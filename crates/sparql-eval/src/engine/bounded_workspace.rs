@@ -160,7 +160,7 @@ pub(super) fn reserve<'a, D: DatasetView>(
     view: &'a D,
     query: &Query,
     has_substitutions: bool,
-    options: super::QueryOptions<'_>,
+    options: super::QueryOptions<'_, '_>,
 ) -> Result<
     ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + 'a, D::ReadError>,
     RdfDiagnostic,
@@ -174,7 +174,7 @@ pub(super) fn reserve_with_error<'a, D: DatasetView>(
     view: &'a D,
     _query: &Query,
     _has_substitutions: bool,
-    _options: super::QueryOptions<'_>,
+    _options: super::QueryOptions<'_, '_>,
 ) -> AdmissionResult<
     D,
     ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + 'a, D::ReadError>,

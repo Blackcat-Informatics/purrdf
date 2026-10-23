@@ -44,9 +44,9 @@ packages = [
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
 rlib_packages = ["purrdf-wasm"]
-# Compile the real generic text/retrieval consumer to assembly, without linking
-# or executing its report-only benchmark.
-consumer_benches = ["purrdf:multimodal_on_demand_read"]
+# Compile the real generic text and retrieval consumers to assembly, without
+# linking or executing their report-only benchmarks.
+consumer_benches = ["purrdf:multimodal_on_demand_read", "purrdf-text:surface"]
 
 [[site]]
 id = "lex.find-byte2-sparql-string"
@@ -1868,7 +1868,7 @@ summary = "`numeric::canonical_double`, the xsd:double canonical lexical form"
 
 [[site]]
 id = "xsd.exact-arith"
-summary = "`bigint::BigInt::mul_fast` and `bigint::BigInt::div_rem`, the limb products and long division under the arbitrary-precision tower (`exact`)"
+summary = "Arbitrary-precision product/division dispatch, exact modular transform and cached-power rendering"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1884,6 +1884,24 @@ summary = "`bigint::BigInt::mul_fast` and `bigint::BigInt::div_rem`, the limb pr
   label = "div_rem"
   crate = "purrdf_xsd"
   symbol = "<purrdf_xsd::bigint::BigInt>::div_rem"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "transform"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::bigint::ntt::transform"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "decimal tree"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::bigint::append_large_decimal_groups"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -3017,7 +3035,7 @@ summary = "`Relation::contains`, the galloping batch probe plus the tail's dupli
 
 [[site]]
 id = "datalog.gallop-leapfrog"
-summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCursor::seek`"
+summary = "`gallop_lower_bound` (in `Batch::subject_run`) and the owned `cycle::Cursor::seek`"
 
   [[site.measure]]
   label = "gallop"
@@ -3032,7 +3050,10 @@ summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCurs
   label = "leapfrog"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_datalog"
-  symbol = "<purrdf_datalog::seminaive::LeapfrogValueCursor>::seek"
+  # The owned cursor has an explicit identity parameter rather than a default.
+  # Name its native TermId instantiation exactly; this one seek dispatches the
+  # same six scan/orientation cases the original default-ID cursor covered.
+  symbol = "<purrdf_datalog::seminaive::cycle::Cursor<purrdf_datalog::id::Id<purrdf_datalog::id::Term>>>::seek"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -3378,7 +3399,7 @@ summary = "`str::chars().count()` in the ShEx length facets, which calls std's o
 
 [[site]]
 id = "shex.matcher"
-summary = "`matcher::search`, the backtracking triple-expression matcher"
+summary = "`matcher::search`, the iterative continuation-based triple-expression matcher"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -7345,7 +7366,7 @@ summary = "Source-aware surface-index assembly"
   label = "assemble"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_text"
-  symbol = "<purrdf_text::surface::SurfaceIndex>::assemble"
+  symbol = "<purrdf_text::surface::SurfaceIndex>::from_rows"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

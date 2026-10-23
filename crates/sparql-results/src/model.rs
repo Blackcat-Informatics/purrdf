@@ -139,25 +139,25 @@ impl ProvenanceNamespace {
         let prefix = prefix.into();
         let iri = iri.into();
         if !purrdf_iri::terminals::is_ncname(&prefix) {
-            return Err(crate::error::Error::InvalidNamespace(format!(
-                "namespace prefix {prefix:?} is not a valid XML NCName"
-            )));
+            return Err(crate::error::Error::InvalidNamespace(
+                crate::error::NamespaceRefusal::Prefix(prefix),
+            ));
         }
         if is_reserved_prefix(&prefix) {
-            return Err(crate::error::Error::InvalidNamespace(format!(
-                "namespace prefix {prefix:?} is reserved (xml/xmlns, case-insensitive)"
-            )));
+            return Err(crate::error::Error::InvalidNamespace(
+                crate::error::NamespaceRefusal::Reserved(prefix),
+            ));
         }
-        let parsed = purrdf_iri::parse(&iri).map_err(|e| {
-            crate::error::Error::InvalidNamespace(format!(
-                "namespace IRI {iri:?} is not a valid IRI: {e}"
-            ))
+        let parsed = purrdf_iri::parse(&iri).map_err(|cause| {
+            crate::error::Error::InvalidNamespace(crate::error::NamespaceRefusal::Iri {
+                iri: iri.clone(),
+                cause,
+            })
         })?;
         if !parsed.has_scheme() {
-            return Err(crate::error::Error::InvalidNamespace(format!(
-                "namespace IRI {iri:?} is a relative IRI reference (no scheme); \
-                 a namespace IRI must be absolute"
-            )));
+            return Err(crate::error::Error::InvalidNamespace(
+                crate::error::NamespaceRefusal::Relative(iri),
+            ));
         }
         Ok(Self { prefix, iri })
     }
@@ -339,6 +339,20 @@ mod tests {
         let err = ProvenanceNamespace::new("prov", "http://example.org/<bad>")
             .expect_err("a syntactically invalid IRI must be rejected");
         assert!(matches!(err, Error::InvalidNamespace(_)), "{err:?}");
+        let retained = err.clone();
+        drop(err);
+        let fields = purrdf_testkit::error_capture::Capture::read(&retained);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "results-namespace-iri");
+        assert!(matches!(
+            cause.field("iri"),
+            purrdf_hash::error::ErrorValue::Iri("http://example.org/<bad>")
+        ));
+        let original = purrdf_iri::parse("http://example.org/<bad>").unwrap_err();
+        assert_eq!(
+            cause.child("cause").code,
+            purrdf_testkit::error_capture::Capture::read(&original).code
+        );
     }
 
     #[test]

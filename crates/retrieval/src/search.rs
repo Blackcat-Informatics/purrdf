@@ -243,7 +243,7 @@ use purrdf_text::Fixed;
 use crate::admission::{AdmissionEnvironment, AdmissionError};
 use crate::compile::{CompiledRetrieval, PlannedResolution, ReadSchedule, compile};
 use crate::error::{FusionError, PlanError};
-use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute_within};
+use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl};
 use crate::fuse::TopK;
 use crate::fusion_profile::{DecayRule, FusionProfile};
 use crate::fusion_stream::{FusedRow, FusionTrailer, ProducerStatus};
@@ -402,6 +402,15 @@ pub enum SearchError {
     FusionError(FusionError),
 }
 
+impl purrdf_hash::error::StructuredError for SearchError {
+    purrdf_hash::error_visit! {
+        PlanError(cause) => "retrieval-search-plan" { "cause" => Cause(cause) },
+        AdmissionError(cause) => "retrieval-search-admission" { "cause" => Cause(cause) },
+        ExecutionError(cause) => "retrieval-search-execution" { "cause" => Cause(cause) },
+        FusionError(cause) => "retrieval-search-fusion" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for SearchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -521,7 +530,7 @@ impl From<FusionError> for SearchError {
 #[allow(clippy::future_not_send)]
 pub async fn search<S, D>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -531,9 +540,18 @@ where
     S: Statistics,
     D: DatasetView<ReadError = std::convert::Infallible> + Sync,
 {
-    search_bound(request, registry, statistics, dataset, env, profile, None)
-        .await
-        .map(|(result, _, _)| result)
+    search_bound(
+        request,
+        registry,
+        statistics,
+        dataset,
+        env,
+        profile,
+        None,
+        || crate::execute::resident_operation(dataset).map_err(SearchError::from),
+    )
+    .await
+    .map(|(result, _, _)| result)
 }
 
 /// Run the original search composition with caller-bound hard constraints.
@@ -547,7 +565,7 @@ where
 #[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn search_scoped<S, D>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -567,6 +585,7 @@ where
         env,
         profile,
         Some((bindings, source)),
+        || crate::execute::resident_operation(dataset).map_err(SearchError::from),
     )
     .await?;
     Ok(crate::ScopedExecution {
@@ -576,12 +595,98 @@ where
     })
 }
 
+/// A scoped retrieval refusal retains the native search failure or original
+/// operational cause and source receipt. A read refusal outranks partial search output.
+#[derive(Debug)]
+pub enum FallibleSearchError<E, V> {
+    /// Original native planning, execution or fusion failure.
+    Search(SearchError),
+    /// Original typed source or admission refusal with its operational receipt.
+    Read(purrdf_sparql_eval::FallibleSparqlError<E, V>),
+}
+
+impl<E: std::fmt::Display, V> std::fmt::Display for FallibleSearchError<E, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Search(error) => std::fmt::Display::fmt(error, f),
+            Self::Read(error) => std::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static, V: std::fmt::Debug + 'static> std::error::Error
+    for FallibleSearchError<E, V>
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Search(error) => Some(error),
+            Self::Read(error) => Some(error),
+        }
+    }
+}
+
+/// Run the original scoped search over an operationally fallible source.
+/// No dataset copy is constructed. The original source account remains alive
+/// through candidate binding, exclusion lookups and fusion; a final read refusal
+/// discards the complete candidate answer rather than becoming unknown evidence.
+///
+/// # Errors
+/// Preserves original search failures and typed operational errors with receipts.
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
+pub async fn search_scoped_fallible<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry<'static>,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    bindings: &crate::ConstraintBindings<'_>,
+    source: &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+) -> Result<
+    (crate::ScopedExecution<SearchResult>, D::Evidence),
+    FallibleSearchError<D::Error, D::Evidence>,
+>
+where
+    S: Statistics,
+    D: purrdf_core::FallibleDatasetView + Sync,
+{
+    let (result, evidence) =
+        purrdf_sparql_eval::with_fallible_read(dataset, |operation| async move {
+            search_bound(
+                request,
+                registry,
+                statistics,
+                dataset,
+                env,
+                profile,
+                Some((bindings, source)),
+                || Ok(operation),
+            )
+            .await
+        })
+        .await
+        .map_err(FallibleSearchError::Read)?;
+    let (result, scopes, fused) = result.map_err(FallibleSearchError::Search)?;
+    Ok((
+        crate::ScopedExecution {
+            result,
+            scopes: scopes.expect("scoped execution retains its original unit receipts"),
+            fused,
+        },
+        evidence,
+    ))
+}
+
 // The optional borrowed input selects the original native execution door; all
 // planning, admission, fusion and answer publication below remain one body.
 #[allow(clippy::future_not_send)]
-async fn search_bound<S, D>(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the existing search inputs carry the operation factory so resident admission stays after compilation"
+)]
+async fn search_bound<S, D, F>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -590,6 +695,7 @@ async fn search_bound<S, D>(
         &crate::ConstraintBindings<'_>,
         &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
     )>,
+    create_read: F,
 ) -> Result<
     (
         SearchResult,
@@ -600,7 +706,8 @@ async fn search_bound<S, D>(
 >
 where
     S: Statistics,
-    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    D: DatasetView + Sync,
+    F: FnOnce() -> Result<purrdf_sparql_eval::ReadOperation<D::ReadError>, SearchError>,
 {
     // 1. Plan. A pure function of the request, the registry and the statistics.
     let plan = plan(request, registry, statistics).map_err(SearchError::PlanError)?;
@@ -620,7 +727,8 @@ where
 
     // 3. Read and fuse. Each stratum is read on demand, so the read goes exactly
     //    as deep as the fusion's own stop; see this module's header.
-    let answer = read_and_fuse(&compiled, registry, dataset, profile, scope).await?;
+    let operation = create_read()?;
+    let answer = read_and_fuse(&compiled, registry, dataset, profile, scope, &operation).await?;
     let workspace = answer.rows.workspace();
     let unserved_terms = purrdf_sparql_eval::SharedWorkspace::new_admitted(
         plan.unserved_evidence_admitted(workspace)
@@ -662,37 +770,43 @@ where
 #[allow(clippy::future_not_send)]
 async fn read_and_fuse<D>(
     compiled: &CompiledRetrieval,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &D,
     profile: &FusionProfile,
     scope: Option<(
         &crate::ConstraintBindings<'_>,
         &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
     )>,
+    operation: &purrdf_sparql_eval::ReadOperation<D::ReadError>,
 ) -> Result<Attempt, SearchError>
 where
-    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    D: DatasetView + Sync,
 {
     // 3. Execute. Each stratum runs independently against the caller's dataset; a
     //    failed stratum is a status, not a stream.
     let (execution, scopes) = match scope {
         Some((bindings, source)) => {
-            let scoped = crate::execute_scoped_within(
+            let scoped = crate::execute::execute_scoped_in_read(
                 compiled,
                 registry,
                 dataset,
                 ReadSchedule::Materialised,
                 bindings,
                 source,
+                operation,
             )
-            .await
             .map_err(SearchError::ExecutionError)?;
             (scoped.result, Some(scoped.scopes))
         }
         None => (
-            execute_within(compiled, registry, dataset, ReadSchedule::OnDemand)
-                .await
-                .map_err(SearchError::ExecutionError)?,
+            crate::execute::execute_read_within(
+                compiled,
+                registry,
+                dataset,
+                ReadSchedule::OnDemand,
+                operation,
+            )
+            .map_err(SearchError::ExecutionError)?,
             None,
         ),
     };

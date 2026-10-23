@@ -57,7 +57,6 @@ fn compile(document: Value) -> Result<Schema, SchemaError> {
     Schema::from_document(metaschemas(), "https://example.org/schema.json", document)
 }
 
-#[test]
 fn parsed_json_numbers_keep_every_decimal_digit() {
     let distinct = json("1.0000000000000001");
     let one = json("1.0");
@@ -82,7 +81,6 @@ fn parsed_json_numbers_keep_every_decimal_digit() {
     assert!(!multiple.is_valid(&distinct).expect("evaluation"));
 }
 
-#[test]
 fn draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted() {
     for dialect in [
         "http://json-schema.org/draft-06/schema#",
@@ -120,7 +118,6 @@ fn draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted() {
     assert!(!unstated.is_valid(&json("1")).expect("evaluation"));
 }
 
-#[test]
 fn each_dialect_reads_its_own_keywords() {
     // Array-form `items` with `additionalItems`: draft-07 and 2019-09 only.
     for dialect in [DRAFT_07, DRAFT_2019_09] {
@@ -203,7 +200,6 @@ fn each_dialect_reads_its_own_keywords() {
     );
 }
 
-#[test]
 fn a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed() {
     match compile(json(
         r##"{
@@ -229,7 +225,6 @@ fn a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed() {
     assert!(!tree.is_valid(&json("[[1]]")).expect("evaluation"));
 }
 
-#[test]
 fn a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_anchor() {
     match compile(json(
         r##"{
@@ -252,7 +247,6 @@ fn a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_ancho
     assert!(!schema.is_valid(&json(r#""a""#)).expect("evaluation"));
 }
 
-#[test]
 fn a_reference_into_another_dialect_is_read_in_it_and_one_into_an_unsupported_dialect_is_refused() {
     let mut registry = registry();
     registry
@@ -293,7 +287,6 @@ fn a_reference_into_another_dialect_is_read_in_it_and_one_into_an_unsupported_di
     );
 }
 
-#[test]
 fn a_missing_metaschema_is_named_and_its_registered_neighbour_compiles() {
     // No meta-schema registered: compiling needs the 2020-12 one to check the
     // document against.
@@ -365,7 +358,6 @@ fn a_missing_metaschema_is_named_and_its_registered_neighbour_compiles() {
     assert!(!schema.is_valid(&json("1")).expect("evaluation"));
 }
 
-#[test]
 fn an_incomplete_metaschema_set_is_refused_and_a_complete_one_is_built() {
     let core_only: Vec<_> = purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
         .iter()
@@ -382,7 +374,6 @@ fn an_incomplete_metaschema_set_is_refused_and_a_complete_one_is_built() {
     assert!(!whole.contains(DRAFT_2019_09));
 }
 
-#[test]
 fn a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored() {
     let meta = |required: bool| {
         json(&format!(
@@ -428,7 +419,6 @@ fn a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored() {
     }
 }
 
-#[test]
 fn an_unknown_format_is_refused_under_format_assertion_and_every_defined_one_asserts() {
     let mut registry = registry();
     registry
@@ -497,7 +487,6 @@ fn an_unknown_format_is_refused_under_format_assertion_and_every_defined_one_ass
     );
 }
 
-#[test]
 fn format_assertion_is_opt_in_and_an_unknown_format_stays_an_annotation() {
     for dialect in [
         Dialect::Draft07,
@@ -538,7 +527,6 @@ fn format_assertion_is_opt_in_and_an_unknown_format_stays_an_annotation() {
     }
 }
 
-#[test]
 fn nonregular_patterns_execute_and_malformed_syntax_is_refused() {
     let lookahead = compile(json(r#"{"pattern": "^(?=a)b"}"#)).expect("lookahead compiles");
     assert!(!lookahead.is_valid(&json(r#""ab""#)).expect("evaluation"));
@@ -566,7 +554,6 @@ fn nonregular_patterns_execute_and_malformed_syntax_is_refused() {
     assert!(!neighbour.is_valid(&json(r#""b""#)).expect("evaluation"));
 }
 
-#[test]
 fn matcher_exhaustion_is_an_error_not_an_invalid_verdict() {
     let schema = compile(json(r#"{"pattern": "(?=a)(a+)+b"}"#)).expect("schema");
     let input = json(r#""aaaaaaaaaaaaaaaaaaaaaaaaaa""#);
@@ -585,7 +572,6 @@ fn matcher_exhaustion_is_an_error_not_an_invalid_verdict() {
     assert!(schema.evaluate_with_limits(&input, limits).is_err());
 }
 
-#[test]
 fn overdeep_regex_format_is_a_resource_error() {
     let mut registry = registry();
     registry.set_format_assertion(true);
@@ -623,7 +609,6 @@ fn reference_chain(links: usize) -> Value {
     )
 }
 
-#[test]
 fn a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates() {
     let at_bound = compile(reference_chain(MAX_REF_CHAIN)).expect("schema");
     assert!(at_bound.is_valid(&json(r#""text""#)).expect("evaluation"));
@@ -648,7 +633,6 @@ fn a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates() {
     );
 }
 
-#[test]
 fn descending_into_the_instance_starts_a_new_reference_chain() {
     // Every level of the instance follows one reference, so a chain never
     // grows past one link however deep the instance is.
@@ -675,7 +659,6 @@ fn tree(depth: usize) -> Value {
     instance
 }
 
-#[test]
 fn a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack() {
     let schema = compile(json(
         r##"{
@@ -730,7 +713,11 @@ fn unit_chain(depth: usize, error: &str) -> OutputUnit {
         children: Vec::new(),
     };
     let mut chain = unit(depth);
-    chain.error = Some(error.to_owned());
+    chain.error = Some(std::sync::Arc::new(
+        purrdf_jsonschema::ValidationRefusal::Pattern {
+            pattern: error.to_owned(),
+        },
+    ));
     for level in (0..depth).rev() {
         let mut parent = unit(level);
         parent.children.push(chain);
@@ -739,7 +726,6 @@ fn unit_chain(depth: usize, error: &str) -> OutputUnit {
     chain
 }
 
-#[test]
 fn output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack() {
     const DEPTH: usize = 10_000;
     purrdf_stack::on_stack(128 * 1024, || {
@@ -755,7 +741,7 @@ fn output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack() {
         assert!(text.contains(&format!(
             "depth: {DEPTH}, valid: false, keyword_location: \"/{DEPTH}\""
         )));
-        assert!(text.contains("error: Some(\"leaf\")"));
+        assert!(text.contains("error: Some(Pattern { pattern: \"leaf\" })"));
         drop((tree, copy));
     })
     .expect("stack");
@@ -767,7 +753,7 @@ fn output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack() {
          absolute_keyword_location: \"\", instance_location: \"\", error: None, \
          annotation: None, children: 1 }, OutputUnit { depth: 1, valid: false, \
          keyword_location: \"/1\", absolute_keyword_location: \"\", instance_location: \"\", \
-         error: Some(\"leaf\"), annotation: None, children: 0 }]"
+         error: Some(Pattern { pattern: \"leaf\" }), annotation: None, children: 0 }]"
     );
 }
 
@@ -785,7 +771,6 @@ fn keyword(keyword: &str, value: Value) -> Value {
     Value::from(Object::new().with(keyword, value))
 }
 
-#[test]
 fn const_enum_and_unique_items_decide_ten_thousand_deep_values() {
     // Built level by level, never parsed from text.
     const DEPTH: usize = 10_000;
@@ -829,10 +814,25 @@ fn const_enum_and_unique_items_decide_ten_thousand_deep_values() {
     assert!(!unique.is_valid(&Value::Array(items)).expect("evaluation"));
 }
 
-#[test]
 fn a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not() {
     match compile(json(r#"{"required": ["a", "a"]}"#)) {
-        Err(SchemaError::InvalidSchema { errors, .. }) => {
+        Err(error @ SchemaError::InvalidSchema { .. }) => {
+            let capture = purrdf_testkit::error_capture::Capture::read(&error);
+            assert!(capture.records("errors").iter().any(|finding| {
+                let reason = finding.child("reason");
+                reason.code == "schema-duplicate-items"
+                    && matches!(
+                        reason.field("first"),
+                        purrdf_hash::error::ErrorValue::Unsigned(0)
+                    )
+                    && matches!(
+                        reason.field("second"),
+                        purrdf_hash::error::ErrorValue::Unsigned(1)
+                    )
+            }));
+            let SchemaError::InvalidSchema { errors, .. } = error else {
+                unreachable!("the native refusal was matched above");
+            };
             assert!(
                 errors
                     .iter()
@@ -863,9 +863,51 @@ fn a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is
         compile(json("5")),
         Err(SchemaError::InvalidKeyword { .. })
     ));
+    for (source, lexeme, requirement) in [
+        (
+            r#"{"minLength": -1}"#,
+            "-1",
+            "schema-requirement-nonnegative-integer",
+        ),
+        ("5", "5", "schema-requirement-schema"),
+    ] {
+        let error = compile(json(source)).unwrap_err();
+        let fields = purrdf_testkit::error_capture::Capture::read(&error);
+        let reason = fields.child("reason");
+        assert_eq!(reason.child("expected").code, requirement);
+        let actual = reason.child("actual");
+        assert!(
+            matches!(actual.field("lexeme"), purrdf_hash::error::ErrorValue::Text(value) if value == lexeme)
+        );
+    }
 }
 
-#[test]
+fn native_output_keeps_cardinality_after_schema_and_input_destruction() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let schema = compile(json(r#"{"maxItems": 1}"#)).expect("schema");
+    let input = json("[1,2,3]");
+    let output = schema.evaluate(&input).expect("evaluation");
+    drop((schema, input));
+    let copied = output.clone();
+    assert!(std::sync::Arc::ptr_eq(
+        output.errors().next().unwrap().error.as_ref().unwrap(),
+        copied.errors().next().unwrap().error.as_ref().unwrap(),
+    ));
+    drop(output);
+    let unit = copied.errors().next().expect("the actual failing keyword");
+    let reason = Capture::read(unit).child("error");
+    assert_eq!(reason.code, "schema-max-items");
+    assert!(matches!(reason.field("actual"), ErrorValue::Unsigned(3)));
+    assert!(matches!(reason.field("limit"), ErrorValue::Unsigned(1)));
+    let rendered = copied.to_json(OutputFormat::Basic);
+    assert_eq!(
+        rendered["errors"][0]["error"],
+        "the array has more than 1 items"
+    );
+}
+
 fn identifiers_are_checked_when_registered() {
     let mut registry = registry();
     assert!(matches!(
@@ -908,7 +950,6 @@ fn identifiers_are_checked_when_registered() {
     ));
 }
 
-#[test]
 fn an_unresolved_reference_is_refused_and_a_resolved_one_is_followed() {
     assert!(matches!(
         compile(json(r#"{"$ref": "https://example.org/elsewhere.json"}"#)),
@@ -921,16 +962,18 @@ fn an_unresolved_reference_is_refused_and_a_resolved_one_is_followed() {
     assert!(local.is_valid(&json(r#""s""#)).expect("evaluation"));
 }
 
-#[test]
 fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
     let schema = compile(json(r##"{"$ref": "#/$defs/a", "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}}}"##))
         .expect("a cycle compiles");
     assert!(!schema.is_valid(&json("1")).expect("evaluation"));
     let output = schema.evaluate(&json("1")).expect("evaluation");
     assert!(output.errors().any(|unit| {
-        unit.error
-            .as_deref()
-            .is_some_and(|error| error.contains("reference cycle"))
+        unit.error.as_ref().is_some_and(|error| {
+            matches!(
+                error.as_ref(),
+                purrdf_jsonschema::ValidationRefusal::ReferenceCycle { .. }
+            )
+        })
     }));
     let consuming = compile(json(r##"{"$defs": {"tree": {"type": "array", "items": {"$ref": "#/$defs/tree"}}}, "$ref": "#/$defs/tree"}"##))
         .expect("a consuming cycle compiles");
@@ -938,7 +981,6 @@ fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
     assert!(!consuming.is_valid(&json("[[1]]")).expect("evaluation"));
 }
 
-#[test]
 fn the_three_output_formats_project_one_evaluation() {
     let schema = compile(json(
         r##"{
@@ -1020,7 +1062,6 @@ fn the_three_output_formats_project_one_evaluation() {
     assert_eq!(detailed["valid"], true);
 }
 
-#[test]
 fn each_draft_emits_independently_expected_output_locations() {
     for dialect in [DRAFT, DRAFT_2019_09, DRAFT_07] {
         let schema = compile(in_dialect(dialect, r#"{"type": "string"}"#)).expect("schema");
@@ -1057,7 +1098,6 @@ fn each_draft_emits_independently_expected_output_locations() {
     }
 }
 
-#[test]
 fn annotations_of_failed_subschemas_are_dropped() {
     let schema = compile(json(
         r#"{"anyOf": [{"title": "wrong", "type": "string"}, {"title": "right"}]}"#,
@@ -1073,7 +1113,6 @@ fn annotations_of_failed_subschemas_are_dropped() {
     assert_eq!(titles, [&json(r#""right""#)]);
 }
 
-#[test]
 fn unevaluated_properties_see_through_every_in_place_applicator() {
     let schema = compile(json(
         r##"{
@@ -1112,7 +1151,6 @@ fn unevaluated_properties_see_through_every_in_place_applicator() {
     );
 }
 
-#[test]
 fn a_schema_repeating_a_member_name_is_refused_and_its_distinct_neighbour_is_not() {
     for (text, object) in [
         (r#"{"type": "string", "type": "integer"}"#, ""),
@@ -1129,7 +1167,10 @@ fn a_schema_repeating_a_member_name_is_refused_and_its_distinct_neighbour_is_not
                     format!("https://example.org/schema.json#{object}"),
                     "{text}"
                 );
-                assert!(reason.contains("repeats the member name"), "{reason}");
+                assert!(
+                    reason.to_string().contains("repeats the member name"),
+                    "{reason}"
+                );
             }
             other => panic!("{text}: expected a repeated-name refusal, got {other:?}"),
         }
@@ -1145,7 +1186,6 @@ fn a_schema_repeating_a_member_name_is_refused_and_its_distinct_neighbour_is_not
     );
 }
 
-#[test]
 fn an_instance_repeating_a_member_name_is_evaluated_member_by_member() {
     // RFC 8259 leaves a repeat's meaning open; the instance is evaluated as
     // written, so every occurrence meets the schema.
@@ -1169,3 +1209,99 @@ fn an_instance_repeating_a_member_name_is_evaluated_member_by_member() {
             .expect("evaluation")
     );
 }
+
+fn content_reports_retain_decoded_bytes_and_native_causes_after_input_disposal() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let schema = compile(in_dialect(
+        DRAFT_07,
+        r#"{"contentEncoding":"base64","contentMediaType":"application/json"}"#,
+    ))
+    .unwrap();
+    let invalid = Value::from("WzEsXQ==");
+    let output = schema.evaluate(&invalid).unwrap();
+    assert!(schema.is_valid(&Value::from("WzFd")).unwrap());
+    drop((schema, invalid));
+    let unit = output.errors().next().unwrap();
+    let reason = Capture::read(unit).child("error").child("cause");
+    assert_eq!(reason.code, "schema-content-json");
+    assert!(matches!(reason.field("bytes"), ErrorValue::Bytes(b"[1,]")));
+    let purrdf_jsonschema::ValidationRefusal::Content(purrdf_jsonschema::ContentRefusal::Json {
+        cause,
+        ..
+    }) = unit.error.as_deref().unwrap()
+    else {
+        panic!("the original decoder cause must survive evaluation");
+    };
+    assert_eq!(reason.child("cause").code, Capture::read(cause).code);
+    assert_eq!(
+        output.to_json(OutputFormat::Basic)["errors"][0]["error"],
+        "the content is not a JSON document"
+    );
+}
+
+fn public_schema_producers_retain_original_uri_and_pattern_causes() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let uri = String::from("https://[invalid");
+    let error = Registry::new()
+        .add_resource(&uri, Value::Bool(true))
+        .unwrap_err();
+    drop(uri);
+    let captured = Capture::read(&error);
+    assert!(matches!(
+        captured.field("uri"),
+        ErrorValue::Iri("https://[invalid")
+    ));
+    assert_eq!(captured.child("reason").code, "schema-uri-parse");
+    assert!(std::error::Error::source(&error).is_some());
+
+    let document = json(r#"{"pattern":"a{9,2}"}"#);
+    let error = compile(document).unwrap_err();
+    let captured = Capture::read(&error);
+    assert!(matches!(
+        captured.field("pattern"),
+        ErrorValue::Text("a{9,2}")
+    ));
+    let reason = captured.child("error").child("reason");
+    assert_eq!(reason.code, "ecma-quantifier-order");
+    assert!(matches!(reason.field("minimum"), ErrorValue::Unsigned(9)));
+    assert!(matches!(reason.field("maximum"), ErrorValue::Unsigned(2)));
+}
+
+purrdf_testkit::harness_main!(
+    content_reports_retain_decoded_bytes_and_native_causes_after_input_disposal,
+    public_schema_producers_retain_original_uri_and_pattern_causes,
+    parsed_json_numbers_keep_every_decimal_digit,
+    draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted,
+    each_dialect_reads_its_own_keywords,
+    a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed,
+    a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_anchor,
+    a_reference_into_another_dialect_is_read_in_it_and_one_into_an_unsupported_dialect_is_refused,
+    a_missing_metaschema_is_named_and_its_registered_neighbour_compiles,
+    an_incomplete_metaschema_set_is_refused_and_a_complete_one_is_built,
+    a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored,
+    an_unknown_format_is_refused_under_format_assertion_and_every_defined_one_asserts,
+    format_assertion_is_opt_in_and_an_unknown_format_stays_an_annotation,
+    nonregular_patterns_execute_and_malformed_syntax_is_refused,
+    matcher_exhaustion_is_an_error_not_an_invalid_verdict,
+    overdeep_regex_format_is_a_resource_error,
+    a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates,
+    descending_into_the_instance_starts_a_new_reference_chain,
+    a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack,
+    output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack,
+    const_enum_and_unique_items_decide_ten_thousand_deep_values,
+    a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not,
+    native_output_keeps_cardinality_after_schema_and_input_destruction,
+    identifiers_are_checked_when_registered,
+    an_unresolved_reference_is_refused_and_a_resolved_one_is_followed,
+    a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing,
+    the_three_output_formats_project_one_evaluation,
+    each_draft_emits_independently_expected_output_locations,
+    annotations_of_failed_subschemas_are_dropped,
+    unevaluated_properties_see_through_every_in_place_applicator,
+    a_schema_repeating_a_member_name_is_refused_and_its_distinct_neighbour_is_not,
+    an_instance_repeating_a_member_name_is_evaluated_member_by_member,
+);

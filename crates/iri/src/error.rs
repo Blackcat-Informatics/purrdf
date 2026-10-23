@@ -34,6 +34,70 @@ const REMEDY_NON_ABSOLUTE_BASE: &str =
 /// The remedy for [`IriError::MissingScheme`].
 const REMEDY_MISSING_SCHEME: &str = "write the IRI in absolute form, with a scheme";
 
+/// The native authority-production failure, before human presentation.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthorityError {
+    /// Non-port text follows the closing bracket.
+    TrailingIpLiteral,
+    /// The opening bracket has no closing bracket.
+    UnterminatedIpLiteral,
+    /// The IPvFuture version has no separating dot.
+    IpvFutureVersion {
+        /// Original byte offset of the literal's contents.
+        offset: usize,
+    },
+    /// The IPvFuture version or address is empty.
+    IpvFutureEmpty {
+        /// Original byte offset of the literal's contents.
+        offset: usize,
+    },
+    /// The bracketed contents do not satisfy the IPv6 production.
+    InvalidIpv6 {
+        /// Original byte offset of the literal's contents.
+        offset: usize,
+        /// Original contents, without brackets or diagnostic escaping.
+        address: String,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for AuthorityError {
+    purrdf_hash::error_visit! {
+        TrailingIpLiteral => "iri-authority-trailing-ip-literal" {},
+        UnterminatedIpLiteral => "iri-authority-unterminated-ip-literal" {},
+        IpvFutureVersion { offset } => "iri-authority-ipvfuture-version" {
+            "offset" => ByteCount(*offset as u128),
+        },
+        IpvFutureEmpty { offset } => "iri-authority-ipvfuture-empty" {
+            "offset" => ByteCount(*offset as u128),
+        },
+        InvalidIpv6 { offset, address } => "iri-authority-invalid-ipv6" {
+            "offset" => ByteCount(*offset as u128), "address" => Text(address),
+        },
+    }
+}
+
+impl fmt::Display for AuthorityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TrailingIpLiteral => f.write_str("trailing characters after IP-literal"),
+            Self::UnterminatedIpLiteral => f.write_str("unterminated IP-literal '['"),
+            Self::IpvFutureVersion { offset } => {
+                write!(f, "IPvFuture at byte {offset} requires a version and '.'")
+            }
+            Self::IpvFutureEmpty { offset } => write!(
+                f,
+                "IPvFuture at byte {offset} needs a nonempty version and address"
+            ),
+            Self::InvalidIpv6 { offset, address } => {
+                write!(f, "invalid IPv6 address {address:?} at byte {offset}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for AuthorityError {}
+
 /// Why an IRI/URI string (or a reference-resolution / CURIE operation) failed.
 #[derive(PartialEq, Eq)]
 #[non_exhaustive]
@@ -53,8 +117,8 @@ pub enum IriError {
     /// the offending `char` and its byte offset.
     DisallowedChar(char, usize),
     /// The authority/host component is malformed (e.g. an unterminated IPv6
-    /// literal `[...]`). Carries a short reason.
-    BadAuthority(String),
+    /// literal `[...]`). Carries the original typed production failure.
+    BadAuthority(AuthorityError),
     /// Reference resolution was asked to produce an absolute IRI from a base that
     /// is itself not absolute (has no scheme) — RFC-3986 §5.1 requires an absolute
     /// base. Carries the base text.
@@ -97,6 +161,33 @@ pub enum IriError {
 
 purrdf_lex::resident_clone!(IriError);
 
+impl purrdf_hash::error::StructuredError for IriError {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        visitor.variant(self.diagnostic_code());
+        match self {
+            Self::Empty | Self::MissingScheme => {}
+            Self::BadScheme(scheme) => visitor.value(Some("scheme"), ErrorValue::Text(scheme)),
+            Self::BadPercentEncoding(offset) => {
+                visitor.value(Some("offset"), ErrorValue::ByteCount(*offset as u128));
+            }
+            Self::DisallowedChar(character, offset) => {
+                visitor.value(Some("character"), ErrorValue::Character(*character));
+                visitor.value(Some("offset"), ErrorValue::ByteCount(*offset as u128));
+            }
+            Self::BadAuthority(cause) => visitor.value(Some("cause"), ErrorValue::Cause(cause)),
+            Self::NonAbsoluteBase(base) => visitor.value(Some("base"), ErrorValue::Iri(base)),
+            Self::NoBase { reference } => {
+                visitor.value(Some("reference"), ErrorValue::Iri(reference));
+            }
+            Self::NotAbsoluteByGrammar { reference, base } => {
+                visitor.value(Some("reference"), ErrorValue::Iri(reference));
+                visitor.value(Some("base"), ErrorValue::Record(base));
+            }
+        }
+    }
+}
+
 impl IriError {
     /// Copy every original typed IRI failure field under before-copy admission.
     /// Text stays verbatim; no parse or diagnostic re-rendering changes identity.
@@ -113,7 +204,20 @@ impl IriError {
             Self::BadScheme(text) => Self::BadScheme(memory.string(text)?),
             Self::BadPercentEncoding(offset) => Self::BadPercentEncoding(*offset),
             Self::DisallowedChar(character, offset) => Self::DisallowedChar(*character, *offset),
-            Self::BadAuthority(text) => Self::BadAuthority(memory.string(text)?),
+            Self::BadAuthority(reason) => Self::BadAuthority(match reason {
+                AuthorityError::TrailingIpLiteral => AuthorityError::TrailingIpLiteral,
+                AuthorityError::UnterminatedIpLiteral => AuthorityError::UnterminatedIpLiteral,
+                AuthorityError::IpvFutureVersion { offset } => {
+                    AuthorityError::IpvFutureVersion { offset: *offset }
+                }
+                AuthorityError::IpvFutureEmpty { offset } => {
+                    AuthorityError::IpvFutureEmpty { offset: *offset }
+                }
+                AuthorityError::InvalidIpv6 { offset, address } => AuthorityError::InvalidIpv6 {
+                    offset: *offset,
+                    address: memory.string(address)?,
+                },
+            }),
             Self::NonAbsoluteBase(text) => Self::NonAbsoluteBase(memory.string(text)?),
             Self::NoBase { reference } => Self::NoBase {
                 reference: memory.string(reference)?,
@@ -130,9 +234,14 @@ impl IriError {
     #[must_use]
     pub fn owned_text_bytes(&self) -> usize {
         match self {
-            Self::BadScheme(text) | Self::BadAuthority(text) | Self::NonAbsoluteBase(text) => {
-                text.capacity()
-            }
+            Self::BadScheme(text) | Self::NonAbsoluteBase(text) => text.capacity(),
+            Self::BadAuthority(reason) => match reason {
+                AuthorityError::InvalidIpv6 { address, .. } => address.capacity(),
+                AuthorityError::TrailingIpLiteral
+                | AuthorityError::UnterminatedIpLiteral
+                | AuthorityError::IpvFutureVersion { .. }
+                | AuthorityError::IpvFutureEmpty { .. } => 0,
+            },
             Self::NoBase { reference } => reference.capacity(),
             Self::NotAbsoluteByGrammar { reference, base } => {
                 reference.capacity()
@@ -373,7 +482,7 @@ impl IriError {
             Self::BadAuthority(reason) => ("iri-bad-authority", "malformed authority: {reason}", {
                 let native_values = [DiagnosticParameter::try_new_with_memory(
                     "reason",
-                    Text(memory.string(reason)?),
+                    Text(memory.format(reason)?),
                     memory,
                 )?];
                 memory.collect(native_values)
@@ -527,7 +636,7 @@ mod tests {
             IriError::BadScheme("1x".to_owned()),
             IriError::BadPercentEncoding(0),
             IriError::DisallowedChar(' ', 0),
-            IriError::BadAuthority("why".to_owned()),
+            IriError::BadAuthority(AuthorityError::UnterminatedIpLiteral),
             IriError::NonAbsoluteBase("/a".to_owned()),
             IriError::NoBase {
                 reference: "foo".to_owned(),

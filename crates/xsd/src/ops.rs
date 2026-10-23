@@ -169,10 +169,11 @@ pub fn value_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 
 /// SPARQL value-space equality test (`Option<bool>` form).
 ///
-/// For every pair except `xsd:duration`/`xsd:duration`, this is
+/// Except for duration and anyURI pairs, this is
 /// `value_cmp(a, b).map(|o| o == Ordering::Equal)` — equality read off the
-/// partial order, `None` for incomparable operands. **Duration pairs are the
-/// one exception**: XPath F&O's `op:duration-equal` is total over the general
+/// partial order, `None` for incomparable operands. anyURI equality compares
+/// collapsed character sequences even though that primitive is unordered.
+/// XPath F&O's `op:duration-equal` is total over the general
 /// `xs:duration` (see [`crate::temporal::duration_equal`] for the full
 /// argument), so `value_equal` never returns `None` for two durations, even
 /// when [`value_cmp`] returns `None` for the same pair because `<`/`>` are only
@@ -209,6 +210,7 @@ pub fn value_equal_admitted(
     ) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<Option<bool>, crate::bigint::LimbScratchError> {
     match (a, b) {
+        (XsdValue::AnyUri(x), XsdValue::AnyUri(y)) => Ok(Some(x == y)),
         (XsdValue::Duration(x), XsdValue::Duration(y)) => {
             temporal::duration_equal_admitted(x, y, admit).map(Some)
         }
@@ -217,7 +219,7 @@ pub fn value_equal_admitted(
 }
 
 /// SPARQL value-space equality (`=`), as a plain `bool`. Built on [`value_equal`],
-/// which is total for durations and otherwise reads equality off [`value_cmp`]'s
+/// which is total for durations and anyURIs and otherwise reads equality off [`value_cmp`]'s
 /// partial order; incomparable operands (of either kind — indeterminate duration
 /// order or cross-family mismatch) collapse to `false` here. When the
 /// error-vs-false distinction matters (the SPARQL `=` operator raises a type
@@ -467,7 +469,7 @@ fn temporal_div_admitted(
 /// order, or duration `+` duration) delegate to [`crate::temporal`].
 /// `xsd:boolean`/`xsd:string`/binary operands have no arithmetic value.
 ///
-/// Exhaustive over all 12 [`XsdValue`] variants — no wildcard arm — so a
+/// Exhaustive over [`XsdValue`] variants — no wildcard arm — so a
 /// variant added to the enum in the future is a compile error here rather than
 /// silently absorbed into the wrong branch.
 ///
@@ -497,11 +499,12 @@ pub fn value_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
         | XsdValue::Time(_)
         | XsdValue::Duration(_)
         | XsdValue::Gregorian(_) => temporal_add(a, b),
-        XsdValue::Boolean(_) | XsdValue::String(_) | XsdValue::Binary { .. } => {
-            Err(XsdError::TypeMismatch {
-                reason: "add: operand has no XSD arithmetic value",
-            })
-        }
+        XsdValue::Boolean(_)
+        | XsdValue::String(_)
+        | XsdValue::AnyUri(_)
+        | XsdValue::Binary { .. } => Err(XsdError::TypeMismatch {
+            reason: "add: operand has no XSD arithmetic value",
+        }),
     }
 }
 
@@ -512,7 +515,7 @@ pub fn value_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// `-` duration, and duration `-` duration — **no commuted temporal row**:
 /// `duration - instant` is a type error, unlike `value_add`'s commuted rows.
 ///
-/// Exhaustive over all 12 [`XsdValue`] variants — no wildcard arm.
+/// Exhaustive over [`XsdValue`] variants — no wildcard arm.
 ///
 /// # Examples
 ///
@@ -537,11 +540,12 @@ pub fn value_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
         | XsdValue::Time(_)
         | XsdValue::Duration(_)
         | XsdValue::Gregorian(_) => temporal_sub(a, b),
-        XsdValue::Boolean(_) | XsdValue::String(_) | XsdValue::Binary { .. } => {
-            Err(XsdError::TypeMismatch {
-                reason: "sub: operand has no XSD arithmetic value",
-            })
-        }
+        XsdValue::Boolean(_)
+        | XsdValue::String(_)
+        | XsdValue::AnyUri(_)
+        | XsdValue::Binary { .. } => Err(XsdError::TypeMismatch {
+            reason: "sub: operand has no XSD arithmetic value",
+        }),
     }
 }
 
@@ -560,7 +564,7 @@ pub fn value_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// reject a valid expression. The other three operators have no such commuted
 /// numeric-into-temporal row and stay single-discriminant.
 ///
-/// Exhaustive over all 12 [`XsdValue`] variants — no wildcard arm.
+/// Exhaustive over [`XsdValue`] variants — no wildcard arm.
 ///
 /// # Examples
 ///
@@ -595,11 +599,12 @@ pub fn value_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
                 reason: "multiply: instant/Gregorian operands have no product",
             })
         }
-        XsdValue::Boolean(_) | XsdValue::String(_) | XsdValue::Binary { .. } => {
-            Err(XsdError::TypeMismatch {
-                reason: "multiply: operand has no XSD arithmetic value",
-            })
-        }
+        XsdValue::Boolean(_)
+        | XsdValue::String(_)
+        | XsdValue::AnyUri(_)
+        | XsdValue::Binary { .. } => Err(XsdError::TypeMismatch {
+            reason: "multiply: operand has no XSD arithmetic value",
+        }),
     }
 }
 
@@ -613,7 +618,7 @@ pub fn value_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// `numeric ÷ duration` is a type error (unlike `value_mul`), so this
 /// dispatcher needs only one discriminant.
 ///
-/// Exhaustive over all 12 [`XsdValue`] variants — no wildcard arm.
+/// Exhaustive over [`XsdValue`] variants — no wildcard arm.
 ///
 /// # Examples
 ///
@@ -660,11 +665,12 @@ pub fn value_div_with_policy(
                 reason: "divide: instant/Gregorian operands have no quotient",
             })
         }
-        XsdValue::Boolean(_) | XsdValue::String(_) | XsdValue::Binary { .. } => {
-            Err(XsdError::TypeMismatch {
-                reason: "divide: operand has no XSD arithmetic value",
-            })
-        }
+        XsdValue::Boolean(_)
+        | XsdValue::String(_)
+        | XsdValue::AnyUri(_)
+        | XsdValue::Binary { .. } => Err(XsdError::TypeMismatch {
+            reason: "divide: operand has no XSD arithmetic value",
+        }),
     }
 }
 
@@ -755,7 +761,7 @@ pub fn value_binary_admitted(
 /// duration form; unary plus stays numeric-only in this crate too, so
 /// `+(?duration)` is a type error while `-(?duration)` is not.
 ///
-/// Exhaustive over all 12 [`XsdValue`] variants — no wildcard arm.
+/// Exhaustive over [`XsdValue`] variants — no wildcard arm.
 ///
 /// # Examples
 ///
@@ -782,6 +788,7 @@ pub fn value_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
         | XsdValue::Gregorian(_)
         | XsdValue::Boolean(_)
         | XsdValue::String(_)
+        | XsdValue::AnyUri(_)
         | XsdValue::Binary { .. } => Err(XsdError::TypeMismatch {
             reason: "unary minus: operand has no XSD arithmetic value",
         }),

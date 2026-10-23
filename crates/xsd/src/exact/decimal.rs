@@ -28,6 +28,8 @@ pub struct PreparedDecimalText {
     digits: crate::bigint::PreparedDecimalDigits,
     scale: usize,
     length: usize,
+    /// Spell a whole-number value with a point and one fractional zero.
+    point_required: bool,
 }
 
 struct DecimalPointWriter<'a, W: fmt::Write + ?Sized> {
@@ -76,7 +78,21 @@ impl PreparedDecimalText {
             digits,
             scale,
             length,
+            point_required: false,
         })
+    }
+
+    /// The same value spelled with a decimal point and at least one fractional
+    /// digit: a whole number `4` becomes `4.0`, every other value is unchanged.
+    /// This is the form of a decimal an operation computes; the XSD 1.1
+    /// canonical form ([`Decimal::canonical_lexical`]) is the one without it.
+    #[must_use]
+    pub const fn with_required_point(mut self) -> Self {
+        if self.scale == 0 && !self.point_required {
+            self.point_required = true;
+            self.length += 2;
+        }
+        self
     }
 
     /// Exact final length, known before allocating an output destination.
@@ -106,7 +122,12 @@ impl PreparedDecimalText {
             out.write_str("-")?;
         }
         if self.scale == 0 {
-            return self.digits.write_unsigned(out);
+            self.digits.write_unsigned(out)?;
+            return if self.point_required {
+                out.write_str(".0")
+            } else {
+                Ok(())
+            };
         }
         if self.digits.digits_len() > self.scale {
             self.digits.write_unsigned(&mut DecimalPointWriter {
@@ -152,6 +173,13 @@ pub enum DecimalTextError {
     Numeric(crate::bigint::LimbScratchError),
     /// The original physical owner refused a lexical buffer or its layout.
     Storage(purrdf_lex::allocation::StorageError),
+}
+
+impl purrdf_hash::error::StructuredError for DecimalTextError {
+    purrdf_hash::error_visit! {
+        Numeric(error) => "decimal-text-numeric" { "cause" => Cause(error) },
+        Storage(error) => "decimal-text-storage" { "cause" => Cause(error) },
+    }
 }
 
 impl fmt::Display for DecimalTextError {
@@ -432,6 +460,32 @@ impl Decimal {
         self.copy_using(&crate::bigint::scratch::Fallible)
     }
 
+    /// Copy the exact coefficient into its original preparation account.
+    /// Publish the result with [`Self::publish_detached`] before shared escape.
+    ///
+    /// # Errors
+    /// Preserves native admission, layout and allocator refusal.
+    pub fn detached_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            unscaled: self.unscaled.detached_with_memory(memory)?,
+            scale: self.scale,
+        })
+    }
+
+    /// Publish the copied coefficient under its original immutable lease.
+    ///
+    /// # Errors
+    /// Returns native shared-control refusal without changing the decimal law.
+    pub fn publish_detached(
+        &mut self,
+        original: &purrdf_lex::allocation::SharedOwned<()>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.unscaled.publish_detached(original)
+    }
+
     /// Absolute value through fallible native destinations.
     /// # Errors
     /// Refuses physical storage without changing the rounding/value law.
@@ -505,7 +559,12 @@ impl Decimal {
     /// other keeps exactly its significant fractional digits (`"2.5"`, `"-0.025"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
-        self.to_string()
+        let prepared = self.prepare_text().expect("native decimal text storage");
+        let mut text = String::with_capacity(prepared.len());
+        prepared
+            .write_to(&mut text)
+            .expect("the exact decimal destination fits the prepared text");
+        text
     }
 
     /// The exact value of a finite `f64`: every binary floating-point value is a
@@ -597,6 +656,7 @@ impl Decimal {
     /// `xs:double` cast, rounded once at any scale. A negative value that rounds
     /// to zero is `-0.0`.
     #[must_use]
+    #[inline]
     pub fn to_f64(&self) -> f64 {
         if let Some(value) = self.unscaled.as_i128()
             && self.scale <= MAX_I128_POW10
@@ -611,6 +671,12 @@ impl Decimal {
             Some(_) => return self.signed(0.0),
             None => {}
         }
+        self.ratio_to_f64()
+    }
+
+    /// Keep ratio conversion's register frame after the inline and range gates.
+    #[cold]
+    fn ratio_to_f64(&self) -> f64 {
         let bits = self.ratio_bits(&BINARY64);
         f64::from_bits(bits)
     }
@@ -1016,6 +1082,15 @@ impl Decimal {
             self.limb_len(),
             rhs.limb_len(),
         )?)?;
+        // Preserve the exact-attempt admission boundary before deciding whether
+        // machine arithmetic can avoid the general integer scratch.
+        match self.div_exact_small(rhs) {
+            Some(SmallQuotient::Exact(quotient)) => return Ok(quotient),
+            Some(SmallQuotient::NonTerminating) => {
+                return Err(ExactError::NonTerminating.into());
+            }
+            None => {}
+        }
         self.div_exact_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
     }
 
@@ -1088,9 +1163,18 @@ impl Decimal {
             DivisionPolicy::Scale { scale, rounding } => {
                 self.div_rounded_using(rhs, scale, rounding, storage)
             }
-            DivisionPolicy::Exact => self.div_exact_using(rhs, storage),
+            DivisionPolicy::Exact => match self.div_exact_small(rhs) {
+                Some(SmallQuotient::Exact(quotient)) => Ok(quotient),
+                Some(SmallQuotient::NonTerminating) => Err(ExactError::NonTerminating.into()),
+                None => self.div_exact_using(rhs, storage),
+            },
             DivisionPolicy::ExactOrScale { scale, rounding } => {
-                match self.div_exact_using(rhs, storage) {
+                let exact = match self.div_exact_small(rhs) {
+                    Some(SmallQuotient::Exact(quotient)) => return Ok(quotient),
+                    Some(SmallQuotient::NonTerminating) => Err(ExactError::NonTerminating.into()),
+                    None => self.div_exact_using(rhs, storage),
+                };
+                match exact {
                     Err(super::ExactOperationError::Value(ExactError::NonTerminating)) => {
                         self.div_rounded_using(rhs, scale, rounding, storage)
                     }
@@ -1098,6 +1182,44 @@ impl Decimal {
                 }
             }
         }
+    }
+
+    /// Resolve a machine-word exact quotient before allocating general integer
+    /// scratch. A quotient outside the word range still takes the general path.
+    fn div_exact_small(&self, rhs: &Self) -> Option<SmallQuotient> {
+        let a = self.unscaled.as_i128()?.unsigned_abs();
+        let b = rhs.unscaled.as_i128()?.unsigned_abs();
+        let twos = b.trailing_zeros();
+        let mut rest = b >> twos;
+        let mut fives = 0_u32;
+        while rest % 5 == 0 {
+            rest /= 5;
+            fives += 1;
+        }
+        if a % rest != 0 {
+            return Some(SmallQuotient::NonTerminating);
+        }
+        let k = twos.max(fives);
+        let coefficient = (a / rest)
+            .checked_mul(1_u128.checked_shl(k - twos)?)?
+            .checked_mul(5_u128.checked_pow(k - fives)?)?;
+        let exponent = i64::from(rhs.scale) - i64::from(self.scale) - i64::from(k);
+        let (coefficient, scale) = if exponent >= 0 {
+            let up = usize::try_from(exponent).ok()?;
+            (coefficient.checked_mul(*POW10.get(up)?)?, 0)
+        } else {
+            (coefficient, u32::try_from(-exponent).ok()?)
+        };
+        let negative = self.is_negative() != rhs.is_negative();
+        let signed = if negative {
+            0_i128.checked_sub_unsigned(coefficient)?
+        } else {
+            i128::try_from(coefficient).ok()?
+        };
+        Some(SmallQuotient::Exact(Self::new(
+            Integer::from_i128(signed),
+            scale,
+        )))
     }
 
     /// The quotient rounded to `scale` digits: with the operands
@@ -1294,6 +1416,14 @@ impl Decimal {
     #[must_use]
     pub fn to_float_cost(&self) -> Cost {
         cost::decimal_to_float(self.shape())
+    }
+
+    /// The cost of rendering this value as a computed decimal
+    /// ([`PreparedDecimalText::with_required_point`]): [`Self::render_cost`] with
+    /// the two bytes of `.0` a whole value carries.
+    #[must_use]
+    pub fn computed_render_cost(&self) -> Cost {
+        cost::render_shape_spelled(self.shape(), if self.scale == 0 { 2 } else { 0 })
     }
 
     /// The cost of rendering [`Self::canonical_lexical`]: every byte of the text,
@@ -1917,6 +2047,11 @@ fn cmp_magnitude_binary_admitted_using(
     if super::binary::log2_of_pow10(decimal_exponent - 1) > binade + 1 {
         return Ok(Ordering::Greater);
     }
+    if let Some(small) = unscaled.as_i128()
+        && let Some(order) = small_magnitude_cmp(small.unsigned_abs(), scale, significand, exponent)
+    {
+        return Ok(order);
+    }
     let shifted_left = if exponent < 0 {
         admit(cost::binary_shift_layout(
             unscaled.binary_bits(),
@@ -1947,6 +2082,37 @@ fn cmp_magnitude_binary_admitted_using(
     let scaled_right = scale_up_using(&right, scale, storage)?;
     let left = shifted_left.as_ref().unwrap_or(unscaled);
     Ok(left.with_bigint(|a| scaled_right.with_bigint(|b| a.cmp_abs(b))))
+}
+
+/// Compare a decimal coefficient and binary significand in machine words when
+/// their aligned products fit; wider products use the admitted integer path.
+fn small_magnitude_cmp(
+    magnitude: u128,
+    scale: u32,
+    significand: u64,
+    exponent: i32,
+) -> Option<Ordering> {
+    let trailing = significand.trailing_zeros();
+    let (significand, exponent) = (
+        u128::from(significand >> trailing),
+        exponent + trailing.cast_signed(),
+    );
+    let pow = *POW10.get(usize::try_from(scale).ok()?)?;
+    let shift = exponent.unsigned_abs();
+    let shl = |value: u128| -> Option<u128> {
+        let shifted = value.checked_shl(shift)?;
+        (shifted >> shift == value).then_some(shifted)
+    };
+    Some(if exponent >= 0 {
+        magnitude.cmp(&shl(significand)?.checked_mul(pow)?)
+    } else {
+        shl(magnitude)?.cmp(&significand.checked_mul(pow)?)
+    })
+}
+
+enum SmallQuotient {
+    Exact(Decimal),
+    NonTerminating,
 }
 
 /// `10^k` for `k ≤ 38`, every power of ten a `u128` holds.
@@ -2358,33 +2524,38 @@ mod physical_render_tests {
 
     #[test]
     fn decimal_group_and_output_refusals_keep_the_original_prefix_and_account() {
-        let coefficient =
-            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+        let large = "7".repeat(160_000);
+        for lexical in [
+            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            large.as_str(),
+        ] {
+            let coefficient = lexical
                 .parse::<crate::exact::Integer>()
                 .unwrap()
                 .to_bigint();
-        let layout = coefficient.decimal_render_layout(7).unwrap();
-        assert!(layout.temporary_bytes() > 0);
-        for allowed_temporary in [0, layout.temporary_bytes()] {
-            let mut account = Account {
-                live: 0,
-                peak: 0,
-                ceiling: usize::MAX,
-                refused: None,
-            };
-            let mut output = Memory::new(&mut account).string("prefix:").unwrap();
-            let baseline = output.capacity();
-            account.ceiling = baseline + allowed_temporary;
-            let mut memory = Memory::resume(&mut account, baseline);
-            assert_eq!(
-                append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
-                Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
-            );
-            assert_eq!(output, "prefix:");
-            assert_eq!(memory.admitted_bytes(), baseline);
-            memory.release_string(output).unwrap();
-            assert_eq!(account.live, 0);
-            assert!(account.refused.is_some());
+            let layout = coefficient.decimal_render_layout(7).unwrap();
+            assert!(layout.temporary_bytes() > 0);
+            for allowed_temporary in [0, layout.temporary_bytes()] {
+                let mut account = Account {
+                    live: 0,
+                    peak: 0,
+                    ceiling: usize::MAX,
+                    refused: None,
+                };
+                let mut output = Memory::new(&mut account).string("prefix:").unwrap();
+                let baseline = output.capacity();
+                account.ceiling = baseline + allowed_temporary;
+                let mut memory = Memory::resume(&mut account, baseline);
+                assert_eq!(
+                    append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
+                    Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
+                );
+                assert_eq!(output, "prefix:");
+                assert_eq!(memory.admitted_bytes(), baseline);
+                memory.release_string(output).unwrap();
+                assert_eq!(account.live, 0);
+                assert!(account.refused.is_some());
+            }
         }
     }
 }

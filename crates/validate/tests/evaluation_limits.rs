@@ -145,6 +145,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
             let limits = |facts: Option<u64>, steps: Option<u64>| MaterializeLimits {
                 max_stored_facts: facts,
                 max_join_steps: steps,
+                max_term_arena_bytes: None,
                 host,
             };
             let short = limits(Some(stored as u64 - 1), None);
@@ -199,6 +200,7 @@ fn the_limits_in_force_reach_the_reports_contract_hash() {
     let restated = hash(&MaterializeLimits {
         max_stored_facts: Some(purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
         max_join_steps: Some(purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS),
+        max_term_arena_bytes: None,
         host: RegimeHost::Rust,
     });
     assert_eq!(default, restated);
@@ -209,7 +211,45 @@ fn the_limits_in_force_reach_the_reports_contract_hash() {
     assert_ne!(default, raised);
 }
 
-/// Every conclusion-directed service takes the same two limits, and a refusal names the knob
+#[test]
+fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
+    for regime in ["rdfs", "owl-rl"] {
+        let reference = materialize_to_nquads_string(regime, DATA, "").unwrap();
+        let bytes: u64 = reference
+            .report()
+            .lines()
+            .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+            .expect("the original arena count")
+            .parse()
+            .unwrap();
+        assert!(bytes > 0);
+        let short = MaterializeLimits {
+            max_term_arena_bytes: Some(bytes - 1),
+            ..MaterializeLimits::default()
+        };
+        let refused = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &short)
+            .expect_err("one original byte short");
+        assert!(
+            refused.contains(&format!(
+                "term arena bytes limit: {bytes} observed, {} permitted",
+                bytes - 1
+            )),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with("raise it with MaterializeLimits::max_term_arena_bytes"),
+            "{refused}"
+        );
+        let exact = MaterializeLimits {
+            max_term_arena_bytes: Some(bytes),
+            ..MaterializeLimits::default()
+        };
+        let actual = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &exact).unwrap();
+        assert_eq!(actual.nquads(), reference.nquads());
+    }
+}
+
+/// Every conclusion-directed service takes the same three limits, and a refusal names the knob
 /// of the entry point the CALLER called — on every host, never another function's argument
 /// and never a Rust type to a non-Rust caller. The neighbour, the same question with the
 /// limit raised to what the run needs, answers.
@@ -271,10 +311,11 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
             .parse()
             .expect("a count");
         for host in hosts {
-            let (stored_facts, join_steps) = host.service_knobs(which);
+            let (stored_facts, join_steps, _) = host.service_knobs(which);
             let limits = |facts: Option<u64>, steps: Option<u64>| MaterializeLimits {
                 max_stored_facts: facts,
                 max_join_steps: steps,
+                max_term_arena_bytes: None,
                 host,
             };
             let refused = service(
@@ -321,7 +362,7 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
         ),
         (RegimeHost::Cli, "--max-stored-facts"),
     ] {
-        let (stored_facts, _) = host.service_knobs(RegimeService::GraphEntails);
+        let (stored_facts, _, _) = host.service_knobs(RegimeService::GraphEntails);
         assert_eq!(stored_facts, expected);
         assert!(
             !stored_facts.contains("MaterializeLimits") && !stored_facts.contains("EvalOptions")

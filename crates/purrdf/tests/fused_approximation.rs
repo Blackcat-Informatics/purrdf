@@ -76,7 +76,7 @@ impl retrieval::Statistics for NoStatistics {
 
 /// A registry holding the exhaustive text producer and the approximate vector
 /// producer, over the same four entities.
-fn registry() -> PropertyFunctionRegistry {
+fn registry() -> PropertyFunctionRegistry<'static> {
     let mut builder = RdfDatasetBuilder::new();
     let note = builder.intern_iri(NOTE).unwrap();
     for (local, body) in ENTITIES {

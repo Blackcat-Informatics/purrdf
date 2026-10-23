@@ -16,7 +16,13 @@ It validates an RDF 1.2 data graph against a SHACL shapes graph with **no
 inference** (parity with pySHACL `inference="none"`); combine with
 [Entailment](../entailment.md) if you want to validate a materialized closure,
 or declare `sh:entailment sh:RulesEntailment` to run the shapes graph's own
-rules first.
+rules first, or name a `sh:RuleSet` of the shapes graph as an `sh:entailment`
+value to run only that rule set's rules (its included rule sets' too); several
+such values run together as one rule set. Any other `sh:entailment` value is
+refused, as SHACL requires of a processor that does not support it. A rule set
+as an `sh:entailment` value is first defined by the SHACL 1.2 editor's draft of
+2026-10-16, so the default law and `shacl-ed-2026-10-16` read it, and
+`shacl-wd-2026-09-18` and `shacl-rec-2017-07-20` refuse it.
 
 ## What it covers
 
@@ -49,6 +55,11 @@ rules first.
   `sh:SPARQLFunction` calls, `sh:SPARQLTargetType`, `sh:sparqlExpr`, and
   `sh:prefixes` resolved as that document specifies (see
   [below](#prefixes-in-shacl-sparql-queries)), all on the native SPARQL engine.
+  A SPARQL-based constraint's `sh:deactivated` is a node expression under the
+  default law and `shacl-ed-2026-10-16`; the working draft and the 2017
+  Recommendation allow `true` or `false` alone there. A blank node passed to a
+  custom SPARQL function is an error under the same two laws, and an ordinary
+  argument under the working draft.
 - **SHACL 1.2 Node Expressions** — the `shnex:` vocabulary and the older
   SHACL-AF `sh:` spelling of a node expression parse to one representation and
   run through one evaluator. Each expression kind keeps the order and
@@ -147,9 +158,7 @@ Every IRI the engine implements is defined by a W3C document; PurRDF mints
 none.
 
 The W3C SHACL 1.0 `data-shapes` suite passes as approved (129/129, zero ledgered
-gaps at the time of writing), and so does the approved W3C SHACL 1.2 suite apart
-from six entries whose approved result spells a decimal non-canonically, which are
-counted on their own line (538/544); the live
+gaps at the time of writing), and the approved W3C SHACL 1.2 suite passes as approved (590/591, the one exception being `hasLang-example`, which contradicts the SPARQL 1.2 grammar's arity); the live
 numbers are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
@@ -215,8 +224,9 @@ SHACL 1.2 Core §6.2 says "owl:imports in the data graph is not enacted", and
 its note asks a data graph that means an import to be typed `owl:Ontology` as
 well. The data graph's own `owl:imports` are never read at all. `purrdf shapes
 lint` lists every `owl:imports` that is data under `unanchored-imports`. The
-same rule decides entailment's imports, and the node set it reads is the one
-the implicit SPARQL prefixes below are collected from.
+same rule decides entailment's imports. Import anchors and the implicit SPARQL
+prefix sources below share one graph-role classifier, with different selections:
+a data-graph role supplies prefixes without making its `owl:imports` an import.
 
 SHACL-SPARQL's prefix path is such data. A query collects its prefixes along
 `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, and the W3C test
@@ -321,7 +331,7 @@ table in its own spelling:
 
 | Host | Import table | Refusal |
 |---|---|---|
-| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`, `link_data_graph`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry \| UnresolvedLink \| UnheldLink \| InvalidLink)` |
+| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`, `link_data_graph`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry \| UnresolvedLink \| UnheldLink \| InvalidLink \| IncompatibleVersions)` |
 | CLI | `--import IRI=FILE`, repeatable | exit 1 for an unresolved import; exit 2 for a pair nothing imports or a malformed pair |
 | Python | `imports=[(iri, turtle), ...]` on `validate`, `entail`, `apply_rules`, `eval_node_expr`, `lint_shapes`, `pack_product` and `Shapes(...)` | `purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and `.iris` |
 | WebAssembly | trailing `importIris`, `importDocuments` arrays on every `shacl*` function that takes a shapes graph | `ShaclImportError` with `kind`, `iris` and `message` |
@@ -331,9 +341,9 @@ Each imported document is Turtle, parsed with its ontology IRI as its base. The
 kind is `unresolved-import`, `unreached-import` (a table entry neither an import
 nor a data-graph link names — refused on every host, because its shapes would
 be read and never applied) or `invalid-import` (a key that is not an absolute
-IRI, a key named twice, or a document that does not parse); the three
-`*-shapes-graph-link` kinds below belong to the data graph's links. Branch on
-the kind, not on the message.
+IRI, a key named twice, or a document that does not parse). Conflicting versions
+use `incompatible-import-versions`; the three `*-shapes-graph-link` kinds above
+belong to the data graph's links. Branch on the kind, not on the message.
 
 ```python
 import purrdf
@@ -381,14 +391,21 @@ A SPARQL query in a shapes graph (`sh:select`, `sh:ask`, `sh:construct`,
 header before it is compiled. The header follows SHACL 1.2 SPARQL Extensions,
 "Prefix Declarations for SPARQL Queries":
 
-- **A query with `sh:prefixes`** uses the prefix declarations on the path
-  `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. The path is read
-  from the query node and from the shape or component that carries it.
+- **A query with `sh:prefixes`** uses the prefix declarations on the path of
+  the selected law, read from the query node and from the shape or component
+  that carries it. The default law and `shacl-ed-2026-10-16` read the editor's
+  draft path
+  `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`.
+  `shacl-wd-2026-09-18` reads the working draft path
+  `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`, which does not read
+  the declarations of the graph a version IRI leads to. `shacl-rec-2017-07-20`
+  reads `sh:prefixes/owl:imports*/sh:declare`, with no `owl:versionIRI` step.
 - **A query without `sh:prefixes`** uses every `sh:declare` of every SHACL
   instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or
   `sh:RulesGraph` in the shapes graph. A subclass of one of those classes
-  counts too. These are the same nodes the `owl:imports` rule reads: one
-  classifier decides both.
+  counts too. Prefix collection and import resolution share one graph-role
+  classifier; a node whose only role is `sh:DataGraph` supplies implicit prefixes
+  but is not an import anchor.
 - **Two different namespaces for one prefix** in the declarations a query
   reaches make the shapes graph ill-formed. The load fails, and the error names
   the prefix and both namespaces. The same prefix declared twice with the same
@@ -600,13 +617,15 @@ candidate by looking it up in its SELECT's results.
 ## SHACL 1.2 conformance
 
 The complete W3C `shacl12-test-suite` is vendored byte-exact under
-`vectors/shacl12/` and run through the library API: 547 tests, covering 174
-`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 203
+`vectors/shacl12/` and run through the library API: 592 tests, covering 213
+`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 209
 SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. An
-upstream manifest lists 544 of them. Of those, 538 pass as approved and 6 are
-counted apart because their approved result spells a decimal non-canonically, as
-described below, and the expected-failure ledger is empty. The other 3 are entries of
-vendored files that no manifest includes, and they are reported apart. A
+upstream manifest lists 591 of them. Of those, 590 pass as approved and the
+expected-failure ledger is empty. The remaining 1 entry belongs to a
+vendored file that no manifest includes and is reported separately. The one approved
+entry that does not pass, `node-expr/shnex-sparql/hasLang-example`, is reported failed with
+its rationale: it calls `sparql:hasLang` with two arguments, and the SPARQL 1.2
+grammar's `hasLANG` takes exactly one. A
 negative SPARQL 1.2 RL test must fail at the stage its test type names, not at
 an earlier one.
 Reproduce it with:
@@ -615,23 +634,24 @@ Reproduce it with:
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
-The last line of the approved suite's scoreboard is
-`W3C12 TOTAL: passed 538, non-canonical-expected-decimal 6, xfailed 0, ledger 0`,
-and the unlisted files' own line is
-`W3C12 UNLISTED: passed 3, exact 2, with-delta 1, total 3`.
+The 213 `sht:Validate` tests also run through the built `purrdf validate
+--shacl-profile shacl-ed-2026-10-16` binary, graded against the approved results by
+the same grader, so the result holds on a shipped surface:
 
-Three vendored files carry test entries that no upstream manifest includes:
-`core/node/xone-002.ttl`, `core/node/xone-003.ttl` and
-`inference-rules/rdfs/rdfs1.ttl`. They are not part of the approved suite, so
-they are never counted among its passes. A separate test,
-`w3c_shacl12_unlisted_vendored_files`, grades them and reports them under their
-own label. Two are graded exactly as written. `core/node/xone-003` expects a
-result from a property shape with no `sh:resultPath`, but section 6.7.2.2 says:
-"For results produced by a property shape, this SHACL property path is
-equivalent to the value of sh:path of the shape, unless stated otherwise." The
-engine keeps the shape's `sh:path`. The harness grades the file's report with
-exactly that one result amended, quotes the clause beside the amendment, and
-proves that a report without the amendment, or with a different one, fails.
+```bash
+cargo test -p purrdf-cli --test w3c12_validate_cli -- --nocapture
+```
+
+The last line of the approved suite's scoreboard is
+`W3C12 TOTAL: passed 590, spec-contradicted 1, xfailed 0, ledger 0`,
+and the unlisted files' own line is
+`W3C12 UNLISTED: passed 1, exact 1, with-delta 0, total 1`.
+
+One vendored file carries test entries that no upstream manifest includes:
+`inference-rules/rdfs/rdfs1.ttl`. It is not part of the approved suite, so it is
+never counted among its passes. A separate test,
+`w3c_shacl12_unlisted_vendored_files`, grades it exactly as written and reports
+it under its own label.
 
 A `sh:reifierShape` or `sh:reificationRequired` result carries the value node
 as `sh:value`. The textual definition in SHACL 1.2 Core section 7.8.5 uses the
@@ -647,18 +667,11 @@ the reifier and says why it fails. A missing reification has no reifier and
 carries no details.
 
 In six node-expression tests the approved result spells a computed
-`xsd:decimal` in a lexical form that is not canonical: `"4.0"`, `"3.0"`,
-`"42.0"` and `"00"`, where XSD 1.1 Part 2 (section 3.3.3.1 and the
-`decimalCanonicalMap` of E.1) makes the canonical form `"4"`, `"3"`, `"42"` and
-`"0"`. (`"00"` is canonical in neither XSD 1.1 nor XSD 1.0, whose canonical
-decimal zero is `"0.0"`.) The expected value is correct in each, and the suite
-says the results must be "equal" without saying whether that is term or value
-equality. PurRDF emits the XSD 1.1 canonical form, which is also what the
-approved W3C SPARQL tests `ceil01`, `floor01`, `round01` and `seconds` expect.
-The harness grades these six by substituting the canonical spelling for the
-expected one and comparing term for term, which for these six is the same as
-comparing values. They are counted on their own line,
-`non-canonical-expected-decimal`, not among the passes.
+`xsd:decimal` as `"4.0"`, `"3.0"`, `"42.0"` and `"00"`. The specifications leave
+the lexical form of a computed literal to the processor, so PurRDF computes a
+decimal with a point and a fractional digit (`4.0`), and `SECONDS` as the
+seconds part of the lexical form of its argument (`00`). All six are graded term
+for term against the approved result, like every other entry.
 
 `sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite,
 passes by name with no import supplied. Its
@@ -1238,7 +1251,7 @@ maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)`.
 - The **term-generating round limit** bounds the evaluation rounds that infer a
   term the graph did not already hold. The default is 16384 rounds. A counter
   stepping to 10,000 completes. A counter with no bound infers one new term per
-  round and is refused in well under a second.
+  round and remains subject to this limit.
 - The **generated-term budget** bounds the terms inferred beyond the input's.
   The default is `max(65536, 4 × N)`, where `N` is the number of distinct terms
   in the data graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set
@@ -1289,15 +1302,14 @@ rebuilt. The inferred triples, their blank-node labels and their proofs are the
 same as running every focus node every iteration. What changes is the cost: a
 shape rule that mints a new focus node every iteration pays for one run per
 iteration, not one per focus node so far, so a rule that never stops is
-refused within a few seconds by a term limit — the round limit when its new
+refused by a term limit — the round limit when its new
 terms stay short, the fixed 16 MiB term-arena ceiling when each is longer than
 the last — and never by the join-step limit.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph
 access) runs as rule elements. An iteration then costs only what is new, instead
-of a pass over the whole evaluation graph, and infers the same triples. This is
-why a 10,000-step countdown completes in well under a second. A `BIND` variable
+of a pass over the whole evaluation graph, and infers the same triples. A `BIND` variable
 must appear in every template triple, and a template must have no blank node.
 Otherwise the rule runs as a producer over the whole graph, as before.
 
@@ -1409,7 +1421,7 @@ once, on request, and reports seven sections:
 1. `load`: the loader's verdict, accepted or the refusal it raised.
 2. `shacl-shacl`: every result of validating the shapes graph against the
    vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core
-   relaxations (`sh:closed sh:ByTypes`, a list-valued `sh:nodeKind`, a
+   relaxations (a list-valued `sh:nodeKind`, a
    path-valued `sh:equals`, a node-expression `sh:targetNode`). A result SHACL
    1.2 Core makes well-formed is marked `superseded` and is not a finding, but
    only when the loader accepted the graph.
@@ -1465,6 +1477,42 @@ dict with `text` and its `language` / `direction` / `datatype` when present).
 A result that carries SHACL-SPARQL result annotations also has `annotations`, a
 list of tuples, each a property IRI and a value in N-Triples syntax.
 
+## Dated SHACL laws
+
+Unselected, SHACL validation runs under the compatibility law. A caller selects
+one exact, dated SHACL law by its stable id: `shacl-rec-2017-07-20` (the 2017
+Recommendation), `shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or
+`shacl-ed-2026-10-16` (the data-shapes editor's draft that the W3C SHACL 1.2 test
+suite is taken from, and the law the PurRDF EARL report is graded under). Every host
+selects the same law the same way, and every host decodes the id once, exactly,
+through `purrdf_validate::complete_profile`.
+
+| Host | Spelling |
+|---|---|
+| CLI | `--shacl-profile <ID>` on `validate`, with `--shapes`, `--shapes-product` (a prepared product stores no SHACL law, so the restore takes it from the request) or `--changes` |
+| Python | `shacl_profile=` on `shapes.validate` and the `Shapes` constructor |
+| WebAssembly | a trailing `shaclProfile` on `shaclValidateToSarif`; its asynchronous twin takes it in its options object |
+| C | `shacl_profile` on `purrdf_shacl_validate_to_sarif_law`, which adds it to `purrdf_shacl_validate_to_sarif_xpath_regex` and changes no existing signature |
+
+```sh
+purrdf validate --shapes shapes.ttl --shacl-profile shacl-ed-2026-10-16 data.ttl
+```
+
+An id that names no law, `shacl-ed-2026-10-17` among them, is refused with the
+`unsupported-profile` status, and no nearby edition is substituted. A shapes graph
+the selected law's text refuses is refused at load, never validated under another
+law. The same pair shows it on every host. The compatibility law refuses
+`sparql/pre-binding/pre-binding-009` at load, because it contains a `VALUES` over
+a variable that is not pre-bound, and the editor's draft validates it. The working
+draft refuses `sparql/node/prefixes-003`, which reaches a prefix declaration through
+a version IRI, and the editor's draft validates it.
+
+A dated law carries its own XPath bundle (see
+[Dated XPath regex laws](#dated-xpath-regex-laws)). Naming another XPath law beside
+it, such as `--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`,
+is refused as a usage error, and naming the same law is accepted. Node-expression
+and SPARQL 1.2 RL records are law-independent and take no SHACL law.
+
 ## Dated XPath regex laws
 
 `sh:pattern` with its `sh:flags`, and the `REGEX` and `REPLACE` of SHACL-SPARQL
@@ -1518,8 +1566,9 @@ the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen
 `RdfDataset`, built straight from the report's own terms rather than through a
 `to_ntriples()` → `parse_dataset()` round-trip. The direct path carries every
 RDF 1.2 term the report holds (a triple-term focus node included). Rendering
-the report in any syntax is then `serialize_dataset(&report.to_dataset(), …)`,
-which is exactly what `purrdf validate --format` does.
+the report in any syntax requires handling the `to_dataset()` result, then
+passing the returned dataset to `serialize_dataset`. This is what
+`purrdf validate --format` does.
 
 A report carries blank nodes from two graphs: a focus node, a value and an
 annotation value come from the data graph, and a source shape from the shapes

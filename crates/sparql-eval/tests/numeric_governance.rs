@@ -33,7 +33,11 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const STAT: &str = "http://example.org/stat#";
 
-fn governed(query: &str, options: QueryOptions<'_>, governors: &QueryGovernors) -> GovernedOutcome {
+fn governed(
+    query: &str,
+    options: QueryOptions<'_, '_>,
+    governors: &QueryGovernors,
+) -> GovernedOutcome {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
     NativeSparqlEngine::new()
         .query_governed(
@@ -74,7 +78,7 @@ fn first_cell(outcome: &GovernedOutcome) -> String {
 fn refused_beside(
     refused: &str,
     neighbour: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     dimension: ResourceDimension,
 ) -> String {
     let metered = governed(neighbour, options, &QueryGovernors::METERED);
@@ -213,7 +217,8 @@ fn a_products_growing_scale_is_charged_for_fuel() {
         QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
-    assert_eq!(answer, "1");
+    // The product is `1.0`, three characters: a computed whole decimal keeps its point.
+    assert_eq!(answer, "3");
     // The exact answer at a modest scale: 0.1^(2^10) has 1,024 fractional digits.
     let metered = governed(
         &squaring("0.1", 10),
@@ -511,7 +516,7 @@ fn machine_word_numbers_charge_no_tower_work() {
         QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
-    assert_eq!(first_cell(&small), "25");
+    assert_eq!(first_cell(&small), "25.0");
     assert!(
         small.evidence().consumed_in(ResourceDimension::Fuel) < 200,
         "{:?}",

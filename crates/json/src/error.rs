@@ -62,6 +62,24 @@ pub enum JsonError {
     Cover(ReconstructError),
 }
 
+impl purrdf_hash::error::StructuredError for JsonError {
+    purrdf_hash::error_visit! {
+        Interrupted { at } => "json-cover-interrupted" { "at" => ByteCount(*at as u128) },
+        Storage(cause) => "json-cover-storage" { "cause" => Cause(cause) },
+        Iri(cause) => "json-cover-iri" { "cause" => Cause(cause) },
+        Profile(reason) => "json-cover-profile" { "reason" => Text(reason) },
+        InvalidUtf8 { valid_up_to } => "json-cover-invalid-utf8" { "valid_up_to" => ByteCount(*valid_up_to as u128) },
+        Syntax { at, expected } => "json-cover-syntax" { "at" => ByteCount(*at as u128), "expected" => Text(expected) },
+        Limit { resource, limit } => "json-cover-limit" { "resource" => Code(resource), "limit" => Unsigned(u128::from(*limit)) },
+        LoneSurrogate { at } => "json-cover-lone-surrogate" { "at" => ByteCount(*at as u128) },
+        Trailing { at } => "json-cover-trailing" { "at" => ByteCount(*at as u128) },
+        Metadata { subject, field } => "json-cover-metadata" { "subject" => Text(subject), "field" => Code(field) },
+        ProfileMismatch => "json-cover-profile-mismatch" {},
+        Rdf(cause) => "json-cover-rdf" { "cause" => Cause(cause) },
+        Cover(cause) => "json-cover-reconstruction" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for JsonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -373,6 +373,18 @@ pub enum ProducerStatus {
     TermsRejected,
 }
 
+impl purrdf_hash::error::StructuredError for ProducerStatus {
+    purrdf_hash::error_visit! {
+        Exhausted { rows_emitted } => "retrieval-producer-exhausted" { "rows_emitted" => Unsigned(u128::from(*rows_emitted)) },
+        DepthReached { rank } => "retrieval-producer-depth-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        RowBoundReached { rank } => "retrieval-producer-row-bound-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        SuppliedQueryEnded { rank } => "retrieval-producer-supplied-query-ended" { "rank" => Unsigned(u128::from(*rank)) },
+        CeilingReached { bound } => "retrieval-producer-ceiling-reached" { "bound" => Record(bound) },
+        ExecutionFailed { reason } => "retrieval-producer-execution-failed" { "reason" => Text(reason.as_ref()) },
+        TermsRejected => "retrieval-producer-terms-rejected" {},
+    }
+}
+
 impl ProducerStatus {
     fn clone_admitted(
         &self,
@@ -2235,7 +2247,7 @@ pub struct FusionStream<'p, S: RankedStream> {
     // no dictionary, row observation or native metadata arena allocation.
     scoped: Option<ScopedFusion>,
     streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
-    profile: ProfileInput<'p>,
+    profile: purrdf_core::ownership::OwnedOrBorrowed<'p, FusionProfile>,
     plan_id: Option<PlanId>,
     initialized: bool,
     heads: purrdf_sparql_eval::AdmittedVec<Option<Head>>,
@@ -2393,26 +2405,12 @@ pub struct FusionStream<'p, S: RankedStream> {
     last_row_won_a_tie: bool,
 }
 
-/// A caller-owned profile moves or borrows without copying its configuration.
-#[derive(Debug)]
-enum ProfileInput<'p> {
-    Owned(FusionProfile),
-    Borrowed(&'p FusionProfile),
-}
-impl std::ops::Deref for ProfileInput<'_> {
-    type Target = FusionProfile;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Owned(value) => value,
-            Self::Borrowed(value) => value,
-        }
-    }
-}
-
 impl<S: RankedStream> fmt::Debug for FusionStream<'_, S> {
+    /// Render stratum names, the profile and frontier metadata without inspecting streams.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         struct Strata<'a, S>(&'a [(Iri, S)]);
         impl<S> fmt::Debug for Strata<'_, S> {
+            /// List registered stratum IRIs without requiring stream debug rendering.
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_list()
                     .entries(self.0.iter().map(|(iri, _)| iri.as_str()))
@@ -2477,26 +2475,31 @@ impl<S: RankedStream> FusionStream<'static, S> {
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Result<Self, FusionError> {
         Self::with_profile(
             crate::fuse::admit_streams(streams)?,
-            ProfileInput::Owned(profile),
+            purrdf_core::ownership::OwnedOrBorrowed::Owned(profile),
         )
     }
 }
 
 impl<'p, S: RankedStream> FusionStream<'p, S> {
+    /// Use the caller's exact immutable profile for the engine's admitted lifetime.
     pub(crate) fn borrowed(
         streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
         profile: &'p FusionProfile,
     ) -> Result<Self, FusionError> {
-        Self::with_profile(streams, ProfileInput::Borrowed(profile))
+        Self::with_profile(
+            streams,
+            purrdf_core::ownership::OwnedOrBorrowed::Borrowed(profile),
+        )
     }
 
     pub(crate) fn workspace(&self) -> &purrdf_sparql_eval::WorkspaceCapability {
         &self.workspace
     }
 
+    /// Admit producer declarations once and build the engine for either storage choice.
     fn with_profile(
         streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
-        profile: ProfileInput<'p>,
+        profile: purrdf_core::ownership::OwnedOrBorrowed<'p, FusionProfile>,
     ) -> Result<Self, FusionError> {
         let workspace = streams.workspace().clone();
         let count = streams.len();

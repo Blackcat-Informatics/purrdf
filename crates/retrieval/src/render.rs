@@ -93,6 +93,14 @@ pub(crate) enum RenderError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for RenderError {
+    purrdf_hash::error_visit! {
+        BlankNotGround { label } => "retrieval-render-blank-not-ground" { "label" => Text(label) },
+        DirectionWithoutLanguage { lexical_form } => "retrieval-render-direction-without-language" { "lexical_form" => Text(lexical_form) },
+        MalformedLanguageTag { tag } => "retrieval-render-malformed-language-tag" { "tag" => Text(tag) },
+    }
+}
+
 impl std::fmt::Display for RenderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

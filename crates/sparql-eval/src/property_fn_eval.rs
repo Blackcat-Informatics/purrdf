@@ -1133,6 +1133,12 @@ fn eval_call_over<D: DatasetView + Sync>(
             drop(opened);
             return Err(EvalError::WorkspaceStopped);
         }
+        let opened = match opened {
+            Err(error) if !matches!(error, EvalError::WorkspaceStopped) || stopped.is_none() => {
+                return Err(error);
+            }
+            other => other,
+        };
         if let Some(governor) = stopped {
             drop(opened);
             tripped = Some(governor);
@@ -1196,7 +1202,29 @@ fn eval_call_over<D: DatasetView + Sync>(
                 stop_input = true;
                 break;
             }
-            let pulled = next_with_workspace_contained(&mut *cursor, &call.iri, &ctx.growth)?;
+            let (pulled, stopped, physical_failure) = crate::user_fn::metered_native_call(
+                ctx,
+                ChargePoint::PropertyFunctionWork,
+                |context| next_with_workspace_contained(&mut *cursor, &call.iri, context),
+            );
+            if let Some(error) = physical_failure {
+                drop(pulled);
+                return Err(error);
+            }
+            if ctx.growth.has_failed() {
+                drop(pulled);
+                return Err(EvalError::WorkspaceStopped);
+            }
+            let pulled = match pulled {
+                Err(EvalError::WorkspaceStopped) if stopped.is_some() => None,
+                other => other?,
+            };
+            if let Some(governor) = stopped {
+                drop(pulled);
+                tripped = Some(governor);
+                stop_input = true;
+                break;
+            }
             // The `property-function-work` charge point. Read after EVERY pull, the
             // terminating one included, so a cursor that searches lazily on its first
             // `next` and one that searched eagerly inside `open` are charged the same
@@ -1375,20 +1403,17 @@ fn eval_call_over<D: DatasetView + Sync>(
 /// host misconfiguration, never an empty relation. The engine's prepare step raises
 /// this before any governor charge; this is the backstop for a directly-built
 /// [`EvalCtx`], which never runs that step.
-fn resolve<D: DatasetView + Sync>(
+fn resolve<'query, D: DatasetView + Sync>(
     call: &PropertyFunctionCall,
-    ctx: &EvalCtx<'_, D>,
-) -> Result<Arc<dyn PropertyFunction>, EvalError> {
-    ctx.property_functions
-        .resolve(&call.iri)
-        .map(Arc::clone)
-        .ok_or_else(|| {
-            crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Function,
-                format_args!("no property function is registered for <{}>", call.iri),
-                &ctx.growth,
-            )
-        })
+    ctx: &EvalCtx<'query, D>,
+) -> Result<&'query Arc<dyn PropertyFunction + 'query>, EvalError> {
+    ctx.property_functions.resolve(&call.iri).ok_or_else(|| {
+        crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::Function,
+            format_args!("no property function is registered for <{}>", call.iri),
+            &ctx.growth,
+        )
+    })
 }
 
 /// Check that a relation whose declared modes are `modes` can serve an invocation whose
@@ -1670,7 +1695,7 @@ fn unify_term(arg: &Arg, value: &TermValue, values: &mut [Option<TermValue>]) ->
 /// charge could exhaust and no stop signal to poll; the relation's reported work is
 /// summed in [`Self::work`] instead of being charged, which is the one use that lane
 /// made of it.
-pub struct CallCursor {
+pub struct CallCursor<'query> {
     /// The called relation's registered IRI, naming every contained host call.
     iri: String,
     /// The call's compiled positions, against an empty driving row.
@@ -1680,7 +1705,7 @@ pub struct CallCursor {
     /// The actual invocation's physical bound, including scoped unknown rows.
     physical_row_bound: u64,
     /// The open invocation.
-    cursor: crate::WorkspaceCursor,
+    cursor: crate::WorkspaceCursor<'query>,
     /// What the invocation attested the instant it opened.
     opened: PfAttestation,
     /// Original whole-search declaration, independent of candidate membership.
@@ -1737,7 +1762,7 @@ pub struct AdmittedPropertyRow {
 purrdf_hash::debug_non_exhaustive!(
     /// Names the relation and the read's position. A cursor is host code with no
     /// `Debug` of its own, so nothing past the counts is printed.
-    CallCursor {
+    CallCursor<'_> {
         iri,
         variables,
         yielded,
@@ -3659,20 +3684,20 @@ fn call_variables<'q>(
 ///
 /// The shape's refusal, and every failure the governed lane raises before the
 /// invocation's first row.
-pub(crate) fn open_call_cursor(
+pub(crate) fn open_call_cursor<'query>(
     shape: &CallReadShape<'_>,
-    registry: &crate::property_fn::PropertyFunctionRegistry,
+    registry: &crate::property_fn::PropertyFunctionRegistry<'query>,
     filtering: FilterContext,
     candidate_scope: Option<&dyn crate::CandidateScope>,
     workspace: &crate::WorkspaceCapability,
     geo: &purrdf_geo_kernel::GeoProfile,
-) -> Result<CallCursor, EvalError> {
+) -> Result<CallCursor<'query>, EvalError> {
     let read = shape
         .read
         .as_ref()
         .map_err(|reason| EvalError::unsupported(reason.clone()))?;
     let call = read.call;
-    let relation = registry.resolve(&call.iri).map(Arc::clone).ok_or_else(|| {
+    let relation = registry.resolve(&call.iri).ok_or_else(|| {
         crate::error::NativeDiagnostic::error(
             crate::error::NativeDiagnosticKind::Function,
             format_args!("no property function is registered for <{}>", call.iri),
@@ -3897,11 +3922,11 @@ pub(crate) fn open_call_cursor(
     })
 }
 
-impl CallCursor {
+impl CallCursor<'_> {
     pub(crate) fn bind_search_evidence<I: purrdf_core::ViewTermId>(
         &mut self,
         source: &dyn crate::EvidenceSource<I>,
-        registry: &crate::PropertyFunctionRegistry,
+        registry: &crate::PropertyFunctionRegistry<'_>,
         scope: Option<&dyn crate::CandidateScope>,
     ) -> Result<(), EvalError> {
         let input = crate::evidence_exec::EvidenceInput::new(
@@ -4096,8 +4121,9 @@ impl CallCursor {
                 self.ended = true;
                 return Ok(None);
             }
-            let pulled =
-                next_with_workspace_contained(&mut *self.cursor, &self.iri, &self.workspace)?;
+            let pulled = crate::user_fn::unmetered_native_call(&self.workspace, |context| {
+                next_with_workspace_contained(&mut *self.cursor, &self.iri, context)
+            })?;
             // After every pull, the terminating one included, as the governed lane
             // reads it — so a relation that searched lazily on its first pull and one
             // that searched eagerly in `open` report the same total.
@@ -4532,7 +4558,9 @@ mod tests {
         .expect("uniform rows")
     }
 
-    fn registry_of(entries: Vec<(&str, Arc<dyn PropertyFunction>)>) -> PropertyFunctionRegistry {
+    fn registry_of(
+        entries: Vec<(&str, Arc<dyn PropertyFunction>)>,
+    ) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         for (iri, relation) in entries {
             registry.register(iri, relation);
@@ -4540,7 +4568,7 @@ mod tests {
         registry
     }
 
-    fn split_registry() -> PropertyFunctionRegistry {
+    fn split_registry() -> PropertyFunctionRegistry<'static> {
         registry_of(vec![(PF_SPLIT, Arc::new(split_table()))])
     }
 
@@ -4561,7 +4589,7 @@ mod tests {
     fn run_on(
         dataset: &Arc<RdfDataset>,
         query: &str,
-        registry: &PropertyFunctionRegistry,
+        registry: &PropertyFunctionRegistry<'_>,
     ) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
         let engine = NativeSparqlEngine::new();
         let result = engine
@@ -4593,13 +4621,13 @@ mod tests {
         }
     }
 
-    fn rows_of(query: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<String>> {
+    fn rows_of(query: &str, registry: &PropertyFunctionRegistry<'_>) -> Vec<Vec<String>> {
         run_on(&documents(), query, registry)
             .expect("query evaluates")
             .1
     }
 
-    fn error_of(query: &str, registry: &PropertyFunctionRegistry) -> String {
+    fn error_of(query: &str, registry: &PropertyFunctionRegistry<'_>) -> String {
         run_on(&documents(), query, registry).expect_err("query must be refused")
     }
 
@@ -4711,11 +4739,14 @@ mod tests {
             self.row_bound
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             self.invocations
                 .lock()
                 .expect("uncontended")
@@ -4842,11 +4873,14 @@ mod tests {
             self.rows.len() as u64
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &PfArgs<'_>,
             ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             self.ceilings.lock().expect("uncontended").push(ceiling);
             let rows = self
                 .rows
@@ -4897,11 +4931,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             let Some(TermValue::Iri(subject)) = args.get(0).cloned() else {
                 // Nothing to tag: an unbound (or non-IRI) subject yields no rows.
                 return Ok(Box::new(VecCursor {
@@ -5772,7 +5809,7 @@ mod tests {
     /// Evaluate `query` under `governors` with `registry` injected.
     fn run_governed(
         query: &str,
-        registry: &PropertyFunctionRegistry,
+        registry: &PropertyFunctionRegistry<'_>,
         governors: &crate::governor::QueryGovernors,
     ) -> crate::GovernedOutcome {
         let engine = NativeSparqlEngine::new();
@@ -6007,7 +6044,7 @@ mod tests {
                 ),
             ])
         };
-        let rows_under = |registry: &PropertyFunctionRegistry| {
+        let rows_under = |registry: &PropertyFunctionRegistry<'_>| {
             let result = engine
                 .query_with_options_view(
                     &*dataset,

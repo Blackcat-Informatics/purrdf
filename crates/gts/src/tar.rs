@@ -3,6 +3,9 @@
 
 //! Tar stream import/export for files-profile-v2 GTS archives.
 
+mod error;
+pub use error::TarError;
+
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -15,12 +18,6 @@ const ZERO_BLOCK: [u8; BLOCK] = [0; BLOCK];
 const CORE_PAX_KEYS: &[&str] = &[
     "path", "linkpath", "size", "uid", "gid", "uname", "gname", "mtime", "devmajor", "devminor",
 ];
-
-purrdf_lex::message_error! {
-    /// Error raised by tar import/export helpers.
-    #[derive(Debug)]
-    pub struct TarError;
-}
 
 /// Compression to apply while writing a tar stream.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -95,16 +92,19 @@ pub fn to_tar<W: Write>(
             write_tar_stream(graph, &mut encoder, options)?;
             encoder
                 .finish()
-                .map_err(|err| TarError::new(format!("gzip encode tar stream: {err}")))?;
+                .map_err(|cause| TarError::io("gzip encode tar stream", None, cause))?;
             Ok(())
         }
         TarCompression::Zstd => {
             let raw = to_tar_vec(graph, options)?;
-            let encoded = encode_chain(&["zstd".to_string()], &raw)
-                .map_err(|err| TarError::new(format!("zstd encode tar stream: {err}")))?;
+            let encoded =
+                encode_chain(&["zstd".to_string()], &raw).map_err(|cause| TarError::Codec {
+                    operation: "zstd encode tar stream",
+                    cause,
+                })?;
             writer
                 .write_all(&encoded)
-                .map_err(|err| TarError::new(format!("write tar stream: {err}")))
+                .map_err(|cause| TarError::io("write tar stream", None, cause))
         }
     }
 }
@@ -121,7 +121,7 @@ fn write_tar_stream<W: Write>(
     mut writer: W,
     options: &ToTarOptions,
 ) -> Result<(), TarError> {
-    let entries = read_entries(graph).map_err(TarError::new)?;
+    let entries = read_entries(graph).map_err(TarError::Files)?;
     let blobs: BTreeMap<&str, &BlobEntry> = graph
         .blobs
         .iter()
@@ -133,7 +133,7 @@ fn write_tar_stream<W: Write>(
     writer
         .write_all(&ZERO_BLOCK)
         .and_then(|()| writer.write_all(&ZERO_BLOCK))
-        .map_err(|err| TarError::new(format!("finish tar stream: {err}")))
+        .map_err(|cause| TarError::io("finish tar stream", None, cause))
 }
 
 fn append_entry<W: Write>(
@@ -143,23 +143,28 @@ fn append_entry<W: Write>(
     options: &ToTarOptions,
 ) -> Result<(), TarError> {
     if entry.kind == FileEntryKind::Socket {
-        return Err(TarError::new(format!(
-            "tar cannot encode socket entry {}",
-            entry.path
-        )));
+        return Err(TarError::Socket {
+            path: entry.path.clone(),
+        });
     }
     let data = if entry.kind == FileEntryKind::File {
         let digest = entry
             .digest
             .as_deref()
-            .ok_or_else(|| TarError::new(format!("file entry {} has no digest", entry.path)))?;
+            .ok_or_else(|| TarError::MissingDigest {
+                path: entry.path.clone(),
+            })?;
         blobs
             .get(digest)
-            .ok_or_else(|| {
-                TarError::new(format!("missing inline blob for {}: {digest}", entry.path))
+            .ok_or_else(|| TarError::MissingBlob {
+                path: entry.path.clone(),
+                digest: digest.to_owned(),
             })?
             .decoded_vec()
-            .map_err(|err| TarError::new(format!("decode blob for {}: {err}", entry.path)))?
+            .map_err(|cause| TarError::Blob {
+                path: entry.path.clone(),
+                cause,
+            })?
     } else {
         Vec::new()
     };
@@ -315,15 +320,15 @@ fn write_header<W: Write>(
     header[148..156].copy_from_slice(checksum.as_bytes());
     writer
         .write_all(&header)
-        .map_err(|err| TarError::new(format!("write tar header for {}: {err}", metadata.path)))?;
+        .map_err(|cause| TarError::io("write tar header", Some(&metadata.path), cause))?;
     writer
         .write_all(data)
-        .map_err(|err| TarError::new(format!("write tar data for {}: {err}", metadata.path)))?;
+        .map_err(|cause| TarError::io("write tar data", Some(&metadata.path), cause))?;
     let padding = (BLOCK - data.len() % BLOCK) % BLOCK;
     if padding != 0 {
-        writer.write_all(&ZERO_BLOCK[..padding]).map_err(|err| {
-            TarError::new(format!("write tar padding for {}: {err}", metadata.path))
-        })?;
+        writer
+            .write_all(&ZERO_BLOCK[..padding])
+            .map_err(|err| TarError::io("write tar padding", Some(&metadata.path), err))?;
     }
     Ok(())
 }
@@ -334,7 +339,10 @@ fn required_link_target(entry: &FileEntry, kind: &str) -> Result<String, TarErro
         .as_deref()
         .filter(|target| !target.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| TarError::new(format!("{kind} entry {} has no link target", entry.path)))
+        .ok_or_else(|| TarError::LinkTarget {
+            kind: kind.to_owned(),
+            path: entry.path.clone(),
+        })
 }
 
 fn default_mode(kind: FileEntryKind) -> u32 {
@@ -348,10 +356,15 @@ fn parse_mtime(value: Option<&str>) -> Result<u64, TarError> {
     let Some(value) = value else {
         return Ok(0);
     };
-    let (timestamp, _) = crate::rfc3339::parse(value)
-        .map_err(|err| TarError::new(format!("parse mtime {value}: {err}")))?;
+    let (timestamp, _) = crate::rfc3339::parse(value).map_err(|cause| TarError::Mtime {
+        actual: value.to_owned(),
+        cause,
+    })?;
     if timestamp < 0 {
-        return Err(TarError::new(format!("negative tar mtime: {value}")));
+        return Err(TarError::NegativeMtime {
+            actual: value.to_owned(),
+            seconds: timestamp,
+        });
     }
     Ok(timestamp as u64)
 }
@@ -405,10 +418,10 @@ fn write_octal(field: &mut [u8], value: u64) -> Result<(), TarError> {
     let width = field.len() - 1;
     let rendered = format!("{value:0width$o}");
     if rendered.len() > width {
-        return Err(TarError::new(format!(
-            "tar numeric value {value} does not fit {}-byte field",
-            field.len()
-        )));
+        return Err(TarError::NumericField {
+            actual: value,
+            width: field.len(),
+        });
     }
     let pad = width - rendered.len();
     for byte in &mut field[..pad] {
@@ -475,21 +488,24 @@ pub(crate) fn read_uncompressed_tar(data: &[u8]) -> Result<Vec<RawTarEntry<'_>>,
         if header == ZERO_BLOCK {
             break;
         }
-        verify_checksum(header, offset)?;
+        verify_checksum(header, offset as u64)?;
         let typeflag = header[156];
-        let size = parse_octal(&header[124..136]).ok_or_else(|| {
-            TarError::new(format!(
-                "tar entry at block {} has invalid size",
-                offset / BLOCK
-            ))
+        let size = parse_octal(&header[124..136]).ok_or_else(|| TarError::InvalidSize {
+            offset: offset as u64,
+            actual: header[124..136].to_vec(),
         })?;
         offset += BLOCK;
-        let body_end = offset
-            .checked_add(size as usize)
+        let body_end = usize::try_from(size)
+            .ok()
+            .and_then(|size| offset.checked_add(size))
             .filter(|end| *end <= data.len())
-            .ok_or_else(|| TarError::new("tar member body overruns archive"))?;
+            .ok_or(TarError::BodyOverrun {
+                offset,
+                size,
+                available: data.len(),
+            })?;
         let body = &data[offset..body_end];
-        offset = body_end + (BLOCK - (size as usize % BLOCK)) % BLOCK;
+        offset = body_end + (BLOCK - body.len() % BLOCK) % BLOCK;
 
         match typeflag {
             b'x' => {
@@ -514,16 +530,15 @@ pub(crate) fn read_uncompressed_tar(data: &[u8]) -> Result<Vec<RawTarEntry<'_>>,
                 pax.clear();
             }
             other => {
-                return Err(TarError::new(format!(
-                    "unsupported tar entry type {:?} at block {}",
-                    other as char,
-                    offset / BLOCK
-                )));
+                return Err(TarError::EntryType {
+                    actual: other,
+                    block: (offset / BLOCK) as u128,
+                });
             }
         }
     }
     if out.is_empty() {
-        return Err(TarError::new("tar archive contains no entries"));
+        return Err(TarError::EmptyArchive);
     }
     Ok(out)
 }
@@ -534,7 +549,7 @@ pub(crate) fn index_uncompressed_tar<R: Read + Seek>(
     let mut out = Vec::new();
     let mut offset = reader
         .stream_position()
-        .map_err(|err| TarError::new(format!("read tar position: {err}")))?;
+        .map_err(|cause| TarError::io("read tar position", None, cause))?;
     let mut pax: BTreeMap<String, String> = BTreeMap::new();
     let mut long_path: Option<String> = None;
     let mut long_link: Option<String> = None;
@@ -544,22 +559,24 @@ pub(crate) fn index_uncompressed_tar<R: Read + Seek>(
         match reader.read_exact(&mut header) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(err) => return Err(TarError::new(format!("read tar header: {err}"))),
+            Err(cause) => return Err(TarError::io("read tar header", None, cause)),
         }
         let header_offset = offset;
         offset = offset
             .checked_add(BLOCK as u64)
-            .ok_or_else(|| TarError::new("tar offset overflow"))?;
+            .ok_or(TarError::OffsetOverflow {
+                offset,
+                size: BLOCK as u64,
+                padding: 0,
+            })?;
         if header == ZERO_BLOCK {
             break;
         }
-        verify_checksum(&header, header_offset as usize)?;
+        verify_checksum(&header, header_offset)?;
         let typeflag = header[156];
-        let size = parse_octal(&header[124..136]).ok_or_else(|| {
-            TarError::new(format!(
-                "tar entry at block {} has invalid size",
-                header_offset as usize / BLOCK
-            ))
+        let size = parse_octal(&header[124..136]).ok_or_else(|| TarError::InvalidSize {
+            offset: header_offset,
+            actual: header[124..136].to_vec(),
         })?;
         let body_offset = offset;
         let next_offset = next_tar_offset(body_offset, size)?;
@@ -591,33 +608,31 @@ pub(crate) fn index_uncompressed_tar<R: Read + Seek>(
                 pax.clear();
             }
             other => {
-                return Err(TarError::new(format!(
-                    "unsupported tar entry type {:?} at block {}",
-                    other as char,
-                    header_offset as usize / BLOCK
-                )));
+                return Err(TarError::EntryType {
+                    actual: other,
+                    block: u128::from(header_offset / BLOCK as u64),
+                });
             }
         }
 
         reader
             .seek(SeekFrom::Start(next_offset))
-            .map_err(|err| TarError::new(format!("seek tar member boundary: {err}")))?;
+            .map_err(|cause| TarError::io("seek tar member boundary", None, cause))?;
         offset = next_offset;
     }
 
     if out.is_empty() {
-        return Err(TarError::new("tar archive contains no entries"));
+        return Err(TarError::EmptyArchive);
     }
     Ok(out)
 }
 
 fn read_current_body<R: Read>(reader: &mut R, size: u64) -> Result<Vec<u8>, TarError> {
-    let len = usize::try_from(size)
-        .map_err(|_| TarError::new(format!("tar member body too large: {size}")))?;
+    let len = usize::try_from(size).map_err(|_| TarError::BodyTooLarge { size })?;
     let mut body = vec![0_u8; len];
     reader
         .read_exact(&mut body)
-        .map_err(|err| TarError::new(format!("read tar member body: {err}")))?;
+        .map_err(|cause| TarError::io("read tar member body", None, cause))?;
     Ok(body)
 }
 
@@ -626,7 +641,11 @@ fn next_tar_offset(body_offset: u64, size: u64) -> Result<u64, TarError> {
     body_offset
         .checked_add(size)
         .and_then(|offset| offset.checked_add(padding))
-        .ok_or_else(|| TarError::new("tar offset overflow"))
+        .ok_or(TarError::OffsetOverflow {
+            offset: body_offset,
+            size,
+            padding,
+        })
 }
 
 fn raw_entry_from_header<'a>(
@@ -653,7 +672,7 @@ fn raw_entry_from_header<'a>(
         .or_else(|| long_path.take())
         .unwrap_or_else(|| header_path(header));
     if path.is_empty() {
-        return Err(TarError::new("empty tar path"));
+        return Err(TarError::EmptyPath);
     }
     let link_target = pax
         .get("linkpath")
@@ -741,7 +760,7 @@ fn seek_entry_from_header(
         .or_else(|| long_path.take())
         .unwrap_or_else(|| header_path(header));
     if path.is_empty() {
-        return Err(TarError::new("empty tar path"));
+        return Err(TarError::EmptyPath);
     }
     let link_target = pax
         .get("linkpath")
@@ -801,12 +820,12 @@ fn seek_entry_from_header(
     })
 }
 
-fn verify_checksum(header: &[u8], offset: usize) -> Result<(), TarError> {
+fn verify_checksum(header: &[u8], offset: u64) -> Result<(), TarError> {
     let Some(expected) = parse_octal(&header[148..156]) else {
-        return Err(TarError::new(format!(
-            "tar entry at block {} has invalid checksum",
-            offset / BLOCK
-        )));
+        return Err(TarError::InvalidChecksum {
+            offset,
+            actual: header[148..156].to_vec(),
+        });
     };
     let mut sum = 0u64;
     for (idx, byte) in header.iter().enumerate() {
@@ -817,10 +836,11 @@ fn verify_checksum(header: &[u8], offset: usize) -> Result<(), TarError> {
         }
     }
     if sum != expected {
-        return Err(TarError::new(format!(
-            "tar entry at block {} has checksum {sum:o}, expected {expected:o}",
-            offset / BLOCK
-        )));
+        return Err(TarError::Checksum {
+            offset,
+            actual: sum,
+            expected,
+        });
     }
     Ok(())
 }
@@ -895,24 +915,48 @@ fn parse_pax_body(body: &[u8]) -> Result<BTreeMap<String, String>, TarError> {
             .iter()
             .position(|byte| *byte == b' ')
             .map(|idx| offset + idx)
-            .ok_or_else(|| TarError::new("malformed pax record length"))?;
-        let len_text = std::str::from_utf8(&body[offset..len_end])
-            .map_err(|_| TarError::new("pax record length is not UTF-8"))?;
+            .ok_or(TarError::PaxLengthMissing {
+                offset,
+                remaining: body.len() - offset,
+            })?;
+        let len_text = std::str::from_utf8(&body[offset..len_end]).map_err(|cause| {
+            TarError::PaxLengthUtf8 {
+                offset,
+                actual: body[offset..len_end].to_vec(),
+                cause,
+            }
+        })?;
         let len: usize = len_text
             .parse()
-            .map_err(|_| TarError::new(format!("invalid pax record length: {len_text}")))?;
+            .map_err(|cause| TarError::PaxLengthInteger {
+                actual: len_text.to_owned(),
+                cause,
+            })?;
         let end = offset
             .checked_add(len)
-            .filter(|end| *end <= body.len())
-            .ok_or_else(|| TarError::new("pax record overruns body"))?;
-        let record = std::str::from_utf8(&body[len_end + 1..end])
-            .map_err(|_| TarError::new("pax record is not UTF-8"))?;
+            .filter(|end| *end <= body.len() && *end > len_end)
+            .ok_or(TarError::PaxOverrun {
+                offset,
+                length: len,
+                available: body.len(),
+            })?;
+        let record = std::str::from_utf8(&body[len_end + 1..end]).map_err(|cause| {
+            TarError::PaxRecordUtf8 {
+                offset,
+                actual: body[len_end + 1..end].to_vec(),
+                cause,
+            }
+        })?;
         let record = record
             .strip_suffix('\n')
-            .ok_or_else(|| TarError::new("pax record missing newline"))?;
-        let (key, value) = record
-            .split_once('=')
-            .ok_or_else(|| TarError::new("pax record missing '='"))?;
+            .ok_or_else(|| TarError::PaxNewline {
+                offset,
+                actual: record.to_owned(),
+            })?;
+        let (key, value) = record.split_once('=').ok_or_else(|| TarError::PaxEquals {
+            offset,
+            actual: record.to_owned(),
+        })?;
         out.insert(key.to_string(), value.to_string());
         offset = end;
     }
@@ -956,6 +1000,121 @@ fn non_empty(value: String) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn malformed_pax_lengths_and_bytes_retain_native_causes_without_panicking() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        for body in [b"0 x=y\n".as_slice(), b"1 x=y\n", b"0001 x=y\n"] {
+            let error = parse_pax_body(body).unwrap_err();
+            assert_eq!(Capture::read(&error).code, "gts-tar-pax-overrun");
+        }
+        let error = parse_pax_body(b"\xff x=y\n").unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-tar-pax-length-utf8");
+        assert!(matches!(fields.field("actual"), ErrorValue::Bytes([255])));
+        assert!(matches!(
+            fields.child("cause").field("valid_up_to"),
+            ErrorValue::ByteCount(0)
+        ));
+        assert!(matches!(
+            fields.child("cause").field("error_len"),
+            ErrorValue::ByteCount(1)
+        ));
+        let error = parse_pax_body(b"6 x=\xff\n").unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-tar-pax-record-utf8");
+        assert!(matches!(
+            fields.child("cause").field("valid_up_to"),
+            ErrorValue::ByteCount(2)
+        ));
+        let input = format!("{} x=y\n", u128::MAX);
+        let error = parse_pax_body(input.as_bytes()).unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-tar-pax-length-integer");
+        assert!(
+            matches!(fields.field("actual"), ErrorValue::Text(value) if value == u128::MAX.to_string())
+        );
+        assert!(matches!(
+            fields.child("cause").child("kind").field("name"),
+            ErrorValue::Code("positive-overflow")
+        ));
+        assert_eq!(parse_pax_body(b"6 x=y\n").unwrap().get("x").unwrap(), "y");
+    }
+
+    #[test]
+    fn full_width_member_bounds_refuse_before_body_allocation() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let entry = FileEntry {
+            path: "large".into(),
+            ..FileEntry::default()
+        };
+        let size = (1_u64 << 32) + 1;
+        let metadata = HeaderMetadata::from_entry(&entry, size, &ToTarOptions::default()).unwrap();
+        let mut bytes = Vec::new();
+        write_header(&mut bytes, &metadata, &[]).unwrap();
+        let error = read_uncompressed_tar(&bytes).unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-tar-body-overrun");
+        assert!(
+            matches!(fields.field("size"), ErrorValue::ByteCount(value) if value == u128::from(size))
+        );
+        assert!(matches!(fields.field("offset"), ErrorValue::ByteCount(512)));
+        bytes[148] = b'x';
+        let error = read_uncompressed_tar(&bytes).unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-tar-invalid-checksum");
+        assert!(
+            matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == &bytes[148..156])
+        );
+    }
+
+    #[test]
+    fn imported_mtime_keeps_full_unsigned_input_and_native_format_error() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        for seconds in [u64::MAX, i64::MAX as u64] {
+            let mut records = BTreeMap::new();
+            records.insert("mtime".to_owned(), seconds.to_string());
+            let body = pax_body(&records);
+            let entry = FileEntry {
+                path: "stamp".into(),
+                kind: FileEntryKind::Directory,
+                ..FileEntry::default()
+            };
+            let mut header =
+                HeaderMetadata::from_entry(&entry, body.len() as u64, &ToTarOptions::default())
+                    .unwrap();
+            header.typeflag = b'x';
+            let mut bytes = Vec::new();
+            write_header(&mut bytes, &header, &body).unwrap();
+            let header = HeaderMetadata::from_entry(&entry, 0, &ToTarOptions::default()).unwrap();
+            write_header(&mut bytes, &header, &[]).unwrap();
+            bytes.extend_from_slice(&ZERO_BLOCK);
+            let options = crate::from_tar::FromTarOptions::default();
+            let errors = [
+                crate::from_tar::from_tar_bytes(&bytes, &options).unwrap_err(),
+                crate::from_tar::from_seekable_tar(&mut Cursor::new(&bytes), &options).unwrap_err(),
+            ];
+            for error in errors {
+                let fields = Capture::read(&error);
+                assert!(
+                    matches!(fields.field("seconds"), ErrorValue::Unsigned(value) if value == u128::from(seconds))
+                );
+                if seconds == u64::MAX {
+                    assert_eq!(fields.code, "gts-tar-mtime-conversion");
+                } else {
+                    assert_eq!(fields.child("cause").code, "rfc3339-format-year-range");
+                    assert!(
+                        matches!(fields.child("cause").field("seconds"), ErrorValue::Signed(value) if value == i128::from(i64::MAX))
+                    );
+                }
+            }
+        }
+        let error = purrdf_xsd::rfc3339::format(0, u32::MAX).unwrap_err();
+        assert_eq!(Capture::read(&error).code, "rfc3339-format-nanoseconds");
+    }
 
     #[test]
     fn pax_body_lengths_include_decimal_prefix() {

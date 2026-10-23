@@ -71,3 +71,7 @@ purrdf-testkit = { workspace = true }
 [[bench]]
 name = "ownership"
 harness = false
+
+[[test]]
+name = "structured_errors"
+harness = false

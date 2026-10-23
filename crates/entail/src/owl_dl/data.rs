@@ -88,6 +88,11 @@ pub(crate) struct DataRangeTable {
 }
 
 impl DataRangeTable {
+    /// Borrow the original native range AST without reinterpreting its value space.
+    pub(crate) fn range(&self, id: u32) -> &DataRange {
+        &self.ranges[id as usize].range
+    }
+
     /// Whether the knowledge base holds no data range at all.
     ///
     /// The tableau's concrete-domain clash rule is skipped wholesale when this holds, so an
@@ -900,19 +905,28 @@ mod tests {
         assert_eq!(boundaries, vec![Construct::DataRange]);
     }
 
-    /// A datatype outside the modelled value space is the second residue class. It may
-    /// OVERLAP a modelled space — every `xsd:decimal` value is an `owl:real` value — so it
-    /// cannot be assumed disjoint either, and the honest answer is the boundary.
+    /// A native primitive is exact; a datatype outside the modelled value space
+    /// remains a named boundary. An unmodelled `owl:real` may overlap decimal,
+    /// so it cannot be assumed disjoint from the modelled spaces either.
     #[test]
-    fn an_unmodelled_datatype_is_reported_rather_than_guessed() {
-        let mut f = Fixture::new();
-        let property = f.iri(EX_P);
-        let individual = f.iri(EX_A);
-        let value = f.literal("http://example.org/x", XSD_ANYURI);
-        f.quad(individual, property, value);
-        let (consistent, boundaries) = run(&f.freeze());
-        assert!(consistent);
-        assert_eq!(boundaries, vec![Construct::DataRange]);
+    fn native_any_uri_is_exact_while_an_unmodelled_datatype_is_reported() {
+        for (lexical, datatype, expected) in [
+            ("http://example.org/x", XSD_ANYURI, vec![]),
+            (
+                "0.5",
+                purrdf_xsd::datatype::OWL_REAL,
+                vec![Construct::DataRange],
+            ),
+        ] {
+            let mut f = Fixture::new();
+            let property = f.iri(EX_P);
+            let individual = f.iri(EX_A);
+            let value = f.literal(lexical, datatype);
+            f.quad(individual, property, value);
+            let (consistent, boundaries) = run(&f.freeze());
+            assert!(consistent, "{datatype}");
+            assert_eq!(boundaries, expected, "{datatype}");
+        }
     }
 
     /// A decidable data range leaves the certificate FLATLY exact, so the boundary is evidence

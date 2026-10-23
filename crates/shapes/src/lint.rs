@@ -58,8 +58,8 @@
 //! # Where `shacl-shacl.ttl` lags SHACL 1.2 Core
 //!
 //! The vendored `shacl-shacl.ttl` predates several SHACL 1.2 Core relaxations, so it
-//! flags some graphs the specification makes well-formed — `sh:closed sh:ByTypes`, a
-//! list-valued `sh:nodeKind`, a path-valued `sh:equals`. Counting those as findings would
+//! flags some graphs the specification makes well-formed — a list-valued `sh:nodeKind`, a
+//! path-valued `sh:equals`. Counting those as findings would
 //! refuse valid shapes graphs. [`SHACL_SHACL_SUPERSEDED`] names each such rule with the
 //! SHACL 1.2 Core sentence that makes the graph well-formed; a `shacl-shacl` result it
 //! covers is reported, marked `superseded`, and is not a finding — but ONLY when the
@@ -113,7 +113,7 @@ const SHACL_SHACL: &str = include_str!("../spec/shacl-shacl.ttl");
 /// makes well-formed. See the [module docs](self).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Supersession {
-    /// The rule's stable name, e.g. `closed-by-types`.
+    /// The rule's stable name, e.g. `list-valued-node-kind`.
     pub name: &'static str,
     /// The `shacl-shacl.ttl` results it covers, each `(constraint component local name,
     /// result path, source shape)`; the path and shape are N-Triples IRIs, and an empty
@@ -161,17 +161,6 @@ fn named(term: &Term) -> String {
 /// Every rule by which the vendored `shacl-shacl.ttl` lags SHACL 1.2 Core. See the
 /// [module docs](self).
 pub const SHACL_SHACL_SUPERSEDED: &[Supersession] = &[
-    Supersession {
-        name: "closed-by-types",
-        covers: &[(
-            "DatatypeConstraintComponent",
-            "<http://www.w3.org/ns/shacl#closed>",
-            "",
-        )],
-        citation: "SHACL 1.2 Core §7.9.1: \"The values of sh:closed in a shape are literals \
-                   with datatype xsd:boolean or the IRI sh:ByTypes.\" — shacl-shacl.ttl still \
-                   requires an xsd:boolean (closed-datatype)",
-    },
     Supersession {
         name: "list-valued-node-kind",
         covers: &[(
@@ -226,6 +215,19 @@ pub const SHACL_SHACL_SUPERSEDED: &[Supersession] = &[
                    triple is the empty node expression, and one carrying sh:select is a SPARQL \
                    node expression whose output nodes are the targets; shacl-shacl.ttl still \
                    requires an IRI or a literal",
+    },
+    Supersession {
+        name: "node-expression-deactivated",
+        covers: &[(
+            "DatatypeConstraintComponent",
+            "<http://www.w3.org/ns/shacl#deactivated>",
+            "",
+        )],
+        citation: "SHACL 1.2 Core, \"Deactivating Shapes and Constraints\": \"The value of \
+                   sh:deactivated is a node expression that must have either true or false as \
+                   the (only) output node.\" A blank node carrying sh:select or another node \
+                   expression is evaluated at each focus node; shacl-shacl.ttl still requires \
+                   an xsd:boolean literal",
     },
     Supersession {
         name: "sequence-path-with-other-values",

@@ -398,14 +398,17 @@ fn cli_rules() {
     ]);
     assert_eq!(code(&unused), 2, "{}", stderr(&unused));
 
-    // The knob reaches the SPARQL 1.2 RL route too: a rule nesting a triple term every
-    // round never stops generating terms, and a limit of 3 stops it by name.
+    // The knob reaches the SPARQL 1.2 RL route too, and the route is stricter than the
+    // knob: a rule whose head templates a triple term containing a variable is a
+    // run-once rule, and a run-once rule that depends on its own output is a cycle
+    // through a closed dependency, which stratification refuses before any round runs.
+    // The refusal names the stratification, not the round limit.
     let nesting = write_file(
         dir.path(),
         "nesting.srl",
         "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:n <<( ?x ex:n ?y )>> } WHERE { ?x ex:n ?y }\n",
     );
-    let bounded = run(&[
+    let refused = run(&[
         "rules",
         "--srl",
         &nesting,
@@ -415,12 +418,60 @@ fn cli_rules() {
         "ntriples",
         &data,
     ]);
-    assert_eq!(code(&bounded), 1, "{}", stderr(&bounded));
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
-        stderr(&bounded).contains("past the limit of 3"),
+        stderr(&refused).contains("not stratifiable"),
         "{}",
-        stderr(&bounded)
+        stderr(&refused)
     );
+    // Its neighbour: the same head over a body that does not read the head's predicate
+    // has no cycle, so it is accepted and evaluated under the same limit.
+    let acyclic = write_file(
+        dir.path(),
+        "acyclic.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:m <<( ?x ex:n ?y )>> } WHERE { ?x ex:n ?y }\n",
+    );
+    let accepted = run(&[
+        "rules",
+        "--srl",
+        &acyclic,
+        "--max-term-generating-rounds",
+        "3",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    // The flag still reaches the RL route and changes the outcome: the neighbour infers a
+    // term the graph did not hold, which is one term-generating round, so a limit of 0
+    // stops it by name and a limit of 1 lets it finish.
+    let stopped = run(&[
+        "rules",
+        "--srl",
+        &acyclic,
+        "--max-term-generating-rounds",
+        "0",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&stopped), 1, "{}", stderr(&stopped));
+    assert!(
+        stderr(&stopped).contains("past the limit of 0"),
+        "{}",
+        stderr(&stopped)
+    );
+    let one = run(&[
+        "rules",
+        "--srl",
+        &acyclic,
+        "--max-term-generating-rounds",
+        "1",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&one), 0, "{}", stderr(&one));
 
     // Exactly one rule source.
     let both = run(&[
@@ -880,16 +931,17 @@ fn cli_shapes_lint() {
     assert!(report.ends_with("clean false\n"), "{report}");
     assert!(stderr(&bad).contains("shapes lint clean false\n"));
 
-    let by_types = write_file(
+    let list_kind = write_file(
         dir.path(),
-        "by-types.ttl",
+        "list-kind.ttl",
         &format!(
-            "{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n"
+            "{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; \
+             sh:nodeKind ( sh:IRI sh:Literal ) .\n"
         ),
     );
-    let superseded = run(&["shapes", "lint", &by_types]);
+    let superseded = run(&["shapes", "lint", &list_kind]);
     assert_eq!(code(&superseded), 0, "{}", stderr(&superseded));
-    assert!(stdout(&superseded).contains(" superseded closed-by-types\n"));
+    assert!(stdout(&superseded).contains(" superseded list-valued-node-kind\n"));
 
     // An empty sh:xone list is a mandatory diagnostic named by rule id: the load is
     // accepted, the line is a finding, and the verb exits 1. The clean fixture above is
@@ -1226,16 +1278,14 @@ fn cli_rules_capacity_limits() {
     assert_eq!(stdout(&roomy), expected_inference());
 }
 
-/// The NON-linear transitive closure of a 181-edge chain enumerates 1,056,743 join
-/// steps, just past the default limit of 2^20: `rules` refuses it naming
-/// `--max-join-steps` and writes no graph, and completes with every one of its 16,471
-/// triples when the limit is raised to 2^21. One edge fewer (1,039,835 steps) fits the
-/// default, so the refusal is the limit's and not the rule shape's. The linear closure
-/// of the same chain fits the default and yields the identical graph.
+/// Nonlinear recursive closure refuses an explicit small work budget without writing
+/// a partial graph. Raising the budget completes the same closure as the default
+/// and the linear rule. The test does not depend on an optimizer's historical step
+/// count or require the default budget to reject a workload it can now complete.
 #[test]
 fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     use std::fmt::Write as _;
-    const EDGES: usize = 181;
+    const EDGES: usize = 32;
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let chain_of = |edges: usize| {
         let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
@@ -1245,7 +1295,6 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         chain
     };
     let data = write_file(dir.path(), "chain.ttl", &chain_of(EDGES));
-    let shorter = write_file(dir.path(), "shorter.ttl", &chain_of(EDGES - 1));
     let rules = |recursive_atom: &str| {
         format!(
             "PREFIX ex: <http://example.org/ns#>\n\
@@ -1256,11 +1305,20 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     let nonlinear = write_file(dir.path(), "nonlinear.srl", &rules("ex:connected"));
     let linear = write_file(dir.path(), "linear.srl", &rules("ex:link"));
 
-    let refused = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
+    let refused = run(&[
+        "rules",
+        "--srl",
+        &nonlinear,
+        "--max-join-steps",
+        "64",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
         stderr(&refused).contains("the rules exceeded the join-step limit: ")
-            && stderr(&refused).contains("1048576 permitted (the default for this target)")
+            && stderr(&refused).contains("64 permitted (the caller's limit)")
             && stderr(&refused)
                 .trim_end()
                 .ends_with("raise it with --max-join-steps"),
@@ -1269,9 +1327,9 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     );
     assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
 
-    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &shorter]);
+    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
     assert_eq!(code(&fits), 0, "{}", stderr(&fits));
-    assert_eq!(stdout(&fits).lines().count(), 16_290);
+    assert_eq!(stdout(&fits).lines().count(), EDGES * (EDGES + 1) / 2);
 
     let raised = run(&[
         "rules",
@@ -1284,7 +1342,7 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         &data,
     ]);
     assert_eq!(code(&raised), 0, "{}", stderr(&raised));
-    assert_eq!(stdout(&raised).lines().count(), 16_471);
+    assert_eq!(stdout(&raised), stdout(&fits));
 
     let linear_run = run(&["rules", "--srl", &linear, "--to", "ntriples", &data]);
     assert_eq!(code(&linear_run), 0, "{}", stderr(&linear_run));
@@ -1421,11 +1479,16 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
         assert_eq!(code(&ceiling), 1, "{}", stderr(&ceiling));
         assert!(
             stderr(&ceiling).contains(
-                "evaluation exceeded the fixed term arena bytes ceiling: 16782539 observed, \
+                "evaluation exceeded the term arena bytes limit: 16782539 observed, \
                  16777216 permitted"
             ),
             "{}",
             stderr(&ceiling)
+        );
+        assert!(
+            stderr(&ceiling)
+                .trim_end()
+                .ends_with("reduce retained term sizes in the input or rules")
         );
         assert!(
             !stderr(&ceiling).contains("join-step"),

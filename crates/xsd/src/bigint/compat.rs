@@ -8,6 +8,8 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 /// Balanced binary products switch to Karatsuba at this limb count.
 pub const KARATSUBA_THRESHOLD: usize = 32;
+/// Balanced products switch to three-way evaluation above the Karatsuba range.
+pub(crate) const TOOM3_THRESHOLD: usize = 1024;
 
 impl BigInt {
     /// The number of binary magnitude limbs, zero for zero.
@@ -298,14 +300,14 @@ impl BigInt {
         self.add(other)
     }
 
-    /// Schoolbook small products and recursive Karatsuba large products.
+    /// Schoolbook small products, Karatsuba, Toom-3 and exact transforms.
     #[must_use]
     pub fn mul_fast(&self, other: &Self) -> Self {
         self.mul_fast_using(other, &super::Unbounded)
             .expect("unbounded integer storage")
     }
 
-    /// The same Karatsuba/schoolbook implementation with explicit destinations.
+    /// The same product dispatch with explicit destinations.
     pub(crate) fn mul_fast_using(
         &self,
         other: &Self,
@@ -316,6 +318,29 @@ impl BigInt {
             return self.mul_using(other, storage);
         }
         let split = self.limb_len().max(other.limb_len()) / 2;
+        // A three-way split is useful only when both top chunks are populated.
+        // Keep asymmetric products on the existing chunked Karatsuba route.
+        if self.limb_len().min(other.limb_len()) >= TOOM3_THRESHOLD
+            && self.limb_len().min(other.limb_len())
+                > self
+                    .limb_len()
+                    .max(other.limb_len())
+                    .div_ceil(3)
+                    .saturating_mul(2)
+        {
+            // Reuse the existing balanced-large admission. Small recursive
+            // products do not pay another algorithm-selection branch.
+            if let Some(length) =
+                super::transform_product_len(self.limb_len() as u64, other.limb_len() as u64)
+            {
+                let length = usize::try_from(length).map_err(|_| SizeOverflow)?;
+                return super::ntt::product(&self.magnitude, &other.magnitude, length, storage)
+                    .map(|words| {
+                        Self::from_parts(self.is_negative() != other.is_negative(), words)
+                    });
+            }
+            return self.mul_toom3_using(other, storage);
+        }
         let (long, short) = if self.limb_len() >= other.limb_len() {
             (self, other)
         } else {
@@ -335,20 +360,7 @@ impl BigInt {
                 let offset = piece_index
                     .checked_mul(short.limb_len())
                     .ok_or(SizeOverflow)?;
-                let mut carry = 0_u128;
-                let mut at = offset;
-                for &word in piece.magnitude.iter() {
-                    let sum = u128::from(output[at]) + u128::from(word) + carry;
-                    output[at] = sum as u64;
-                    carry = sum >> 64;
-                    at += 1;
-                }
-                while carry != 0 {
-                    let sum = u128::from(output[at]) + carry;
-                    output[at] = sum as u64;
-                    carry = sum >> 64;
-                    at += 1;
-                }
+                add_scaled_magnitude_at(&mut output, offset, &piece.magnitude, 1)?;
             }
             super::mag_trim(&mut output);
             return Ok(Self::from_parts(
@@ -394,6 +406,171 @@ impl BigInt {
         let magnitude = lower.add_using(&shifted_high, storage)?;
         Ok(magnitude.with_sign(self.is_negative() != other.is_negative()))
     }
+
+    /// Evaluate at 0, 1, -1, 2 and infinity, then interpolate the exact
+    /// integer coefficients. Each recursive product has at most one third of
+    /// the balanced input limbs plus carry; every destination uses `storage`.
+    fn mul_toom3_using(
+        &self,
+        other: &Self,
+        storage: &impl super::Allocate,
+    ) -> Result<Self, super::LimbScratchError> {
+        let width = self.limb_len().max(other.limb_len()).div_ceil(3);
+        let split = |value: &Self| -> Result<[Self; 3], super::LimbScratchError> {
+            let words = &value.magnitude[..];
+            let first = width.min(words.len());
+            let second = width.saturating_mul(2).min(words.len());
+            Ok([
+                Self::from_parts(false, storage.copy(&words[..first])?),
+                Self::from_parts(false, storage.copy(&words[first..second])?),
+                Self::from_parts(false, storage.copy(&words[second..])?),
+            ])
+        };
+        let [a0, a1, a2] = split(self)?;
+        let [b0, b1, b2] = split(other)?;
+        let r0 = a0.mul_fast_using(&b0, storage)?;
+        let r4 = a2.mul_fast_using(&b2, storage)?;
+        let (even, odd) = {
+            let p1 = {
+                let left = eval_positive_point([&a0, &a1, &a2], 1, storage)?;
+                let right = eval_positive_point([&b0, &b1, &b2], 1, storage)?;
+                left.mul_fast_using(&right, storage)?
+            };
+            let pm1 = {
+                let left = a0.sub_using(&a1, storage)?.add_using(&a2, storage)?;
+                let right = b0.sub_using(&b1, storage)?.add_using(&b2, storage)?;
+                left.mul_fast_using(&right, storage)?
+            };
+            (
+                exact_div_small(&p1.add_using(&pm1, storage)?, 2, storage)?,
+                exact_div_small(&p1.sub_using(&pm1, storage)?, 2, storage)?,
+            )
+        };
+        let r2 = even.sub_using(&r0, storage)?.sub_using(&r4, storage)?;
+        let p2_odd = {
+            let p2 = {
+                let left = eval_positive_point([&a0, &a1, &a2], 2, storage)?;
+                let right = eval_positive_point([&b0, &b1, &b2], 2, storage)?;
+                left.mul_fast_using(&right, storage)?
+            };
+            let r4_times_16 = r4.shl_using(4, storage)?;
+            exact_div_small(
+                &p2.sub_using(&r0, storage)?
+                    .sub_using(&r4_times_16, storage)?,
+                2,
+                storage,
+            )?
+        };
+        drop((a0, a1, a2, b0, b1, b2));
+        let r3 = exact_div_small(
+            &p2_odd
+                .sub_using(&r2.shl_using(1, storage)?, storage)?
+                .sub_using(&odd, storage)?,
+            3,
+            storage,
+        )?;
+        let r1 = odd.sub_using(&r3, storage)?;
+
+        // The polynomial coefficients are sums of products of nonnegative
+        // chunks. Add each at its binary-limb offset into one admitted result
+        // instead of copying a growing prefix through four shifts and sums.
+        let result_len = self
+            .limb_len()
+            .checked_add(other.limb_len())
+            .ok_or(super::LimbScratchError::SizeOverflow)?;
+        let mut output = storage.destination(result_len, result_len)?;
+        for (power, coefficient) in [&r0, &r1, &r2, &r3, &r4].into_iter().enumerate() {
+            // r[k] is the sum of a[i]*b[j] at i+j=k. The source chunks
+            // are magnitudes, so these interpolated coefficients are
+            // nonnegative even when the outer product is signed.
+            debug_assert!(!coefficient.is_negative());
+            let offset = width
+                .checked_mul(power)
+                .ok_or(super::LimbScratchError::SizeOverflow)?;
+            add_scaled_magnitude_at(&mut output, offset, &coefficient.magnitude, 1)?;
+        }
+        super::mag_trim(&mut output);
+        Ok(Self::from_parts(
+            self.is_negative() != other.is_negative(),
+            output,
+        ))
+    }
+}
+
+/// Form a positive Toom point directly in one admitted destination. The
+/// coefficients are magnitudes, and the only callers evaluate at 1 and 2.
+fn eval_positive_point(
+    chunks: [&BigInt; 3],
+    point: u64,
+    storage: &impl super::Allocate,
+) -> Result<BigInt, super::LimbScratchError> {
+    use super::LimbScratchError::SizeOverflow;
+    debug_assert!(point == 1 || point == 2);
+    let length = chunks
+        .iter()
+        .map(|chunk| chunk.limb_len())
+        .max()
+        .unwrap_or(0)
+        .checked_add(2)
+        .ok_or(SizeOverflow)?;
+    let mut output = storage.destination(length, length)?;
+    for (chunk, factor) in chunks.into_iter().zip([1, point, point * point]) {
+        add_scaled_magnitude_at(&mut output, 0, &chunk.magnitude, factor)?;
+    }
+    super::mag_trim(&mut output);
+    Ok(BigInt::from_parts(false, output))
+}
+
+/// Carry-add a scaled magnitude into an initialized destination. The chunked
+/// product, three-way reconstruction and positive evaluation share this body.
+fn add_scaled_magnitude_at(
+    output: &mut [u64],
+    offset: usize,
+    words: &[u64],
+    factor: u64,
+) -> Result<(), super::LimbScratchError> {
+    use super::LimbScratchError::SizeOverflow;
+    let end = offset.checked_add(words.len()).ok_or(SizeOverflow)?;
+    if end > output.len() {
+        return Err(SizeOverflow);
+    }
+    let mut carry = 0_u128;
+    for (slot, &word) in output[offset..end].iter_mut().zip(words) {
+        let sum = u128::from(*slot) + u128::from(word) * u128::from(factor) + carry;
+        *slot = sum as u64;
+        carry = sum >> 64;
+    }
+    let mut at = end;
+    while carry != 0 {
+        let slot = output.get_mut(at).ok_or(SizeOverflow)?;
+        let sum = u128::from(*slot) + carry;
+        *slot = sum as u64;
+        carry = sum >> 64;
+        at += 1;
+    }
+    Ok(())
+}
+
+fn exact_div_small(
+    value: &BigInt,
+    divisor: i128,
+    storage: &impl super::Allocate,
+) -> Result<BigInt, super::LimbScratchError> {
+    if divisor == 2 {
+        // Every interpolation numerator is even. The general one-limb
+        // division path performs quotient/remainder division for each limb;
+        // an exact signed shift uses the same admitted destination instead.
+        assert_eq!(value.magnitude.first().copied().unwrap_or(0) & 1, 0);
+        return value.shr_using(1, storage);
+    }
+    let (quotient, remainder) = value
+        .div_rem_using(&BigInt::from_i128(divisor), storage)?
+        .expect("nonzero interpolation divisor");
+    assert!(
+        remainder.is_zero(),
+        "Toom interpolation must divide exactly"
+    );
+    Ok(quotient)
 }
 
 impl Add<&BigInt> for &BigInt {
@@ -424,5 +601,44 @@ impl Neg for BigInt {
     type Output = Self;
     fn neg(self) -> Self {
         self.negated()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BigInt, TOOM3_THRESHOLD};
+
+    fn operand(limbs: usize, seed: u64, negative: bool) -> BigInt {
+        let words: Vec<u64> = (0..limbs)
+            .map(|index| {
+                let step = u64::try_from(index).expect("test length");
+                seed.wrapping_add(step.wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1
+            })
+            .collect();
+        BigInt::from_parts(negative, super::super::Mag::Heap(words))
+    }
+
+    #[test]
+    fn toom3_balanced_products_match_schoolbook_across_cutoffs_and_signs() {
+        for (left_len, right_len) in [
+            (TOOM3_THRESHOLD - 1, TOOM3_THRESHOLD - 1),
+            (TOOM3_THRESHOLD, TOOM3_THRESHOLD),
+            (TOOM3_THRESHOLD + 1, TOOM3_THRESHOLD + 2),
+            (TOOM3_THRESHOLD * 2, TOOM3_THRESHOLD * 2 + 1),
+            (TOOM3_THRESHOLD * 4, TOOM3_THRESHOLD * 4),
+            (TOOM3_THRESHOLD, TOOM3_THRESHOLD * 2),
+        ] {
+            for (left_negative, right_negative) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let left = operand(left_len, 0x1234_5678_9abc_def0, left_negative);
+                let right = operand(right_len, 0xfedc_ba98_7654_3210, right_negative);
+                assert_eq!(
+                    left.mul_fast(&right),
+                    left.mul(&right),
+                    "{left_len}/{right_len} limbs, signs {left_negative}/{right_negative}"
+                );
+            }
+        }
     }
 }

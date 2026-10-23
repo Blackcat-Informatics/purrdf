@@ -5,6 +5,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # PurRDF columnar schema
 
+English | [简体中文](COLUMNAR.zh-Hans.md)
+
 `purrdf-columnar` represents one RDF 1.2 dataset and one content-addressed blob
 store as a closed set of five Parquet files. A `ParquetFiles` value always
 contains all five files, including valid zero-row files for empty tables.
@@ -13,6 +15,24 @@ Every table is flat. The only Parquet physical types are `INT64` and
 `BYTE_ARRAY`; textual byte arrays carry the standard UTF8 annotation. Required
 columns contain one value per row. Optional columns use definition level 0 for
 null and 1 for present.
+
+## Projection failures
+
+Native integrity refusals retain their original `ContentStoreError` in
+`ColumnarError::ContentStore` or `BlobContent { row, cause }`. The latter row is
+zero-based. Both SHA-256 identities are borrowed as original digest bytes through
+the structured-error protocol. `Reconstruction` retains the complete original
+`RdfDiagnostic`, including its storage and native-cause attachments. Standard
+error sources borrow these causes directly; transport does not format, clone or
+allocate a replacement cause. Existing human message prefixes and frozen bytes
+are unchanged.
+
+`project` and `write` return `ColumnarWriteError<D::ReadError>`. Its `SourceRead`
+variant owns the original `DatasetView` failure; its `Codec` variant owns the
+existing `ColumnarError`. Source transport neither formats nor clones the error.
+The standard error chain borrows that original cause. When the source implements
+the structured-error protocol, inspection reports its original nested fields.
+`read` and a prepared projection's `to_parquet` still return `ColumnarError`.
 
 ## Tables
 

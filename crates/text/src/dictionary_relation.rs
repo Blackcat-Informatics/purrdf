@@ -68,7 +68,7 @@ impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: &WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'static>, EvalError> {
         let needle = phrase(args, workspace)?;
         let entries = [DictionaryEntry {
             identity: args.get(1).expect("required phrase"),
@@ -108,20 +108,26 @@ impl<P: CorpusProfile> PropertyFunction for PhraseOccurrenceRelation<P> {
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         self.rows
     }
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.owned_cursor(args, ceiling, &WorkspaceCapability::resident())
             .and_then(WorkspaceCursor::into_resident)
     }
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.owned_cursor(args, ceiling, &workspace)
     }
     fn dictionary_shape(&self) -> Option<DictionaryShape> {
@@ -244,13 +250,16 @@ impl<P: CorpusProfile> DictionaryBatch for PhraseBatch<P> {
             output_rows: work.output_rows,
         }
     }
-    fn open(
+    fn open<'cursor>(
         &self,
         ordinal: usize,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: &WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         cursor(
             self.results.clone(),
             ordinal,
@@ -280,7 +289,7 @@ fn cursor<P: CorpusProfile>(
     generation: Arc<str>,
     count_work: bool,
     workspace: &WorkspaceCapability,
-) -> Result<WorkspaceCursor, EvalError> {
+) -> Result<WorkspaceCursor<'static>, EvalError> {
     phrase(args, workspace)?;
     let rows = results.matches.rows();
     let begin = rows.partition_point(|row| row.entry < ordinal);
@@ -398,7 +407,6 @@ fn literal_matches<P: CorpusProfile>(
                     for token in index
                         .token_occurrences(document)
                         .expect("index stream")
-                        .iter()
                         .filter(|token| {
                             token.position == position
                                 && index.occurrence_term(token.term) == Some(term.as_str())

@@ -128,7 +128,7 @@ pub(super) fn reflected_source_towards(
             ) {
                 // A reflected source outside the explicitly declared domain is
                 // an unavailable optional proof; the original solver remains.
-                Err(GeoError::Domain(_)) => Ok(None),
+                Err(error) if error.is_domain_error() => Ok(None),
                 result => result.map(Some),
             }
         })();

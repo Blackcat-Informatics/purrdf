@@ -307,7 +307,7 @@ pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
 /// charge (see [`Planner::enter_aggregate`]).
 pub(crate) fn plan_query(
     query: &Query,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
 ) -> Result<Option<Query>, PlanError> {
@@ -318,7 +318,7 @@ pub(crate) fn plan_query(
 /// parameter feasibility still run, without normalizing an already admitted tree.
 fn legacy_query_plan(
     query: &Query,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
     normalize: bool,
@@ -336,7 +336,7 @@ fn legacy_query_plan(
 /// Prepare through the original allocation admission, retaining only new AST buffers.
 pub(crate) fn plan_query_with_memory(
     query: &Query,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     parameters: &[&str],
     memory: &mut Memory<'_, LexicalFrame>,
@@ -348,7 +348,7 @@ pub(crate) fn plan_query_with_memory(
 /// Recheck feasibility without renormalizing an immutable prepared topology.
 pub(crate) fn recheck_query_with_memory(
     query: &Query,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     parameters: &[&str],
     memory: &mut Memory<'_, LexicalFrame>,
@@ -370,7 +370,7 @@ fn promised_parameters(
 
 fn plan_query_native(
     query: &Query,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     parameters: &[&str],
     normalize: bool,
@@ -419,7 +419,7 @@ fn plan_query_native(
 /// [`plan_query`]'s doc.
 pub(crate) fn plan_where_pattern(
     pattern: &GraphPattern,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
 ) -> Result<Option<GraphPattern>, PlanError> {
@@ -441,7 +441,7 @@ pub(crate) fn plan_where_pattern(
 
 fn plan_where_pattern_native(
     pattern: &GraphPattern,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     parameters: &VarSchema,
     normalize_positive: bool,
@@ -610,7 +610,7 @@ struct Atom<'a> {
 #[cfg(test)]
 fn plan_pattern(
     pattern: &GraphPattern,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
     promise: Promise<'_>,
@@ -638,7 +638,7 @@ fn plan_pattern(
 
 fn plan_pattern_native<'a>(
     pattern: &'a GraphPattern,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
     outer: &'a VarSchema,
     promise: NativePromise<'a>,
@@ -889,7 +889,7 @@ struct NativeChainOrder<'a> {
 
 fn order_chain_native<'a>(
     mut remaining: AdmittedVec<Atom<'a>>,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     outer: &VarSchema,
     promise: NativePromise<'_>,
     memory: &mut Memory<'_, LexicalFrame>,
@@ -1034,7 +1034,7 @@ fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
 #[cfg(test)]
 fn stuck(
     remaining: &[Atom<'_>],
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     bound: &DetHashSet<Variable>,
 ) -> PlanError {
     let workspace = WorkspaceCapability::resident();
@@ -1051,7 +1051,7 @@ fn stuck(
 
 fn stuck_native(
     remaining: &[Atom<'_>],
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     bound: &dyn Fn(&Variable) -> bool,
     memory: &mut Memory<'_, LexicalFrame>,
 ) -> PrepResult<PlanError> {
@@ -1133,9 +1133,9 @@ fn stuck_native(
 /// configuration that names a relation it never supplied — never a silently empty one.
 fn resolve_native<'r>(
     call: &PropertyFunctionCall,
-    relations: &'r PropertyFunctionRegistry,
+    relations: &'r PropertyFunctionRegistry<'r>,
     workspace: &WorkspaceCapability,
-) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
+) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction + 'r>, PlanError> {
     relations.resolve(&call.iri).ok_or_else(|| {
         plan_message(
             PlanSeam::PropertyFunction,
@@ -1150,7 +1150,7 @@ fn resolve_native<'r>(
 #[cfg(test)]
 fn admitted_row_bound(
     call: &PropertyFunctionCall,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     bound: &DetHashSet<Variable>,
 ) -> Result<Option<u64>, PlanError> {
     let workspace = WorkspaceCapability::resident();
@@ -1167,7 +1167,7 @@ fn admitted_row_bound(
 
 fn admitted_row_bound_native(
     call: &PropertyFunctionCall,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     bound: &dyn Fn(&Variable) -> bool,
     memory: &mut Memory<'_, LexicalFrame>,
 ) -> PrepResult<Option<u64>> {
@@ -1398,7 +1398,7 @@ enum Assemble<'a> {
 /// before the node it is under, so a set is released exactly when the last frame
 /// reading it is gone.
 struct Planner<'a, 'r, 'm, 's> {
-    relations: &'r PropertyFunctionRegistry,
+    relations: &'r PropertyFunctionRegistry<'r>,
     agg_registry: &'r AggregateRegistry,
     steps: AdmittedVec<Step<'a>>,
     values: AdmittedVec<Planned>,
@@ -4050,7 +4050,7 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 /// canonical "no registry" value — always is): that case returns before any
 /// relation's declaration is read at all.
 pub(crate) fn registry_fingerprint(
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
 ) -> Result<String, EvalError> {
     let capability = WorkspaceCapability::resident();
     let mut frame = LexicalFrame::new(&capability);
@@ -4059,7 +4059,7 @@ pub(crate) fn registry_fingerprint(
 
 /// Recompute the live declaration identity through its original physical account.
 pub(crate) fn registry_fingerprint_with_memory(
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     memory: &mut Memory<'_, LexicalFrame>,
 ) -> Result<String, EvalError> {
     if relations.is_empty() {
@@ -4169,7 +4169,7 @@ const CONTENT_VERSION: u16 = 2;
 /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)'s
 /// own failure, propagated unchanged.
 pub fn content_fingerprint(
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
 ) -> Result<ContentDigest, EvalError> {
     let capability = WorkspaceCapability::resident();
     let mut frame = LexicalFrame::new(&capability);
@@ -4177,7 +4177,7 @@ pub fn content_fingerprint(
 }
 
 fn content_fingerprint_with_memory(
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     memory: &mut Memory<'_, LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {
     let capability = memory.admission_mut().workspace().clone();
@@ -4439,11 +4439,14 @@ mod content_fingerprint_tests {
             0
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(EmptyCursor))
         }
     }
@@ -4454,7 +4457,7 @@ mod content_fingerprint_tests {
         subject: usize,
         object: usize,
         volatility: Volatility,
-    ) -> PropertyFunctionRegistry {
+    ) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             iri,
@@ -4494,7 +4497,7 @@ mod content_fingerprint_tests {
         object: usize,
         volatility: Volatility,
         stratum: &str,
-    ) -> PropertyFunctionRegistry {
+    ) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register_ranked(
             iri,
@@ -4542,11 +4545,14 @@ mod content_fingerprint_tests {
             self.rows_per_invocation
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(EmptyCursor))
         }
     }
@@ -4557,7 +4563,7 @@ mod content_fingerprint_tests {
         arity: PfArity,
         modes: Vec<BindingPattern>,
         rows_per_invocation: u64,
-    ) -> PropertyFunctionRegistry {
+    ) -> PropertyFunctionRegistry<'_> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             iri,
@@ -4813,16 +4819,19 @@ mod pushdown_reach_tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(Empty))
         }
     }
 
-    fn registry(modes: &[&str]) -> PropertyFunctionRegistry {
+    fn registry(modes: &[&str]) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             REL,
@@ -5258,7 +5267,7 @@ mod iterative_walk_tests {
     /// Test-only recursive reference for `super::plan_pattern`.
     fn reference_plan_pattern(
         pattern: &GraphPattern,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         agg_registry: &AggregateRegistry,
         outer: &DetHashSet<Variable>,
         promise: Promise<'_>,
@@ -5341,7 +5350,7 @@ mod iterative_walk_tests {
     /// Test-only recursive reference for `super::order_chain_native`.
     fn reference_order_chain(
         atoms: Vec<Atom<'_>>,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         agg_registry: &AggregateRegistry,
         outer: &DetHashSet<Variable>,
         promise: Promise<'_>,
@@ -5446,7 +5455,7 @@ mod iterative_walk_tests {
     /// Test-only recursive reference for `super::map_children`.
     fn reference_map_children(
         pattern: &GraphPattern,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         agg_registry: &AggregateRegistry,
         outer: &DetHashSet<Variable>,
         promise: Promise<'_>,
@@ -5765,7 +5774,7 @@ mod iterative_walk_tests {
     /// Test-only recursive reference for `super::plan_expression`.
     fn reference_plan_expression(
         expr: &Expression,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         agg_registry: &AggregateRegistry,
         outer: &DetHashSet<Variable>,
         promise: Promise<'_>,
@@ -5861,7 +5870,7 @@ mod iterative_walk_tests {
     /// Test-only recursive reference for `super::plan_aggregate`.
     fn reference_plan_aggregate(
         aggregate: &AggregateExpression,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         agg_registry: &AggregateRegistry,
         outer: &DetHashSet<Variable>,
         promise: Promise<'_>,
@@ -5920,7 +5929,7 @@ mod iterative_walk_tests {
     /// Test-only recursive reference for `super::plan_order_expression`.
     fn reference_plan_order_expression(
         order: &OrderExpression,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         agg_registry: &AggregateRegistry,
         outer: &DetHashSet<Variable>,
         promise: Promise<'_>,
@@ -6411,16 +6420,19 @@ mod iterative_walk_tests {
             self.rows
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(Empty))
         }
     }
 
-    fn relations() -> PropertyFunctionRegistry {
+    fn relations() -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             REL_BOUND,

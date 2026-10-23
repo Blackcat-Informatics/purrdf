@@ -505,8 +505,8 @@ impl CheckedRuleSet {
     }
 }
 
-/// Options for [`infer`]: the four rule-evaluation limits, and how the host names their
-/// knobs.
+/// Options for [`infer`]: caller-selected time and entropy, the four rule-evaluation
+/// limits, and how the host names their knobs.
 #[derive(Debug, Clone)]
 pub struct InferOptions {
     /// The limits, as the rules engine takes them.
@@ -527,6 +527,21 @@ impl Default for InferOptions {
 }
 
 impl InferOptions {
+    /// Select the exact evaluation time for every query in this inference.
+    #[must_use]
+    pub fn with_now(mut self, now: purrdf_xsd::temporal::DateTime) -> Self {
+        self.rules = self.rules.with_now(now);
+        self
+    }
+
+    /// Select the reproducible query-seed sequence described by
+    /// [`RuleOptions::with_entropy_seed`].
+    #[must_use]
+    pub fn with_entropy_seed(mut self, seed: u64) -> Self {
+        self.rules = self.rules.with_entropy_seed(seed);
+        self
+    }
+
     /// Permit exactly `rounds` evaluation rounds that infer a term the evaluation graph
     /// did not hold. A general rule builds no blank node and assigns nothing, but it can
     /// build a triple term from a triple term it matched, every round; SPARQL 1.2 RL §C:

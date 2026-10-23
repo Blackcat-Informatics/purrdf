@@ -387,8 +387,11 @@ where
         &FastSet<Term>,
     ) -> Result<Arc<D>, crate::error::ShapesError>,
 {
+    let _coordinates = options.coordinate_scope();
     let source_rules = options.source_rules();
-    let governors = options.eval_options();
+    let governors = options
+        .eval_options()
+        .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record);
     for rule in &set.rules {
         if let IrRuleBody::Elements(element_rule) = &rule.body {
             element_rule
@@ -523,7 +526,10 @@ where
     inferred.sort_by_cached_key(|triple| triple.each_ref().map(ToString::to_string));
 
     let mut explanations: FastMap<[Term; 3], Explanation> = FastMap::default();
-    for derivation in evaluation.derivations() {
+    for derivation in evaluation
+        .derivations()
+        .expect("SHACL rules requested derivation recording")
+    {
         if !Arity::<N>::is_output(derivation.fact()) {
             continue;
         }
@@ -750,6 +756,17 @@ fn describe(error: &EvalError, set: &RuleSet<'_>) -> String {
                 name(*rule)
             )
         }
+        EvalError::BudgetExhausted {
+            resource: BudgetResource::TermArenaBytes,
+            report,
+        } => format!(
+            "SHACL rules did not complete: {}",
+            purrdf_datalog::seminaive::render_budget_refusal(
+                BudgetResource::TermArenaBytes,
+                *report,
+                "reduce retained term sizes in the input or rules",
+            )
+        ),
         EvalError::Guard {
             rule,
             guard,
@@ -822,8 +839,8 @@ impl Codec {
 struct LiveView {
     /// The store generation the view was built at.
     generation: u64,
-    /// The store row count the view reflects.
-    rows: usize,
+    /// The retained append boundary the view reflects, including vacant slots.
+    rows: u64,
     /// The surface bytes of the triples in the delta.
     delta_bytes: usize,
     /// The surface bytes every extension since the last compaction re-froze.
@@ -841,7 +858,7 @@ impl LiveView {
     /// A view with no delta over the compacted `core` and `sparql` datasets.
     fn compacted<const N: usize>(
         generation: u64,
-        rows: usize,
+        rows: u64,
         core: Arc<RdfDataset>,
         sparql: Arc<RdfDataset>,
         engine: &Engine<'_, '_, N>,
@@ -926,9 +943,9 @@ struct ProducerRecord {
     /// reifier turns the triples about its subject into that reifier's annotations, a
     /// different layer of the evaluation graph.
     reads: Vec<ReadPattern>,
-    /// The `(generation, row count)` of the store the rule last ran against; `None`
+    /// The `(generation, append boundary)` of the store the rule last ran against; `None`
     /// before its first execution.
-    last: Option<(u64, usize)>,
+    last: Option<(u64, u64)>,
     /// The focus nodes executed since.
     focus: rules::FocusRecord,
 }
@@ -985,13 +1002,13 @@ where
     /// The view is extended rather than rebuilt when the store has only grown since the
     /// last one, by triples that change no triple's layer: a delta over the last
     /// compacted view, holding every triple committed since. The view is compacted — rebuilt
-    /// from the whole store — when a retraction rebuilt the store, when a new triple is
+    /// from the whole store — after a retraction, when a new triple is
     /// an `r rdf:reifies t` declaration or mentions a blank node (whose identity the
     /// compacted view keeps by label), and once re-freezing the delta has cost as much as
     /// a compaction would.
     fn view(&self, model: &RuleStore<N>) -> Result<Rc<ShaclData>, crate::error::ShapesError> {
         let generation = self.generation.get();
-        let rows = model.row_count();
+        let rows = model.row_slots();
         let mut live = self.view.borrow_mut();
         if let Some(view) = live.as_mut()
             && view.generation == generation
@@ -1036,7 +1053,7 @@ where
         let sparql = rules::build_round_base(&core, self.shapes, self.shapes_graph_iri.as_deref())?;
         Ok(LiveView::compacted(
             generation,
-            model.row_count(),
+            model.row_slots(),
             core,
             sparql,
             self,
@@ -1050,7 +1067,7 @@ where
         view: &mut LiveView,
         model: &RuleStore<N>,
     ) -> Result<Option<Rc<ShaclData>>, crate::error::ShapesError> {
-        let rows = model.row_count();
+        let rows = model.row_slots();
         let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
         let mut triples = self.new_triples(model, view.rows)?;
         if triples
@@ -1170,7 +1187,7 @@ where
     fn evaluate(
         &self,
         call: &GuardCall<'_, TermInterner, N>,
-    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+    ) -> Result<purrdf_datalog::guard::GuardRows, purrdf_datalog::guard::CallbackError> {
         let implementation = self
             .guards
             .get(&(call.rule, call.site))
@@ -1191,36 +1208,45 @@ where
                 )?;
                 Ok(triples
                     .iter()
-                    .map(|triple| triple.iter().map(|t| self.codec.surface(t)).collect())
+                    .map(|triple| {
+                        triple
+                            .iter()
+                            .map(|t| self.codec.surface(t).into())
+                            .collect()
+                    })
                     .collect())
             }
-            GuardImpl::Filter { query, variables } => {
-                let args = self.arguments(variables, call.inputs)?;
+            GuardImpl::Filter { query, variables } => call.evaluate_lexical(|lexical| {
+                let args = self.arguments(variables, lexical)?;
                 let value =
                     crate::sparql::eval_scalar_query_view(self.empty.sparql_view(), query, &args)?;
                 Ok(match value {
                     Some(Term::Literal(l)) if l.value() == "true" => vec![Vec::new()],
                     _ => Vec::new(),
                 })
-            }
+            }),
             GuardImpl::Assign { query, variables } => {
-                let args = self.arguments(variables, call.inputs)?;
-                // A blank node the expression computes (`BNODE()`) is fresh per
-                // evaluation: each call mints under its own prefix.
-                let prefix = format!("{}a{}_", self.mint_prefix, self.mint());
-                let value = crate::sparql::eval_scalar_query_view_minting(
-                    self.empty.sparql_view(),
-                    query,
-                    &args,
-                    &prefix,
-                )?;
-                // "If evaluating the expression in an assignment causes an error, then the
-                // current solution mapping is rejected by the assignment."
-                Ok(value.map_or_else(Vec::new, |term| vec![vec![self.codec.surface(&term)]]))
+                call.evaluate_lexical(|lexical| {
+                    let args = self.arguments(variables, lexical)?;
+                    // A blank node the expression computes (`BNODE()`) is fresh per
+                    // evaluation: each call mints under its own prefix.
+                    let prefix = format!("{}a{}_", self.mint_prefix, self.mint());
+                    let value = crate::sparql::eval_scalar_query_view_minting(
+                        self.empty.sparql_view(),
+                        query,
+                        &args,
+                        &prefix,
+                    )?;
+                    // "If evaluating the expression in an assignment causes an error, then the
+                    // current solution mapping is rejected by the assignment."
+                    Ok(value.map_or_else(Vec::new, |term| {
+                        vec![vec![self.codec.surface(&term).into()]]
+                    }))
+                })
             }
             GuardImpl::FreshBlank => {
                 let blank = Term::blank(format!("{}h{}", self.mint_prefix, self.mint()));
-                Ok(vec![vec![self.codec.surface(&blank)]])
+                Ok(vec![vec![self.codec.surface(&blank).into()]])
             }
             GuardImpl::SameTerm => Ok(if call.inputs[0] == call.inputs[1] {
                 vec![Vec::new()]
@@ -1231,10 +1257,10 @@ where
                 pattern,
                 inputs,
                 outputs,
-            } => {
-                let term = self.codec.term(call.inputs[0])?;
+            } => call.evaluate_lexical(|lexical| {
+                let term = self.codec.term(lexical[0])?;
                 let mut known: BTreeMap<&str, Term> = BTreeMap::new();
-                for (name, surface) in inputs.iter().zip(&call.inputs[1..]) {
+                for (name, surface) in inputs.iter().zip(&lexical[1..]) {
                     known.insert(name.as_str(), self.codec.term(surface)?);
                 }
                 if !match_triple(pattern, &term, &mut known) {
@@ -1243,18 +1269,18 @@ where
                 Ok(vec![
                     outputs
                         .iter()
-                        .map(|name| self.codec.surface(&known[name.as_str()]))
+                        .map(|name| self.codec.surface(&known[name.as_str()]).into())
                         .collect(),
                 ])
-            }
-            GuardImpl::BuildTriple { template, inputs } => {
+            }),
+            GuardImpl::BuildTriple { template, inputs } => call.evaluate_lexical(|lexical| {
                 let mut known: BTreeMap<&str, Term> = BTreeMap::new();
-                for (name, surface) in inputs.iter().zip(call.inputs) {
+                for (name, surface) in inputs.iter().zip(lexical) {
                     known.insert(name.as_str(), self.codec.term(surface)?);
                 }
                 let term = build_triple(template, &known)?;
-                Ok(vec![vec![self.codec.surface(&term)]])
-            }
+                Ok(vec![vec![self.codec.surface(&term).into()]])
+            }),
         }
     }
 }
@@ -1292,9 +1318,9 @@ where
         else {
             return Ok(rules::FocusSelection::Every);
         };
-        let now = (self.generation.get(), model.row_count());
+        let now = (self.generation.get(), model.row_slots());
         match record.last.replace(now) {
-            // A retraction rebuilt the store: nothing about the last run carries over.
+            // A retraction changes the generation: the old incremental selection is invalid.
             Some((generation, rows)) if generation == now.0 => {
                 Ok(rules::FocusSelection::Incremental {
                     gained: self.new_triples(model, rows)?,
@@ -1311,7 +1337,7 @@ where
     /// # Errors
     ///
     /// An internal-invariant breach: a store surface the codec never saw.
-    fn new_triples(&self, model: &RuleStore<N>, since: usize) -> Result<Vec<[Term; 3]>, String> {
+    fn new_triples(&self, model: &RuleStore<N>, since: u64) -> Result<Vec<[Term; 3]>, String> {
         model
             .rows_from(since)
             .filter(|(_, row)| Arity::<N>::is_output_row(model, row))

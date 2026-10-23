@@ -86,7 +86,9 @@ use purrdf_core::TermBox;
 
 use purrdf_core::{TermValue, write_term_value};
 use purrdf_datalog::chase::ChaseError;
-use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
+use purrdf_datalog::seminaive::{
+    BudgetResource, EvalError, EvalOptions, render_budget_refusal, render_capacity_refusal,
+};
 use purrdf_entail::reasoner::SchemaObstruction;
 use purrdf_entail::{
     ChaseProof, ClaimSubject, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
@@ -342,7 +344,7 @@ pub fn materialize_to_nquads_string(
 /// The entailment service a set of evaluation limits is handed to: with the
 /// [`RegimeHost`], it decides the spelling of the knob a refusal names.
 ///
-/// Every service that evaluates the regime's rule table takes the same two limits, and each
+/// Every service that evaluates the regime's rule table takes the same three limits, and each
 /// host spells them on the entry point the caller actually called — a Python caller of
 /// `graph_entails` is told about `graph_entails(max_stored_facts=...)`, never about another
 /// function's argument or a Rust type it cannot reach.
@@ -381,100 +383,129 @@ pub enum RegimeHost {
 }
 
 impl RegimeHost {
-    /// The host's names for the stored-fact limit and the join-step limit of a
+    /// The host's names for the stored-fact, join-step and term-arena byte limits of a
     /// MATERIALIZATION, in that order — [`Self::service_knobs`] for
     /// [`RegimeService::Materialize`].
     #[must_use]
-    pub const fn limit_knobs(self) -> (&'static str, &'static str) {
+    pub const fn limit_knobs(self) -> (&'static str, &'static str, &'static str) {
         self.service_knobs(RegimeService::Materialize)
     }
 
-    /// The host's names for the stored-fact limit and the join-step limit of `service`, in
+    /// The host's names for the stored-fact, join-step and term-arena byte limits of `service`, in
     /// that order: the argument, keyword or flag of the entry point the caller called.
     #[must_use]
-    pub const fn service_knobs(self, service: RegimeService) -> (&'static str, &'static str) {
+    pub const fn service_knobs(
+        self,
+        service: RegimeService,
+    ) -> (&'static str, &'static str, &'static str) {
         match (self, service) {
             (Self::Rust, _) => (
                 "MaterializeLimits::max_stored_facts",
                 "MaterializeLimits::max_join_steps",
+                "MaterializeLimits::max_term_arena_bytes",
             ),
-            (Self::Cli, _) => ("--max-stored-facts", "--max-join-steps"),
+            (Self::Cli, _) => (
+                "--max-stored-facts",
+                "--max-join-steps",
+                "--max-term-arena-bytes",
+            ),
             (Self::Python | Self::PythonText, RegimeService::CertainAnswers) => (
                 "certain_answers(max_stored_facts=...)",
                 "certain_answers(max_join_steps=...)",
+                "certain_answers(max_term_arena_bytes=...)",
             ),
             (Self::Python | Self::PythonText, RegimeService::GraphEntails) => (
                 "graph_entails(max_stored_facts=...)",
                 "graph_entails(max_join_steps=...)",
+                "graph_entails(max_term_arena_bytes=...)",
             ),
             (Self::Python | Self::PythonText, RegimeService::VerifyEntailment) => (
                 "verify_entailment(max_stored_facts=...)",
                 "verify_entailment(max_join_steps=...)",
+                "verify_entailment(max_term_arena_bytes=...)",
             ),
             (Self::Python | Self::PythonText, RegimeService::Query) => (
                 "query_entailment_governed(max_stored_facts=...)",
                 "query_entailment_governed(max_join_steps=...)",
+                "query_entailment_governed(max_term_arena_bytes=...)",
             ),
             (Self::Wasm, RegimeService::CertainAnswers) => (
                 "entailCertainAnswers's maxStoredFacts",
                 "entailCertainAnswers's maxJoinSteps",
+                "entailCertainAnswers's maxTermArenaBytes",
             ),
             (Self::Wasm, RegimeService::GraphEntails) => (
                 "entailGraphEntails's maxStoredFacts",
                 "entailGraphEntails's maxJoinSteps",
+                "entailGraphEntails's maxTermArenaBytes",
             ),
             (Self::Wasm, RegimeService::VerifyEntailment) => (
                 "entailVerifyEntailment's maxStoredFacts",
                 "entailVerifyEntailment's maxJoinSteps",
+                "entailVerifyEntailment's maxTermArenaBytes",
             ),
             (Self::Wasm, RegimeService::Query) => (
                 "queryEntailmentGoverned's maxStoredFacts",
                 "queryEntailmentGoverned's maxJoinSteps",
+                "queryEntailmentGoverned's maxTermArenaBytes",
             ),
             (Self::CAbi, RegimeService::CertainAnswers) => (
                 "purrdf_entail_certain_answers's max_stored_facts",
                 "purrdf_entail_certain_answers's max_join_steps",
+                "purrdf_entail_certain_answers's max_term_arena_bytes",
             ),
             (Self::CAbi, RegimeService::GraphEntails) => (
                 "purrdf_entail_graph_entails's max_stored_facts",
                 "purrdf_entail_graph_entails's max_join_steps",
+                "purrdf_entail_graph_entails's max_term_arena_bytes",
             ),
             (Self::CAbi, RegimeService::VerifyEntailment) => (
                 "purrdf_entail_verify_entailment's max_stored_facts",
                 "purrdf_entail_verify_entailment's max_join_steps",
+                "purrdf_entail_verify_entailment's max_term_arena_bytes",
             ),
             (Self::CAbi, RegimeService::Query) => (
                 "purrdf_query_entailment_governed's max_stored_facts",
                 "purrdf_query_entailment_governed's max_join_steps",
+                "purrdf_query_entailment_governed's max_term_arena_bytes",
             ),
             (_, RegimeService::Materialize) => self.materialize_knobs(),
         }
     }
 
     /// The materialization entry point's knob names.
-    const fn materialize_knobs(self) -> (&'static str, &'static str) {
+    const fn materialize_knobs(self) -> (&'static str, &'static str, &'static str) {
         match self {
             Self::Rust => (
                 "MaterializeLimits::max_stored_facts",
                 "MaterializeLimits::max_join_steps",
+                "MaterializeLimits::max_term_arena_bytes",
             ),
             Self::Python => (
                 "materialize(max_stored_facts=...)",
                 "materialize(max_join_steps=...)",
+                "materialize(max_term_arena_bytes=...)",
             ),
             Self::PythonText => (
                 "materialize_nt(max_stored_facts=...)",
                 "materialize_nt(max_join_steps=...)",
+                "materialize_nt(max_term_arena_bytes=...)",
             ),
             Self::Wasm => (
                 "entailMaterialize's maxStoredFacts",
                 "entailMaterialize's maxJoinSteps",
+                "entailMaterialize's maxTermArenaBytes",
             ),
             Self::CAbi => (
                 "purrdf_entail_materialize_to_nquads's max_stored_facts",
                 "purrdf_entail_materialize_to_nquads's max_join_steps",
+                "purrdf_entail_materialize_to_nquads's max_term_arena_bytes",
             ),
-            Self::Cli => ("--max-stored-facts", "--max-join-steps"),
+            Self::Cli => (
+                "--max-stored-facts",
+                "--max-join-steps",
+                "--max-term-arena-bytes",
+            ),
         }
     }
 }
@@ -491,6 +522,7 @@ impl RegimeHost {
 /// natively, 131,072 and 1,048,576 on `wasm32`
 /// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
 /// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). They
+/// also bound retained term surfaces to 16,777,216 bytes by default on every target.
 /// govern the four rule-table regimes (`rdf`, `rdfs`, `owl-rl`, `d`); see
 /// [`purrdf_entail::materialize_with`]. A run past one fails naming the limit, the numbers
 /// and the knob that raises it in the calling host's own terms ([`Self::host`]).
@@ -500,7 +532,9 @@ pub struct MaterializeLimits {
     pub max_stored_facts: Option<u64>,
     /// The join-step limit, or `None` for the target's default.
     pub max_join_steps: Option<u64>,
-    /// The host calling, whose names for the two limits' knobs a refusal gives.
+    /// Bytes of interned term spellings, or `None` for the engine's default.
+    pub max_term_arena_bytes: Option<u64>,
+    /// The host calling, whose names for the limits' knobs a refusal gives.
     pub host: RegimeHost,
 }
 
@@ -514,6 +548,9 @@ impl MaterializeLimits {
         }
         if let Some(steps) = self.max_join_steps {
             options = options.with_max_join_steps(steps);
+        }
+        if let Some(bytes) = self.max_term_arena_bytes {
+            options = options.with_max_term_arena_bytes(bytes);
         }
         options
     }
@@ -885,38 +922,50 @@ pub fn render_reasoning_report(report: &ReasoningReport) -> String {
 /// carry, so it renders as its own diagnostic and nothing is implied about a closure that
 /// was never assembled.
 #[must_use]
-pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
+pub fn render_entail_error<E: std::fmt::Display>(regime: &str, error: &EntailError<E>) -> String {
     render_entail_error_for(regime, error, RegimeHost::Rust)
 }
 
-/// [`render_entail_error`], naming the knob that raises a passed stored-fact or join-step
+/// [`render_entail_error`], naming the knob that raises a passed stored-fact, join-step or term-arena
 /// limit in `host`'s own terms ([`RegimeHost::limit_knobs`]): the refusal reads
 /// `evaluation exceeded the stored-fact limit: N facts observed, M permitted (…); raise it
 /// with <knob>`.
 #[must_use]
-pub fn render_entail_error_for(regime: &str, error: &EntailError, host: RegimeHost) -> String {
+pub fn render_entail_error_for<E: std::fmt::Display>(
+    regime: &str,
+    error: &EntailError<E>,
+    host: RegimeHost,
+) -> String {
     render_entail_error_in(regime, error, host, RegimeService::Materialize)
 }
 
 /// [`render_entail_error_for`] for the entailment `service` the error came out of, naming the
 /// knob of the entry point the caller called ([`RegimeHost::service_knobs`]).
 #[must_use]
-pub fn render_entail_error_in(
+pub fn render_entail_error_in<E: std::fmt::Display>(
     regime: &str,
-    error: &EntailError,
+    error: &EntailError<E>,
     host: RegimeHost,
     service: RegimeService,
 ) -> String {
     let capacity = match error {
         EntailError::Evaluate(EvalError::BudgetExhausted { resource, report })
         | EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) => {
-            let (stored_facts, join_steps) = host.service_knobs(service);
-            let knob = if *resource == BudgetResource::StoredFacts {
-                stored_facts
-            } else {
-                join_steps
-            };
-            render_capacity_refusal(*resource, *report, knob)
+            let (stored_facts, join_steps, term_arena_bytes) = host.service_knobs(service);
+            match resource {
+                BudgetResource::StoredFacts => {
+                    render_capacity_refusal(*resource, *report, stored_facts)
+                }
+                BudgetResource::JoinSteps => {
+                    render_capacity_refusal(*resource, *report, join_steps)
+                }
+                BudgetResource::TermArenaBytes => Some(render_budget_refusal(
+                    *resource,
+                    *report,
+                    &format!("raise it with {term_arena_bytes}"),
+                )),
+                _ => None,
+            }
         }
         _ => None,
     };
@@ -1140,6 +1189,7 @@ pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
 pub const REGIME_GOLDEN_VECTOR_LIMITS: MaterializeLimits = MaterializeLimits {
     max_stored_facts: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_STORED_FACTS),
     max_join_steps: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS),
+    max_term_arena_bytes: None,
     host: RegimeHost::Rust,
 };
 
@@ -2318,9 +2368,9 @@ impl ReasonerSession {
     /// The ontology this session reasons over — the premise merged with its imports closure
     /// when [`Self::open_premise`] resolved one — as canonical (RDFC-1.0) N-Quads.
     ///
-    /// The document a consumer hands [`check_dl_proof`] to check a proof this session
-    /// recorded: a proof binds the ontology it was produced over, and for an importing
-    /// premise that is the merge rather than the text the caller wrote.
+    /// This is a data export, not a copy of the native checking context: canonical
+    /// ordering can change first-seen DL term identifiers. Check a proof against
+    /// this session's actual resolved source with [`Self::check_proof`].
     ///
     /// # Errors
     ///
@@ -2328,6 +2378,35 @@ impl ReasonerSession {
     /// the RDFC-1.0 search budget).
     pub fn premise_nquads(&self) -> Result<String, String> {
         caller_flat_nquads(&self.dataset, "the reasoned premise")
+    }
+
+    /// Check a supplied proof against this consumer's actual parsed/imported source.
+    ///
+    /// Builds a fresh checking context from the frozen dataset, without a search
+    /// or a serialization/reparse that could change native term coordinates.
+    /// This session need not record proofs; neither its search state nor a
+    /// producer's context participates in checking. All proof, question, answer
+    /// and certificate checks are the same as [`check_dl_proof`].
+    ///
+    /// # Errors
+    /// The refusals of [`check_dl_proof`], over this session's source snapshot.
+    pub fn check_proof(
+        &self,
+        service: &str,
+        argument: &str,
+        answer: &str,
+        certificate: &str,
+        proof: &str,
+    ) -> Result<String, String> {
+        check_dl_proof_from_source(
+            || Ok(std::sync::Arc::clone(&self.dataset)),
+            self.resolved_imports,
+            service,
+            argument,
+            answer,
+            certificate,
+            proof,
+        )
     }
 
     /// Whether this session records proof terms.
@@ -4705,19 +4784,44 @@ pub fn check_dl_proof(
     certificate: &str,
     proof: &str,
 ) -> Result<String, String> {
+    check_dl_proof_from_source(
+        || {
+            purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+                .map_err(|diagnostic| diagnostic.to_string())
+        },
+        false,
+        service,
+        argument,
+        answer,
+        certificate,
+        proof,
+    )
+}
+
+fn check_dl_proof_from_source(
+    source: impl FnOnce() -> Result<std::sync::Arc<purrdf_rdf::RdfDataset>, String>,
+    resolved_imports: bool,
+    service: &str,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    proof: &str,
+) -> Result<String, String> {
     let asked = parse_proof_service(service)?;
     let term = decode_dl_proof(proof)?;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
+    let dataset = source()?;
     // The consumer's own reverse mapping, never the producer's: this is the step that rests on
     // the `refutation-encoding` and `reverse-mapping` entries the report names.
     let mut reasoner = Reasoner::with_proofs(&dataset).map_err(|e| format!("reasoner: {e}"))?;
+    if resolved_imports {
+        reasoner = reasoner.with_resolved_imports();
+    }
     let question = proof_question(&reasoner, asked, argument)?;
     reasoner
         .prepare(&question)
         .map_err(|error| format!("question preparation: {error}"))?;
     let context = reasoner
-        .proof_context()
+        .borrowed_proof_context()
         .map_err(|error| format!("checking context: {error}"))?;
     let read = if asked == Service::ModuleExtraction {
         // Locality extraction opens no tableau, so it issues no DL certificate at all — its
@@ -4738,7 +4842,7 @@ pub fn check_dl_proof(
         Some(parse_dl_certificate(certificate)?)
     };
     let replay = term
-        .verify(&dataset, &question, read.as_ref(), &context)
+        .verify_prepared(&question, read.as_ref(), &context)
         .map_err(|error| format!("the proof does not check: {error}"))?;
     let bound = if answer.trim().is_empty() {
         None
@@ -4823,6 +4927,11 @@ pub fn check_dl_proof(
 /// WASM and PyO3 crates consume the SAME bytes as the Rust test rather than each growing a
 /// fixture that drifts from the other three. The artifact lives at
 /// `crates/validate/tests/fixtures/dl-proof.vectors`.
+///
+/// After an intentional proof-layout change, refresh only its proof/check bodies
+/// with `cargo run -p purrdf-validate --example refresh_dl_proof_vectors`.
+/// The explicit producer refuses an answer change and preserves source/questions;
+/// normal native, portable and packaged host tests remain read-only comparisons.
 pub const DL_PROOF_GOLDEN_VECTORS: &str = include_str!("../tests/fixtures/dl-proof.vectors");
 
 /// One case of [`DL_PROOF_GOLDEN_VECTORS`]: a document and a question, and the three strings
@@ -4996,6 +5105,7 @@ pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
     if cases.is_empty() {
         return Err("the DL proof golden vector artifact holds no cases".to_owned());
     }
+    let mut causal_checked = false;
     for case in &cases {
         let produced = prove_to_string(
             case.input(),
@@ -5029,6 +5139,13 @@ pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
         if checked != case.check() {
             return Err(differs("check", case.check(), &checked));
         }
+        if case.name() == "recursive-nominal-introduction" {
+            check_recursive_causal_vector(case, &produced)?;
+            causal_checked = true;
+        }
+    }
+    if !causal_checked {
+        return Err("the DL proof golden artifact is missing its causal NI case".to_owned());
     }
     for service in PROOF_SERVICE_NAMES {
         if !cases.iter().any(|case| case.service() == service) {
@@ -5036,6 +5153,56 @@ pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
                 "the DL proof golden vector artifact no longer covers service \"{service}\""
             ));
         }
+    }
+    Ok(())
+}
+
+/// Exercise causal capture through the existing packaged-WASM golden entry.
+/// The consumer prepares the original source but never repeats the producer search.
+fn check_recursive_causal_vector(
+    case: &DlProofVector,
+    produced: &ReasoningAnswer,
+) -> Result<(), String> {
+    use purrdf_entail::proof_source::{
+        ResolvedNode,
+        causal::{CausalMutation, CausalObservation},
+    };
+    let proof = decode_dl_proof(produced.proof_document())?;
+    let certificate = parse_dl_certificate(produced.certificate())?;
+    let mut consumer = ReasonerSession::open_with_proofs(case.input(), 0, 0)?;
+    let context = consumer
+        .kb()?
+        .borrowed_proof_context()
+        .map_err(|error| format!("causal vector consumer: {error}"))?;
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(&certificate), &context)
+        .map_err(|error| format!("causal vector replay: {error}"))?;
+    let mut nested = false;
+    for (_, refutation) in checked.refutations() {
+        if !refutation.replay().is_closed() {
+            return Err("causal vector has an unclosed refutation".to_owned());
+        }
+        for clash in refutation.clashes() {
+            for step in clash.steps() {
+                if let CausalObservation::Effect {
+                    mutation:
+                        CausalMutation::Node {
+                            node,
+                            reserved: true,
+                            ..
+                        },
+                    ..
+                } = step.observation()
+                {
+                    nested |= node.reserved_identity().is_some_and(|identity| {
+                        matches!(identity.origin(), ResolvedNode::Reserved(_))
+                    });
+                }
+            }
+        }
+    }
+    if !nested {
+        return Err("causal vector lost its original nested reserved descriptor".to_owned());
     }
     Ok(())
 }

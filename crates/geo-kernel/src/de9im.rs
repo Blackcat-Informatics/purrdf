@@ -224,7 +224,7 @@ impl IntersectionMatrix {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if `text` is not exactly nine of those characters.
+    /// [`GeoError::MatrixConfiguration`] if `text` is not exactly nine of those characters.
     /// This is a test and diagnostic constructor; a pattern with `T` or `*` in it
     /// is a [`Pattern`], not a matrix, and is refused here by name.
     pub fn parse(text: &str) -> Result<Self, GeoError> {
@@ -241,11 +241,13 @@ impl IntersectionMatrix {
                 '1' => Dim::One,
                 '2' => Dim::Two,
                 other => {
-                    return Err(GeoError::config(format!(
-                        "{other:?} is not an intersection-matrix entry; a matrix is written with \
-                         F, 0, 1 and 2 only ({other:?} looks like a PATTERN character, and a \
-                         pattern is matched against a matrix rather than being one)"
-                    )));
+                    return Err(GeoError::resident_failure(
+                        crate::MatrixInputError::Entry {
+                            index,
+                            character: other,
+                        },
+                        GeoError::MatrixConfiguration,
+                    ));
                 }
             };
             count = index + 1;
@@ -253,9 +255,13 @@ impl IntersectionMatrix {
         if count == 9 {
             Ok(Self { cells })
         } else {
-            Err(GeoError::config(format!(
-                "an intersection matrix has exactly nine entries; got {count} in {text:?}"
-            )))
+            Err(GeoError::resident_failure(
+                crate::MatrixInputError::Length {
+                    input: text.to_owned(),
+                    observed: count,
+                },
+                GeoError::MatrixConfiguration,
+            ))
         }
     }
 
@@ -381,17 +387,17 @@ impl Pattern {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Literal`] when there are not exactly nine pattern terminals.
+    /// [`GeoError::PatternSyntax`] when there are not exactly nine pattern terminals.
     pub fn parse(text: &str) -> Result<Self, GeoError> {
         Self::parse_observed(text, None)
     }
 
-    /// Read the same runtime pattern, admitting its original error text before
+    /// Read the same runtime pattern, admitting its original error fields before
     /// allocation through the caller's native workspace.
     ///
     /// # Errors
     ///
-    /// [`GeoError::Literal`] for malformed pattern terminals, or the original
+    /// [`GeoError::PatternSyntax`] for malformed pattern terminals, or the original
     /// physical admission refusal before any diagnostic buffer is created.
     pub fn parse_metered(
         text: &str,
@@ -402,26 +408,24 @@ impl Pattern {
 
     fn parse_observed(
         text: &str,
-        mut observer: Option<&mut dyn crate::MetricWorkObserver>,
+        observer: Option<&mut dyn crate::MetricWorkObserver>,
     ) -> Result<Self, GeoError> {
         let count = text.chars().count();
         if count != 9 {
-            return Err(crate::carrier::error_from_display_metered(
-                GeoError::Literal,
-                format_args!("a DE-9IM pattern has exactly nine positions; {text:?} has {count}"),
-                observer,
-            ));
+            let mut progress = crate::context::WorkProgress::integer(observer);
+            return Err(progress.retained_error(|memory| {
+                let input = memory.string(text)?;
+                Ok(GeoError::PatternSyntax(crate::PatternInputError::Length {
+                    input,
+                    count,
+                }))
+            }));
         }
         let mut slots = [Slot::Any; 9];
         for (slot, character) in slots.iter_mut().zip(text.chars()) {
             let Some(parsed) = Slot::from_char(character) else {
-                return Err(crate::carrier::error_from_display_metered(
-                    GeoError::Literal,
-                    format_args!(
-                        "{character:?} is not a DE-9IM pattern character; a pattern is written with F, T, \
-                         0, 1, 2 and * only"
-                    ),
-                    observer.take(),
+                return Err(GeoError::PatternSyntax(
+                    crate::PatternInputError::Character { character },
                 ));
             };
             *slot = parsed;
@@ -448,7 +452,6 @@ impl fmt::Display for Pattern {
 #[cfg(test)]
 mod tests {
     use super::{Dim, IntersectionMatrix, Pattern, Set, Slot};
-    use crate::error::GeoError;
 
     #[test]
     fn input_dimensions_include_every_interior_and_boundary_partition() {
@@ -530,18 +533,35 @@ mod tests {
     /// nine-entry matrix right beside it is still accepted.
     #[test]
     fn matrix_parse_refuses_pattern_characters_but_accepts_real_entries() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
         for bad in ["T********", "*********", "TFFFTFFFT"] {
+            let error = IntersectionMatrix::parse(bad).unwrap_err();
+            let fields = Capture::read(&error).child("cause");
+            assert_eq!(fields.code, "geo-matrix-entry");
+            assert!(matches!(fields.field("index"), ErrorValue::Unsigned(0)));
             assert!(
-                matches!(IntersectionMatrix::parse(bad), Err(GeoError::Config(_))),
-                "{bad:?} is a pattern, not a matrix"
+                matches!(fields.field("character"), ErrorValue::Character(value) if bad.starts_with(value))
             );
         }
         for bad in ["FFFFFFFF", "FFFFFFFFFF", ""] {
+            let error = IntersectionMatrix::parse(bad).unwrap_err();
+            let fields = Capture::read(&error).child("cause");
+            assert_eq!(fields.code, "geo-matrix-length");
+            assert!(matches!(fields.field("input"), ErrorValue::Text(value) if value == bad));
             assert!(
-                matches!(IntersectionMatrix::parse(bad), Err(GeoError::Config(_))),
-                "{bad:?} does not have nine entries"
+                matches!(fields.field("observed"), ErrorValue::Unsigned(value) if value == bad.len() as u128)
             );
+            assert!(matches!(fields.field("expected"), ErrorValue::Unsigned(9)));
         }
+        let input = "F".repeat(32);
+        let error = IntersectionMatrix::parse(&input).unwrap_err();
+        drop(input);
+        let cloned = error.clone();
+        drop(error);
+        let fields = Capture::read(&cloned).child("cause");
+        assert!(matches!(fields.field("input"), ErrorValue::Text(value) if value.len() == 32));
+        assert!(matches!(fields.field("observed"), ErrorValue::Unsigned(10)));
         // The neighbouring VALID cases.
         assert!(IntersectionMatrix::parse("0FFFFFFFF").is_ok());
         assert!(IntersectionMatrix::parse("212101212").is_ok());
@@ -566,6 +586,43 @@ mod tests {
     fn a_pattern_round_trips_through_its_rendering() {
         for text in ["T*F**F***", "FF*FF****", "1*T***T**", "*********"] {
             assert_eq!(Pattern::new(text).to_string(), text);
+        }
+    }
+
+    #[test]
+    fn runtime_pattern_refusals_retain_native_fields_and_expression_classification() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let result = Pattern::parse("FFFFFFFF?");
+        let allocations = window.close();
+        let error = result.unwrap_err();
+        assert_eq!(allocations.allocations, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+        assert!(error.is_expression_error());
+        let fields = Capture::read(error.original()).child("cause");
+        assert_eq!(fields.code, "geo-pattern-character");
+        assert!(matches!(
+            fields.field("character"),
+            ErrorValue::Character('?')
+        ));
+        for input in [String::new(), "F".repeat(8), "F".repeat(10), "é".repeat(10)] {
+            let count = input.chars().count();
+            let error = Pattern::parse(&input).unwrap_err();
+            drop(input);
+            let cloned = error.clone();
+            drop(error);
+            assert!(cloned.is_expression_error());
+            let fields = Capture::read(cloned.original()).child("cause");
+            assert_eq!(fields.code, "geo-pattern-length");
+            assert!(
+                matches!(fields.field("count"), ErrorValue::Unsigned(value) if value == count as u128)
+            );
+            assert!(matches!(fields.field("expected"), ErrorValue::Unsigned(9)));
+            assert!(
+                matches!(fields.field("input"), ErrorValue::Text(value) if value.chars().count() == count)
+            );
         }
     }
 

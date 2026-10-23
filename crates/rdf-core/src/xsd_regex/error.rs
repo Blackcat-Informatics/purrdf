@@ -362,3 +362,14 @@ impl fmt::Display for ReplacementError {
 }
 
 impl std::error::Error for ReplacementError {}
+
+impl purrdf_hash::error::StructuredError for ReplacementError {
+    purrdf_hash::error_visit! {
+        UnescapedBackslash { offset } => "xpath-replacement-unescaped-backslash" {
+            "offset" => ByteCount(*offset as u128),
+        },
+        DollarWithoutGroup { offset } => "xpath-replacement-dollar-without-group" {
+            "offset" => ByteCount(*offset as u128),
+        },
+    }
+}

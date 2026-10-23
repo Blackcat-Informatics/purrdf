@@ -2227,26 +2227,38 @@ fn finite_cyclic_class_equations_have_meaningful_positive_and_negative_models() 
 #[test]
 fn malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals() {
     use purrdf_iri::vocab::owl::DATATYPE_COMPLEMENT_OF;
-    for malformed in [
-        ds(&[
-            (N::B("c"), N::V(UNION), N::B("list")),
-            (N::B("list"), N::V(FIRST), N::E("A")),
-            (N::B("list"), N::V(REST), N::B("list")),
-            typed(N::E("x"), N::B("c")),
-        ]),
-        ds(&[
-            typed(N::B("d"), N::V(RDFS_DATATYPE)),
-            (N::B("d"), N::V(DATATYPE_COMPLEMENT_OF), N::B("d")),
-            typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
-            (N::E("p"), N::V(purrdf_iri::vocab::rdfs::RANGE), N::B("d")),
-        ]),
+    for (malformed, collection) in [
+        (
+            ds(&[
+                (N::B("c"), N::V(UNION), N::B("list")),
+                (N::B("list"), N::V(FIRST), N::E("A")),
+                (N::B("list"), N::V(REST), N::B("list")),
+                typed(N::E("x"), N::B("c")),
+            ]),
+            true,
+        ),
+        (
+            ds(&[
+                typed(N::B("d"), N::V(RDFS_DATATYPE)),
+                (N::B("d"), N::V(DATATYPE_COMPLEMENT_OF), N::B("d")),
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(purrdf_iri::vocab::rdfs::RANGE), N::B("d")),
+            ]),
+            false,
+        ),
     ] {
-        assert!(
-            matches!(
-                Reasoner::new(malformed.as_ref()),
-                Err(purrdf_entail::EntailError::Parse(_))
-            ),
-            "class-expression cut points never turn a malformed RDF list or cyclic data range into a decided answer"
-        );
+        let error = Reasoner::new(malformed.as_ref()).unwrap_err();
+        if collection {
+            assert!(
+                matches!(error, purrdf_entail::EntailError::Collection(ref error)
+                if error.phase == purrdf_entail::CollectionPhase::OwlDirect
+                && error.original.kind == purrdf_core::collections::ListErrorKind::Cycle)
+            );
+        } else {
+            assert!(
+                matches!(error, purrdf_entail::EntailError::OwlSyntax(ref original)
+                if matches!(original.as_ref(), purrdf_entail::OwlSyntaxError::DataRangeCycle { .. }))
+            );
+        }
     }
 }

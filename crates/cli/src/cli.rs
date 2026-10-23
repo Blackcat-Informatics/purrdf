@@ -390,6 +390,15 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        #[arg(
+            long = "max-term-arena-bytes",
+            value_name = "BYTES",
+            requires = "entailment"
+        )]
+        max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
         /// imports closure to BE the ontology, so the `--entailment` closure is
@@ -435,9 +444,9 @@ pub(crate) enum Command {
         /// (the query then runs over the closure, not the raw view). Combines with
         /// every governor flag: the ceilings bound the QUERY over the closure, and
         /// `--deadline` additionally bounds computing the closure itself. The query
-        /// governors never become limits on the reasoning run; `--max-stored-facts` and
-        /// `--max-join-steps` are its limits, and like every evaluation limit they can
-        /// only refuse, never truncate a closure. A deadline that expires while the
+        /// governors never become limits on the reasoning run; `--max-stored-facts`,
+        /// `--max-join-steps` and `--max-term-arena-bytes` are its limits. Like every
+        /// evaluation limit they can only refuse, never truncate a closure. A deadline that expires while the
         /// closure is still being computed prints the governor report, writes no rows,
         /// and exits 3.
         #[arg(long, value_enum, value_name = "REGIME")]
@@ -477,6 +486,15 @@ pub(crate) enum Command {
         /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        #[arg(
+            long = "max-term-arena-bytes",
+            value_name = "BYTES",
+            requires = "entailment"
+        )]
+        max_term_arena_bytes: Option<u64>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv, its media
         /// type, or `srj`, in any case) for SELECT/ASK, or an RDF syntax
         /// (turtle/trig/…) for CONSTRUCT/DESCRIBE. Defaults to `json` when omitted. `None` here (the flag genuinely
@@ -723,6 +741,11 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+        max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
         /// imports closure to BE the ontology, so the closure is materialized over the
@@ -814,6 +837,11 @@ pub(crate) enum Command {
         /// is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+        max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
         #[allow(clippy::option_option)]
@@ -1273,6 +1301,20 @@ pub(crate) enum Command {
         /// compatibility pattern engine runs, exactly as before this flag existed.
         #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
         xpath_regex: Option<Profile>,
+        /// Validate under one exact, dated SHACL law, named by its stable id:
+        /// `shacl-rec-2017-07-20` (the 2017 Recommendation), `shacl-wd-2026-09-18` (the
+        /// SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the data-shapes editor's draft
+        /// the W3C SHACL 1.2 test suite is graded under). The id is decoded once, exactly,
+        /// by `purrdf_validate::complete_profile`; an id it does not know is refused with
+        /// its `unsupported-profile` status (exit 2), never mapped to a nearby edition.
+        /// A dated law carries its own XPath pattern law, so `--xpath-regex` may only name
+        /// that same law: `--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`
+        /// is a usage error (exit 2). Applies to `--shapes` and `--shapes-product` alike
+        /// (a product stores no SHACL law; the restore takes it from this request) and to
+        /// the `--changes` lane. Omitted, the compatibility law runs, exactly as before this
+        /// flag existed.
+        #[arg(long = "shacl-profile", value_name = "ID")]
+        shacl_profile: Option<String>,
         /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,

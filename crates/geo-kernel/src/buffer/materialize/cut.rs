@@ -216,12 +216,24 @@ fn clip(
                 1,
                 |values| Ok(values.subtract(edge[1].x(), edge[0].x())?),
             )?;
-            let parameter =
-                admission.expression_result(RationalDivide, &[&offset, &width], 1, |values| {
+            let parameter = admission.expression_observed(
+                RationalDivide,
+                &[&offset, &width],
+                1,
+                |values, progress| {
                     values.divide(&offset, &width)?.ok_or_else(|| {
-                        GeoError::domain("crossed meridian has zero longitude variation")
+                        crate::GeometryDomainError::edge_quotient(
+                            &edge[0],
+                            &edge[1],
+                            cut,
+                            &offset,
+                            &width,
+                            crate::EdgeQuotientOperation::CrossedMeridian,
+                            progress,
+                        )
                     })
-                })?;
+                },
+            )?;
             let latitude = SourceLinearEdge::interpolate_ordinate_admitted(
                 edge[0].y(),
                 edge[1].y(),

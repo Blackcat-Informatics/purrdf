@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::dataset_view::{
     DatasetView, FallibleDatasetView, GraphMatch, TermGuard, ViewOperationStatus,
+    WorkspaceReservation as _,
 };
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
@@ -26,6 +27,15 @@ mod cache;
 #[cfg(test)]
 mod cache_control;
 mod statistics;
+
+/// Read an identifier ordinal without allocating a decoded reverse dictionary.
+fn reverse_id(ids: &[u8], index: u64) -> Result<GlobalTermId, SegmentedError> {
+    let offset = usize::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_mul(8))
+        .ok_or(SegmentedError::AddressExhausted)?;
+    Reader::at(ids, offset).id()
+}
 
 // Both owners reserve through the same admission home after their own readiness
 // check; a session additionally verifies its provider's snapshot identity.
@@ -677,7 +687,7 @@ fn owned_workspace(
 /// The original live-byte/cache/request/first-fault owner shared by every
 /// descriptor read in one stack query. Opening an ordinary session uses the
 /// same owner with one descriptor.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct SegmentedOperation {
     limits: SegmentedReadLimits,
     state: Arc<Mutex<State>>,
@@ -818,7 +828,9 @@ impl SegmentedOperation {
                 graphs: Stream::default(),
                 summaries: Stream::default(),
                 statistics: [Stream::default(); 4],
+                effective_directory: Stream::default(),
                 flags: 0,
+                source_union: purrdf_hash::multiset::Multiset256::default(),
             },
             state: Arc::clone(&self.state),
             budget: Arc::clone(&self.budget),
@@ -941,6 +953,13 @@ impl SegmentedSession {
     fn fail<T>(&self, error: SegmentedError) -> Result<T, SegmentedError> {
         latch_error(&self.state, error)
     }
+    pub(super) fn source_union(
+        &self,
+    ) -> Result<purrdf_hash::multiset::Multiset256, SegmentedError> {
+        self.ready()?;
+        Ok(self.header.source_union)
+    }
+
     fn ready(&self) -> Result<(), SegmentedError> {
         let error = lock_read_state(&self.state).error.clone();
         if let Some(error) = error {
@@ -1084,9 +1103,7 @@ impl SegmentedSession {
         let encoded = u64::from(self.receipt.block_bytes);
         let in_dictionary = slot >= self.header.dictionary.first
             && slot < self.header.dictionary.first + self.header.dictionary.blocks;
-        let in_reverse = slot >= self.header.reverse.first
-            && slot < self.header.reverse.first + self.header.reverse.blocks;
-        let records = if slot != 0 && (in_dictionary || in_reverse) {
+        let records = if slot != 0 && in_dictionary {
             u64::from(self.header.records_per_block)
         } else {
             0
@@ -1094,18 +1111,10 @@ impl SegmentedSession {
         let decoded = encoded
             .checked_mul(records)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let entries = records
-            .checked_mul(
-                u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>())
-                    .map_err(|_| SegmentedError::AddressExhausted)?,
-            )
-            .ok_or(SegmentedError::AddressExhausted)?;
         let overhead = u64::try_from(size_of::<CachedBlock>() + 64)
             .map_err(|_| SegmentedError::AddressExhausted)?;
         let charge = encoded
-            .checked_add(decoded)
-            .and_then(|v| v.checked_add(entries))
-            .and_then(|v| v.checked_add(overhead))
+            .checked_add(overhead)
             .ok_or(SegmentedError::AddressExhausted)?;
         self.make_room(&mut state, charge, true)?;
         if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
@@ -1157,15 +1166,33 @@ impl SegmentedSession {
             if digest != self.receipt.root {
                 return Err(SegmentedError::Corrupt("block/index authentication failed"));
             }
+            let (decode_bytes, scratch_bytes) = if in_dictionary {
+                (
+                    format::decode_memory_bytes(&bytes, self.header.records_per_block, decoded)?,
+                    format::decode_scratch_bytes(&bytes, self.header.records_per_block, decoded)?,
+                )
+            } else {
+                (0, 0)
+            };
+            let additional = decode_bytes
+                .checked_add(scratch_bytes)
+                .ok_or(SegmentedError::AddressExhausted)?;
+            self.make_room(&mut state, additional, false)?;
+            reservation.resize(
+                charge
+                    .checked_add(decode_bytes)
+                    .ok_or(SegmentedError::AddressExhausted)?,
+            )?;
+            let scratch = self.budget.reserve(scratch_bytes)?;
             let decoded_records = match bytes[0] {
-                format::DICTIONARY | format::REVERSE if slot != 0 => Some(DecodedRecords::decode(
+                format::DICTIONARY if slot != 0 => Some(DecodedRecords::decode(
                     &bytes,
-                    bytes[0],
                     self.header.records_per_block,
                     decoded,
                 )?),
                 _ => None,
             };
+            drop(scratch);
             let dictionary_range = if in_dictionary {
                 let records = decoded_records.as_ref().ok_or(SegmentedError::Corrupt(
                     "forward dictionary block kind changed",
@@ -1342,11 +1369,13 @@ impl SegmentedSession {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let block = self.block(self.header.reverse.first + mid)?;
-            let records = block
-                .decoded
-                .as_ref()
-                .ok_or(SegmentedError::Corrupt("reverse index block kind changed"))?;
-            if records.key(0) <= key {
+            let ids = fixed_records(&block.encoded, format::REVERSE, 8)?;
+            let id = reverse_id(ids, 0)?;
+            let (dictionary, index) = self.term_block(id)?;
+            let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                "forward dictionary block kind changed",
+            ))?;
+            if records.key(index) <= key {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -1356,14 +1385,24 @@ impl SegmentedSession {
             return Ok(None);
         }
         let block = self.block(self.header.reverse.first + lo - 1)?;
-        let records = block
-            .decoded
-            .as_ref()
-            .ok_or(SegmentedError::Corrupt("reverse index block kind changed"))?;
-        let index = records
-            .entries
-            .binary_search_by(|(_, range)| records.arena[range.clone()].cmp(key));
-        Ok(index.ok().map(|index| records.entries[index].0))
+        let ids = fixed_records(&block.encoded, format::REVERSE, 8)?;
+        let count = u64::try_from(ids.len() / 8).map_err(|_| SegmentedError::AddressExhausted)?;
+        let index = format::partition_point(count, |index| {
+            let (dictionary, record) = self.term_block(reverse_id(ids, index)?)?;
+            let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                "forward dictionary block kind changed",
+            ))?;
+            Ok::<_, SegmentedError>(records.key(record) < key)
+        })?;
+        if index == count {
+            return Ok(None);
+        }
+        let id = reverse_id(ids, index)?;
+        let (dictionary, record) = self.term_block(id)?;
+        let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+            "forward dictionary block kind changed",
+        ))?;
+        Ok((records.key(record) == key).then_some(id))
     }
 
     fn lookup_value(
@@ -1742,8 +1781,26 @@ impl DatasetView for SegmentedSession {
     type ReadError = SegmentedError;
     type TermGuard<'a> = SegmentedTermGuard;
     type ProbePlan = ();
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        self.ready()?;
+        Ok(Some(
+            self.header
+                .streams
+                .iter()
+                .map(|stream| u128::from(stream.rows))
+                .sum(),
+        ))
+    }
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         Some(self)
+    }
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Self::source_summary(self, predicate, graph, stream)
     }
     fn read_error(&self) -> Option<Self::ReadError> {
         self.ready().err()
@@ -2396,8 +2453,11 @@ mod operation_tests {
     #[test]
     fn dictionary_positions_are_bound_to_their_certified_source() {
         let mut images = Vec::new();
-        for width in [180, 80] {
-            let limits = SegmentedBuildLimits::new(20, 20_000, 0, 512, 8)
+        // Fix the two page populations independently of text compression: the
+        // selected ID starts a five-record page but lies inside an eight-record
+        // page that crosses the routing bucket boundary.
+        for (width, records_per_block) in [(180, 5), (80, 8)] {
+            let limits = SegmentedBuildLimits::new(20, 20_000, 0, 512, records_per_block)
                 .unwrap()
                 .with_first_term_index((1_u64 << 54) + 251)
                 .unwrap();
@@ -2432,11 +2492,24 @@ mod operation_tests {
                     .unwrap()
             })
             .collect();
+        // Load a separate page before pinning both cache slots below. Its
+        // unpinned payload must be evicted while its routing bound survives.
+        let other = GlobalTermId::from_index(sessions[0].header.first_term_index).unwrap();
+        drop(sessions[0].resolve(other).unwrap());
         let pins: Vec<_> = sessions
             .iter()
             .zip(&images)
             .map(|(session, (_, id, _))| session.resolve(*id).unwrap())
             .collect();
+        {
+            let state = lock_read_state(&operation.state);
+            let key = CacheKey {
+                snapshot: images[0].0.receipt().snapshot(),
+                slot: sessions[0].header.dictionary.first,
+            };
+            assert!(!state.cache.iter().any(|entry| entry.key == key));
+            drop(state);
+        }
         let before = operation.evidence(()).request_count();
         for index in [0, 1, 0, 1] {
             let (_, id, value) = &images[index];

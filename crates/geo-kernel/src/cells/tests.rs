@@ -8,6 +8,49 @@ use crate::metric::Metres;
 use crate::profile::PreparedEllipsoid;
 
 #[test]
+fn invalid_point_index_policies_keep_original_full_width_limits_before_allocation() {
+    use crate::cells::{PointCellIndex, PointIndexLimits};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    for limits in [
+        PointIndexLimits {
+            max_points: 0,
+            max_work_items: u64::MAX,
+            max_workspace_bytes: u64::MAX,
+        },
+        PointIndexLimits {
+            max_points: u64::MAX,
+            max_work_items: 0,
+            max_workspace_bytes: u64::MAX,
+        },
+        PointIndexLimits {
+            max_points: u64::MAX,
+            max_work_items: u64::MAX,
+            max_workspace_bytes: 0,
+        },
+    ] {
+        let grid = CubeHilbertQ62V1::new(NativeGridProfile::Wgs84);
+        let reference = crate::GeographicReference::wgs84();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = PointCellIndex::new(grid, 0, reference, None, Vec::new(), limits).unwrap_err();
+        let allocations = window.close();
+        assert_eq!(allocations.allocations, 0);
+        assert_eq!(error, GeoError::InvalidPointIndexPolicy(limits));
+        let fields = Capture::read(&error).child("limits");
+        assert!(
+            matches!(fields.field("max_points"), ErrorValue::Unsigned(value) if value == u128::from(limits.max_points))
+        );
+        assert!(
+            matches!(fields.field("max_work_items"), ErrorValue::Unsigned(value) if value == u128::from(limits.max_work_items))
+        );
+        assert!(
+            matches!(fields.field("max_workspace_bytes"), ErrorValue::ByteCount(value) if value == u128::from(limits.max_workspace_bytes))
+        );
+    }
+}
+
+#[test]
 fn borrowed_policy_batches_preserve_keys_and_charge_original_sources() {
     let grid = CubeHilbertQ62V1::new(NativeGridProfile::Wgs84);
     let sources = [

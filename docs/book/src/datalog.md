@@ -37,8 +37,15 @@ disjunctive, conjunctive, and empty (`false`) — so an axiom like `A ⊑ ∃r.C
 which lowers to `∃y. (r(x, y) ∧ C(y))` with one *shared* witness, is one rule
 rather than two unrelated ones.
 
-The semi-naive evaluator runs the atomic form and refuses the other four **by
-name**. The existential form is not lost by that refusal: the restricted chase
+The semi-naive evaluator runs atomic and unquantified conjunctive heads. Several
+heads share one body evaluation; each recorded derivation names its authored
+clause index and head ordinal. Recursion, factor projection and stratified
+negation use the same evaluator. Predicate completion follows every producer,
+even when a shared rule emits a higher-stratum head early. Independent proofs
+check the selected head ordinal; their version 2 encoding carries it explicitly.
+
+Existential, disjunctive and false heads are refused **by name**. The existential
+form is not lost by that refusal: the restricted chase
 consumes it, minting frontier-addressed Skolem witnesses, which is how the four
 existential RDF/RDFS patterns fire and the rule inventory reads complete. What
 never happens is a surrogate leaking into an answer — the entailment layer above
@@ -47,6 +54,13 @@ boundary and reports the withholding, rather than inventing an answer the caller
 did not ask for.
 
 ## Determinism
+
+Use `Guard::not_equal("?left", "?right")` for native term inequality, without a
+callback. It compares exact bound term identity without numeric coercion.
+A caller-defined `Guard::filter("!=", ...)` remains a callback: operation kind,
+not its name, selects native behavior and participates in the clause digest.
+The independent proof checker re-evaluates native top-level filters from the
+checked premises.
 
 - Per-key rows keep insertion order; the arrangement is sorted; no map iteration
   order reaches an output path.
@@ -62,14 +76,23 @@ Identical input yields byte-identical output, on every target.
 
 ## Limits refuse; they never truncate
 
-Three limits bound what every run holds and enumerates. Two are the caller's,
-on `EvalOptions`, with a default sized for the target; the third is a constant:
+Three limits bound what every run holds and enumerates. All are caller-selected
+through `EvalOptions`, with explicit defaults:
 
 | Limit | Bounds | Set with | Default on `wasm32` | Default elsewhere |
 | --- | --- | --- | --- | --- |
 | join steps | candidate solutions enumerated | `EvalOptions::with_max_join_steps` | 1,048,576 | 1,048,576 |
 | stored facts | facts seeded or derived | `EvalOptions::with_max_stored_facts` | 131,072 | 4,194,304 |
-| term arena bytes | interned term surface bytes | `MAX_TERM_ARENA_BYTES` (fixed) | 16,777,216 | 16,777,216 |
+| term arena bytes | interned term surface bytes | `EvalOptions::with_max_term_arena_bytes` | 16,777,216 | 16,777,216 |
+
+`EvalOptions::without_term_arena_limit` removes the logical surface-byte ceiling.
+Actual storage admission still applies. The effective ceiling is available in
+the budget report and participates in the contract hash.
+
+Stored-fact admission checks each unique insertion before changing the store.
+On refusal, `BudgetReport::stored_facts` reports the admitted count and
+`observed_stored_facts` reports the first refused insertion, exactly one higher.
+Duplicate candidates do not consume another stored-fact allowance.
 
 The stored-fact defaults differ because the memory the store lives in does: a
 `wasm32` evaluation shares one linear memory with the rest of its page, and its
@@ -79,30 +102,24 @@ refused ordinary terminating rule sets there — a single rule that copies
 each of 70,000 `ex:p` triples to `ex:q`. The default is chosen at compile time from the
 target architecture, never by a Cargo feature.
 
-The join-step default is the same on every target, for a measured reason: a
-body's candidate solutions for a round are materialised before the limit is
-checked. A body joining two unrelated atoms over 20,000 nodes (400 million
-candidates) is refused at the default in about two seconds, holding under half
-a gigabyte; at 268,435,456 join steps it had allocated about 20 GB, still
-enumerating, when it was stopped at a 24 GB address-space cap. A larger default
-would let a Cartesian body exhaust memory before it could be refused. Reach is
-the caller's to buy: the non-linear transitive closure of a thousand-node chain
-enumerates over 67 million candidates and completes when the caller raises the
-limit (`--max-join-steps` on the command line), while the linear closure of the
-same chain fits the default.
+The join-step default is the same on every target. Evaluation reserves a
+candidate's credit before expanding it, using one round-wide pool; an exhausted
+allowance stops further candidate expansion. This is a work ceiling, separate
+from retained storage: raising it can permit larger intermediate buffers,
+without raising the stored-fact or term-arena ceilings. A caller whose program
+needs more candidate work must state that allowance explicitly
+(`--max-join-steps` on the command line).
 
 The join-step limit is not what stops a divergent rule. A SHACL shape rule
 minting a new focus node every round is re-executed only for the focus nodes
-whose inputs changed, not for every earlier one, so it is refused by the term
-limits below within a few seconds, whatever the join-step limit: by the
-term-generating round limit when its new terms are of bounded length, and by
-the term-arena ceiling when each is longer than the last (a rule minting an IRI
-one character longer every round reaches 16 MiB of term surfaces after about
-5,800 rounds).
+whose inputs changed, not for every earlier one. Term generation has its own
+guards: the term-generating round limit when new terms have bounded length,
+and the term-arena ceiling when retained surfaces grow.
 
 A limit can only refuse. A run inside its limits returns the program's least
-model, the same model under every limit that admits it; a run past one returns
-no model at all. Every caller passing the same options gets the same answer or
+model, the same model under every limit that admits it. Complete-only calls
+return a refusal past a limit. A retained `EvaluationSession` exposes certified
+facts through a separate `PartialModel`. Every caller passing the same options gets the same answer or
 the same refusal, and the effective limits are folded into the result's
 contract hash, so a closure computed under one set of limits, or on one target
 under its defaults, never claims the identity of another. A join-step count
@@ -110,12 +127,67 @@ also depends on the evaluator's plan, so a limit sized tightly against one
 release can refuse under the next; a limit with headroom cannot change a
 completed answer.
 
-There is deliberately no wall-clock budget: it would break both `wasm32` and
-reproducibility.
+The Datalog evaluator reads no clock. A host can adapt a wall-clock deadline or
+cancellation flag to the answer-blind `StopSignal` interface. The signal is polled
+at session entry and round boundaries. A stopped session can resume with a fresh
+signal; neither signal changes the completed model.
 
-Passing a limit is a **total** refusal, not a truncation. There is no partial
-fixpoint to hand back with a note attached, and a truncated closure presented as
-a complete one is exactly the failure a reasoning report exists to prevent. The
-error names the limit, the numbers observed and permitted, and the knob that
-raises it; in `purrdf-entail` that surfaces as `EntailError::Evaluate` or
+## Model output, proofs and measured work
+
+Ordinary evaluation defaults to `DerivationMode::ModelOnly`. Set
+`EvalOptions::with_derivation_mode(DerivationMode::Record)` when exported
+derivations are needed. `Evaluation::derivations` returns `None` when recording
+was disabled and `Some([])` when recording was enabled but derived nothing.
+Proof construction refuses a model-only result with
+`ProofError::DerivationsNotRecorded`. Recording does not change the least model,
+internal canonical witness preference or candidate accounting.
+
+`Evaluation::work` separates unique input facts and committed fact insertions
+from physical candidate admissions. For an ordinary completed stratified run,
+the fact counts are independent of the join plan. Candidate counts can change
+with the planner; the report names its version, and callers can compare
+candidates per committed fact. Scheduled withdrawals can cause a later commit
+of the same fact and therefore another commit event.
+
+`EvalOptions::with_round_execution(RoundExecution::Sequential)` selects the
+direct execution path for one call, without changing a global thread pool.
+Both scheduling policies use the same evaluator, program-order merge and sorted
+commit, and preserve the same model and recorded derivations.
+
+Complete-only entry points such as `evaluate_guarded` return no model on refusal.
+The error names the limit, the numbers observed and permitted, and the knob that
+raises it; entailment reports these through `EntailError::Evaluate` or
 `EntailError::Chase`.
+
+## Certified partial models and continuations
+
+`EvaluationSession::new` consumes the input store and borrows the immutable
+program and guard evaluator. Its `SessionContext` requires the caller's canonical
+snapshot, guard-semantics and evidence-regime identities. The session adds the
+canonical authored-program identity. Retain its `binding()` value and present
+that binding unchanged to `resume`, together with cumulative limits and an
+optional stop signal. Scheduling may change; derivation recording remains fixed.
+Changing any binding coordinate refuses before execution. The original dictionary
+checks its pinned source at every public read and resume boundary.
+
+`ResumeProgress::Paused` carries the original resource or stop refusal.
+`partial_model()` borrows the seeded and proved published facts, actual successful
+work, optional derivations and each stratum's `Complete`, `SoundLowerBound` or
+`Withheld` status. Execution never enters a stratum before all preceding strata
+finish, so negation cannot observe an incomplete lower extension. Later dependent
+conclusions are withheld. The partial identity includes the original canonical
+bindings, governors and consumption in a separate hash domain. Runtime term and
+row handles never participate in it.
+
+Raise a ceiling or supply a fresh stop signal to resume the retained joins,
+guards, rule/round work, sorted publication and current delta. Successful work
+is counted once; retrying the same refused allowance adds no successful work or
+guard calls. `EvaluationProofs::of_partial` builds proofs for recorded published
+derivations, checked by the same independent checker used for complete models.
+Source and guard failures stay hard failures and prevent further resumption.
+
+Only `ResumeProgress::Complete` enables `take_complete()` to return an
+`Evaluation`. An incomplete request leaves the session intact. The completed
+model, derivations and successful join count match uninterrupted execution under
+the final options; its calculus identity uses the ordinary `contract_hash_with`
+recipe. The continuation is an in-process owner and has no serialized token form.

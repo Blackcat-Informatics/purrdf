@@ -104,7 +104,10 @@ impl SliceTier {
             Some("Core") => Ok(Self::Core),
             Some("Extension") => Ok(Self::Extension),
             Some("Domain") => Ok(Self::Domain),
-            Some(other) => Err(SliceError::Json(format!("unknown slice tier `{other}`"))),
+            Some(other) => Err(SliceError::Json(crate::error::JsonRefusal::Unknown {
+                category: "slice tier",
+                name: other.to_owned(),
+            })),
             None => json_form::newtype_variant(value, "Unknown").map(Self::Unknown),
         }
     }
@@ -218,7 +221,7 @@ impl SliceCatalog {
     /// Load a single slice from `dir` (which must contain `manifest.ttl`).
     pub fn from_slice_dir(dir: &Path, vocab: &SliceVocab) -> Result<SliceRecord, SliceError> {
         let manifest_path = dir.join("manifest.ttl");
-        let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::Io)?;
+        let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::from)?;
 
         // Parse Turtle once into the native IR (lenient: accepts @x-purrdf-* lang tags).
         // The frozen dataset serves BOTH the manifest-view extraction and the
@@ -341,17 +344,21 @@ fn find_slice_iri(ds: &Dataset, vocab: &SliceVocab) -> Result<String, SliceError
     let prefix = vocab.prefix_name();
 
     match subjects.len() {
-        0 => Err(SliceError::InvalidManifest(format!(
-            "no `a {prefix}:Slice` triple found in manifest.ttl"
-        ))),
+        0 => Err(SliceError::InvalidManifest(
+            crate::error::ManifestRefusal::SliceSubjects {
+                prefix: prefix.to_owned(),
+                subjects,
+            },
+        )),
         1 => Ok(subjects.remove(0)),
         _ => {
             subjects.sort();
-            Err(SliceError::InvalidManifest(format!(
-                "manifest.ttl declares {} `a {prefix}:Slice` subjects (must be exactly one): {}",
-                subjects.len(),
-                subjects.join(", ")
-            )))
+            Err(SliceError::InvalidManifest(
+                crate::error::ManifestRefusal::SliceSubjects {
+                    prefix: prefix.to_owned(),
+                    subjects,
+                },
+            ))
         }
     }
 }
@@ -381,10 +388,10 @@ fn collect_artifacts(
     current: &Path,
     out: &mut Vec<ArtifactRecord>,
 ) -> Result<(), SliceError> {
-    for entry in std::fs::read_dir(current).map_err(SliceError::Io)? {
-        let entry = entry.map_err(SliceError::Io)?;
+    for entry in std::fs::read_dir(current).map_err(SliceError::from)? {
+        let entry = entry.map_err(SliceError::from)?;
         let path = entry.path();
-        let file_type = entry.file_type().map_err(SliceError::Io)?;
+        let file_type = entry.file_type().map_err(SliceError::from)?;
 
         if file_type.is_dir() {
             collect_artifacts(root, &path, out)?;
@@ -397,7 +404,10 @@ fn collect_artifacts(
 
         // Compute relative logical path.
         let rel = path.strip_prefix(root).map_err(|_| {
-            SliceError::InvalidPath(format!("path not under root: {}", path.display()))
+            SliceError::InvalidPath(crate::error::PathRefusal::OutsideRoot {
+                path: path.clone(),
+                root: root.to_path_buf(),
+            })
         })?;
 
         // Validate: no absolute components, no `..`.
@@ -407,16 +417,18 @@ fn collect_artifacts(
                 Component::Normal(_) => {}
                 Component::CurDir => {}
                 other => {
-                    return Err(SliceError::InvalidPath(format!(
-                        "unsafe path component {other:?} in {}",
-                        rel.display()
-                    )));
+                    return Err(SliceError::InvalidPath(
+                        crate::error::PathRefusal::Component {
+                            path: rel.to_path_buf(),
+                            component: other.as_os_str().to_owned(),
+                        },
+                    ));
                 }
             }
         }
 
         let logical_path = rel.to_string_lossy().to_string();
-        let content = std::fs::read(&path).map_err(SliceError::Io)?;
+        let content = std::fs::read(&path).map_err(SliceError::from)?;
         let raw_digest = hex_sha256(&content);
 
         let role = classify_role(&logical_path);
@@ -478,12 +490,15 @@ fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceErr
     // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
     // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
     // canonicalizes that flat set.
-    let canonical = dataset.canonical_nquads_flat().map_err(|error| {
-        SliceError::Parse(format!(
-            "canonicalize {} for its semantic digest: {error}",
-            path.display()
-        ))
-    })?;
+    let canonical = dataset
+        .canonical_nquads_flat()
+        .map_err(|error| match error {
+            purrdf_rdf::CanonError::Storage(storage) => SliceError::Storage(storage),
+            cause => SliceError::Canonicalize {
+                path: path.to_path_buf(),
+                cause: Box::new(cause),
+            },
+        })?;
     Ok(hex_sha256(canonical.as_bytes()))
 }
 
@@ -545,9 +560,9 @@ fn find_slice_dirs_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Slice
         // Don't recurse into a slice dir — slices are not nested.
         return Ok(());
     }
-    for entry in std::fs::read_dir(dir).map_err(SliceError::Io)? {
-        let entry = entry.map_err(SliceError::Io)?;
-        if entry.file_type().map_err(SliceError::Io)?.is_dir() {
+    for entry in std::fs::read_dir(dir).map_err(SliceError::from)? {
+        let entry = entry.map_err(SliceError::from)?;
+        if entry.file_type().map_err(SliceError::from)?.is_dir() {
             find_slice_dirs_inner(&entry.path(), out)?;
         }
     }
@@ -617,8 +632,23 @@ mod tests {
         let ds = Dataset::parse_file(ttl.as_bytes(), &path).expect("should parse without error");
         let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
         let result = find_slice_iri(&ds, &vocab);
+        drop(ds);
+        drop(vocab);
         match result {
             Err(SliceError::InvalidManifest(msg)) => {
+                let fields = purrdf_testkit::error_capture::Capture::read(&msg);
+                assert_eq!(fields.code, "slice-subject-count");
+                assert!(matches!(
+                    fields.field("required"),
+                    purrdf_hash::error::ErrorValue::Unsigned(1)
+                ));
+                for subject in [
+                    "https://example.org/slice/alpha",
+                    "https://example.org/slice/beta",
+                ] {
+                    assert!(fields.events.iter().any(|event| matches!(event, purrdf_testkit::error_capture::Event::Value(None, purrdf_hash::error::ErrorValue::Iri(value)) if *value == subject)));
+                }
+                let msg = msg.to_string();
                 assert!(
                     msg.contains("https://example.org/slice/alpha"),
                     "error message must name first subject, got: {msg}"

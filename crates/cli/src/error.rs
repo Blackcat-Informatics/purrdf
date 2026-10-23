@@ -192,9 +192,12 @@ purrdf_lex::variant_from!(CliError {
         purrdf_rdf::TransportError,
         std::io::Error,
         purrdf_sparql_results::Error,
-        EntailError,
         purrdf_validate::ShapesError,
     ) as ToString::to_string
+});
+
+purrdf_lex::variant_from!(impl [E] CliError where [E: fmt::Display] {
+    Runtime(EntailError<E>, purrdf_core::DatasetMaterializationError<E>) as ToString::to_string
 });
 
 #[cfg(test)]

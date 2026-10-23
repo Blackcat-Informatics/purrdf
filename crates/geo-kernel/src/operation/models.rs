@@ -102,6 +102,14 @@ pub struct PolynomialTerm {
     /// Coefficient of the second output coordinate, in metres.
     pub y_coefficient: Rat,
 }
+impl purrdf_hash::error::StructuredError for PolynomialTerm {
+    purrdf_hash::error_visit! {
+        @record self { x_power, y_power, x_coefficient, y_coefficient } => "polynomial-term" {
+            "x_power" => Unsigned(u128::from(self.x_power)), "y_power" => Unsigned(u128::from(self.y_power)),
+            "x_coefficient" => Record(&self.x_coefficient), "y_coefficient" => Record(&self.y_coefficient)
+        }
+    }
+}
 
 crate::context::retained::native_detached_fields!(PolynomialTerm {
     native: [x_coefficient, y_coefficient],
@@ -115,6 +123,16 @@ pub struct Polynomial2d {
     origin: [Rat; 2],
     scale: [Rat; 2],
     terms: crate::PreparedValues<PolynomialTerm>,
+}
+impl purrdf_hash::error::StructuredError for Polynomial2d {
+    purrdf_hash::error_visit! {
+        @record self { degree, origin, scale, terms } => "polynomial-2d" {
+            "degree" => Unsigned(u128::from(self.degree)),
+            "origin" => List(self.origin.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "scale" => List(self.scale.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "terms" => List(self.terms.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value)))
+        }
+    }
 }
 
 crate::context::retained::native_detached_fields!(Polynomial2d {
@@ -242,15 +260,19 @@ impl Polynomial2d {
         values: &crate::numerical::ExactValues<'_>,
         progress: &mut WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
-        for value in &scale {
+        for (axis, value) in scale.iter().enumerate() {
             if !values
                 .compare(value, &Rat::zero())
                 .map_err(GeoError::NumericalScratch)?
                 .is_gt()
             {
-                return Err(progress.retained_message(
-                    "polynomial normalization scales must be positive",
-                    GeoError::Config,
+                return Err(crate::PolynomialInputError::normalization(
+                    degree,
+                    origin,
+                    scale,
+                    axis,
+                    terms.len(),
+                    progress,
                 ));
             }
         }
@@ -263,23 +285,31 @@ impl Polynomial2d {
                         (a.x_power, a.y_power).cmp(&(b.x_power, b.y_power))
                     })
                     .map_err(GeoError::Storage)?;
-                for term in terms.iter() {
+                for (index, term) in terms.iter().enumerate() {
                     if u32::from(term.x_power) + u32::from(term.y_power) > u32::from(degree) {
-                        return Err(GeoError::Config(
-                            memory
-                                .string("polynomial term exceeds declared degree")
-                                .map_err(GeoError::Storage)?,
-                        ));
+                        return Err(crate::PolynomialInputError::monomial_with_memory(
+                            degree,
+                            index,
+                            terms.len(),
+                            term,
+                            None,
+                            memory,
+                        )
+                        .map_err(GeoError::Storage)?);
                     }
                 }
-                if terms.windows(2).any(|pair| {
+                if let Some(index) = terms.windows(2).position(|pair| {
                     (pair[0].x_power, pair[0].y_power) == (pair[1].x_power, pair[1].y_power)
                 }) {
-                    return Err(GeoError::Config(
-                        memory
-                            .string("duplicate polynomial monomial")
-                            .map_err(GeoError::Storage)?,
-                    ));
+                    return Err(crate::PolynomialInputError::monomial_with_memory(
+                        degree,
+                        index,
+                        terms.len(),
+                        &terms[index],
+                        Some(&terms[index + 1]),
+                        memory,
+                    )
+                    .map_err(GeoError::Storage)?);
                 }
                 for term in terms.iter_mut() {
                     *term = term.prepare(memory).map_err(GeoError::Storage)?;
@@ -541,6 +571,146 @@ pub struct GridNode {
     /// Displacement along the second metre axis.
     pub y: Rat,
 }
+impl purrdf_hash::error::StructuredError for GridNode {
+    purrdf_hash::error_visit! {
+        @record self { x, y } => "grid-node" { "x" => Record(&self.x), "y" => Record(&self.y) }
+    }
+}
+
+/// The first absent node in the original ordered four-corner lookup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GridMissingNode {
+    /// Original patch column.
+    pub column: u32,
+    /// Original patch row.
+    pub row: u32,
+    /// Original missing node column.
+    pub node_column: u32,
+    /// Original missing node row.
+    pub node_row: u32,
+    /// Original row-major lookup index.
+    pub index: usize,
+}
+impl purrdf_hash::error::StructuredError for GridMissingNode {
+    purrdf_hash::error_visit! {
+        @record self { column, row, node_column, node_row, index } => "grid-missing-node" {
+            "column" => Unsigned(u128::from(self.column)), "row" => Unsigned(u128::from(self.row)),
+            "node_column" => Unsigned(u128::from(self.node_column)), "node_row" => Unsigned(u128::from(self.node_row)), "index" => Unsigned(self.index as u128)
+        }
+    }
+}
+impl core::fmt::Display for GridMissingNode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("bilinear grid cell touches a missing node")
+    }
+}
+impl std::error::Error for GridMissingNode {}
+
+/// Original exact locator data; trial panels may use it only to refine precision.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GridLocationRefusal {
+    /// The original normalized coordinate is outside the closed grid extent.
+    OutsideExtent {
+        /// First failed zero-based coordinate axis.
+        axis: usize,
+        /// Original computed normalized coordinate.
+        relative: Rat,
+        /// Original greatest node index on that axis.
+        last_node: u32,
+    },
+    /// No complete incident patch contains the original point.
+    NoCompletePatch {
+        /// Original located patch column.
+        column: u32,
+        /// Original located patch row.
+        row: u32,
+        /// First incident column actually searched.
+        first_column: u32,
+        /// First incident row actually searched.
+        first_row: u32,
+    },
+}
+impl purrdf_hash::error::StructuredError for GridLocationRefusal {
+    purrdf_hash::error_visit! {
+        OutsideExtent { axis, relative, last_node } => "grid-location-outside-extent" {
+            "axis" => Unsigned(*axis as u128), "relative" => Record(relative), "last_node" => Unsigned(u128::from(*last_node))
+        },
+        NoCompletePatch { column, row, first_column, first_row } => "grid-location-no-complete-patch" {
+            "column" => Unsigned(u128::from(*column)), "row" => Unsigned(u128::from(*row)),
+            "first_column" => Unsigned(u128::from(*first_column)), "first_row" => Unsigned(u128::from(*first_row))
+        },
+    }
+}
+crate::context::retained::native_detached_enum!(GridLocationRefusal {
+    units: [],
+    tuples: [],
+    fields: [
+        OutsideExtent {
+            native: [relative],
+            copy: [axis, last_node]
+        },
+        NoCompletePatch {
+            native: [],
+            copy: [column, row, first_column, first_row]
+        }
+    ]
+});
+impl core::fmt::Display for GridLocationRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::OutsideExtent { .. } => "bilinear grid does not extrapolate outside its extent",
+            Self::NoCompletePatch { .. } => {
+                "bilinear grid point is outside all complete closed patches"
+            }
+        })
+    }
+}
+impl std::error::Error for GridLocationRefusal {}
+
+/// A domain probe remains separate from an actual operational failure. Only
+/// domain uncertainty in a trial enclosure may request greater precision.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum GridLocationFailure {
+    Domain(GridLocationRefusal),
+    IndexOverflow,
+}
+impl purrdf_hash::error::StructuredError for GridLocationFailure {
+    purrdf_hash::error_visit! {
+        Domain(cause) => "grid-location-domain" { "cause" => Cause(cause) },
+        IndexOverflow => "grid-location-index-overflow" {},
+    }
+}
+impl core::fmt::Display for GridLocationFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Domain(cause) => core::fmt::Display::fmt(cause, f),
+            Self::IndexOverflow => {
+                core::fmt::Display::fmt(&GeoError::ArithmeticOverflow("grid cell index"), f)
+            }
+        }
+    }
+}
+impl std::error::Error for GridLocationFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Domain(cause) => Some(cause),
+            Self::IndexOverflow => None,
+        }
+    }
+}
+impl GridLocationFailure {
+    fn into_geo(
+        self,
+        grid: &BilinearGrid,
+        point: [&Rat; 2],
+        progress: &mut WorkProgress<'_>,
+    ) -> GeoError {
+        match self {
+            Self::Domain(cause) => crate::ModelInputError::location(grid, point, &cause, progress),
+            Self::IndexOverflow => GeoError::ArithmeticOverflow("grid cell index"),
+        }
+    }
+}
 
 crate::context::retained::native_detached_fields!(GridNode {
     native: [x, y],
@@ -555,6 +725,18 @@ pub struct BilinearGrid {
     columns: u32,
     rows: u32,
     nodes: crate::PreparedValues<Option<GridNode>>,
+}
+impl purrdf_hash::error::StructuredError for BilinearGrid {
+    purrdf_hash::error_visit! {
+        @record self { origin, spacing, columns, rows, nodes } => "bilinear-grid" {
+            "origin" => List(self.origin.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "spacing" => List(self.spacing.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "columns" => Unsigned(u128::from(self.columns)), "rows" => Unsigned(u128::from(self.rows)),
+            "nodes" => List(self.nodes.iter().map(|value| match value {
+                Some(node) => purrdf_hash::error::ErrorValue::Record(node), None => purrdf_hash::error::ErrorValue::Absent,
+            }))
+        }
+    }
 }
 
 crate::context::retained::native_detached_fields!(BilinearGrid {
@@ -681,23 +863,33 @@ impl BilinearGrid {
         values: &crate::numerical::ExactValues<'_>,
         progress: &mut WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
-        let mut valid = columns >= 2 && rows >= 2;
-        if valid {
-            for value in &spacing {
+        let mut reason = if columns < 2 {
+            Some(crate::GridConfigurationReason::Columns)
+        } else if rows < 2 {
+            Some(crate::GridConfigurationReason::Rows)
+        } else {
+            None
+        };
+        if reason.is_none() {
+            for (axis, value) in spacing.iter().enumerate() {
                 if !values
                     .compare(value, &Rat::zero())
                     .map_err(GeoError::NumericalScratch)?
                     .is_gt()
                 {
-                    valid = false;
+                    reason = Some(crate::GridConfigurationReason::Spacing { axis });
                     break;
                 }
             }
         }
-        if !valid {
-            return Err(progress.retained_message(
-                "bilinear grid needs positive spacing and at least two nodes per axis",
-                GeoError::Config,
+        if let Some(reason) = reason {
+            return Err(crate::ModelInputError::grid_configuration(
+                origin,
+                spacing,
+                (columns, rows),
+                nodes.len(),
+                reason,
+                progress,
             ));
         }
         let expected = usize::try_from(u64::from(columns) * u64::from(rows))
@@ -777,28 +969,37 @@ impl BilinearGrid {
         }
         Ok(())
     }
-    pub(super) fn cell(&self, x: &Rat, y: &Rat) -> Result<(u32, u32), GeoError> {
-        let coordinate = |value: &Rat, axis: usize, count: u32| -> Result<u32, GeoError> {
-            let relative = value
-                .sub(&self.origin[axis])
-                .div(&self.spacing[axis])
-                .expect("positive spacing");
-            if relative < Rat::zero() || relative > Rat::from_i64(i64::from(count - 1)) {
-                return Err(GeoError::domain(
-                    "bilinear grid does not extrapolate outside its extent",
-                ));
-            }
-            let index = relative
-                .numerator()
-                .div_rem(relative.denominator().as_ref())
-                .expect("positive denominator")
-                .0
-                .to_i128()
-                .ok_or(GeoError::ArithmeticOverflow("grid cell index"))?;
-            Ok(u32::try_from(index)
-                .map_err(|_| GeoError::ArithmeticOverflow("grid cell index"))?
-                .min(count - 2))
-        };
+    #[allow(
+        clippy::result_large_err,
+        reason = "The original exact normalized coordinate stays inline until its caller admits the retained diagnostic; boxing the trial refusal would allocate outside that admission"
+    )]
+    pub(super) fn cell(&self, x: &Rat, y: &Rat) -> Result<(u32, u32), GridLocationFailure> {
+        let coordinate =
+            |value: &Rat, axis: usize, count: u32| -> Result<u32, GridLocationFailure> {
+                let relative = value
+                    .sub(&self.origin[axis])
+                    .div(&self.spacing[axis])
+                    .expect("positive spacing");
+                if relative < Rat::zero() || relative > Rat::from_i64(i64::from(count - 1)) {
+                    return Err(GridLocationFailure::Domain(
+                        GridLocationRefusal::OutsideExtent {
+                            axis,
+                            relative,
+                            last_node: count - 1,
+                        },
+                    ));
+                }
+                let index = relative
+                    .numerator()
+                    .div_rem(relative.denominator().as_ref())
+                    .expect("positive denominator")
+                    .0
+                    .to_i128()
+                    .ok_or(GridLocationFailure::IndexOverflow)?;
+                Ok(u32::try_from(index)
+                    .map_err(|_| GridLocationFailure::IndexOverflow)?
+                    .min(count - 2))
+            };
         Ok((
             coordinate(x, 0, self.columns)?,
             coordinate(y, 1, self.rows)?,
@@ -871,6 +1072,53 @@ impl BilinearGrid {
         math: &mut CoordinateMath,
         progress: &mut WorkProgress<'_>,
     ) -> Result<(u32, u32), MathError> {
+        match self.location_result_math(x, y, complete, math, progress)? {
+            Ok(location) => Ok(location),
+            // Trial-panel uncertainty requests refinement, not a latched failure.
+            Err(GridLocationFailure::Domain(_)) if !complete => Err(MathError::PrecisionExhausted),
+            Err(error) => Err(self.location_error_math(error, x, y, progress)),
+        }
+    }
+
+    /// Certification may reject a trial point without rejecting the operation.
+    /// Cost admission and both polling boundaries are the declared path's.
+    pub(super) fn contains_complete_patch_math(
+        &self,
+        x: &Rat,
+        y: &Rat,
+        math: &mut CoordinateMath,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<bool, MathError> {
+        match self.location_result_math(x, y, true, math, progress)? {
+            Ok(_) => Ok(true),
+            Err(GridLocationFailure::Domain(_)) => Ok(false),
+            Err(error) => Err(self.location_error_math(error, x, y, progress)),
+        }
+    }
+
+    fn location_error_math(
+        &self,
+        error: GridLocationFailure,
+        x: &Rat,
+        y: &Rat,
+        progress: &mut WorkProgress<'_>,
+    ) -> MathError {
+        let error = error.into_geo(self, [x, y], progress);
+        GeoError::math_validation_failure(
+            error,
+            crate::OperationValidationContext::GridLocation,
+            progress,
+        )
+    }
+
+    fn location_result_math(
+        &self,
+        x: &Rat,
+        y: &Rat,
+        complete: bool,
+        math: &mut CoordinateMath,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<Result<(u32, u32), GridLocationFailure>, MathError> {
         let cost = self
             .location_cost(x, y, complete)
             .ok_or(MathError::WorkExhausted)?;
@@ -882,13 +1130,18 @@ impl BilinearGrid {
             self.cell(x, y)
         };
         progress.math_poll(math)?;
-        location.map_err(|_| MathError::Domain("bilinear grid point is outside complete patches"))
+        Ok(location)
     }
-    pub(super) fn corners(&self, column: u32, row: u32) -> Result<[&GridNode; 4], GeoError> {
+    pub(super) fn corners(&self, column: u32, row: u32) -> Result<[&GridNode; 4], GridMissingNode> {
         let get = |x: u32, y: u32| {
-            self.nodes[(u64::from(y) * u64::from(self.columns) + u64::from(x)) as usize]
-                .as_ref()
-                .ok_or_else(|| GeoError::domain("bilinear grid cell touches a missing node"))
+            let index = (u64::from(y) * u64::from(self.columns) + u64::from(x)) as usize;
+            self.nodes[index].as_ref().ok_or(GridMissingNode {
+                column,
+                row,
+                node_column: x,
+                node_row: y,
+                index,
+            })
         };
         Ok([
             get(column, row)?,
@@ -897,14 +1150,27 @@ impl BilinearGrid {
             get(column + 1, row + 1)?,
         ])
     }
-    pub(super) fn validate_point(&self, point: &OperationPoint) -> Result<(), GeoError> {
-        self.complete_patch(&point.x, &point.y)?;
+    pub(super) fn validate_point(
+        &self,
+        point: &OperationPoint,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<(), GeoError> {
+        self.complete_patch(&point.x, &point.y)
+            .map_err(|error| error.into_geo(self, [&point.x, &point.y], progress))?;
         Ok(())
     }
 
     // The domain is the closed union of complete patches. A missing node does
     // not remove the boundary of an adjacent complete patch.
-    pub(super) fn complete_patch(&self, x: &Rat, y: &Rat) -> Result<(u32, u32), GeoError> {
+    #[allow(
+        clippy::result_large_err,
+        reason = "The original exact normalized coordinate stays inline until its caller admits the retained diagnostic; boxing the trial refusal would allocate outside that admission"
+    )]
+    pub(super) fn complete_patch(
+        &self,
+        x: &Rat,
+        y: &Rat,
+    ) -> Result<(u32, u32), GridLocationFailure> {
         let (column, row) = self.cell(x, y)?;
         let previous = |value: &Rat, axis: usize, index: u32| {
             index > 0
@@ -921,8 +1187,13 @@ impl BilinearGrid {
                 }
             }
         }
-        Err(GeoError::domain(
-            "bilinear grid point is outside all complete closed patches",
+        Err(GridLocationFailure::Domain(
+            GridLocationRefusal::NoCompletePatch {
+                column,
+                row,
+                first_column,
+                first_row,
+            },
         ))
     }
 
@@ -1023,18 +1294,8 @@ impl BilinearGrid {
     ) -> Result<(OperationCoordinates, RootJacobian2), MathError> {
         let (xmin, xmax) = exact_bounds(&coordinates[0]);
         let (ymin, ymax) = exact_bounds(&coordinates[1]);
-        let mut first = self
-            .location_math(&xmin, &ymin, false, math, progress)
-            .map_err(|error| match error {
-                MathError::Domain(_) => MathError::PrecisionExhausted,
-                other => other,
-            })?;
-        let last = self
-            .location_math(&xmax, &ymax, false, math, progress)
-            .map_err(|error| match error {
-                MathError::Domain(_) => MathError::PrecisionExhausted,
-                other => other,
-            })?;
+        let mut first = self.location_math(&xmin, &ymin, false, math, progress)?;
+        let last = self.location_math(&xmax, &ymax, false, math, progress)?;
         for (axis, value) in [&xmin, &ymin].into_iter().enumerate() {
             let (column, row) = first;
             let index = if axis == 0 {
@@ -1204,9 +1465,14 @@ impl BilinearGrid {
         progress: &mut WorkProgress<'_>,
     ) -> Result<(OperationCoordinates, RootJacobian2), MathError> {
         progress.math_poll(math)?;
-        let corners = self
-            .corners(column, row)
-            .map_err(|_| MathError::Domain("bilinear grid hole"))?;
+        let corners = self.corners(column, row).map_err(|cause| {
+            let error = crate::ModelInputError::missing_node(self, cause, progress);
+            GeoError::math_validation_failure(
+                error,
+                crate::OperationValidationContext::GridHole,
+                progress,
+            )
+        })?;
         let (origin, _) = self.patch_bounds_math(column, row, math, progress)?;
         let scale = [
             fixed_from_rat(&self.spacing[0], math)?,

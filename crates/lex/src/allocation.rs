@@ -19,7 +19,7 @@ pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, Shared
 mod text;
 pub use text::OwnedText;
 mod ordered;
-pub use ordered::{OrderedIter, OrderedRange, OrderedTable};
+pub use ordered::{OrderedEntry, OrderedIter, OrderedRange, OrderedSlot, OrderedTable};
 
 use core::alloc::Layout;
 use core::fmt;
@@ -54,6 +54,16 @@ impl fmt::Display for StorageError {
 }
 
 impl std::error::Error for StorageError {}
+
+impl purrdf_hash::error::StructuredError for StorageError {
+    purrdf_hash::error_visit! {
+        Capacity(error) => "storage-capacity" { "cause" => Cause(error) },
+        SizeOverflow => "storage-size-overflow" {},
+        AllocationFailed => "storage-allocation-failed" {},
+        AdmissionFailed => "storage-admission-failed" {},
+        FormattingFailed => "storage-formatting-failed" {},
+    }
+}
 
 /// Exhaustion of one named logical space, distinct from physical allocation.
 /// Counts use u128 so even an attempted count beyond a u64 space is reported
@@ -245,6 +255,16 @@ impl fmt::Display for CapacityError {
 }
 
 impl std::error::Error for CapacityError {}
+
+impl purrdf_hash::error::StructuredError for CapacityError {
+    purrdf_hash::error_visit! {
+        @record self { space, attempted, limit } => "capacity-exceeded" {
+            "space" => Code(self.space.as_str()),
+            "attempted" => Unsigned(self.attempted()),
+            "limit" => Unsigned(self.limit()),
+        }
+    }
+}
 
 crate::variant_from!(StorageError { Capacity(CapacityError) });
 

@@ -425,7 +425,7 @@ pub(crate) fn refuse_duplicate_iris(specs: &[PathRelationSpec]) -> Result<(), Cl
 pub(crate) fn build_registry<D: DatasetView>(
     view: &D,
     specs: &[PathRelationSpec],
-) -> Result<Option<PropertyFunctionRegistry>, CliError> {
+) -> Result<Option<PropertyFunctionRegistry<'static>>, CliError> {
     if specs.is_empty() {
         return Ok(None);
     }
@@ -449,7 +449,7 @@ pub(crate) fn build_registry<D: DatasetView>(
 pub(crate) fn registry_over<D: DatasetView>(
     view: &D,
     specs: &[PathRelationSpec],
-) -> Result<PropertyFunctionRegistry, String> {
+) -> Result<PropertyFunctionRegistry<'static>, String> {
     let mut registry = PropertyFunctionRegistry::new();
     for spec in specs {
         let alternatives = spec

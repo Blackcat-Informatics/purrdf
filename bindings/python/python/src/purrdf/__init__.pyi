@@ -746,7 +746,8 @@ class _QuadStore:
     # `away-from-zero`, `floor`, `ceiling`, `half-even`,
     # `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`). Unset is
     # `"exact-or-18:half-even"`. Under `"exact"` a quotient with no finite decimal expansion
-    # raises the query's `ValueError`, naming `err:FOAR0002`. An unreadable policy
+    # is an expression error (`err:FOAR0002`), leaving a projected cell unbound or
+    # available to COALESCE. Governed evidence counts that absorbed error. An unreadable policy
     # raises `ValueError` before anything is evaluated. Every query, UPDATE, governed,
     # entailment and prepared entry point takes it.
     def query(
@@ -837,6 +838,7 @@ class _QuadStore:
         premise_iris: Sequence[str] | None = ...,
         max_stored_facts: int | None = ...,
         max_join_steps: int | None = ...,
+        max_term_arena_bytes: int | None = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         property_fn_namespaces: list[str] | None = ...,
@@ -1397,6 +1399,9 @@ _InputTermRow = tuple[
     tuple[int, int, int] | None,
 ]
 
+# The existing native sentinel selecting every graph; None selects the default graph.
+GTS_ALL_SCOPE: str
+
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]
     # RDF 1.2 base direction ("ltr"/"rtl"), positionally parallel to `terms`.
@@ -1520,7 +1525,8 @@ class RdfDataset:
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
-    # Canonical (RDFC-1.0) flat N-Quads — the readable surface of a frozen
+    # Canonical flat N-Quads under the shipped RDF 1.2 profile (RDFC-1.0 on its
+    # RDF 1.1 subset) — the readable surface of a frozen
     # dataset, and the same serializer the shared string boundary uses. N-Triples
     # is a syntactic subset, so a default-graph-only dataset serializes to a valid
     # N-Triples document; one that names graphs keeps the graph term. There is
@@ -1646,7 +1652,9 @@ class _Shapes:
     # under (see `shapes.validate`), resolved against `base`; every validation,
     # `prepare()` and `to_product()` carry it. `subclass_of_in_shapes_graph` is SHACL
     # 1.2 Core section 6.3's `subClassOfInShapesGraph` (see `shapes.validate`); every
-    # validation and `prepare()` carry it.
+    # validation and `prepare()` carry it. `shacl_profile` is the stable id of the exact
+    # dated SHACL law the shapes graph is loaded and every validation answers under (see
+    # `shapes.validate`); None is the compatibility law.
     def __init__(
         self,
         shapes_ttl: str,
@@ -1655,6 +1663,7 @@ class _Shapes:
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
+        shacl_profile: str | None = None,
     ) -> None: ...
     # `xpath_regex` (here, on `validate_store`, on `PreparedShapes.validate_nt` and
     # `validate_store_changes`, and on `shapes.validate`) selects the dated XPath law sh:pattern and every SHACL-SPARQL
@@ -1909,6 +1918,14 @@ class shapes:
     # pattern or flag the law refuses is reported as the ordinary sh:pattern result;
     # a native resource refusal raises ValueError carrying its `xpath-*` code and no
     # partial report.
+    #
+    # `shacl_profile` selects one exact, dated SHACL law by its stable id:
+    # "shacl-rec-2017-07-20" (the 2017 Recommendation), "shacl-wd-2026-09-18" (the SHACL
+    # 1.2 working draft) or "shacl-ed-2026-10-16" (the data-shapes editor's draft the W3C
+    # SHACL 1.2 test suite is graded under). None keeps the compatibility law. An id that
+    # names no law raises ValueError carrying the `unsupported-profile` status, and a
+    # shapes graph the selected law's text refuses raises ValueError at load. A dated law
+    # carries its own XPath law, so an `xpath_regex` naming another raises ValueError.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1920,6 +1937,7 @@ class shapes:
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
         xpath_regex: str | None = None,
+        shacl_profile: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
@@ -2155,10 +2173,11 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
-    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out,
-    # under the same two evaluation limits.
+    # document in, canonical flat N-Quads under the shipped profile plus the report out,
+    # under the same three evaluation limits.
     @staticmethod
     def materialize_nt(
         data: str,
@@ -2169,6 +2188,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # The rule table the specification DEFINES the regime by, in table order
     # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`
@@ -2393,6 +2413,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -2413,6 +2434,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
@@ -2431,6 +2453,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────

@@ -29,7 +29,63 @@ fn measured<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
     (result, window.close())
 }
 
-#[test]
+fn admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs() {
+    use purrdf_lex::allocation::{Memory, Resident, SharedOwned};
+    let lexical = format!("2024-02-29T12:34:56.{}+05:30", "7".repeat(4096));
+    let XsdValue::DateTime(original) = purrdf_xsd::parse(&lexical, XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("dateTime value")
+    };
+    let expected = original.canonical_lexical();
+    let mut account = Resident;
+    let mut memory = Memory::new(&mut account);
+    let mut prepared = original.detached_with_memory(&mut memory).unwrap();
+    let admitted = memory.admitted_bytes();
+    let (owner, _) = SharedOwned::retain_current(
+        &mut account,
+        Resident,
+        admitted,
+        std::alloc::Layout::new::<()>(),
+    )
+    .unwrap();
+    prepared.publish_detached(&owner).unwrap();
+    drop(owner);
+    drop(original);
+    let (copied, allocation) = measured(|| prepared.clone());
+    assert_eq!(allocation.allocations, 0);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.retained_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
+    assert_eq!(prepared.canonical_lexical(), expected);
+    drop(prepared);
+    assert_eq!(copied.canonical_lexical(), expected);
+}
+
+fn admitted_datetime_refusal_precedes_any_copy_allocation() {
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+    struct Refuse;
+    impl Admission for Refuse {
+        fn resize(&mut self, _: usize) -> Result<(), StorageError> {
+            Err(StorageError::AdmissionFailed)
+        }
+    }
+    let lexical = format!("2024-02-29T12:34:56.{}Z", "7".repeat(4096));
+    let XsdValue::DateTime(original) = purrdf_xsd::parse(&lexical, XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("dateTime value")
+    };
+    let expected = original.canonical_lexical();
+    let mut account = Refuse;
+    let mut memory = Memory::new(&mut account);
+    let (result, allocation) = measured(|| original.detached_with_memory(&mut memory));
+    assert!(matches!(result, Err(StorageError::AdmissionFailed)));
+    assert_eq!(allocation.allocations, 0);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.retained_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
+    assert_eq!(original.canonical_lexical(), expected);
+}
+
 fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
     use purrdf_lex::allocation::{Admission, Memory, StorageError};
     use purrdf_xsd::value::{ParsedValue, try_parse_with_memory};
@@ -73,6 +129,8 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Double, "-0.0"),
         (D::Boolean, "true"),
         (D::String, "é\ntext"),
+        (D::AnyUri, " \t../é\n path#Fragment\r "),
+        (D::AnyUri, " \t\r\n "),
         (D::HexBinary, "00aF"),
         (D::Base64Binary, " A P 8 = "),
         (D::DateTime, "2024-02-29T12:34:56Z"),
@@ -156,6 +214,9 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Integer, "invalid"),
         (D::Decimal, "invalid"),
         (D::Boolean, "invalid"),
+        (D::String, "invalid\0"),
+        (D::String, "invalid\u{fffe}"),
+        (D::AnyUri, "invalid\0"),
         (D::HexBinary, "invalid"),
         (D::Base64Binary, "invalid"),
         (D::DateTime, "invalid"),
@@ -183,6 +244,7 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Integer, very_large_integer.as_str()),
         (D::Decimal, huge_decimal.as_str()),
         (D::String, "owned"),
+        (D::AnyUri, " \towned\r\n "),
         (D::HexBinary, "abcd"),
     ] {
         let mut allocation_budget = ParseAccount::default();
@@ -200,7 +262,6 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
     }
 }
 
-#[test]
 fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
     use purrdf_lex::allocation::{Admission, Memory, StorageError};
     use purrdf_xsd::value::{ParsedValue, try_parse_with_memory};
@@ -315,7 +376,6 @@ fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
     }
 }
 
-#[test]
 fn temporal_comparison_admits_wide_alignment_before_allocating() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::ops::{value_cmp_admitted, value_equal_admitted};
@@ -371,7 +431,6 @@ fn temporal_comparison_admits_wide_alignment_before_allocating() {
     }
 }
 
-#[test]
 fn calendar_text_prepares_wide_seconds_under_original_admission() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::temporal::prepare_calendar_text;
@@ -409,7 +468,6 @@ fn calendar_text_prepares_wide_seconds_under_original_admission() {
     }
 }
 
-#[test]
 fn duration_subtype_cast_admits_kept_seconds_and_drops_other_component() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::temporal::{cast_duration_admitted, parse_duration};
@@ -444,7 +502,6 @@ fn duration_subtype_cast_admits_kept_seconds_and_drops_other_component() {
     assert_eq!(measurement.allocations, 0);
 }
 
-#[test]
 fn duration_add_sub_admit_seconds_before_allocation() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
@@ -523,7 +580,6 @@ fn duration_add_sub_admit_seconds_before_allocation() {
     }
 }
 
-#[test]
 fn duration_scale_and_ratio_admit_borrowed_exact_parts() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
@@ -587,7 +643,6 @@ fn duration_scale_and_ratio_admit_borrowed_exact_parts() {
     assert_eq!(exact_request.canonical_lexical(), "0.333333333333333333");
 }
 
-#[test]
 fn duration_unary_minus_admits_wide_seconds_before_copy() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::numeric::{
@@ -622,7 +677,6 @@ fn duration_unary_minus_admits_wide_seconds_before_copy() {
     assert_eq!(numeric_unary_cost(&tiny), Cost::ZERO);
 }
 
-#[test]
 fn calendar_duration_arithmetic_admits_exact_seconds_before_allocation() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
@@ -679,7 +733,6 @@ fn calendar_duration_arithmetic_admits_exact_seconds_before_allocation() {
     }
 }
 
-#[test]
 fn named_duration_calendar_operations_use_the_exact_general_path() {
     use purrdf_xsd::temporal::{
         add_day_time_duration_to_date, add_day_time_duration_to_datetime,
@@ -753,7 +806,6 @@ fn named_duration_calendar_operations_use_the_exact_general_path() {
     assert!(add_day_time_duration_to_datetime(&datetime, &months).is_err());
 }
 
-#[test]
 fn instant_difference_borrows_wide_seconds_and_admits_each_total() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
@@ -824,7 +876,6 @@ fn instant_difference_borrows_wide_seconds_and_admits_each_total() {
     assert_eq!(measurement.allocations, 0);
 }
 
-#[test]
 fn timezone_adjustment_admits_wide_seconds_before_copy_or_shift() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::temporal::{
@@ -877,7 +928,6 @@ fn timezone_adjustment_admits_wide_seconds_before_copy_or_shift() {
     }
 }
 
-#[test]
 fn gregorian_whole_days_admits_wide_duration_before_division() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
@@ -928,7 +978,6 @@ fn gregorian_whole_days_admits_wide_duration_before_division() {
     );
 }
 
-#[test]
 fn calendar_exact_work_cost_tracks_wide_seconds_and_keeps_tiny_zero() {
     use purrdf_xsd::numeric::{temporal_subtract_cost, timezone_adjust_cost};
     use purrdf_xsd::temporal::parse_duration;
@@ -983,7 +1032,6 @@ fn calendar_exact_work_cost_tracks_wide_seconds_and_keeps_tiny_zero() {
     );
 }
 
-#[test]
 fn calendar_exact_work_bounds_actual_native_traffic() {
     use purrdf_xsd::numeric::{temporal_subtract_cost, timezone_adjust_cost};
     use purrdf_xsd::temporal::{adjust_datetime_to_timezone, parse_datetime, parse_duration};
@@ -1022,7 +1070,6 @@ fn calendar_exact_work_bounds_actual_native_traffic() {
     );
 }
 
-#[test]
 fn invalid_temporal_pairs_keep_type_error_ahead_of_admission() {
     use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
     use purrdf_xsd::temporal::parse_duration;
@@ -1059,7 +1106,6 @@ fn invalid_temporal_pairs_keep_type_error_ahead_of_admission() {
     }
 }
 
-#[test]
 fn duration_text_prepares_wide_days_and_fraction_without_quotient_owner() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::temporal::{parse_duration, prepare_duration_text};
@@ -1092,7 +1138,6 @@ fn duration_text_prepares_wide_days_and_fraction_without_quotient_owner() {
     }
 }
 
-#[test]
 fn admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal() {
     use purrdf_xsd::bigint::LimbScratchError;
     use purrdf_xsd::ops::{value_cmp_admitted, value_equal_admitted};
@@ -1159,6 +1204,17 @@ fn assert_bounded(what: &str, cost: Cost, measurement: Measurement) {
     );
 }
 
+fn wide_gap_gcd_stays_within_its_work_and_physical_cost() {
+    let narrow: Integer = "9".repeat(200).parse().expect("integer");
+    let wide: Integer = format!("{}{}", "9".repeat(200), "0".repeat(1_000))
+        .parse()
+        .expect("integer");
+    let cost = wide.gcd_cost(&narrow);
+    let (result, measurement) = measured(|| wide.gcd(&narrow));
+    assert_eq!(result, narrow);
+    assert_bounded("wide-gap gcd", cost, measurement);
+}
+
 /// `1 × 10^-scale`: one digit of coefficient, `scale` fractional digits.
 fn tiny(scale: usize) -> Decimal {
     format!("0.{}1", "0".repeat(scale - 1))
@@ -1172,7 +1228,6 @@ fn big_decimal(decimal: Decimal) -> XsdValue {
 
 /// A product of one short and one very long integer is `long / short` balanced
 /// products and one pass of carries, not a copy of the running total per piece.
-#[test]
 fn a_lopsided_product_costs_what_it_is_charged() {
     let short: Integer = "7".repeat(64 * 9).parse().expect("an integer");
     let long: Integer = "3".repeat(20_000 * 9).parse().expect("an integer");
@@ -1189,11 +1244,49 @@ fn a_lopsided_product_costs_what_it_is_charged() {
     assert_bounded("10032 × 10032 limbs", cost, measurement);
 }
 
+/// The staged physical layout must include the live three-way evaluation and
+/// interpolation destinations, not just the final product.
+fn balanced_large_products_fit_their_admitted_peak() {
+    for (digits, limbs) in [
+        (2_429, 127),
+        (2_448, 128),
+        (2_468, 129),
+        (5_000, 260),
+        (9_827, 511),
+        (9_846, 512),
+        (9_866, 513),
+        (10_000, 520),
+        (19_691, 1023),
+        (19_711, 1024),
+        (19_730, 1025),
+        (40_000, 2077),
+    ] {
+        let a: Decimal = "7".repeat(digits).parse().expect("integer-valued decimal");
+        let b: Decimal = "3".repeat(digits).parse().expect("integer-valued decimal");
+        assert_eq!(a.limb_len(), limbs);
+        assert_eq!(b.limb_len(), limbs);
+        let mut admitted_peak = 0;
+        let (answer, measurement) = measured(|| {
+            a.try_mul_admitted(&b, &mut |layout| {
+                admitted_peak = admitted_peak.max(layout.required_bytes());
+                Ok(())
+            })
+        });
+        let product = answer.expect("sufficient admission");
+        assert_eq!(product.canonical_lexical().len(), digits * 2);
+        assert!(
+            usize::try_from(measurement.peak_working_bytes).expect("test-sized peak")
+                <= admitted_peak,
+            "{digits} digits: measured {measurement:?}, admitted {admitted_peak}"
+        );
+        assert_bounded("balanced Toom product", a.mul_cost(&b), measurement);
+    }
+}
+
 /// A decimal of one digit at a scale of millions renders, converts and compares at
 /// the price its estimates state: the text it becomes is charged, and the float
 /// conversion and the comparison with a double never form `10^scale` when the
 /// value is plainly below every binary one.
-#[test]
 fn a_vast_scale_is_charged_where_it_is_paid() {
     let scale = 4_000_000;
     let value = big_decimal(tiny(scale));
@@ -1233,7 +1326,6 @@ fn a_vast_scale_is_charged_where_it_is_paid() {
 
 /// Aligning two scales — a sum, a comparison of equal leading positions — is paid
 /// at the gap, and a comparison whose leading positions differ costs nothing.
-#[test]
 fn alignment_is_charged_at_the_scale_gap() {
     let scale = 2_000_000;
     let small = big_decimal(tiny(scale));
@@ -1261,7 +1353,6 @@ fn alignment_is_charged_at_the_scale_gap() {
 /// A division under a stated scale forms its shifted operand at the price
 /// `div_cost` states; a bounded pair under a non-default policy runs on the tower
 /// and is charged even though neither operand is big.
-#[test]
 fn division_is_charged_at_its_policy() {
     let one = XsdValue::Integer {
         value: Integer::from_i128(1),
@@ -1299,7 +1390,6 @@ fn division_is_charged_at_its_policy() {
 }
 
 /// The unary functions are one pass over the coefficient.
-#[test]
 fn unary_functions_are_linear() {
     let long: Decimal = format!("{}.5", "9".repeat(100_000))
         .parse()
@@ -1321,7 +1411,6 @@ fn unary_functions_are_linear() {
 
 /// An integer past the double range converts from its length alone; one inside it
 /// pays a base conversion of at most 35 limbs.
-#[test]
 fn a_long_integer_converts_to_a_float_from_its_length() {
     let long: Integer = format!("1{}", "0".repeat(400_000))
         .parse()
@@ -1345,7 +1434,6 @@ fn a_long_integer_converts_to_a_float_from_its_length() {
 }
 
 /// A final exact scale-up is part of the quotient's actual retained storage.
-#[test]
 fn exact_division_positive_scale_gap_covers_retained_result() {
     let divisor = Decimal::new(Integer::ONE, 10_000);
     let cost = Decimal::ONE.div_cost(&divisor, DivisionPolicy::Exact);
@@ -1362,7 +1450,6 @@ fn exact_division_positive_scale_gap_covers_retained_result() {
 }
 
 /// (3*10^2000 + 1)/3 = 10^2000 + 1/3, rounded to two places.
-#[test]
 fn rounded_division_prices_a_long_scaled_dividend() {
     let coefficient: Integer = format!("3{}1", "0".repeat(1_999))
         .parse()
@@ -1382,7 +1469,6 @@ fn rounded_division_prices_a_long_scaled_dividend() {
 }
 
 /// 0.01/(3*10^2000 + 1) rounds to zero; its denominator still grows by 10^2.
-#[test]
 fn rounded_division_prices_a_long_scaled_divisor() {
     let coefficient: Integer = format!("3{}1", "0".repeat(1_999))
         .parse()
@@ -1396,7 +1482,6 @@ fn rounded_division_prices_a_long_scaled_divisor() {
     assert_eq!(result.canonical_lexical(), "0");
     assert_bounded("long rounded divisor", cost, measurement);
 }
-#[test]
 fn temporal_native_values_and_deferred_refusals_allocate_no_heap() {
     use purrdf_xsd::temporal::{TemporalReadError, read_temporal};
     enum Expect {
@@ -1476,7 +1561,6 @@ fn temporal_native_values_and_deferred_refusals_allocate_no_heap() {
     check(D::Duration, &format!("P{wide_year}Y"), Range);
     check(D::Duration, &format!("P{wide_year}YQ"), Invalid);
 }
-#[test]
 fn inline_ieee_text_preserves_extreme_values_without_heap_traffic() {
     use purrdf_xsd::numeric::{canonical_double_text, canonical_float_text};
     let doubles = [
@@ -1519,7 +1603,6 @@ fn inline_ieee_text_preserves_extreme_values_without_heap_traffic() {
     }
 }
 
-#[test]
 fn inline_ieee_append_refuses_before_mutation_and_never_grows() {
     use purrdf_xsd::numeric::{NumericRenderError, canonical_double_text};
     let text = canonical_double_text(f64::MAX);
@@ -1552,3 +1635,70 @@ fn inline_ieee_append_refuses_before_mutation_and_never_grows() {
     assert_eq!(allocation.requested_bytes, 0);
     assert_eq!(allocation.peak_working_bytes, 0);
 }
+
+/// The public convenience renderer reserves its complete destination once,
+/// including tiny values and large fractional padding, without changing bytes.
+fn canonical_decimal_reserves_one_exact_output_destination() {
+    let cases = [
+        (Decimal::ZERO, "0".to_owned()),
+        (Decimal::from(-1), "-1".to_owned()),
+        ("12.3400".parse().unwrap(), "12.34".to_owned()),
+        ("-0.0001200".parse().unwrap(), "-0.00012".to_owned()),
+        (
+            Decimal::from_integer(Integer::from(i128::MIN)),
+            "-170141183460469231731687303715884105728".to_owned(),
+        ),
+        (
+            Decimal::new(Integer::ONE, 4096),
+            format!("0.{}1", "0".repeat(4095)),
+        ),
+    ];
+    for (value, expected) in cases {
+        let (text, allocation) = measured(|| value.canonical_lexical());
+        assert_eq!(text, expected);
+        assert_eq!(text, value.to_string());
+        let bytes = u64::try_from(expected.len()).unwrap();
+        assert_eq!(allocation.allocations, 1, "{expected}");
+        assert_eq!(allocation.requested_bytes, bytes);
+        assert_eq!(allocation.retained_bytes, i64::try_from(bytes).unwrap());
+        assert_eq!(allocation.peak_working_bytes, i64::try_from(bytes).unwrap());
+    }
+}
+
+purrdf_testkit::harness_main!(
+    admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs,
+    admitted_datetime_refusal_precedes_any_copy_allocation,
+    full_native_parser_preserves_all_value_families_and_original_heap_owners,
+    wide_temporal_parse_admits_native_peak_and_releases_retained_owner,
+    temporal_comparison_admits_wide_alignment_before_allocating,
+    calendar_text_prepares_wide_seconds_under_original_admission,
+    duration_subtype_cast_admits_kept_seconds_and_drops_other_component,
+    duration_add_sub_admit_seconds_before_allocation,
+    duration_scale_and_ratio_admit_borrowed_exact_parts,
+    duration_unary_minus_admits_wide_seconds_before_copy,
+    calendar_duration_arithmetic_admits_exact_seconds_before_allocation,
+    named_duration_calendar_operations_use_the_exact_general_path,
+    instant_difference_borrows_wide_seconds_and_admits_each_total,
+    timezone_adjustment_admits_wide_seconds_before_copy_or_shift,
+    gregorian_whole_days_admits_wide_duration_before_division,
+    calendar_exact_work_cost_tracks_wide_seconds_and_keeps_tiny_zero,
+    calendar_exact_work_bounds_actual_native_traffic,
+    invalid_temporal_pairs_keep_type_error_ahead_of_admission,
+    duration_text_prepares_wide_days_and_fraction_without_quotient_owner,
+    admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal,
+    wide_gap_gcd_stays_within_its_work_and_physical_cost,
+    a_lopsided_product_costs_what_it_is_charged,
+    balanced_large_products_fit_their_admitted_peak,
+    a_vast_scale_is_charged_where_it_is_paid,
+    alignment_is_charged_at_the_scale_gap,
+    division_is_charged_at_its_policy,
+    unary_functions_are_linear,
+    a_long_integer_converts_to_a_float_from_its_length,
+    exact_division_positive_scale_gap_covers_retained_result,
+    rounded_division_prices_a_long_scaled_dividend,
+    rounded_division_prices_a_long_scaled_divisor,
+    temporal_native_values_and_deferred_refusals_allocate_no_heap,
+    inline_ieee_text_preserves_extreme_values_without_heap_traffic,
+    inline_ieee_append_refuses_before_mutation_and_never_grows,
+    canonical_decimal_reserves_one_exact_output_destination,
+);

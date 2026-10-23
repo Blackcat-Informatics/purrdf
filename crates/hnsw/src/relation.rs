@@ -90,31 +90,51 @@ use purrdf_sparql_eval::{
 use crate::error::HnswError;
 use crate::{HnswIndex, IndexArithmetic, profile};
 
+mod setup;
+use setup::SetupFailure;
+
 /// An HNSW failure as the evaluator's error, under `context`.
 ///
 /// A float-environment refusal keeps its own variant rather than being flattened into
 /// data prose: nothing is wrong with the artifact, the calling thread is, and a host has
 /// to be able to tell the two apart without reading a message.
-fn eval_error(context: &str, error: HnswError) -> EvalError {
-    match error {
-        HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
-        HnswError::Workspace(error) => error,
-        other => EvalError::data(format!("{context}: {other}")),
+#[derive(Debug)]
+struct HnswQueryFailure {
+    context: &'static str,
+    cause: HnswError,
+}
+
+impl purrdf_hash::error::StructuredError for HnswQueryFailure {
+    purrdf_hash::error_visit! {
+        @record self { context, cause } => "hnsw-query-failure" {
+            "context" => Text(self.context), "cause" => Cause(&self.cause),
+        }
     }
 }
 
+impl core::fmt::Display for HnswQueryFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}: {}", self.context, self.cause)
+    }
+}
+
+purrdf_lex::error_source!(HnswQueryFailure => { Self { cause, .. } => cause });
+
 /// Native query failures preserve typed storage causes without formatting them.
 fn eval_error_admitted(
-    context: &str,
+    context: &'static str,
     error: HnswError,
     workspace: &purrdf_sparql_eval::WorkspaceCapability,
 ) -> EvalError {
     match error {
         HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
         HnswError::Workspace(error) => error,
-        other => purrdf_sparql_eval::NativeDiagnostic::error(
+        other => purrdf_sparql_eval::RetainedNativeFailure::error(
             purrdf_sparql_eval::NativeDiagnosticKind::Data,
-            format_args!("{context}: {other}"),
+            HnswQueryFailure {
+                context,
+                cause: other,
+            },
             workspace,
         ),
     }
@@ -156,18 +176,18 @@ impl<A: IndexArithmetic> HnswSpace<A> {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] for a caller mistake — a space, target set or effective
+    /// A native configuration failure for a caller mistake — a space, target set or effective
     /// matrix the artifact does not hold, a binding outside the set, a duplicate target or
     /// term, a row no binding covers, a space larger than the guard admits, or an
     /// unsupported metric.
     ///
-    /// [`EvalError::Data`] for a defect in the artifact itself — verification failure, a
+    /// A native data failure for a defect in the artifact itself — verification failure, a
     /// missing or ambiguous HNSW guard, a stale or substituted guard, a payload whose
     /// commitment fails, an unreadable row, or a decoded kernel that disagrees with the
     /// family contract.
     ///
     /// A guard naming the implementation of another arithmetic, or a payload recorded on a
-    /// dispatch path this process cannot run, is [`EvalError::Data`].
+    /// dispatch path this process cannot run, is a native data failure.
     ///
     /// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not
     /// the IEEE one the distance arithmetic defines.
@@ -182,78 +202,127 @@ impl<A: IndexArithmetic> HnswSpace<A> {
         // rows are exact arithmetic, and a refused environment must be reported as one,
         // not as an artifact that failed to verify.
         let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
-        let mut view = EmbeddingView::from_bytes(artifact)
-            .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
-        verify_embedding(&mut view)
-            .map_err(|e| EvalError::data(format!("the PURREMB artifact does not verify: {e}")))?;
+        let mut view = EmbeddingView::from_bytes(artifact).map_err(|cause| {
+            SetupFailure::Embedding {
+                context: "the PURREMB artifact is unreadable",
+                cause,
+            }
+            .into_error()
+        })?;
+        verify_embedding(&mut view).map_err(|cause| {
+            SetupFailure::Embedding {
+                context: "the PURREMB artifact does not verify",
+                cause,
+            }
+            .into_error()
+        })?;
 
-        let space = view.vector_space(vector_space).ok_or_else(|| {
-            EvalError::config(format!(
-                "the artifact declares no vector space {vector_space}"
-            ))
-        })?;
-        let set = view.target_set(target_set).ok_or_else(|| {
-            EvalError::config(format!("the artifact declares no target set {target_set}"))
-        })?;
+        let space = view
+            .vector_space(vector_space)
+            .ok_or_else(|| SetupFailure::MissingSpace(vector_space).into_error())?;
+        let set = view
+            .target_set(target_set)
+            .ok_or_else(|| SetupFailure::MissingSet(target_set).into_error())?;
         let effective = view
             .effective_matrix(target_set, vector_space)
-            .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?
+            .map_err(|cause| {
+                SetupFailure::Embedding {
+                    context: "the effective matrix is unreadable",
+                    cause,
+                }
+                .into_error()
+            })?
             .ok_or_else(|| {
-                EvalError::config(format!(
-                    "the artifact holds no matrix joining target set {target_set} to vector \
-                     space {vector_space}"
-                ))
+                SetupFailure::MissingMatrix {
+                    target_set,
+                    vector_space,
+                }
+                .into_error()
             })?;
 
         // The typed adapter: exactly one HNSW guard, its profile and coordinates checked
         // against the matrix being searched, and its payload commitment verified.
-        let guard_view =
-            crate::guard::select(&view).map_err(|e| EvalError::data(format!("{e}")))?;
+        let guard_view = crate::guard::select(&view).map_err(|cause| {
+            SetupFailure::Native {
+                context: None,
+                cause,
+            }
+            .into_error()
+        })?;
         crate::guard::check_coordinates(&guard_view, target_set, vector_space, &effective)
-            .map_err(|e| EvalError::data(format!("{e}")))?;
-        crate::guard::validate_guard(&guard_view).map_err(|e| EvalError::data(format!("{e}")))?;
+            .map_err(|cause| {
+                SetupFailure::Native {
+                    context: None,
+                    cause,
+                }
+                .into_error()
+            })?;
+        crate::guard::validate_guard(&guard_view).map_err(|cause| {
+            SetupFailure::Native {
+                context: None,
+                cause,
+            }
+            .into_error()
+        })?;
 
         let family = view.family(space.family_id()).ok_or_else(|| {
-            EvalError::data(format!(
-                "vector space {vector_space} names family {}, which the artifact does not hold",
-                space.family_id()
-            ))
+            SetupFailure::MissingFamily {
+                vector_space,
+                family: space.family_id(),
+            }
+            .into_error()
         })?;
-        let metric = family.metric().map_err(|e| {
-            EvalError::data(format!("the family's declared metric is unusable: {e}"))
+        let metric = family.metric().map_err(|cause| {
+            SetupFailure::Embedding {
+                context: "the family's declared metric is unusable",
+                cause,
+            }
+            .into_error()
         })?;
         let kernel = Kernel::of(&metric).ok_or_else(|| {
-            EvalError::config(format!(
-                "vector space {vector_space} declares the caller-defined distance metric \
-                 {metric:?}, whose parameters are opaque bytes this engine cannot evaluate"
-            ))
+            SetupFailure::UnsupportedMetric {
+                vector_space,
+                metric,
+            }
+            .into_error()
         })?;
 
         let row_count = set.row_count();
         if row_count as u64 > guard.max_candidates() {
-            return Err(EvalError::config(format!(
-                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
-                 the configured guard admits",
-                guard.max_candidates()
-            )));
+            return Err(SetupFailure::CandidateBound {
+                rows: row_count,
+                maximum: guard.max_candidates(),
+            }
+            .into_error());
         }
 
-        let matrix = crate::guard::read_effective_matrix(&effective, exact)
-            .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?;
-        let index = crate::guard::load::<A>(&guard_view, matrix)
-            .map_err(|e| eval_error("the HNSW payload is unusable", e))?;
+        let matrix = crate::guard::read_effective_matrix(&effective, exact).map_err(|cause| {
+            SetupFailure::Native {
+                context: Some("the effective matrix is unreadable"),
+                cause,
+            }
+            .into_error()
+        })?;
+        let index = crate::guard::load::<A>(&guard_view, matrix).map_err(|e| {
+            eval_error_admitted(
+                "the HNSW payload is unusable",
+                e,
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+        })?;
         if index.kernel() != kernel {
-            return Err(EvalError::data(format!(
-                "the HNSW payload was built under a different distance kernel than the \
-                 family contract declares ({kernel:?})"
-            )));
+            return Err(SetupFailure::Kernel {
+                expected: kernel,
+                actual: index.kernel(),
+            }
+            .into_error());
         }
         if index.dims() != space.dimension() as usize {
-            return Err(EvalError::data(format!(
-                "the HNSW payload indexes {} dimension(s) but the vector space declares {}",
-                index.dims(),
-                space.dimension()
-            )));
+            return Err(SetupFailure::Dimensions {
+                actual: index.dims(),
+                expected: space.dimension(),
+            }
+            .into_error());
         }
 
         let rows = TermRows::bind(&set, bindings)?;
@@ -266,7 +335,7 @@ impl<A: Arithmetic> HnswSpace<A> {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] if the term count differs from the graph's row count, one
+    /// A native configuration failure if the term count differs from the graph's row count, one
     /// term is claimed by two rows, or the graph holds more rows than the guard admits.
     ///
     /// The candidate bound is checked here and not only in [`Self::from_artifact`],
@@ -278,20 +347,18 @@ impl<A: Arithmetic> HnswSpace<A> {
         guard: KnnGuard,
     ) -> Result<Self, EvalError> {
         if terms.len() != index.rows() {
-            return Err(EvalError::config(format!(
-                "the HNSW graph holds {} row(s) but {} term(s) were bound; every row must \
-                 stand for exactly one RDF term",
-                index.rows(),
-                terms.len()
-            )));
+            return Err(SetupFailure::Terms {
+                rows: index.rows(),
+                terms: terms.len(),
+            }
+            .into_error());
         }
         if index.rows() as u64 > guard.max_candidates() {
-            return Err(EvalError::config(format!(
-                "this space holds {} row(s), which is more than the {} candidate(s) the \
-                 configured guard admits",
-                index.rows(),
-                guard.max_candidates()
-            )));
+            return Err(SetupFailure::CandidateBound {
+                rows: index.rows(),
+                maximum: guard.max_candidates(),
+            }
+            .into_error());
         }
         let rows = TermRows::new(terms)?;
         // Derived once, here, so BOTH constructors carry it: `from_artifact`
@@ -864,12 +931,15 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     /// row — and this relation does not claim one.
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let invocation = KnnInvocation::open_owned(
             "the HNSW relation",
             args,
@@ -1112,7 +1182,7 @@ pub struct RankedHnswRegistration {
 /// PurRDF supplies no IRI: the caller's predicate is what a query text names the provider
 /// by, which is the second of the three approximation channels the contract requires.
 pub fn register_ranked_hnsw_relation<A: Arithmetic>(
-    registry: &mut PropertyFunctionRegistry,
+    registry: &mut PropertyFunctionRegistry<'_>,
     iri: impl Into<String>,
     space: Arc<HnswSpace<A>>,
     declared: RankedHnswRegistration,
@@ -1150,7 +1220,7 @@ pub fn register_ranked_hnsw_relation<A: Arithmetic>(
 /// kind, depth datatype, vector-order disclosure and domain declaration a
 /// plain-SPARQL host has no reason to invent.
 pub fn register_hnsw_relation<A: Arithmetic>(
-    registry: &mut PropertyFunctionRegistry,
+    registry: &mut PropertyFunctionRegistry<'_>,
     iri: impl Into<String>,
     space: Arc<HnswSpace<A>>,
 ) {
@@ -1165,6 +1235,32 @@ mod tests {
     use super::*;
     use crate::{Params, VectorMatrix};
     use purrdf_xsd::datatype::XSD_INTEGER;
+
+    #[test]
+    fn native_query_transport_retains_the_original_image_refusal() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let original = HnswIndex::<Exact>::decode(matrix(2, 2), &[0]).unwrap_err();
+        let expected = EvalError::data(format!("the HNSW search failed: {original}")).to_string();
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let error = eval_error_admitted("the HNSW search failed", original, &workspace);
+        let retained = error.clone();
+        drop(error);
+        drop(workspace);
+        assert_eq!(retained.to_string(), expected);
+        let EvalError::RetainedNativeFailure(failure) = &retained else {
+            panic!("the native image refusal must keep its original cause");
+        };
+        let fields = Capture::read(failure.cause());
+        assert_eq!(fields.code, "hnsw-query-failure");
+        let image = fields.child("cause");
+        let cause = image.child("reason");
+        assert_eq!(cause.code, "hnsw-payload-truncated");
+        assert!(matches!(cause.field("available"), ErrorValue::ByteCount(1)));
+        assert!(matches!(cause.field("count"), ErrorValue::ByteCount(8)));
+        assert!(matches!(cause.field("at"), ErrorValue::Unsigned(0)));
+    }
 
     fn matrix(rows: usize, dims: usize) -> VectorMatrix {
         let mut state = 0x5151_5151_5151_5151_u64;
@@ -1232,7 +1328,22 @@ mod tests {
         let error =
             HnswSpace::from_index(build(), terms(16), KnnGuard::new(15, 16).expect("valid"))
                 .expect_err("sixteen rows exceed a fifteen-candidate bound");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        let EvalError::RetainedNativeFailure(failure) = &error else {
+            panic!("the configuration refusal must retain its native operands");
+        };
+        assert_eq!(
+            failure.kind(),
+            purrdf_sparql_eval::NativeDiagnosticKind::Config
+        );
+        let fields = purrdf_testkit::error_capture::Capture::read(failure.cause());
+        assert!(matches!(
+            fields.field("rows"),
+            purrdf_hash::error::ErrorValue::Unsigned(16)
+        ));
+        assert!(matches!(
+            fields.field("maximum"),
+            purrdf_hash::error::ErrorValue::Unsigned(15)
+        ));
         assert!(error.to_string().contains("16 row(s)"), "got {error}");
         assert!(error.to_string().contains("15 candidate(s)"), "got {error}");
         // The neighbouring valid case: a bound exactly at the row count admits the space.

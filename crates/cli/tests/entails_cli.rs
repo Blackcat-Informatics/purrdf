@@ -1911,4 +1911,28 @@ fn entails_and_query_take_the_evaluation_limits() {
         "ASK { ?s ?p ?o }",
     ]);
     assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+    for call in [&entails as &dyn Fn(&[&str]) -> std::process::Output, &query] {
+        let refused = call(&["--max-term-arena-bytes", "0"]);
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("term arena bytes limit: ")
+                && stderr(&refused).contains("0 permitted")
+                && stderr(&refused)
+                    .trim_end()
+                    .ends_with("raise it with --max-term-arena-bytes"),
+            "{}",
+            stderr(&refused)
+        );
+        let answered = call(&["--max-term-arena-bytes", "16777216"]);
+        assert!(answered.status.success(), "{}", stderr(&answered));
+    }
+    let bare = run(&[
+        "query",
+        "--data",
+        premise.as_str(),
+        "--max-term-arena-bytes",
+        "0",
+        "ASK { ?s ?p ?o }",
+    ]);
+    assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
 }

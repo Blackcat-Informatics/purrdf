@@ -493,6 +493,87 @@ pub struct PfAttestation {
     pub service: ServiceLevel,
 }
 
+impl purrdf_hash::error::StructuredError for PfAttestation {
+    purrdf_hash::error_visit! {
+        @record self { generation, service } => "pf-attestation" {
+            "generation" => Record(&self.generation), "service" => Record(&self.service)
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for IndexGeneration {
+    purrdf_hash::error_visit! {
+        Undeclared => "index-generation-undeclared" {},
+        Declared(value) => "index-generation-declared" { "value" => Text(value) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ServiceLevel {
+    purrdf_hash::error_visit! {
+        Undeclared => "service-level-undeclared" {},
+        Incomplete { reason } => "service-level-incomplete" { "reason" => Message(reason.as_str()) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DuplicatePolicy {
+    purrdf_hash::error_visit! {
+        Unique => "duplicate-policy-unique" {},
+        Allowed => "duplicate-policy-allowed" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RankFidelity {
+    purrdf_hash::error_visit! {
+        @record self { completeness, order } => "rank-fidelity" {
+            "completeness" => Record(&self.completeness), "order" => Record(&self.order)
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Completeness {
+    purrdf_hash::error_visit! {
+        Complete => "completeness-complete" {},
+        Lossy { evidence } => "completeness-lossy" { "evidence" => Text(evidence) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for OrderFidelity {
+    purrdf_hash::error_visit! {
+        Faithful => "order-fidelity-faithful" {},
+        Perturbed { evidence } => "order-fidelity-perturbed" { "evidence" => Text(evidence) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ExclusionBasis {
+    purrdf_hash::error_visit! {
+        Unavailable => "exclusion-basis-unavailable" {},
+        Membership => "exclusion-basis-membership" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DomainTag {
+    purrdf_hash::error_visit! {
+        @tuple self (_value) => "candidate-domain-tag" { "iri" => Iri(self.as_str()) }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CandidateDomains {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Unrestricted => visitor.variant("candidate-domains-unrestricted"),
+            Self::Within(tags) => {
+                visitor.variant("candidate-domains-within");
+                visitor.begin_list(Some("tags"), tags.len());
+                for tag in tags.iter() {
+                    visitor.value(None, ErrorValue::Record(tag));
+                }
+                visitor.end_list();
+            }
+        }
+    }
+}
+
 impl PfAttestation {
     /// The attestation of a relation that declared neither fact — what every cursor
     /// that overrides neither method attests, named once so the "said nothing" value
@@ -520,10 +601,11 @@ impl PfAttestation {
 /// # The deaf-relation doctrine
 ///
 /// The evaluator polls its stop signal before opening a cursor and between successive
-/// `next` calls, and charges the work a row costs **before** that row is consumed. A
-/// relation that blocks forever inside one `next` call therefore degrades the
-/// stop-check granularity to one call — it can make a stop *late*, never a partial
-/// answer unsound, and never an answer wrong.
+/// pulls, and charges reported work **before** consuming a row. A storage-backed
+/// cursor overrides [`Self::next_metered`] and [`Self::next_admitted_metered`] to
+/// checkpoint and charge bounded source chunks through the original query context.
+/// Work charged through that context must not also be returned by [`Self::take_work`].
+/// A legacy cursor that only implements `next` has stop granularity of one call.
 pub trait PfCursor {
     /// Whether this cursor transports original row evidence in its native
     /// envelope. Such rows must use `next_admitted`, even without a memory
@@ -553,6 +635,18 @@ pub trait PfCursor {
     /// offered as complete is exactly the wrong answer the doctrine forbids.
     fn next(&mut self) -> Result<Option<PfRow>, EvalError>;
 
+    /// Pull with the invoking query's original work and cancellation context.
+    /// Charge before bounded source chunks; work charged here must not be
+    /// reported again by [`Self::take_work`]. Existing cursors keep their pull.
+    /// # Errors
+    /// Preserve original producer failures; a context stop remains a governor.
+    fn next_metered(
+        &mut self,
+        _context: &crate::NativeFnContext<'_>,
+    ) -> Result<Option<PfRow>, EvalError> {
+        self.next()
+    }
+
     /// Produce a row whose allocations were admitted before construction.
     ///
     /// # Errors
@@ -561,6 +655,16 @@ pub trait PfCursor {
         Err(EvalError::WorkspaceUnpriced(
             "a property-function cursor without allocation admission",
         ))
+    }
+
+    /// The admitted pull with the same work/cancellation owner as opening.
+    /// # Errors
+    /// Preserve physical, source and producer failures without publishing rows.
+    fn next_admitted_metered(
+        &mut self,
+        _context: &crate::NativeFnContext<'_>,
+    ) -> Result<Option<AdmittedPfRow>, EvalError> {
+        self.next_admitted()
     }
 
     /// The **internal work** this cursor has performed since this method last returned,
@@ -1577,6 +1681,18 @@ pub enum RequestFacet {
     UpperBound,
 }
 
+impl purrdf_hash::error::StructuredError for RequestFacet {
+    purrdf_hash::error_visit! {
+        Value => "request-facet-value" {},
+        ScopedLexicalValue => "request-facet-scoped-lexical-value" {},
+        Language => "request-facet-language" {},
+        Predicate => "request-facet-predicate" {},
+        MaxDistance => "request-facet-max-distance" {},
+        LowerBound => "request-facet-lower-bound" {},
+        UpperBound => "request-facet-upper-bound" {},
+    }
+}
+
 impl RequestFacet {
     /// The stable spelling used in the canonical description.
     #[must_use]
@@ -1955,20 +2071,22 @@ fn write_canonical_option(
 
 /// One native cursor and its original concrete control admission. The Box is
 /// destroyed before the outside grant, including on failure or an early stop.
-pub struct WorkspaceCursor {
-    cursor: Box<dyn PfCursor>,
+/// The cursor may borrow the query's captured snapshot; its original allocation
+/// account remains owned independently of that borrow.
+pub struct WorkspaceCursor<'query> {
+    cursor: Box<dyn PfCursor + 'query>,
     allocation: crate::WorkspaceAllocation,
 }
-purrdf_hash::debug_non_exhaustive!(WorkspaceCursor { allocation });
+purrdf_hash::debug_non_exhaustive!(WorkspaceCursor<'_> { allocation });
 
-impl WorkspaceCursor {
+impl<'query> WorkspaceCursor<'query> {
     /// Box the actual concrete cursor after admitting its exact control layout.
     /// Its fields must already retain their own original payload grants.
     ///
     /// # Errors
     /// Returns checked physical overflow, admission or allocator refusal before
     /// the cursor Box is born. Pending fields die before their original owners.
-    pub fn new<C: PfCursor + 'static>(
+    pub fn new<C: PfCursor + 'query>(
         cursor: C,
         workspace: &crate::WorkspaceCapability,
         construct: &'static str,
@@ -1977,7 +2095,7 @@ impl WorkspaceCursor {
         Ok(Self { cursor, allocation })
     }
 
-    fn resident(cursor: Box<dyn PfCursor>) -> Self {
+    fn resident(cursor: Box<dyn PfCursor + 'query>) -> Self {
         Self {
             cursor,
             allocation: crate::WorkspaceCapability::resident()
@@ -1991,7 +2109,7 @@ impl WorkspaceCursor {
     ///
     /// # Errors
     /// Refuses extraction of an operational control whose original lease is live.
-    pub fn into_resident(self) -> Result<Box<dyn PfCursor>, EvalError> {
+    pub fn into_resident(self) -> Result<Box<dyn PfCursor + 'query>, EvalError> {
         if self.allocation.is_bounded() {
             drop(self);
             Err(EvalError::WorkspaceUnpriced(
@@ -2003,13 +2121,13 @@ impl WorkspaceCursor {
     }
 }
 
-impl core::ops::Deref for WorkspaceCursor {
-    type Target = dyn PfCursor;
+impl<'query> core::ops::Deref for WorkspaceCursor<'query> {
+    type Target = dyn PfCursor + 'query;
     fn deref(&self) -> &Self::Target {
         self.cursor.as_ref()
     }
 }
-impl core::ops::DerefMut for WorkspaceCursor {
+impl core::ops::DerefMut for WorkspaceCursor<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.cursor.as_mut()
     }
@@ -2095,13 +2213,15 @@ pub trait DictionaryBatch: Send + Sync {
     /// Open the already-computed slice for the original driving row.
     /// # Errors
     /// Preserve native construction and operational failures.
-    fn open(
+    fn open<'cursor>(
         &self,
         ordinal: usize,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: &crate::WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError>;
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor;
 }
 
 /// Declare the resident cursor bridge for an admitted-first property function.
@@ -2116,11 +2236,17 @@ pub trait DictionaryBatch: Send + Sync {
 macro_rules! resident_property_open {
     ($(#[$meta:meta])*) => {
         $(#[$meta])*
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &$crate::PfArgs<'_>,
             ceiling: ::core::option::Option<u64>,
-        ) -> ::core::result::Result<::std::boxed::Box<dyn $crate::PfCursor>, $crate::EvalError> {
+        ) -> ::core::result::Result<
+            ::std::boxed::Box<dyn $crate::PfCursor + 'cursor>,
+            $crate::EvalError,
+        >
+        where
+            Self: 'cursor,
+        {
             self.open_admitted(args, ceiling, $crate::WorkspaceCapability::resident())
                 .and_then($crate::WorkspaceCursor::into_resident)
         }
@@ -2178,13 +2304,16 @@ pub trait PropertyFunction: Send + Sync {
     ///
     /// # Errors
     /// Preserves the producer's original operational or physical refusal.
-    fn open_metered(
+    fn open_metered<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         context: &crate::NativeFnContext<'_>,
         _geo: &purrdf_geo_kernel::GeoProfile,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         if context.workspace().is_bounded() {
             self.open_admitted(args, ceiling, context.workspace().clone())
         } else {
@@ -2245,12 +2374,15 @@ pub trait PropertyFunction: Send + Sync {
     /// # Errors
     /// Refuses a missing certificate before entering opaque producer code, or
     /// propagates allocation, admission and producer failures unchanged.
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: crate::WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let certificate =
             self.workspace_certificate(args, ceiling)
                 .ok_or(EvalError::WorkspaceUnpriced(
@@ -2310,6 +2442,12 @@ pub trait PropertyFunction: Send + Sync {
 
     /// Begin one invocation, returning its row cursor.
     ///
+    /// `'cursor` names the lifetime of captured source references. It is
+    /// independent of this temporary producer-handle borrow: copy references
+    /// to the original snapshot into the cursor and share owned metadata with
+    /// its original owners. The cursor can then survive moving or releasing a
+    /// registry handle while its captured source remains alive.
+    ///
     /// `ceiling` is the optimization licence described in the trait docs — the number
     /// of further emitted-and-agreeing rows that can still reach the query's answer, or
     /// `None` for "no bound, or none the engine can offer here". `args` carries the
@@ -2321,8 +2459,13 @@ pub trait PropertyFunction: Send + Sync {
     /// value it cannot use. Per the hard-fail doctrine a refused invocation aborts the
     /// query rather than contributing zero rows, which would be indistinguishable from
     /// an honest empty answer.
-    fn open(&self, args: &PfArgs<'_>, ceiling: Option<u64>)
-    -> Result<Box<dyn PfCursor>, EvalError>;
+    fn open<'cursor>(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor;
 
     /// Whether this relation can serve an invocation whose access pattern is
     /// `invocation`: some declared [`mode`](Self::modes) subsumes it.
@@ -2440,14 +2583,14 @@ impl AdmittedPfRow {
     }
 }
 
-struct CertifiedCursor {
-    cursor: Box<dyn PfCursor>,
+struct CertifiedCursor<'query> {
+    cursor: Box<dyn PfCursor + 'query>,
     workspace: crate::WorkspaceCapability,
     row_bytes: u64,
     _admission: crate::WorkspaceAllocation,
 }
 
-impl PfCursor for CertifiedCursor {
+impl PfCursor for CertifiedCursor<'_> {
     fn carries_row_evidence(&self) -> bool {
         self.cursor.carries_row_evidence()
     }
@@ -2457,6 +2600,12 @@ impl PfCursor for CertifiedCursor {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         self.cursor.next()
     }
+    fn next_metered(
+        &mut self,
+        context: &crate::NativeFnContext<'_>,
+    ) -> Result<Option<PfRow>, EvalError> {
+        self.cursor.next_metered(context)
+    }
     fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
         if self.cursor.carries_row_evidence() {
             return self.cursor.next_admitted();
@@ -2464,6 +2613,18 @@ impl PfCursor for CertifiedCursor {
         let admission = self.workspace.charge(self.row_bytes)?;
         self.cursor
             .next()
+            .map(|row| row.map(|row| AdmittedPfRow::new(row, admission)))
+    }
+    fn next_admitted_metered(
+        &mut self,
+        context: &crate::NativeFnContext<'_>,
+    ) -> Result<Option<AdmittedPfRow>, EvalError> {
+        if self.cursor.carries_row_evidence() {
+            return self.cursor.next_admitted_metered(context);
+        }
+        let admission = self.workspace.charge(self.row_bytes)?;
+        self.cursor
+            .next_metered(context)
             .map(|row| row.map(|row| AdmittedPfRow::new(row, admission)))
     }
     fn take_work(&mut self) -> u64 {
@@ -2531,12 +2692,12 @@ impl PfRowOwner {
 /// [`EvalError::Function`] on an arity mismatch, and [`EvalError::FunctionOperational`]
 /// on a caught panic or opaque caller-returned failure. More specific typed causes
 /// propagate unchanged.
-pub fn open_contained(
-    relation: &dyn PropertyFunction,
+pub fn open_contained<'query>(
+    relation: &(dyn PropertyFunction + 'query),
     iri: &str,
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
-) -> Result<Box<dyn PfCursor>, EvalError> {
+) -> Result<Box<dyn PfCursor + 'query>, EvalError> {
     open_with_workspace_contained(
         relation,
         iri,
@@ -2564,15 +2725,15 @@ pub fn open_contained(
     })
 }
 
-pub(crate) fn open_with_workspace_contained(
-    relation: &dyn PropertyFunction,
+pub(crate) fn open_with_workspace_contained<'query>(
+    relation: &(dyn PropertyFunction + 'query),
     iri: &str,
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
     workspace: &crate::WorkspaceCapability,
     context: Option<&crate::NativeFnContext<'_>>,
     geo: &purrdf_geo_kernel::GeoProfile,
-) -> Result<WorkspaceCursor, EvalError> {
+) -> Result<WorkspaceCursor<'query>, EvalError> {
     let declared = declaration_contained_admitted(iri, "arity", || relation.arity(), workspace)?;
     let supplied = args.arity();
     if declared != supplied {
@@ -2620,8 +2781,9 @@ pub(crate) fn open_with_workspace_contained(
 pub(crate) fn next_with_workspace_contained(
     cursor: &mut dyn PfCursor,
     iri: &str,
-    workspace: &crate::WorkspaceCapability,
+    context: &crate::NativeFnContext<'_>,
 ) -> Result<Option<PfRowOwner>, EvalError> {
+    let workspace = context.workspace();
     crate::contain::call_contained_admitted(
         "property function",
         iri,
@@ -2629,10 +2791,12 @@ pub(crate) fn next_with_workspace_contained(
         || {
             if workspace.is_bounded() || cursor.carries_row_evidence() {
                 cursor
-                    .next_admitted()
+                    .next_admitted_metered(context)
                     .map(|row| row.map(PfRowOwner::Admitted))
             } else {
-                cursor.next().map(|row| row.map(PfRowOwner::Resident))
+                cursor
+                    .next_metered(context)
+                    .map(|row| row.map(PfRowOwner::Resident))
             }
         },
         workspace,
@@ -2889,10 +3053,16 @@ pub struct PfDescriptor {
 /// with identical declarations — `crate::property_fn_plan::registry_fingerprint`
 /// folds this id in ahead of the declaration digest so those two registries can
 /// never be mistaken for each other by a prepared plan's identity.
+///
+/// The registry may hold query-local producers borrowing an immutable storage
+/// snapshot. [`crate::ExtensionEnv`] carries the same lifetime through preparation
+/// and evaluation; cursor pulls borrow their captured source. Prepared plans
+/// retain identities and declarations, while published results own their rows
+/// independently of the producer and snapshot.
 #[derive(Clone)]
-pub struct PropertyFunctionRegistry {
+pub struct PropertyFunctionRegistry<'query> {
     id: crate::registry_id::RegistryId,
-    relations: DetHashMap<String, Arc<dyn PropertyFunction>>,
+    relations: DetHashMap<String, Arc<dyn PropertyFunction + 'query>>,
     /// The ranked declarations supplied at registration, keyed by the same IRI
     /// as `relations`. A side table rather than a field of the relation,
     /// because a producer's participation in ranked retrieval is host wiring,
@@ -2904,7 +3074,7 @@ pub struct PropertyFunctionRegistry {
     ranked: DetHashMap<String, Arc<RankedDeclaration>>,
 }
 
-impl core::fmt::Debug for PropertyFunctionRegistry {
+impl core::fmt::Debug for PropertyFunctionRegistry<'_> {
     /// A `dyn PropertyFunction` has no `Debug` impl, so this lists the registered
     /// IRIs, sorted for deterministic output, rather than deriving. The instance
     /// id rides along too, since it is exactly the thing that can make two
@@ -2922,9 +3092,9 @@ impl core::fmt::Debug for PropertyFunctionRegistry {
     }
 }
 
-purrdf_hash::default_from_new!(PropertyFunctionRegistry);
+purrdf_hash::default_from_new!(['query] PropertyFunctionRegistry<'query>);
 
-impl PropertyFunctionRegistry {
+impl<'query> PropertyFunctionRegistry<'query> {
     /// An empty registry with a freshly minted instance id; [`Default`] delegates here.
     ///
     /// Unlike [`Self::EMPTY`], whose id is the reserved empty one, a registry built here
@@ -2962,7 +3132,11 @@ impl PropertyFunctionRegistry {
     ///
     /// Panics if `iri` is already registered — see the type's docs for why a relation
     /// may not be silently shadowed.
-    pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
+    pub fn register(
+        &mut self,
+        iri: impl Into<String>,
+        relation: Arc<dyn PropertyFunction + 'query>,
+    ) {
         self.insert(iri.into(), relation, None);
     }
 
@@ -3022,7 +3196,7 @@ impl PropertyFunctionRegistry {
     pub fn register_ranked(
         &mut self,
         iri: impl Into<String>,
-        relation: Arc<dyn PropertyFunction>,
+        relation: Arc<dyn PropertyFunction + 'query>,
         decl: RankedDeclaration,
     ) {
         self.insert(iri.into(), relation, Some(decl));
@@ -3036,7 +3210,7 @@ impl PropertyFunctionRegistry {
     fn insert(
         &mut self,
         iri: String,
-        relation: Arc<dyn PropertyFunction>,
+        relation: Arc<dyn PropertyFunction + 'query>,
         decl: Option<RankedDeclaration>,
     ) {
         assert!(
@@ -3065,7 +3239,7 @@ impl PropertyFunctionRegistry {
 
     /// Resolve a predicate IRI to its registered relation, if any.
     #[must_use]
-    pub fn resolve(&self, iri: &str) -> Option<&Arc<dyn PropertyFunction>> {
+    pub fn resolve(&self, iri: &str) -> Option<&Arc<dyn PropertyFunction + 'query>> {
         self.relations.get(iri)
     }
 
@@ -3846,11 +4020,14 @@ impl PropertyFunction for MemoryRelation {
         self.rows.len() as u64
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // `open_contained` already checked this for every engine-driven call; a
         // direct caller (a doctest, a host wiring its own harness) gets the same
         // answer rather than a panic on a short row.
@@ -4351,11 +4528,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             assert!(!self.on_open, "relation exploded in open");
             Ok(Box::new(PanickingCursor))
         }
@@ -4518,11 +4698,14 @@ mod tests {
                 1
             }
 
-            fn open(
+            fn open<'cursor>(
                 &self,
                 _args: &PfArgs<'_>,
                 _ceiling: Option<u64>,
-            ) -> Result<Box<dyn PfCursor>, EvalError> {
+            ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+            where
+                Self: 'cursor,
+            {
                 Err(self.0.clone())
             }
         }
@@ -4596,11 +4779,14 @@ mod tests {
             0
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             unreachable!("arity panics before open is ever reached")
         }
     }

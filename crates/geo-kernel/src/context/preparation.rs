@@ -9,11 +9,20 @@ use crate::{ExecutionPolicy, GeoError};
 /// An immutable prepared source's original identity and complete admission.
 /// Only a successfully prepared geometry or geographic index constructs this receipt. It carries
 /// resource evidence separately from the mathematical source content identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreparedSourceReceipt {
     source: purrdf_hash::hex::Digest32,
     work: u64,
     workspace: u64,
+}
+
+impl purrdf_hash::error::StructuredError for PreparedSourceReceipt {
+    purrdf_hash::error_visit! {
+        @record self { source, work, workspace } => "prepared-source-receipt" {
+            "source" => Bytes(self.source.as_bytes()), "work" => Unsigned(u128::from(self.work)),
+            "workspace" => ByteCount(u128::from(self.workspace))
+        }
+    }
 }
 
 impl PreparedSourceReceipt {
@@ -51,11 +60,24 @@ impl PreparedSourceReceipt {
     /// against the immutable source it evaluates.
     pub fn validate_context(self, context: &MetricContext) -> Result<(), GeoError> {
         context.checkpoint()?;
-        if context.preparation_work_items() < self.work
-            || context.retained_workspace_bytes() < self.workspace
-        {
-            return Err(GeoError::config(
-                "prepared source is absent from the context admission baseline",
+        let actual_work = context.preparation_work_items();
+        let actual_workspace = context.retained_workspace_bytes();
+        let reason = if actual_work < self.work {
+            Some(crate::PreparationBaselineReason::Work)
+        } else if actual_workspace < self.workspace {
+            Some(crate::PreparationBaselineReason::Workspace)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(GeoError::resident_failure(
+                crate::SourcePreparationError::Baseline {
+                    receipt: self,
+                    reason,
+                    actual_work,
+                    actual_workspace,
+                },
+                GeoError::SourcePreparation,
             ));
         }
         Ok(())
@@ -64,12 +86,20 @@ impl PreparedSourceReceipt {
 
 /// Cumulative actual preparation receipts under one original invocation policy.
 /// It does not charge an observer again; each metered phase charges its own work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreparationBudget {
     policy: ExecutionPolicy,
     work: u64,
     workspace: u64,
     peak: u64,
+}
+impl purrdf_hash::error::StructuredError for PreparationBudget {
+    purrdf_hash::error_visit! {
+        @record self { policy, work, workspace, peak } => "preparation-budget" {
+            "policy" => Record(&self.policy), "work" => Unsigned(u128::from(self.work)),
+            "workspace" => ByteCount(u128::from(self.workspace)), "peak" => ByteCount(u128::from(self.peak))
+        }
+    }
 }
 impl PreparationBudget {
     /// Begin an invocation before any source/prepared allocation.
@@ -133,6 +163,37 @@ impl PreparationBudget {
         self.retain(work, workspace)?;
         self.peak = self.peak.max(complete_peak);
         Ok(())
+    }
+
+    /// Retain one context's cumulative receipt against this original baseline.
+    /// No receipt is changed when the context predates the baseline or exceeds
+    /// the invocation's limits. A diagnostic uses the supplied native observer.
+    ///
+    /// # Errors
+    /// Preserves original inconsistent counters or native admission refusal.
+    pub fn retain_context_phase(
+        &mut self,
+        context: &MetricContext,
+        workspace: u64,
+        phase: crate::PreparationPhase,
+        observer: Option<&mut dyn super::MetricWorkObserver>,
+    ) -> Result<(), GeoError> {
+        let actual_work = context.work_items();
+        let complete_peak = context.workspace_peak();
+        let work = actual_work.checked_sub(self.work).ok_or_else(|| {
+            GeoError::retained_failure(
+                crate::ContextConfigError::PreparationWork {
+                    phase,
+                    baseline_work: self.work,
+                    actual_work,
+                    retained_workspace: workspace,
+                    complete_peak,
+                },
+                GeoError::ContextConfiguration,
+                observer,
+            )
+        })?;
+        self.retain_phase(work, workspace, complete_peak)
     }
 
     /// Admit the next phase against the same cumulative original policy.
@@ -523,8 +584,12 @@ impl PreparationBudget {
     /// Refuses a different original policy or changing an active context phase.
     pub fn install(self, context: &mut MetricContext) -> Result<(), GeoError> {
         if context.policy() != self.policy {
-            return Err(GeoError::config(
-                "preparation receipt belongs to a different execution policy",
+            return Err(GeoError::resident_failure(
+                crate::SourcePreparationError::BudgetPolicy {
+                    budget: self,
+                    actual: context.policy(),
+                },
+                GeoError::SourcePreparation,
             ));
         }
         context.set_preparation_work(self.work)?;
@@ -547,16 +612,30 @@ impl PreparationBudget {
         radius: &crate::Metres,
         observer: &mut dyn super::MetricWorkObserver,
     ) -> Result<crate::OffsetRegion, GeoError> {
-        if self.work < geometry.preparation_work_items() {
-            return Err(GeoError::config(
-                "offset source preparation work receipt is missing",
+        let source = geometry.source_receipt();
+        if self.work < source.work_items() {
+            return Err(GeoError::retained_failure(
+                crate::SourcePreparationError::OffsetAdmission {
+                    source,
+                    budget: *self,
+                    reason: crate::PreparationBaselineReason::Work,
+                },
+                GeoError::SourcePreparation,
+                Some(observer),
             ));
         }
-        let source_bytes = geometry.retained_workspace_bytes();
-        let other_bytes = self
-            .workspace
-            .checked_sub(source_bytes)
-            .ok_or_else(|| GeoError::config("offset source preparation receipt is missing"))?;
+        let source_bytes = source.workspace_bytes();
+        let other_bytes = self.workspace.checked_sub(source_bytes).ok_or_else(|| {
+            GeoError::retained_failure(
+                crate::SourcePreparationError::OffsetAdmission {
+                    source,
+                    budget: *self,
+                    reason: crate::PreparationBaselineReason::Workspace,
+                },
+                GeoError::SourcePreparation,
+                Some(&mut *observer),
+            )
+        })?;
         let policy = self.policy.remaining_after(self.work, other_bytes)?;
         let mut continuation = super::MetricWorkContinuation::new(observer, 0, source_bytes);
         let offset = crate::OffsetRegion::new_metered(
@@ -568,7 +647,18 @@ impl PreparationBudget {
         let additional = offset
             .retained_workspace_bytes()
             .checked_sub(source_bytes)
-            .ok_or_else(|| GeoError::config("offset constructor source receipt is inconsistent"))?;
+            .ok_or_else(|| {
+                GeoError::retained_failure(
+                    crate::SourcePreparationError::OffsetConstruction {
+                        source,
+                        budget: *self,
+                        result_work: offset.preparation_work_items(),
+                        result_workspace: offset.retained_workspace_bytes(),
+                    },
+                    GeoError::SourcePreparation,
+                    Some(&mut continuation),
+                )
+            })?;
         self.retain(offset.preparation_work_items(), additional)?;
         Ok(offset)
     }
@@ -669,6 +759,72 @@ mod tests {
     }
 
     #[test]
+    fn source_baseline_and_budget_policy_refusals_keep_full_original_records() {
+        use crate::{GeoError, PreparationBaselineReason, SourcePreparationError};
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let source = super::PreparedSourceReceipt::new(
+            purrdf_hash::hex::Digest32::new([113; 32]),
+            u64::MAX,
+            u64::MAX,
+        );
+        let mut context = MetricContext::wgs84().unwrap();
+        let error = source.validate_context(&context).unwrap_err();
+        let GeoError::SourcePreparation(cause) = &error else {
+            panic!("original context baseline")
+        };
+        assert_eq!(
+            &**cause,
+            &SourcePreparationError::Baseline {
+                receipt: source,
+                reason: PreparationBaselineReason::Work,
+                actual_work: 0,
+                actual_workspace: 0
+            }
+        );
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.child("reason").code, "preparation-baseline-work");
+        assert!(
+            matches!(fields.child("receipt").field("work"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(
+            matches!(fields.child("receipt").field("workspace"), ErrorValue::ByteCount(value) if value == u128::from(u64::MAX))
+        );
+        assert!(
+            matches!(fields.child("receipt").field("source"), ErrorValue::Bytes(value) if value == [113; 32])
+        );
+        assert!(!error.is_expression_error());
+
+        let expected = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 17,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        let budget = super::PreparationBudget::new(expected);
+        let error = budget.install(&mut context).unwrap_err();
+        let GeoError::SourcePreparation(cause) = &error else {
+            panic!("original preparation policy")
+        };
+        assert_eq!(
+            &**cause,
+            &SourcePreparationError::BudgetPolicy {
+                budget,
+                actual: context.policy()
+            }
+        );
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "source-preparation-budget-policy");
+        assert_eq!(fields.child("budget").code, "preparation-budget");
+        assert_eq!(context.preparation_work_items(), 0);
+        assert_eq!(context.retained_workspace_bytes(), 0);
+        assert_eq!(
+            error.detail(),
+            "preparation receipt belongs to a different execution policy"
+        );
+    }
+
+    #[test]
     fn source_receipt_requires_persistent_work_and_storage_not_temporary_counts() {
         let profile = GeoProfile::standard();
         let literal =
@@ -680,7 +836,10 @@ mod tests {
         assert_eq!(receipt.work_items(), source.preparation_work_items());
         assert_eq!(receipt.workspace_bytes(), source.retained_workspace_bytes());
         let mut context = MetricContext::new(source.reference().clone(), profile.policy()).unwrap();
-        assert!(receipt.validate_context(&context).is_err());
+        let error = receipt.validate_context(&context).unwrap_err();
+        assert!(
+            matches!(error, crate::GeoError::SourcePreparation(cause) if matches!(&*cause, crate::SourcePreparationError::Baseline { receipt: original, reason: crate::PreparationBaselineReason::Work, actual_work: 0, actual_workspace: 0 } if *original == receipt))
+        );
         context.charge_work(receipt.work_items()).unwrap();
         context.admit_workspace(receipt.workspace_bytes()).unwrap();
         assert!(receipt.validate_context(&context).is_err());
@@ -688,6 +847,10 @@ mod tests {
             .release_workspace(receipt.workspace_bytes())
             .unwrap();
         context.set_preparation_work(receipt.work_items()).unwrap();
+        let error = receipt.validate_context(&context).unwrap_err();
+        assert!(
+            matches!(error, crate::GeoError::SourcePreparation(cause) if matches!(&*cause, crate::SourcePreparationError::Baseline { reason: crate::PreparationBaselineReason::Workspace, .. }))
+        );
         context
             .set_retained_workspace(receipt.workspace_bytes())
             .unwrap();

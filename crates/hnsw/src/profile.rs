@@ -171,7 +171,7 @@ use purrdf_core::{
 };
 
 use crate::IndexArithmetic;
-use crate::error::{HnswError, Result};
+use crate::error::{HnswError, ProfileRefusal, Result};
 use crate::params::Params;
 
 /// The stable identifier of the HNSW derived-index implementation.
@@ -451,11 +451,8 @@ pub fn parameters(params: Params) -> Vec<u8> {
 /// field, a non-zero padding byte, or a value that [`Params::new`] refuses (including a
 /// negative parameter smuggled in as a two's-complement `u64`).
 pub fn parse_parameters(bytes: &[u8]) -> Result<Params> {
-    let entries = canonical_tlv(bytes).map_err(|error| {
-        profile_error(format!(
-            "the parameter block is not a canonical TLV block: {error}"
-        ))
-    })?;
+    let entries = canonical_tlv(bytes)
+        .map_err(|cause| profile_error(ProfileRefusal::ParameterBlock(cause)))?;
     let mut m = None;
     let mut m0 = None;
     let mut ef_construction = None;
@@ -463,40 +460,50 @@ pub fn parse_parameters(bytes: &[u8]) -> Result<Params> {
     for entry in entries {
         let tag = entry.tag;
         if !entry.critical {
-            return Err(profile_error(format!("parameter {tag} is not critical")));
+            return Err(profile_error(ProfileRefusal::ParameterCritical {
+                tag,
+                wire_type: entry.wire_type,
+                value: entry.value.to_vec(),
+            }));
         }
         if entry.wire_type != TlvWireType::U64 {
-            return Err(profile_error(format!(
-                "parameter {tag} has wire type {:?}, not a u64",
-                entry.wire_type
-            )));
+            return Err(profile_error(ProfileRefusal::ParameterType {
+                tag,
+                actual: entry.wire_type,
+            }));
         }
-        let value = u64::from_le_bytes(
-            entry
-                .value
-                .try_into()
-                .map_err(|_| profile_error(format!("parameter {tag} is not eight bytes")))?,
-        );
+        let value = u64::from_le_bytes(entry.value.try_into().map_err(|_| {
+            profile_error(ProfileRefusal::ParameterLength {
+                tag,
+                actual: entry.value.to_vec(),
+            })
+        })?);
         match tag {
             PARAM_M => m = Some(value),
             PARAM_M0 => m0 = Some(value),
             PARAM_EF_CONSTRUCTION => ef_construction = Some(value),
             PARAM_EF_SEARCH => ef_search = Some(value),
             other => {
-                return Err(profile_error(format!(
-                    "unknown critical parameter tag {other}"
-                )));
+                return Err(profile_error(ProfileRefusal::UnknownParameter {
+                    tag: other,
+                    value,
+                }));
             }
         }
     }
-    let missing = |field: &str| profile_error(format!("the parameter block is missing {field}"));
+    let missing = |name: &'static str| profile_error(ProfileRefusal::MissingParameter { name });
     let m = m.ok_or_else(|| missing("M"))?;
     let m0 = m0.ok_or_else(|| missing("M0"))?;
     let ef_construction = ef_construction.ok_or_else(|| missing("ef_construction"))?;
     let ef_search = ef_search.ok_or_else(|| missing("ef_search"))?;
-    let widen = |name: &str, value: u64| {
-        usize::try_from(value)
-            .map_err(|_| profile_error(format!("parameter {name} = {value} does not fit usize")))
+    let widen = |name: &'static str, value: u64| {
+        usize::try_from(value).map_err(|_| {
+            profile_error(ProfileRefusal::ParameterRange {
+                name,
+                value,
+                maximum: usize::MAX,
+            })
+        })
     };
     Params::new(
         widen("M", m)?,
@@ -510,9 +517,15 @@ pub fn parse_parameters(bytes: &[u8]) -> Result<Params> {
 ///
 /// The one constructor of [`HnswError::GuardProfile`]: the profile reader here
 /// and the guard's profile checks both refuse through it.
-pub(crate) fn profile_error(description: impl Into<String>) -> HnswError {
-    HnswError::GuardProfile {
-        description: description.into(),
+pub(crate) fn profile_error(cause: ProfileRefusal) -> HnswError {
+    // Profile decoding is a resident construction boundary, before a query
+    // workspace exists. Keep the original large operands out of every hot
+    // Result slot; allocator refusal remains an explicit operational failure.
+    match purrdf_lex::allocation::try_boxed(cause) {
+        Ok(cause) => HnswError::GuardProfile { cause },
+        Err(_) => HnswError::Workspace(purrdf_sparql_eval::EvalError::AllocationFailed {
+            construct: "HNSW profile refusal",
+        }),
     }
 }
 
@@ -570,7 +583,7 @@ mod tests {
 
     fn refusal(bytes: &[u8]) -> String {
         match parse_parameters(bytes) {
-            Err(HnswError::GuardProfile { description }) => description,
+            Err(HnswError::GuardProfile { cause }) => cause.to_string(),
             other => panic!("expected a guard-profile refusal, got {other:?}"),
         }
     }
@@ -608,6 +621,22 @@ mod tests {
         )
         .expect("a canonical entry");
         assert!(refusal(&bytes).contains("is not critical"));
+        let error = parse_parameters(&bytes).unwrap_err();
+        drop(bytes);
+        let fields = purrdf_testkit::error_capture::Capture::read(&error);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "hnsw-profile-parameter-critical");
+        assert!(matches!(
+            cause.field("tag"),
+            purrdf_hash::error::ErrorValue::Unsigned(1)
+        ));
+        assert!(matches!(
+            cause.field("critical"),
+            purrdf_hash::error::ErrorValue::Boolean(false)
+        ));
+        assert!(
+            matches!(cause.field("value"), purrdf_hash::error::ErrorValue::Bytes(value) if value == 16_u64.to_le_bytes())
+        );
     }
 
     #[test]

@@ -91,7 +91,7 @@ impl<T: Eq + std::hash::Hash> Seen<T> {
 }
 
 impl SegmentedStackQuery<'_> {
-    fn source_at(&self, layer: usize) -> SegmentedStackSource {
+    pub(super) fn source_at(&self, layer: usize) -> SegmentedStackSource {
         if layer == self.sessions.len() {
             SegmentedStackSource::Head
         } else {
@@ -375,9 +375,18 @@ impl SegmentedStackQuery<'_> {
         kind: StatementKind,
         pattern: ProbePattern<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.logical_rows_to(Some(kind), pattern, self.source_count())
+    }
+
+    fn logical_rows_to(
+        &self,
+        kind: Option<StatementKind>,
+        pattern: ProbePattern<GlobalTermId>,
+        sources: usize,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         let mut seen = Seen::new(&self.operation);
-        let end = self.source_count().saturating_sub(1);
-        (0..self.source_count())
+        let end = sources.saturating_sub(1);
+        (0..sources)
             .rev()
             .flat_map(move |layer| {
                 [Stream::Annotation, Stream::Ordinary]
@@ -397,6 +406,9 @@ impl SegmentedStackQuery<'_> {
                     if !seen.insert(row)? {
                         return Ok(None);
                     }
+                    let Some(kind) = kind else {
+                        return Ok(Some(row));
+                    };
                     let ordinary = stream == Stream::Ordinary;
                     let effective = !ordinary && self.declarations(row.s, row.g, end);
                     let original = !ordinary && self.declarations(row.s, row.g, layer);
@@ -422,9 +434,17 @@ impl SegmentedStackQuery<'_> {
         &self,
         pattern: ProbePattern<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.reifiers_to(pattern, self.source_count())
+    }
+
+    fn reifiers_to(
+        &self,
+        pattern: ProbePattern<GlobalTermId>,
+        sources: usize,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         let mut seen = Seen::new(&self.operation);
-        let end = self.source_count().saturating_sub(1);
-        (0..self.source_count())
+        let end = sources.saturating_sub(1);
+        (0..sources)
             .rev()
             .flat_map(move |layer| {
                 self.physical_rows(self.source_at(layer), Stream::Reifier, pattern)
@@ -447,6 +467,45 @@ impl SegmentedStackQuery<'_> {
                     .or_else(|error| self.operation.fail(error))
                     .ok()
                     .flatten()
+            })
+    }
+
+    pub(super) fn source_rows(
+        &self,
+        family: crate::source::SourceFamily,
+        pattern: ProbePattern<GlobalTermId>,
+        sources: usize,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        use crate::source::SourceFamily;
+        (family == SourceFamily::Statements)
+            .then_some(())
+            .into_iter()
+            .flat_map(move |()| self.logical_rows_to(None, pattern, sources))
+            .chain(
+                (family == SourceFamily::Reifiers)
+                    .then_some(())
+                    .into_iter()
+                    .flat_map(move |()| self.reifiers_to(pattern, sources)),
+            )
+    }
+
+    pub(super) fn physical_source_rows(
+        &self,
+        origin: SegmentedStackSource,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        [Stream::Ordinary, Stream::Reifier, Stream::Annotation]
+            .into_iter()
+            .flat_map(move |stream| {
+                self.physical_rows(
+                    origin,
+                    stream,
+                    ProbePattern {
+                        s: None,
+                        p: None,
+                        o: None,
+                        g: GraphMatch::Any,
+                    },
+                )
             })
     }
 }
@@ -480,6 +539,25 @@ impl DatasetView for SegmentedStackQuery<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
+        self.capture_source_version()
+            .map(Some)
+            .or_else(|error| self.operation.fail(error))
+    }
+
+    fn visit_source_changes<B>(
+        &self,
+        previous: &crate::source::SourceVersion,
+        visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::source::SourceFamily,
+            crate::source::SourceRowRef<'_>,
+        ) -> std::ops::ControlFlow<B>,
+    ) -> Result<crate::source::SourceVisit<B>, Self::ReadError> {
+        self.observed_source_changes(previous, visit)
+            .or_else(|error| self.operation.fail(error))
+    }
 
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         self.check_ready().ok().map(|()| self as _)

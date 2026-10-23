@@ -411,7 +411,7 @@ impl GeoVocab {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] naming `crs` when the caller has not declared its
+    /// [`GeoError::Vocabulary`] naming `crs` when the caller has not declared its
     /// unit. This is the refusal the module docs describe: a measurement in an
     /// undeclared unit would be a plausible number that is silently wrong.
     pub fn unit_of(&self, crs: &Crs) -> Result<&str, GeoError> {
@@ -420,12 +420,12 @@ impl GeoVocab {
             .find(|entry| entry.crs == crs.as_str())
             .map(|entry| entry.unit.as_str())
             .ok_or_else(|| {
-                GeoError::config(format!(
-                    "no linear unit is declared for the coordinate reference system <{crs}>; a \
-                     measurement cannot be reported in a unit purrdf-geo was never told, and \
-                     PurRDF ships no coordinate-reference-system database to derive one from — \
-                     declare it with GeoVocabBuilder::declare_crs_unit"
-                ))
+                GeoError::resident_failure(
+                    crate::VocabularyError::UndeclaredUnit {
+                        crs: crs.as_str().to_owned(),
+                    },
+                    GeoError::Vocabulary,
+                )
             })
     }
 
@@ -434,8 +434,8 @@ impl GeoVocab {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] when `crs` has no declared unit, and
-    /// [`GeoError::Domain`] when the declared unit is a different IRI. This crate
+    /// [`GeoError::Vocabulary`] when `crs` has no declared unit or the declared
+    /// unit is a different IRI. The latter is an expression error. This crate
     /// converts between units no more than it reprojects between systems: the
     /// planar measurement it computes is in the system's own unit, and reporting
     /// it under any other name would be a wrong number wearing a right label.
@@ -444,11 +444,14 @@ impl GeoVocab {
         if declared == requested_unit {
             return Ok(());
         }
-        Err(GeoError::domain(format!(
-            "a measurement of a geometry in <{crs}> is computed in that system's declared unit \
-             <{declared}>, and <{requested_unit}> was requested; purrdf-geo converts no units, \
-             so it refuses rather than reporting the number under a unit it does not denote"
-        )))
+        Err(GeoError::resident_failure(
+            crate::VocabularyError::UnitMismatch {
+                crs: crs.as_str().to_owned(),
+                declared: declared.to_owned(),
+                requested: requested_unit.to_owned(),
+            },
+            GeoError::Vocabulary,
+        ))
     }
 
     /// Check that a `metric*` measurement of a geometry in `crs` is meaningful —
@@ -457,15 +460,16 @@ impl GeoVocab {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] when no metre IRI or no unit for `crs` has been
-    /// declared, and [`GeoError::Domain`] when the system's unit is not the
+    /// [`GeoError::Vocabulary`] when no metre IRI or no unit for `crs` has been
+    /// declared, or when the system's unit is not the
     /// metre.
     pub fn require_metre(&self, crs: &Crs) -> Result<(), GeoError> {
         let metre = self.metre_unit.as_deref().ok_or_else(|| {
-            GeoError::config(
-                "the metric GeoSPARQL functions report metres, and no IRI has been declared as \
-                 the metre; PurRDF mints no vocabulary IRIs, so declare it with \
-                 GeoVocabBuilder::declare_metre",
+            GeoError::resident_failure(
+                crate::VocabularyError::MissingMetre {
+                    crs: crs.as_str().to_owned(),
+                },
+                GeoError::Vocabulary,
             )
         })?;
         self.require_unit(crs, metre)
@@ -482,7 +486,7 @@ impl GeoVocab {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] when the caller has not declared the Simple Features
+    /// [`GeoError::Vocabulary`] when the caller has not declared the Simple Features
     /// namespace. `geof:geometryType` answers with an IRI from a *third*
     /// vocabulary (`sf:`), which is no more PurRDF's to mint than `geo:` or
     /// `geof:` is, so the function is inert until the caller supplies it rather
@@ -491,13 +495,7 @@ impl GeoVocab {
         &self,
         kind: crate::geom::GeometryKind,
     ) -> Result<String, GeoError> {
-        let iri = self.simple_features_type_view(kind).ok_or_else(|| {
-            crate::carrier::error_from_display_metered(
-                GeoError::Config,
-                Self::MISSING_SIMPLE_FEATURES_NAMESPACE,
-                None,
-            )
-        })?;
+        let iri = self.require_simple_features_type(kind, None)?;
         // The `sf:` local names are the Simple Features class names, which are
         // the WKT keywords in upper-camel case. `GeometryKind::geojson_type`
         // already spells exactly those (`Point`, `LineString`, `MultiPolygon`,
@@ -516,6 +514,24 @@ impl GeoVocab {
          vocabulary, and no namespace has been declared for it; PurRDF mints no \
          vocabulary IRIs, so declare it with \
          GeoVocabBuilder::declare_simple_features_namespace";
+
+    /// Borrow a declared geometry-type IRI or retain its original native refusal.
+    ///
+    /// # Errors
+    /// Refuses an absent class namespace, or the observer's original admission.
+    pub fn require_simple_features_type(
+        &self,
+        kind: crate::geom::GeometryKind,
+        observer: Option<&mut dyn crate::MetricWorkObserver>,
+    ) -> Result<SimpleFeaturesType<'_>, GeoError> {
+        self.simple_features_type_view(kind).ok_or_else(|| {
+            GeoError::retained_failure(
+                crate::VocabularyError::MissingSimpleFeatures { kind },
+                GeoError::Vocabulary,
+                observer,
+            )
+        })
+    }
 
     /// Borrow a type IRI without allocating or inventing a namespace. An absent
     /// declaration remains observable as `None`; callers retain the original
@@ -566,7 +582,7 @@ impl GeoVocabBuilder {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if either namespace is empty. An empty namespace
+    /// [`GeoError::Vocabulary`] if either namespace is empty. An empty namespace
     /// would make every term IRI a bare local name, which would collide with
     /// every other vocabulary in the dataset.
     pub fn new(
@@ -577,12 +593,15 @@ impl GeoVocabBuilder {
     ) -> Result<Self, GeoError> {
         let core_ns = core_namespace.into();
         let function_ns = function_namespace.into();
-        for (label, value) in [("geo:", &core_ns), ("geof:", &function_ns)] {
+        for (namespace, value) in [
+            (crate::VocabularyNamespace::Core, &core_ns),
+            (crate::VocabularyNamespace::Function, &function_ns),
+        ] {
             if value.is_empty() {
-                return Err(GeoError::config(format!(
-                    "the {label} namespace may not be empty; PurRDF mints no vocabulary IRIs, so \
-                     the GeoSPARQL namespaces must be supplied by the caller"
-                )));
+                return Err(GeoError::resident_failure(
+                    crate::VocabularyError::EmptyNamespace(namespace),
+                    GeoError::Vocabulary,
+                ));
             }
         }
         Ok(Self {
@@ -601,7 +620,7 @@ impl GeoVocabBuilder {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if `unit` is empty, or if `crs` already has a
+    /// [`GeoError::Vocabulary`] if `unit` is empty, or if `crs` already has a
     /// declared unit that differs. A silently overwritten declaration would
     /// change every measurement's meaning with no symptom; a repeat of the same
     /// declaration is harmless and is accepted.
@@ -612,9 +631,11 @@ impl GeoVocabBuilder {
     ) -> Result<Self, GeoError> {
         let unit = unit.into();
         if unit.is_empty() {
-            return Err(GeoError::config(
-                "a unit IRI may not be empty; PurRDF mints no vocabulary IRIs, so the unit of a \
-                 coordinate reference system must be supplied by the caller",
+            return Err(GeoError::resident_failure(
+                crate::VocabularyError::EmptyUnit {
+                    crs: crs.as_str().to_owned(),
+                },
+                GeoError::Vocabulary,
             ));
         }
         if let Some(existing) = self
@@ -625,12 +646,14 @@ impl GeoVocabBuilder {
             if existing.unit == unit {
                 return Ok(self);
             }
-            return Err(GeoError::config(format!(
-                "<{crs}> is already declared to have the linear unit <{}>, and <{unit}> was \
-                 declared for it as well; a silently replaced declaration would change every \
-                 measurement's meaning with no symptom",
-                existing.unit
-            )));
+            return Err(GeoError::resident_failure(
+                crate::VocabularyError::ConflictingUnit {
+                    crs: crs.as_str().to_owned(),
+                    first: existing.unit.clone(),
+                    second: unit,
+                },
+                GeoError::Vocabulary,
+            ));
         }
         self.crs_units.push(CrsUnit {
             crs: crs.as_str().to_owned(),
@@ -644,11 +667,14 @@ impl GeoVocabBuilder {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if `iri` is empty.
+    /// [`GeoError::Vocabulary`] if `iri` is empty.
     pub fn declare_metre(mut self, iri: impl Into<String>) -> Result<Self, GeoError> {
         let iri = iri.into();
         if iri.is_empty() {
-            return Err(GeoError::config("the metre IRI may not be empty"));
+            return Err(GeoError::resident_failure(
+                crate::VocabularyError::EmptyMetre,
+                GeoError::Vocabulary,
+            ));
         }
         self.metre_unit = Some(iri);
         Ok(self)
@@ -659,15 +685,16 @@ impl GeoVocabBuilder {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if `iri` is empty.
+    /// [`GeoError::Vocabulary`] if `iri` is empty.
     pub fn declare_simple_features_namespace(
         mut self,
         iri: impl Into<String>,
     ) -> Result<Self, GeoError> {
         let iri = iri.into();
         if iri.is_empty() {
-            return Err(GeoError::config(
-                "the Simple Features geometry-type namespace may not be empty",
+            return Err(GeoError::resident_failure(
+                crate::VocabularyError::EmptyNamespace(crate::VocabularyNamespace::SimpleFeatures),
+                GeoError::Vocabulary,
             ));
         }
         self.simple_features_ns = Some(iri);
@@ -750,14 +777,19 @@ mod tests {
     /// constructor that does not take the namespaces.
     #[test]
     fn a_vocabulary_cannot_be_built_without_the_callers_namespaces() {
-        assert!(matches!(
-            GeoVocabBuilder::new("", FUNC, crs(CRS_A), crs(CRS_A)),
-            Err(GeoError::Config(_))
-        ));
-        assert!(matches!(
-            GeoVocabBuilder::new(CORE, "", crs(CRS_A), crs(CRS_A)),
-            Err(GeoError::Config(_))
-        ));
+        use purrdf_testkit::error_capture::Capture;
+
+        for (core, function, namespace) in [
+            ("", FUNC, "vocabulary-namespace-core"),
+            (CORE, "", "vocabulary-namespace-function"),
+            ("", "", "vocabulary-namespace-core"),
+        ] {
+            let error = GeoVocabBuilder::new(core, function, crs(CRS_A), crs(CRS_A)).unwrap_err();
+            let fields = Capture::read(&error).child("cause");
+            assert_eq!(fields.code, "vocabulary-empty-namespace");
+            assert_eq!(fields.child("namespace").code, namespace);
+            assert!(!error.is_expression_error());
+        }
         // The neighbouring VALID case.
         assert!(GeoVocabBuilder::new(CORE, FUNC, crs(CRS_A), crs(CRS_A)).is_ok());
     }
@@ -832,44 +864,59 @@ mod tests {
 
     #[test]
     fn an_undeclared_crs_unit_is_refused_and_a_declared_one_is_not() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let vocab = vocab();
-        assert!(
-            matches!(vocab.unit_of(&crs(CRS_B)), Err(GeoError::Config(_))),
-            "a system with no declared unit cannot be measured in one"
-        );
+        let original = crs(CRS_B);
+        let error = vocab.unit_of(&original).unwrap_err();
         // The neighbouring VALID case.
         assert_eq!(vocab.unit_of(&crs(CRS_A)).expect("declared"), METRE);
+        let clone = error.clone();
+        drop((error, vocab, original));
+        let fields = Capture::read(&clone).child("cause");
+        assert_eq!(fields.code, "vocabulary-undeclared-unit");
+        assert!(matches!(fields.field("crs"), ErrorValue::Iri(CRS_B)));
+        assert!(!clone.is_expression_error());
+        assert!(std::error::Error::source(&clone).is_some());
     }
 
     #[test]
     fn a_measurement_in_the_wrong_unit_is_refused_and_the_right_one_is_not() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let vocab = vocab();
-        assert!(
-            matches!(
-                vocab.require_unit(&crs(CRS_A), DEGREE),
-                Err(GeoError::Domain(_))
-            ),
-            "this crate converts no units"
-        );
+        let requested = DEGREE.to_owned();
+        let error = vocab.require_unit(&crs(CRS_A), &requested).unwrap_err();
         // The neighbouring VALID case.
         assert!(vocab.require_unit(&crs(CRS_A), METRE).is_ok());
+        drop((vocab, requested));
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "vocabulary-unit-mismatch");
+        assert!(matches!(fields.field("crs"), ErrorValue::Iri(CRS_A)));
+        assert!(matches!(fields.field("declared"), ErrorValue::Iri(METRE)));
+        assert!(matches!(fields.field("requested"), ErrorValue::Iri(DEGREE)));
+        assert!(error.is_expression_error());
     }
 
     #[test]
     fn the_metric_family_needs_both_a_metre_iri_and_a_metre_crs() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         // No metre declared at all.
         let no_metre = GeoVocabBuilder::new(CORE, FUNC, crs(CRS_A), crs(CRS_A))
             .expect("namespaces")
             .declare_crs_unit(&crs(CRS_A), METRE)
             .expect("declaration")
             .build();
-        assert!(
-            matches!(
-                no_metre.require_metre(&crs(CRS_A)),
-                Err(GeoError::Config(_))
-            ),
-            "without a declared metre IRI the metric family cannot answer"
-        );
+        let error = no_metre.require_metre(&crs(CRS_A)).unwrap_err();
+        drop(no_metre);
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "vocabulary-missing-metre");
+        assert!(matches!(fields.field("crs"), ErrorValue::Iri(CRS_A)));
+        assert!(!error.is_expression_error());
 
         // A metre IRI, but a system measured in degrees.
         let degrees = GeoVocabBuilder::new(CORE, FUNC, crs(CRS_A), crs(CRS_A))
@@ -880,7 +927,10 @@ mod tests {
             .expect("metre")
             .build();
         assert!(
-            matches!(degrees.require_metre(&crs(CRS_B)), Err(GeoError::Domain(_))),
+            matches!(
+                degrees.require_metre(&crs(CRS_B)),
+                Err(GeoError::Vocabulary(_))
+            ),
             "a planar measurement in degrees is not a measurement in metres"
         );
 
@@ -890,6 +940,9 @@ mod tests {
 
     #[test]
     fn a_repeated_identical_declaration_is_accepted_and_a_conflicting_one_is_not() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let builder = GeoVocabBuilder::new(CORE, FUNC, crs(CRS_A), crs(CRS_A))
             .expect("namespaces")
             .declare_crs_unit(&crs(CRS_A), METRE)
@@ -899,10 +952,53 @@ mod tests {
             .declare_crs_unit(&crs(CRS_A), METRE)
             .expect("a repeat of the same declaration is not a conflict");
         // A different one for the same system is a hard error.
-        assert!(matches!(
-            builder.declare_crs_unit(&crs(CRS_A), DEGREE),
-            Err(GeoError::Config(_))
-        ));
+        let error = builder.declare_crs_unit(&crs(CRS_A), DEGREE).unwrap_err();
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "vocabulary-conflicting-unit");
+        assert!(matches!(fields.field("crs"), ErrorValue::Iri(CRS_A)));
+        assert!(matches!(fields.field("first"), ErrorValue::Iri(METRE)));
+        assert!(matches!(fields.field("second"), ErrorValue::Iri(DEGREE)));
+        assert!(!error.is_expression_error());
+    }
+
+    #[test]
+    fn empty_declarations_keep_the_original_vocabulary_role_and_carrier() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let builder = GeoVocabBuilder::new(CORE, FUNC, crs(CRS_A), crs(CRS_A)).unwrap();
+        let errors = [
+            (
+                builder
+                    .clone()
+                    .declare_crs_unit(&crs(CRS_B), "")
+                    .unwrap_err(),
+                "vocabulary-empty-unit",
+            ),
+            (
+                builder.clone().declare_metre("").unwrap_err(),
+                "vocabulary-empty-metre",
+            ),
+            (
+                builder.declare_simple_features_namespace("").unwrap_err(),
+                "vocabulary-empty-namespace",
+            ),
+        ];
+        for (error, code) in errors {
+            let fields = Capture::read(&error).child("cause");
+            assert_eq!(fields.code, code);
+            assert!(!error.is_expression_error());
+            match code {
+                "vocabulary-empty-unit" => {
+                    assert!(matches!(fields.field("crs"), ErrorValue::Iri(CRS_B)));
+                }
+                "vocabulary-empty-namespace" => assert_eq!(
+                    fields.child("namespace").code,
+                    "vocabulary-namespace-simple-features"
+                ),
+                _ => {}
+            }
+        }
     }
 
     #[test]
@@ -943,10 +1039,18 @@ mod tests {
     #[test]
     fn geometry_type_is_inert_until_the_simple_features_namespace_is_declared() {
         use crate::geom::GeometryKind;
-        assert!(matches!(
-            vocab().simple_features_type(GeometryKind::Polygon),
-            Err(GeoError::Config(_))
-        ));
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let original = vocab();
+        let error = original
+            .simple_features_type(GeometryKind::Polygon)
+            .unwrap_err();
+        drop(original);
+        let fields = Capture::read(error.original()).child("cause");
+        assert_eq!(fields.code, "vocabulary-missing-simple-features");
+        assert!(matches!(fields.field("kind"), ErrorValue::Code("Polygon")));
+        assert!(!error.is_expression_error());
         // The neighbouring VALID case.
         let declared = GeoVocabBuilder::new(CORE, FUNC, crs(CRS_A), crs(CRS_A))
             .expect("namespaces")

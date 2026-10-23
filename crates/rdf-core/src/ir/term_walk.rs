@@ -140,6 +140,15 @@ pub enum OwnedTermFoldError<E> {
     /// Original checked layout, admission or allocator refusal.
     Storage(purrdf_lex::allocation::StorageError),
 }
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for OwnedTermFoldError<E>
+{
+    purrdf_hash::error_visit! {
+        Visitor(cause) => "owned-term-fold-visitor" { "cause" => Cause(cause) },
+        Storage(cause) => "owned-term-fold-storage" { "cause" => Cause(cause) },
+    }
+}
 purrdf_lex::variant_from!(impl<E> OwnedTermFoldError<E> { Storage(purrdf_lex::allocation::StorageError) });
 impl<E: fmt::Display> fmt::Display for OwnedTermFoldError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -900,7 +909,7 @@ impl TermValue {
     pub fn try_clone(&self) -> Result<Self, std::collections::TryReserveError> {
         use CloneStep as Step;
         let Self::Triple { .. } = self else {
-            return shallow_clone(self);
+            return shallow_clone(self, try_owned_text);
         };
         let mut stack: WorkList<Step<'_>, 32> = WorkList::with(Step::Enter(self));
         let mut copies: Vec<Self> = Vec::new();
@@ -919,7 +928,7 @@ impl TermValue {
                 }
                 Step::Enter(leaf) => {
                     copies.try_reserve(1)?;
-                    copies.push(shallow_clone(leaf)?);
+                    copies.push(shallow_clone(leaf, try_owned_text)?);
                 }
                 Step::Assemble => {
                     let o = copies.pop().expect("a triple's object is copied");
@@ -937,6 +946,43 @@ impl TermValue {
         Ok(copies
             .pop()
             .expect("the root's copy is the last one assembled"))
+    }
+
+    /// Copy original term fields through the shared admitted traversal.
+    /// The result remains enclosed by this memory account until destruction
+    /// or publication with its original owner. The resident clone and this
+    /// adapter share one leaf copier; no spelling is rendered or reparsed.
+    ///
+    /// # Errors
+    /// Returns the first original visitor, allocation or accounting refusal. Partial
+    /// terms die before the shared traversal refunds their original charge.
+    pub fn try_clone_with_memory<E, S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        mut before: impl FnMut(&Self) -> Result<(), E>,
+    ) -> Result<Self, OwnedTermFoldError<E>> {
+        try_fold_nested_with_memory(
+            self,
+            &mut before,
+            |before, term, memory| {
+                before(term).map_err(OwnedTermFoldError::Visitor)?;
+                match term {
+                    Self::Triple { s, p, o } => Ok(Nested::Triple(&**s, &**p, &**o)),
+                    leaf => shallow_clone(leaf, |source| memory.string(source))
+                        .map(Nested::Leaf)
+                        .map_err(OwnedTermFoldError::Storage),
+                }
+            },
+            |_, _, s, p, o, memory| {
+                Ok(Self::Triple {
+                    s: memory.boxed(s).map_err(OwnedTermFoldError::Storage)?.into(),
+                    p: memory.boxed(p).map_err(OwnedTermFoldError::Storage)?.into(),
+                    o: memory.boxed(o).map_err(OwnedTermFoldError::Storage)?.into(),
+                })
+            },
+            |error, _| OwnedTermFoldError::Storage(error),
+            memory,
+        )
     }
 
     /// Destroy a term produced under this Memory before refunding its original
@@ -997,8 +1043,10 @@ pub(crate) fn try_owned_text(source: &str) -> Result<String, std::collections::T
     Ok(copy)
 }
 
-fn shallow_clone(term: &TermValue) -> Result<TermValue, std::collections::TryReserveError> {
-    use try_owned_text as text;
+fn shallow_clone<E>(
+    term: &TermValue,
+    mut text: impl FnMut(&str) -> Result<String, E>,
+) -> Result<TermValue, E> {
     Ok(match term {
         TermValue::Iri(iri) => TermValue::Iri(text(iri)?),
         TermValue::Blank { label, scope } => TermValue::Blank {
@@ -1013,7 +1061,7 @@ fn shallow_clone(term: &TermValue) -> Result<TermValue, std::collections::TryRes
         } => TermValue::Literal {
             lexical_form: text(lexical_form)?,
             datatype: text(datatype)?,
-            language: language.as_deref().map(text).transpose()?,
+            language: language.as_deref().map(&mut text).transpose()?,
             direction: *direction,
         },
         TermValue::Triple { .. } => unreachable!("a triple term is copied over the work list"),
@@ -1467,6 +1515,100 @@ mod tests {
     use super::{TermBox, TermValue, TermVisit};
     use crate::RdfTextDirection;
     use crate::ir::term::BlankScope;
+
+    #[test]
+    fn admitted_clone_preserves_nested_terms_and_releases_only_its_original_layouts() {
+        use purrdf_lex::allocation::{Memory, Resident};
+
+        let mut term = TermValue::Triple {
+            s: TermBox::new(TermValue::Blank {
+                label: "original-blank".to_owned(),
+                scope: BlankScope(u32::MAX),
+            }),
+            p: TermBox::new(TermValue::iri("https://example.org/predicate")),
+            o: TermBox::new(TermValue::Literal {
+                lexical_form: "original 原文".to_owned(),
+                datatype: "https://example.org/datatype".to_owned(),
+                language: Some("zh-Hant".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            }),
+        };
+        for _ in 0..256 {
+            term = TermValue::Triple {
+                s: TermBox::new(term),
+                p: TermBox::new(TermValue::iri("predicate")),
+                o: TermBox::new(TermValue::iri("object")),
+            };
+        }
+        let resident_copy = term.try_clone().unwrap();
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let parent = memory.string("original parent").unwrap();
+        let baseline = memory.admitted_bytes();
+        let mut visited = 0;
+        let copied = term
+            .try_clone_with_memory(&mut memory, |_| {
+                visited += 1;
+                Ok::<_, &'static str>(())
+            })
+            .unwrap();
+        assert_eq!(visited, 772);
+        assert_eq!(copied, term);
+        assert_eq!(copied, resident_copy);
+        drop((term, resident_copy));
+        copied.release_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(parent).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
+    #[test]
+    fn admitted_clone_preserves_first_visitor_failure_and_refunds_partial_fields() {
+        use purrdf_lex::allocation::{Memory, Resident, StorageError};
+
+        let input = TermValue::typed_literal("original lexical", "https://example.org/datatype");
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let baseline = usize::MAX - "original lexical".len();
+        memory.add_bytes(baseline).unwrap();
+        let result = input.try_clone_with_memory(&mut memory, |_| Ok::<_, &'static str>(()));
+        assert!(matches!(
+            result,
+            Err(super::OwnedTermFoldError::Storage(
+                StorageError::SizeOverflow
+            ))
+        ));
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_bytes(baseline).unwrap();
+
+        let parent = memory.string("original parent").unwrap();
+        let baseline = memory.admitted_bytes();
+        let mut term = input;
+        for _ in 0..64 {
+            term = TermValue::Triple {
+                s: TermBox::new(term),
+                p: TermBox::new(TermValue::iri("predicate")),
+                o: TermBox::new(TermValue::iri("object")),
+            };
+        }
+        let mut visited = 0;
+        let result = term.try_clone_with_memory(&mut memory, |_| {
+            visited += 1;
+            if visited == 80 {
+                Err("original cancellation")
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(super::OwnedTermFoldError::Visitor("original cancellation"))
+        ));
+        assert_eq!(visited, 80);
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(parent).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
 
     #[test]
     fn native_visit_failure_releases_only_its_pending_spill() {

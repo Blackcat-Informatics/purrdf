@@ -73,6 +73,32 @@ dev = [
 # ignore `[tool.uv.sources]`, so a real `pip install purrdf[rdflib]` still pulls
 # the published wheel. Extras are opt-in, so this NEVER enters the default dev
 # (oracle) sync — the genuine rdflib in `[dependency-groups].dev` stays unshadowed.
+[tool.uv]
+# The extension is compiled from the workspace's Rust sources, so a change to any of
+# them (or to the lockfile, a manifest, the toolchain pin, or a file a crate embeds with
+# `include_str!` / `include_bytes!` / `#![doc = include_str!]`) must rebuild it; uv's
+# default keys see only this file. The embedded-file keys cover the `include_*!`
+# targets of code that is compiled into the extension: `crates/*/spec/` (vendored
+# vocabularies), `crates/*/tests/fixtures/` and `crates/*/tests/vectors/` (embedded
+# fixtures) and the crate-root Markdown (`#![doc = include_str!]`). Targets that only
+# `#[cfg(test)]` code embeds (for example `vectors/shacl12/`, `crates/iri/unicode/`,
+# `crates/jsonschema/tests/*.txt`) are not part of the build and are not keys.
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "rust-toolchain.toml" },
+  { file = "../../rust-toolchain.toml" },
+  { file = "../../Cargo.toml" },
+  { file = "../../Cargo.lock" },
+  { file = "../../crates/**/Cargo.toml" },
+  { file = "../../crates/**/*.rs" },
+  { file = "../../crates/*/spec/**" },
+  { file = "../../crates/*/tests/fixtures/**" },
+  { file = "../../crates/*/tests/vectors/**" },
+  { file = "../../crates/*/*.md" },
+  { file = "src/**/*.rs" },
+]
+
 [tool.uv.sources]
 purrdf-rdflib = { path = "../python-rdflib-shadow" }
 

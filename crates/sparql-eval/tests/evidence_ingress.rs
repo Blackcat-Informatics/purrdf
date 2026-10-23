@@ -3,6 +3,8 @@
 
 //! Original engine claim ingress and alternative-witness coalescing on native/WASM.
 
+mod support;
+
 use purrdf_core::evidence::{
     EvidenceRecord, Frame, Information, InformationMap, ReasonDescription, ReasonId,
     SearchCompleteness,
@@ -28,22 +30,22 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
         AnswerRequest, AnswerTier, StandpointKey, WitnessQuestion, WitnessVerdict,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
-    struct CountedClaims {
-        opposed: TermId,
-        poison: TermId,
+    struct CountedClaims<I> {
+        opposed: I,
+        poison: I,
         record: EvidenceRecord,
         calls: AtomicUsize,
         completeness: SearchCompleteness,
     }
-    impl EvidenceSource<TermId> for CountedClaims {
-        fn claim(&self, quad: &QuadIds<TermId>) -> Result<Option<&EvidenceRecord>, EvalError> {
+    impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for CountedClaims<I> {
+        fn claim(&self, quad: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if quad.p == self.poison {
                 return Err(EvalError::WorkspaceUnpriced("unvisited producer suffix"));
             }
             Ok((quad.p == self.opposed).then_some(&self.record))
         }
-        fn scope(&self, _: GraphMatch<TermId>) -> Result<EvidenceScope, EvalError> {
+        fn scope(&self, _: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
             Ok(EvidenceScope {
                 completeness: self.completeness,
                 closure_declared: true,
@@ -64,128 +66,146 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
         builder.push_quad(subject, predicate, value, None).unwrap();
     }
     let dataset = builder.freeze().unwrap();
-    let mut source = CountedClaims {
-        opposed,
-        poison,
-        record: EvidenceRecord::from_parts(
-            &InformationMap::uniform(Information::Opposed),
-            SearchCompleteness::Complete,
-            &Frame::actual(),
-            &[],
-            &[],
-            &mut Memory::new(&mut Resident),
-        )
-        .unwrap(),
-        calls: AtomicUsize::new(0),
-        completeness: SearchCompleteness::Complete,
-    };
-    let engine = NativeSparqlEngine::new();
-    let positive_arm = "{ ?s <https://example.org/positive> ?o }";
-    let negative_arm = "{ ?s <https://example.org/opposed> ?o }";
-    let poison_arm = "{ ?s <https://example.org/poison> ?o }";
-    for form in [
-        "SELECT ?s",
-        "ASK",
-        "CONSTRUCT { ?s <https://example.org/result> ?o }",
-        "DESCRIBE ?s",
-    ] {
-        for (body, question, calls, information) in [
-            (
-                format!("{positive_arm} UNION {poison_arm}"),
-                WitnessQuestion::Support,
-                1,
-                Information::Supported,
-            ),
-            (
-                format!("{positive_arm} UNION {negative_arm} UNION {poison_arm}"),
-                WitnessQuestion::Contradiction,
-                2,
-                Information::Both,
-            ),
-            (
-                format!(
-                    "{{ ?s <https://example.org/positive> ?o FILTER(false) }} UNION {positive_arm} UNION {poison_arm}"
-                ),
-                WitnessQuestion::Support,
-                2,
-                Information::Supported,
-            ),
+    fn check<D: purrdf_core::FallibleDatasetView + Sync>(dataset: &D) {
+        let mut source = CountedClaims {
+            opposed: dataset
+                .term_id_by_value(&purrdf_core::TermValue::iri("https://example.org/opposed"))
+                .unwrap()
+                .unwrap(),
+            poison: dataset
+                .term_id_by_value(&purrdf_core::TermValue::iri("https://example.org/poison"))
+                .unwrap()
+                .unwrap(),
+            record: EvidenceRecord::from_parts(
+                &InformationMap::uniform(Information::Opposed),
+                SearchCompleteness::Complete,
+                &Frame::actual(),
+                &[],
+                &[],
+                &mut Memory::new(&mut Resident),
+            )
+            .unwrap(),
+            calls: AtomicUsize::new(0),
+            completeness: SearchCompleteness::Complete,
+        };
+        let engine = NativeSparqlEngine::new();
+        let positive_arm = "{ ?s <https://example.org/positive> ?o }";
+        let negative_arm = "{ ?s <https://example.org/opposed> ?o }";
+        let poison_arm = "{ ?s <https://example.org/poison> ?o }";
+        for form in [
+            "SELECT ?s",
+            "ASK",
+            "CONSTRUCT { ?s <https://example.org/result> ?o }",
+            "DESCRIBE ?s",
         ] {
+            for (body, question, calls, information) in [
+                (
+                    format!("{positive_arm} UNION {poison_arm}"),
+                    WitnessQuestion::Support,
+                    1,
+                    Information::Supported,
+                ),
+                (
+                    format!("{positive_arm} UNION {negative_arm} UNION {poison_arm}"),
+                    WitnessQuestion::Contradiction,
+                    2,
+                    Information::Both,
+                ),
+                (
+                    format!(
+                        "{{ ?s <https://example.org/positive> ?o FILTER(false) }} UNION {positive_arm} UNION {poison_arm}"
+                    ),
+                    WitnessQuestion::Support,
+                    2,
+                    Information::Supported,
+                ),
+            ] {
+                source.calls.store(0, Ordering::Relaxed);
+                let query = format!("{form} WHERE {{ {body} }}");
+                engine
+                    .query_evidence_status_fallible_view(
+                        dataset,
+                        request(&query),
+                        QueryOptions::default(),
+                        &source,
+                        AnswerRequest {
+                            tier: AnswerTier::Verdict,
+                            question: Some(question),
+                            standpoint: StandpointKey::Unscoped,
+                            input_completeness: SearchCompleteness::Complete,
+                            closure_declared: true,
+                        },
+                        |_, status| {
+                            assert_eq!(status.verdict, Some(WitnessVerdict::Yes));
+                            assert_eq!(status.information, information);
+                            assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
+                            assert_eq!(status.reasons, []);
+                        },
+                    )
+                    .expect("settled verdict leaves the hard-failing suffix unopened");
+                assert_eq!(source.calls.load(Ordering::Relaxed), calls, "{query}");
+            }
             source.calls.store(0, Ordering::Relaxed);
-            let query = format!("{form} WHERE {{ {body} }}");
+            let query = format!("{form} WHERE {{ {positive_arm} UNION {negative_arm} }}");
             engine
-                .query_evidence_status_view(
-                    &dataset,
+                .query_evidence_status_fallible_view(
+                    dataset,
                     request(&query),
                     QueryOptions::default(),
                     &source,
                     AnswerRequest {
-                        tier: AnswerTier::Verdict,
-                        question: Some(question),
+                        tier: AnswerTier::Summary,
+                        question: Some(WitnessQuestion::Support),
                         standpoint: StandpointKey::Unscoped,
                         input_completeness: SearchCompleteness::Complete,
                         closure_declared: true,
                     },
                     |_, status| {
-                        assert_eq!(status.verdict, Some(WitnessVerdict::Yes));
-                        assert_eq!(status.information, information);
-                        assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
-                        assert_eq!(status.reasons, []);
+                        assert_eq!(status.information, Information::Both);
+                        assert_eq!(status.completeness, SearchCompleteness::Complete);
+                        assert_eq!(status.established, 2);
                     },
                 )
-                .expect("settled verdict leaves the hard-failing suffix unopened");
-            assert_eq!(source.calls.load(Ordering::Relaxed), calls, "{query}");
+                .unwrap();
+            assert_eq!(source.calls.load(Ordering::Relaxed), 2);
         }
+        source.completeness = SearchCompleteness::Undetermined;
         source.calls.store(0, Ordering::Relaxed);
-        let query = format!("{form} WHERE {{ {positive_arm} UNION {negative_arm} }}");
         engine
-            .query_evidence_status_view(
-                &dataset,
-                request(&query),
+            .query_evidence_status_fallible_view(
+                dataset,
+                request("SELECT ?s WHERE { ?s <https://example.org/poison> ?o }"),
                 QueryOptions::default(),
                 &source,
                 AnswerRequest {
-                    tier: AnswerTier::Summary,
-                    question: Some(WitnessQuestion::Support),
+                    tier: AnswerTier::Verdict,
+                    question: Some(WitnessQuestion::ClosedAbsence),
                     standpoint: StandpointKey::Unscoped,
                     input_completeness: SearchCompleteness::Complete,
                     closure_declared: true,
                 },
                 |_, status| {
-                    assert_eq!(status.information, Information::Both);
-                    assert_eq!(status.completeness, SearchCompleteness::Complete);
-                    assert_eq!(status.established, 2);
+                    assert_eq!(status.verdict, Some(WitnessVerdict::Unknown));
+                    assert_eq!(status.established, 0);
                 },
             )
             .unwrap();
-        assert_eq!(source.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            source.calls.load(Ordering::Relaxed),
+            0,
+            "declared incompleteness settles absence before opening the producer"
+        );
     }
-    source.completeness = SearchCompleteness::Undetermined;
-    source.calls.store(0, Ordering::Relaxed);
-    engine
-        .query_evidence_status_view(
-            &dataset,
-            request("SELECT ?s WHERE { ?s <https://example.org/poison> ?o }"),
-            QueryOptions::default(),
-            &source,
-            AnswerRequest {
-                tier: AnswerTier::Verdict,
-                question: Some(WitnessQuestion::ClosedAbsence),
-                standpoint: StandpointKey::Unscoped,
-                input_completeness: SearchCompleteness::Complete,
-                closure_declared: true,
-            },
-            |_, status| {
-                assert_eq!(status.verdict, Some(WitnessVerdict::Unknown));
-                assert_eq!(status.established, 0);
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        source.calls.load(Ordering::Relaxed),
-        0,
-        "declared incompleteness settles absence before opening the producer"
-    );
+    check(&dataset);
+    let paged = purrdf_core::PagedDataset::from_provider(std::sync::Arc::new(
+        purrdf_core::InMemoryPageProvider::with_byte_lengths(
+            vec![(dataset, 64)],
+            purrdf_core::PageGeneration(69),
+        ),
+    ))
+    .unwrap();
+    let view = paged.query_view(purrdf_core::PagedQueryLimits::UNBOUNDED);
+    check(&view);
 }
 
 fn actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims() {
@@ -2365,20 +2385,26 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
             self.inner.rows_per_invocation(mode)
         }
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &PfArgs<'_>,
             ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             self.open_admitted(args, ceiling, WorkspaceCapability::resident())
                 .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
         }
-        fn open_admitted(
+        fn open_admitted<'cursor>(
             &self,
             args: &PfArgs<'_>,
             _ceiling: Option<u64>,
             workspace: WorkspaceCapability,
-        ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+        ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             let query = {
                 let mut retained = self
                     .query
@@ -3319,7 +3345,237 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
     }
 }
 
+struct UniformClaims(EvidenceRecord);
+
+impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for UniformClaims {
+    fn claim(&self, _: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
+        Ok(Some(&self.0))
+    }
+
+    fn scope(&self, _: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
+        Ok(EvidenceScope {
+            completeness: self.0.completeness(),
+            closure_declared: true,
+            missing_reason: None,
+        })
+    }
+
+    fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
+        Ok(None)
+    }
+}
+
+fn uniform_claims() -> UniformClaims {
+    UniformClaims(
+        EvidenceRecord::from_parts(
+            &InformationMap::uniform(Information::Supported),
+            SearchCompleteness::Complete,
+            &Frame::actual(),
+            &[],
+            &[],
+            &mut Memory::new(&mut Resident),
+        )
+        .unwrap(),
+    )
+}
+
+fn healthy_paged_evidence_source() -> purrdf_core::PagedDataset {
+    use purrdf_core::{InMemoryPageProvider, PagedDataset};
+    PagedDataset::from_provider(std::sync::Arc::new(InMemoryPageProvider::new(vec![
+        support::local_dataset([("a", "p", "b")]),
+        support::local_dataset([("b", "q", "c")]),
+    ])))
+    .unwrap()
+}
+
+fn fallible_evidence_doors_keep_original_rows_and_all_query_form_status() {
+    use purrdf_core::PagedQueryLimits;
+    use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
+    let paged = healthy_paged_evidence_source();
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    for form in ["SELECT ?s", "ASK", "CONSTRUCT { ?s ?p ?o }", "DESCRIBE ?s"] {
+        let query = format!("{form} WHERE {{ ?s ?p ?o }}");
+        for tier in [AnswerTier::Verdict, AnswerTier::Summary, AnswerTier::Rows] {
+            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let answer = AnswerRequest {
+                tier,
+                question: None,
+                standpoint: StandpointKey::Unscoped,
+                input_completeness: SearchCompleteness::Complete,
+                closure_declared: true,
+            };
+            let (value, evidence) = engine
+                .query_evidence_answer_fallible_view(
+                    &view,
+                    request(&query),
+                    QueryOptions::EMPTY,
+                    &claims,
+                    answer,
+                    |outcome, rows, status| {
+                        match outcome {
+                            InternedOutcome::Solutions(rows) => assert_eq!(rows.len(), 2),
+                            InternedOutcome::Boolean(value) => assert!(value),
+                            InternedOutcome::Graph(graph) => {
+                                assert!(graph.dataset_handle().quad_count() >= 2);
+                            }
+                        }
+                        (
+                            rows.len(),
+                            status.information,
+                            status.established,
+                            status.undecided,
+                        )
+                    },
+                )
+                .unwrap();
+            assert_eq!(value, (2, Information::Supported, 2, 0));
+            assert_eq!(evidence.consumed_pages, 2);
+            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let (status, _) = engine
+                .query_evidence_status_fallible_view(
+                    &view,
+                    request(&query),
+                    QueryOptions::EMPTY,
+                    &claims,
+                    answer,
+                    |_, status| (status.information, status.established, status.undecided),
+                )
+                .unwrap();
+            assert_eq!(status, (Information::Supported, 2, 0));
+        }
+    }
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let (count, _) = engine
+        .query_interned_evidence_fallible_view(
+            &view,
+            request("SELECT ?s WHERE { ?s ?p ?o }"),
+            QueryOptions::EMPTY,
+            &claims,
+            |outcome| {
+                let InternedOutcome::Solutions(rows) = outcome else {
+                    panic!("SELECT rows");
+                };
+                for row in rows.rows() {
+                    row.evidence()
+                        .with_record(|record| {
+                            assert_eq!(record.information().fallback(), Information::Supported);
+                        })
+                        .unwrap();
+                }
+                rows.len()
+            },
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
+    use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
+    use purrdf_core::{PageId, PagedQueryError, PagedQueryEvidence, PagedQueryLimits};
+    use purrdf_sparql_eval::FallibleSparqlError;
+    use support::fallible::{ScriptedFault, two_page_faulting_dataset};
+    fn refused(error: FallibleSparqlError<PagedQueryError, PagedQueryEvidence>) {
+        assert!(error.diagnostic().is_none());
+        assert!(error.partial_answers().is_none());
+        let FallibleSparqlError::Operational { error, evidence } = error else {
+            panic!("the read refusal must remain operational");
+        };
+        assert_eq!(
+            error,
+            PagedQueryError::Provider {
+                page: PageId(1),
+                message: "object read failed".to_owned(),
+            }
+        );
+        assert_eq!(evidence.requested_pages, vec![PageId(0), PageId(1)]);
+        assert_eq!(evidence.consumed_pages, 1);
+    }
+    let paged = two_page_faulting_dataset(ScriptedFault::Provider);
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    let query = "SELECT ?s WHERE { ?s ?p ?o }";
+    let answer = AnswerRequest {
+        tier: AnswerTier::Rows,
+        question: None,
+        standpoint: StandpointKey::Unscoped,
+        input_completeness: SearchCompleteness::Complete,
+        closure_declared: true,
+    };
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .query_evidence_answer_fallible_view(
+                &view,
+                request(query),
+                QueryOptions::EMPTY,
+                &claims,
+                answer,
+                |_, _, _| 7,
+            )
+            .unwrap_err(),
+    );
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .query_evidence_status_fallible_view(
+                &view,
+                request(query),
+                QueryOptions::EMPTY,
+                &claims,
+                answer,
+                |_, _| 7,
+            )
+            .unwrap_err(),
+    );
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .query_interned_evidence_fallible_view(
+                &view,
+                request(query),
+                QueryOptions::EMPTY,
+                &claims,
+                |_| 7,
+            )
+            .unwrap_err(),
+    );
+    let mut execution = engine
+        .prepare_execution(query, None, &[], QueryOptions::EMPTY)
+        .unwrap();
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .execute_witnessed_evidence_fallible(
+                &mut execution,
+                &view,
+                QueryOptions::EMPTY,
+                &claims,
+                |_| 7,
+            )
+            .unwrap_err(),
+    );
+    let healthy = healthy_paged_evidence_source();
+    let view = healthy.query_view(PagedQueryLimits::UNBOUNDED);
+    let ((count, _witness), evidence) = engine
+        .execute_witnessed_evidence_fallible(
+            &mut execution,
+            &view,
+            QueryOptions::EMPTY,
+            &claims,
+            |outcome| match outcome {
+                InternedOutcome::Solutions(rows) => rows.len(),
+                _ => panic!("prepared SELECT"),
+            },
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(evidence.consumed_pages, 2);
+}
+
 purrdf_testkit::harness_main!(
+    fallible_evidence_doors_keep_original_rows_and_all_query_form_status,
+    fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers,
     verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities,
     actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims,
     service_rows_keep_signed_and_undecided_declarations_through_original_operators,

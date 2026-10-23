@@ -88,11 +88,14 @@ impl PropertyFunction for SelfRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let Some(subject) = args.get(0) else {
             return Err(EvalError::function(
                 "the subject at position 0 is free; this relation is declared `bf` and cannot \
@@ -108,7 +111,7 @@ impl PropertyFunction for SelfRelation {
     }
 }
 
-fn relation() -> (Arc<PropertyFunctionRegistry>, Arc<SelfRelation>) {
+fn relation() -> (Arc<PropertyFunctionRegistry<'static>>, Arc<SelfRelation>) {
     let relation = Arc::new(SelfRelation {
         modes: [BindingPattern::from_code("bf")],
         seen: Mutex::new(Vec::new()),

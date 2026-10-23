@@ -56,6 +56,50 @@ const FIRST_YEAR: i64 = 0;
 /// The year after the last one `format` can write.
 const YEAR_AFTER_LAST: i64 = 10_000;
 
+/// An instant cannot be written in the RFC 3339 four-digit-year grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FormatError {
+    /// The fractional field is not less than one second.
+    Nanoseconds {
+        /// Original whole Unix seconds.
+        seconds: i64,
+        /// Original nanosecond field.
+        nanos: u32,
+    },
+    /// The instant lies outside years 0000 through 9999.
+    YearRange {
+        /// Original whole Unix seconds.
+        seconds: i64,
+        /// Original nanosecond field.
+        nanos: u32,
+    },
+}
+
+impl fmt::Display for FormatError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Nanoseconds { .. } => "nanoseconds must be less than one second",
+            Self::YearRange { .. } => "instant lies outside the four-digit years 0000..=9999",
+        })
+    }
+}
+
+impl std::error::Error for FormatError {}
+
+impl purrdf_hash::error::StructuredError for FormatError {
+    purrdf_hash::error_visit! {
+        Nanoseconds { seconds, nanos } => "rfc3339-format-nanoseconds" {
+            "seconds" => Signed(i128::from(*seconds)), "nanoseconds" => Unsigned(u128::from(*nanos)),
+            "limit" => Unsigned(u128::from(NANOS_PER_SECOND))
+        },
+        YearRange { seconds, nanos } => "rfc3339-format-year-range" {
+            "seconds" => Signed(i128::from(*seconds)), "nanoseconds" => Unsigned(u128::from(*nanos)),
+            "first_year" => Signed(i128::from(FIRST_YEAR)), "year_after_last" => Signed(i128::from(YEAR_AFTER_LAST))
+        },
+    }
+}
+
 /// Which bytes may separate `full-date` from `full-time` in a `date-time`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Separator {
@@ -76,6 +120,13 @@ pub enum LeapSecond {
     /// At 23:59:60 UTC on any day. JSON Schema's `date-time` and `time`
     /// formats, whose test suite accepts a leap second on a mid-month day.
     AnyDay,
+}
+
+impl purrdf_hash::error::StructuredError for LeapSecond {
+    purrdf_hash::error_visit! {
+        MonthEnd => "rfc3339-leap-month-end" {},
+        AnyDay => "rfc3339-leap-any-day" {},
+    }
 }
 
 /// Why a text is not RFC 3339, and where.
@@ -132,6 +183,29 @@ pub enum ParseErrorKind {
         /// The first byte after it.
         found: u8,
     },
+}
+
+impl purrdf_hash::error::StructuredError for ParseErrorKind {
+    purrdf_hash::error_visit! {
+        EndOfInput { expected } => "rfc3339-end-of-input" { "expected" => Text(expected) },
+        Unexpected { expected, found } => "rfc3339-unexpected" {
+            "expected" => Text(expected), "found" => Unsigned(u128::from(*found)),
+        },
+        OutOfRange { field, value, min, max } => "rfc3339-out-of-range" {
+            "field" => Code(field), "value" => Unsigned(u128::from(*value)),
+            "min" => Unsigned(u128::from(*min)), "max" => Unsigned(u128::from(*max)),
+        },
+        LeapSecond(policy) => "rfc3339-leap-second" { "policy" => Record(policy) },
+        Trailing { found } => "rfc3339-trailing" { "found" => Unsigned(u128::from(*found)) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ParseError {
+    purrdf_hash::error_visit! {
+        @record self { at, kind } => "rfc3339-parse" {
+            "at" => ByteCount(self.at as u128), "kind" => Cause(&self.kind),
+        }
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -448,13 +522,13 @@ fn is_utc_leap_second_slot(seconds: i64, policy: LeapSecond) -> bool {
 ///
 /// When `nanos` is a second or more, or the instant lies outside the
 /// four-digit years 0000..=9999.
-pub fn format(seconds: i64, nanos: u32) -> Result<String, &'static str> {
+pub fn format(seconds: i64, nanos: u32) -> Result<String, FormatError> {
     if nanos >= NANOS_PER_SECOND {
-        return Err("nanoseconds must be less than one second");
+        return Err(FormatError::Nanoseconds { seconds, nanos });
     }
     let days = seconds.div_euclid(SECONDS_PER_DAY);
     if days < day_number(FIRST_YEAR, 1, 1) || days >= day_number(YEAR_AFTER_LAST, 1, 1) {
-        return Err("instant lies outside the four-digit years 0000..=9999");
+        return Err(FormatError::YearRange { seconds, nanos });
     }
     // `rem_euclid` bounded the second to 0..86_400.
     let second_of_day = seconds.rem_euclid(SECONDS_PER_DAY) as u32;

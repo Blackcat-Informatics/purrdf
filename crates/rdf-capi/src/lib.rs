@@ -13,7 +13,10 @@
 //! ## ABI contract (every entry point)
 //! - **No unwinding across the boundary.** Every `extern "C"` function body runs
 //!   inside [`std::panic::catch_unwind`] via the `ffi_try!` / `ffi_guard!`
-//!   macros. A caught panic becomes [`status::PurrdfStatus::Panic`].
+//!   macros. Fallible entry points report a caught unwinding panic as
+//!   [`status::PurrdfStatus::Panic`]; entry points without an error channel return
+//!   their guard's default value. Aborting panics and other process aborts cannot
+//!   be converted into status codes.
 //! - **`int32` status + out-params.** Fallible functions return a
 //!   [`status::PurrdfStatus`] as `i32` and write results through out-pointers;
 //!   on error they set `*out_error` to an owned [`error::PurrdfError`].
@@ -23,7 +26,7 @@
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
 //!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.11.0 (beta)**; the minor
+//!   no-backwards-compat exception. The current ABI is **0.12.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
 //!   Pre-1.0, an incompatible change rides a MINOR bump — see
 //!   [`version::PURRDF_ABI_MAJOR`] for the rule and

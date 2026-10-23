@@ -761,7 +761,7 @@ impl ValidatedRdfDatasetBuilder {
     /// Number of distinct statements, including both RDF 1.2 overlay tables.
     #[must_use]
     pub fn statement_count(&self) -> usize {
-        self.inner.quads.len() + self.inner.reifiers.len() + self.inner.annotations.len()
+        self.inner.statement_count()
     }
 
     /// Bytes occupied by the staged term payload, excluding indexes and rows.
@@ -788,6 +788,12 @@ pub enum NativeBuildError {
     Storage(StorageError),
     /// The original RDF diagnostic; its producer's Memory retains its buffers.
     Diagnostic(RdfDiagnostic),
+}
+impl purrdf_hash::error::StructuredError for NativeBuildError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "native-build-storage" { "cause" => Cause(cause) },
+        Diagnostic(cause) => "native-build-diagnostic" { "cause" => Cause(cause) },
+    }
 }
 purrdf_lex::variant_from!(NativeBuildError { Storage(StorageError) });
 purrdf_lex::variant_from!(NativeBuildError { Diagnostic(RdfDiagnostic) });
@@ -2498,6 +2504,11 @@ impl RdfDatasetBuilder {
         self.interner.term_count()
     }
 
+    /// Exact distinct rows retained by the three store-once statement tables.
+    pub(crate) fn statement_count(&self) -> usize {
+        super::statement_row_count!(self)
+    }
+
     /// The terms, RDF rows and payload bytes freezing this builder now would
     /// retain, given the number of distinct named graphs it names: exactly what the
     /// frozen dataset's [`term_count`](RdfDataset::term_count),
@@ -2508,7 +2519,7 @@ impl RdfDatasetBuilder {
     /// deduplicates, so its distinct count is the caller's. Each quantity only
     /// grows as interning proceeds.
     pub(crate) fn pending_extent(&self, named_graphs: usize) -> (usize, usize, usize) {
-        let rows = self.quads.len() + self.reifiers.len() + self.annotations.len();
+        let rows = self.statement_count();
         let payload = self.interner.arena.len()
             + size_of_val(self.interner.terms.as_slice())
             + size_of_val(self.quads.as_slice())

@@ -20,6 +20,9 @@ all-features = true
 [lints]
 workspace = true
 
+[dependencies]
+purrdf-hash.workspace = true
+
 [lib]
 # rlib-only leaf: the one place the workspace measures the stack. The SPARQL
 # parser (`purrdf-sparql-algebra`) and evaluator (`purrdf-sparql-eval`) refuse

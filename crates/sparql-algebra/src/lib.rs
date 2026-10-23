@@ -101,10 +101,10 @@ pub use ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
     QuadPattern, TermPattern, TriplePattern, Variable,
 };
-pub use error::{ParseError, Result};
+pub use error::{IriTermReason, ParseError, Result};
 pub use parser::{
     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
-    builtin_function_keyword,
+    builtin_function_keyword, builtin_keyword_arity,
 };
 pub use projection::{ProjectionIter, ProjectionNames, ProjectionNamesIter, ProjectionVars};
 pub use scope::{

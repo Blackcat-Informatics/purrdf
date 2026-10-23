@@ -185,7 +185,9 @@ const RECOGNIZED_TYPES: &[&str] = &[
 /// A predicate OUTSIDE the reserved namespaces is an ordinary property assertion: it is ABox
 /// data the chase seeds from and matches, it states no axiom, and admitting it is what keeps
 /// a caller's own vocabulary readable rather than turning every property into a boundary.
-fn every_statement_is_recognized<D: DatasetView>(ds: &D) -> Result<bool, EntailError> {
+fn every_statement_is_recognized<D: DatasetView>(
+    ds: &D,
+) -> Result<bool, EntailError<D::ReadError>> {
     for quad in ds.quads() {
         if quad.g.is_some() {
             return Ok(false);
@@ -263,7 +265,7 @@ pub struct CombinedMaterialization {
 pub fn materialize_combined<D: DatasetView>(
     ds: &D,
     query_bgp: &[QTriple],
-) -> Result<Option<CombinedMaterialization>, EntailError> {
+) -> Result<Option<CombinedMaterialization>, EntailError<D::ReadError>> {
     materialize_combined_until(ds, query_bgp, None)
 }
 
@@ -283,7 +285,7 @@ pub fn materialize_combined_until<D: DatasetView>(
     ds: &D,
     query_bgp: &[QTriple],
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<Option<CombinedMaterialization>, EntailError> {
+) -> Result<Option<CombinedMaterialization>, EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         let Some(clauses) = lower_horn_tbox(ds)? else {
             return Ok(None);
@@ -441,7 +443,9 @@ fn resolve_surface(
 ///
 /// See the module docs for why this module refuses a PARTIAL lowering rather than skipping
 /// the one axiom it cannot read.
-fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Result<Option<Vec<DlClause>>, EntailError> {
+fn lower_horn_tbox<D: DatasetView>(
+    ds: &D,
+) -> Result<Option<Vec<DlClause>>, EntailError<D::ReadError>> {
     if !every_statement_is_recognized(ds)? {
         return Ok(None);
     }

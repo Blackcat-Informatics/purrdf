@@ -73,6 +73,42 @@ const TEST_ONLY: &str = "Declared under `#[cfg(test)]`, so it is not compiled in
 /// Every `thread_local!` static under `crates/`, with its reason.
 pub const LEDGER: &[ThreadLocal] = &[
     ThreadLocal {
+        file: "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+        name: "BUILDS",
+        safety: Safety::NotCompiledIn,
+        reason: "Effective-directory node counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+        name: "COPIES",
+        safety: Safety::NotCompiledIn,
+        reason: "Effective-directory copied-key counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/index.rs",
+        name: "DIGEST_BYTES",
+        safety: Safety::NotCompiledIn,
+        reason: "Index identity work counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/index/token_streams.rs",
+        name: "HANDLE_CLONES",
+        safety: Safety::NotCompiledIn,
+        reason: "Persistent-table clone counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/index/token_streams.rs",
+        name: "NODE_BUILDS",
+        safety: Safety::NotCompiledIn,
+        reason: "Persistent-table node counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/analysis.rs",
+        name: "PROJECTION_CALLS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/tests/expr_vm_owned_strings.rs",
         name: "TEXT_WINDOW",
         safety: Safety::NotCompiledIn,
@@ -166,6 +202,12 @@ pub const LEDGER: &[ThreadLocal] = &[
     },
     ThreadLocal {
         file: "crates/shapes/src/xpath.rs",
+        name: "CURRENT",
+        safety: Safety::Swapped,
+        reason: SHACL_CONTEXT,
+    },
+    ThreadLocal {
+        file: "crates/shapes/src/sparql/coordinates.rs",
         name: "CURRENT",
         safety: Safety::Swapped,
         reason: SHACL_CONTEXT,
@@ -507,7 +549,7 @@ mod tests {
     }
 
     /// The swapped entries are exactly the statics of the two contexts `JobAmbient` moves:
-    /// the five of `purrdf_stack::Context` and the ten of the SHACL `AmbientContext`.
+    /// the five of `purrdf_stack::Context` and the eleven of the SHACL `AmbientContext`.
     #[test]
     fn the_swapped_entries_are_the_two_contexts() {
         let swapped: Vec<_> = LEDGER
@@ -531,9 +573,10 @@ mod tests {
                     "crates/shapes/src/sparql.rs"
                         | "crates/shapes/src/query_law.rs"
                         | "crates/shapes/src/xpath.rs"
+                        | "crates/shapes/src/sparql/coordinates.rs"
                 ))
                 .count(),
-            10
+            11
         );
     }
 }

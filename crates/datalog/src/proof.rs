@@ -76,10 +76,14 @@ use std::fmt;
 use hashbrown::HashTable;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use crate::guard::GuardOperation;
 use crate::id::ProofId;
 use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::Evaluation;
 use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
+
+mod malformed;
+pub use malformed::ProofMalformed;
 
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
 
@@ -87,8 +91,8 @@ use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInter
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v1");
-const TRIPLE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-triple-proof-v1");
+const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v2");
+const TRIPLE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-triple-proof-v2");
 
 /// Wire kind byte: an axiom (assertion) leaf.
 const KIND_AXIOM: u8 = 0;
@@ -114,12 +118,14 @@ where
 {
     /// Native capacity or allocation refused; this is not an invalid-proof verdict.
     Storage(StorageError),
+    /// The caller requested a proof from a model-only evaluation.
+    DerivationsNotRecorded,
     /// The proof is not a well-formed term: a reference outside the arena, a premise that
     /// does not precede the step it justifies, or — for a decoded proof — bytes that are
     /// truncated, mis-tagged, or carry an unknown node kind.
     Malformed {
-        /// A human-readable account of the structural defect.
-        detail: String,
+        /// Original structural defect and operands at the rejecting computation.
+        detail: ProofMalformed,
     },
     /// An axiom leaf's fact is not in the seeded EDB.
     ///
@@ -134,7 +140,16 @@ where
         /// The cited clause index.
         rule: usize,
     },
-    /// A rule application names a clause whose head is not a single unquantified atom, so
+    /// A rule application names a head ordinal outside the authored conjunction.
+    UnknownHead {
+        /// The cited clause index.
+        rule: usize,
+        /// The cited head ordinal.
+        head: usize,
+        /// Number of authored head atoms.
+        heads: usize,
+    },
+    /// A rule application names a clause whose head is not an unquantified conjunction, so
     /// it licenses no Datalog step at all.
     NonDatalogRule {
         /// The cited clause index.
@@ -170,6 +185,22 @@ where
         /// The satisfied atom's index in the clause's AUTHORED body.
         body_position: usize,
     },
+    /// A negated conjunction has a complete matching extension in the model.
+    NegatedGroupSatisfied {
+        /// The cited clause index.
+        rule: usize,
+        /// The group's authored ordinal.
+        group: usize,
+    },
+    /// A grouped base read has no explicit immutable base context.
+    MissingGroupBase {
+        /// The cited clause index.
+        rule: usize,
+        /// The group's authored ordinal.
+        group: usize,
+        /// The atom's ordinal inside the group.
+        atom: usize,
+    },
     /// The clause head carries a variable the checked premises never bound, so no
     /// conclusion can be instantiated. A program that came through
     /// [`compile`](crate::seminaive::compile) is range-restricted and cannot produce this;
@@ -180,8 +211,28 @@ where
         /// The unbound head variable, as authored.
         variable: String,
     },
-    /// A rule application names a clause carrying guard literals or negated conjunctions
-    /// ([`crate::guard`]). Their truth is caller code the checker has no evaluator for, so
+    /// A native guard reads a variable that its checked premises did not bind.
+    UnboundGuardVariable {
+        /// The cited clause index.
+        rule: usize,
+        /// The guard's authored position.
+        guard: usize,
+        /// The original variable name.
+        variable: String,
+    },
+    /// A native guard rejects the terms established by the checked premises.
+    GuardRejected {
+        /// The cited clause index.
+        rule: usize,
+        /// The guard's authored position.
+        guard: usize,
+        /// The original native operation.
+        operation: GuardOperation,
+        /// Original checked input terms, in declared order.
+        inputs: Box<[String]>,
+    },
+    /// A rule application names a clause carrying callbacks
+    /// ([`crate::guard`]). The checker has no interpretation for these, so
     /// it cannot re-derive the step — and it refuses rather than accept a step it did not
     /// check.
     GuardedRule {
@@ -215,6 +266,9 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(f),
+            Self::DerivationsNotRecorded => {
+                f.write_str("derivations were not recorded; evaluate with DerivationMode::Record")
+            }
             Self::Malformed { detail } => write!(f, "malformed proof term: {detail}"),
             Self::NotAsserted { goal } => write!(
                 f,
@@ -227,6 +281,10 @@ where
                     "the proof cites clause {rule}, which the program has not"
                 )
             }
+            Self::UnknownHead { rule, head, heads } => write!(
+                f,
+                "clause {rule} has {heads} head atoms, so head ordinal {head} does not exist"
+            ),
             Self::NonDatalogRule { rule, form } => write!(
                 f,
                 "clause {rule} has {} {form} head, so it licenses no Datalog step",
@@ -262,6 +320,26 @@ where
                 f,
                 "clause {rule} head variable {variable} is not bound by the checked premises"
             ),
+            Self::UnboundGuardVariable {
+                rule,
+                guard,
+                variable,
+            } => write!(
+                f,
+                "clause {rule} guard {guard} variable {variable} is not bound by the checked premises"
+            ),
+            Self::GuardRejected { rule, guard, .. } => write!(
+                f,
+                "clause {rule} native guard {guard} rejects the checked input terms"
+            ),
+            Self::NegatedGroupSatisfied { rule, group } => write!(
+                f,
+                "clause {rule} negated group {group} has a matching extension"
+            ),
+            Self::MissingGroupBase { rule, group, atom } => write!(
+                f,
+                "clause {rule} negated group {group} atom {atom} requires an explicit immutable base context"
+            ),
             Self::GuardedRule { rule } => write!(
                 f,
                 "clause {rule} carries guard literals, whose truth this checker cannot re-derive"
@@ -280,7 +358,44 @@ where
     }
 }
 
-impl<const N: usize> std::error::Error for ProofError<N> where Arity<N>: StoreShape<N> {}
+impl<const N: usize> std::error::Error for ProofError<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(cause) => Some(cause),
+            Self::Malformed { detail } => Some(detail),
+            _ => None,
+        }
+    }
+}
+
+impl<const N: usize> purrdf_hash::error::StructuredError for ProofError<N>
+where
+    Arity<N>: StoreShape<N>,
+    <Arity<N> as StoreShape<N>>::Graph: purrdf_hash::error::StructuredError,
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "datalog-proof-storage" { "cause" => Cause(cause) },
+        DerivationsNotRecorded => "datalog-proof-derivations-not-recorded" {},
+        Malformed { detail } => "datalog-proof-malformed" { "detail" => Cause(detail) },
+        NotAsserted { goal } => "datalog-proof-not-asserted" { "goal" => Record(goal.as_ref()) },
+        UnknownRule { rule } => "datalog-proof-unknown-rule" { "rule" => Unsigned(*rule as u128) },
+        UnknownHead { rule, head, heads } => "datalog-proof-unknown-head" { "rule" => Unsigned(*rule as u128), "head" => Unsigned(*head as u128), "heads" => Unsigned(*heads as u128) },
+        NonDatalogRule { rule, form } => "datalog-proof-non-datalog-rule" { "rule" => Unsigned(*rule as u128), "form" => Record(form) },
+        PremiseCountMismatch { rule, body, premises } => "datalog-proof-premise-count-mismatch" { "rule" => Unsigned(*rule as u128), "body" => Unsigned(*body as u128), "premises" => Unsigned(*premises as u128) },
+        PremiseMismatch { rule, body_position, proven } => "datalog-proof-premise-mismatch" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128), "proven" => Record(proven.as_ref()) },
+        NegatedPremiseSatisfied { rule, body_position } => "datalog-proof-negated-premise-satisfied" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128) },
+        NegatedGroupSatisfied { rule, group } => "datalog-proof-negated-group-satisfied" { "rule" => Unsigned(*rule as u128), "group" => Unsigned(*group as u128) },
+        MissingGroupBase { rule, group, atom } => "datalog-proof-missing-group-base" { "rule" => Unsigned(*rule as u128), "group" => Unsigned(*group as u128), "atom" => Unsigned(*atom as u128) },
+        UnboundHeadVariable { rule, variable } => "datalog-proof-unbound-head-variable" { "rule" => Unsigned(*rule as u128), "variable" => Text(variable) },
+        UnboundGuardVariable { rule, guard, variable } => "datalog-proof-unbound-guard-variable" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "variable" => Text(variable) },
+        GuardRejected { rule, guard, operation, inputs } => "datalog-proof-guard-rejected" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "operation" => Record(operation), "inputs" => List(inputs.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value.as_str()))) },
+        GuardedRule { rule } => "datalog-proof-guarded-rule" { "rule" => Unsigned(*rule as u128) },
+        GoalMismatch { rule, derived, stated } => "datalog-proof-goal-mismatch" { "rule" => Unsigned(*rule as u128), "derived" => Record(derived.as_ref()), "stated" => Record(stated.as_ref()) },
+    }
+}
 
 purrdf_lex::variant_from!(impl [const N: usize] ProofError<N> where [Arity<N>: StoreShape<N>] { Storage(StorageError) });
 
@@ -308,6 +423,8 @@ where
         goal: ShapeFact<N>,
         /// The producing clause's index in authored program order.
         rule: usize,
+        /// The producing atom's ordinal in the authored head conjunction.
+        head: usize,
         /// One premise per POSITIVE body atom, in authored body order.
         premises: Vec<ProofId>,
     },
@@ -324,8 +441,9 @@ where
             Self::ByRule {
                 goal,
                 rule,
+                head,
                 premises,
-            } => (goal, Some((*rule, premises))),
+            } => (goal, Some((*rule, *head, premises))),
         }
     }
 
@@ -338,7 +456,7 @@ where
 }
 
 /// An axiom or rule application, borrowing all lexical and premise payloads.
-type ProofIdentity<'a, const N: usize> = (&'a ShapeFact<N>, Option<(usize, &'a [ProofId])>);
+type ProofIdentity<'a, const N: usize> = (&'a ShapeFact<N>, Option<(usize, usize, &'a [ProofId])>);
 
 /// Fold `fact`'s four length-prefixed surfaces into `hasher`.
 fn hash_fact<const N: usize>(hasher: &mut impl Hasher, fact: &ShapeFact<N>)
@@ -368,10 +486,11 @@ where
             hasher.write_u8(KIND_AXIOM);
             hash_fact::<N>(&mut hasher, goal);
         }
-        Some((rule, premises)) => {
+        Some((rule, head, premises)) => {
             hasher.write_u8(KIND_BY_RULE);
             hash_fact::<N>(&mut hasher, goal);
             hasher.write_u64(rule as u64);
+            hasher.write_u64(head as u64);
             hasher.write_u64(premises.len() as u64);
             for premise in premises {
                 hasher.write_u64(premise.index());
@@ -497,7 +616,8 @@ where
     /// Intern a RULE APPLICATION: `goal` follows from `premises` by clause `rule`.
     ///
     /// `premises` are one per POSITIVE body atom of the clause, in authored body order. The
-    /// stated `goal` is recorded but is never an input to checking; it exists so that
+    /// selected head ordinal is zero; [`Self::by_rule_head`] selects another conjunct.
+    /// The stated `goal` is recorded but is never an input to checking; it exists so that
     /// [`check`](Self::check) has something to compare its own re-derivation against, and so
     /// that a tampered conclusion is a detectable forgery rather than an unrepresentable one.
     ///
@@ -513,13 +633,30 @@ where
         rule: usize,
         premises: &[ProofId],
     ) -> Result<ProofId, StorageError> {
+        self.by_rule_head(goal, rule, 0, premises)
+    }
+
+    /// Intern an application of one authored head atom, sharing its body's premises.
+    ///
+    /// # Errors
+    /// Returns the original storage refusal when the arena cannot admit the node.
+    ///
+    /// # Panics
+    /// Panics if a premise was not already interned in this arena.
+    pub fn by_rule_head(
+        &mut self,
+        goal: ShapeFact<N>,
+        rule: usize,
+        head: usize,
+        premises: &[ProofId],
+    ) -> Result<ProofId, StorageError> {
         for premise in premises {
             assert!(
                 premise.resident_index() < self.terms.len(),
                 "a premise must be interned in this arena before the step it justifies"
             );
         }
-        let identity = (&goal, Some((rule, premises)));
+        let identity = (&goal, Some((rule, head, premises)));
         let hash = term_hash::<N>(identity);
         if let Some(id) = self.find(identity, hash) {
             return Ok(id);
@@ -532,6 +669,7 @@ where
             ProofTerm::ByRule {
                 goal,
                 rule,
+                head,
                 premises,
             },
             hash,
@@ -617,6 +755,17 @@ where
         }
     }
 
+    /// The authored head ordinal of a rule application, or `None` for an axiom.
+    ///
+    /// # Panics
+    /// Panics if `id` was not minted by this arena.
+    pub fn head(&self, id: ProofId) -> Option<usize> {
+        match self.term(id) {
+            ProofTerm::Axiom { .. } => None,
+            ProofTerm::ByRule { head, .. } => Some(*head),
+        }
+    }
+
     /// The node's premises, in authored positive-body order; empty for an axiom leaf.
     ///
     /// # Panics
@@ -669,16 +818,14 @@ where
             let fact = self.check_step(index, &proven, ctx)?;
             proven.insert(index, fact);
         }
-        proven
-            .remove(&root.address()?)
-            .ok_or_else(|| Self::malformed("the root of a proof is reachable from itself"))
+        proven.remove(&root.address()?).ok_or_else(|| {
+            Self::malformed(ProofMalformed::RootUnestablished { root: root.index() })
+        })
     }
 
     /// A [`ProofError::Malformed`] carrying `detail`.
-    fn malformed(detail: &str) -> ProofError<N> {
-        ProofError::Malformed {
-            detail: detail.to_owned(),
-        }
+    fn malformed(detail: ProofMalformed) -> ProofError<N> {
+        ProofError::Malformed { detail }
     }
 
     /// Every node index reachable from `root`, ASCENDING.
@@ -689,7 +836,10 @@ where
     /// a term set that somehow violated it is rejected instead of silently mis-checked.
     fn reachable_from(&self, root: ProofId) -> Result<BTreeSet<usize>, ProofError<N>> {
         if root.address()? >= self.terms.len() {
-            return Err(Self::malformed("the root is outside this arena"));
+            return Err(Self::malformed(ProofMalformed::RootOutside {
+                root: root.index(),
+                nodes: self.terms.len(),
+            }));
         }
         let mut reachable = BTreeSet::new();
         let mut stack = vec![root.address()?];
@@ -700,9 +850,10 @@ where
             if let ProofTerm::ByRule { premises, .. } = &self.terms[index] {
                 for premise in premises {
                     if premise.address()? >= index {
-                        return Err(Self::malformed(
-                            "a premise must be interned before the step it justifies",
-                        ));
+                        return Err(Self::malformed(ProofMalformed::PremiseOrder {
+                            premise: premise.index(),
+                            position: index,
+                        }));
                     }
                     stack.push(premise.address()?);
                 }
@@ -732,15 +883,17 @@ where
             ProofTerm::ByRule {
                 goal,
                 rule,
+                head,
                 premises,
-            } => self.check_rule_step(*rule, premises, goal, proven, ctx),
+            } => self.check_rule_step(index, (*rule, *head), premises, goal, proven, ctx),
         }
     }
 
     /// Re-derive one rule application and compare the result against the stated conclusion.
     fn check_rule_step(
         &self,
-        rule: usize,
+        index: usize,
+        (rule, head): (usize, usize),
         premises: &[ProofId],
         stated: &ShapeFact<N>,
         proven: &BTreeMap<usize, ShapeFact<N>>,
@@ -752,13 +905,28 @@ where
             .ok_or(ProofError::UnknownRule { rule })?;
         // A clause with any other head form licenses no Datalog step, so there is no head
         // to instantiate and nothing to compare — that is a refusal, not a mismatch.
-        let head = clause
-            .datalog_head()
+        let heads = clause
+            .datalog_heads()
             .ok_or_else(|| ProofError::NonDatalogRule {
                 rule,
                 form: clause.head_form(),
             })?;
-        if clause.is_guarded() {
+        let head = heads.get(head).ok_or(ProofError::UnknownHead {
+            rule,
+            head,
+            heads: heads.len(),
+        })?;
+        if clause
+            .guards()
+            .iter()
+            .chain(
+                clause
+                    .negations()
+                    .iter()
+                    .flat_map(crate::guard::Negation::guards),
+            )
+            .any(|guard| guard.operation() == GuardOperation::Callback)
+        {
             return Err(ProofError::GuardedRule { rule });
         }
 
@@ -784,7 +952,10 @@ where
         let mut subst: BTreeMap<&str, &str> = BTreeMap::new();
         for (&(body_position, atom), premise) in positive.iter().zip(premises) {
             let fact = proven.get(&premise.address()?).ok_or_else(|| {
-                Self::malformed("a premise was not established before the step that uses it")
+                Self::malformed(ProofMalformed::PremiseUnestablished {
+                    premise: premise.index(),
+                    position: index,
+                })
             })?;
             if !match_atom(atom, fact, &mut subst)
                 || (atom.read_source() == crate::clause::ReadSource::Base
@@ -802,6 +973,36 @@ where
             }
         }
 
+        // Native filters are independently decided from the checked substitution.
+        // The guarded-fragment gate above has already refused caller callbacks.
+        for (position, guard) in clause.guards().iter().enumerate() {
+            let inputs = guard
+                .inputs()
+                .iter()
+                .map(|variable| {
+                    subst.get(variable.as_str()).copied().ok_or_else(|| {
+                        ProofError::UnboundGuardVariable {
+                            rule,
+                            guard: position,
+                            variable: variable.clone(),
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            match guard.operation().filter(&inputs) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(ProofError::GuardRejected {
+                        rule,
+                        guard: position,
+                        operation: guard.operation(),
+                        inputs: inputs.into_iter().map(str::to_owned).collect(),
+                    });
+                }
+                None => unreachable!("caller callbacks were refused before checking premises"),
+            }
+        }
+
         // Negation-as-failure, re-decided against the model.
         for (body_position, atom) in clause
             .body()
@@ -815,9 +1016,10 @@ where
                     ctx.edb.read_source(crate::clause::ReadSource::Base)
                 }
                 crate::clause::ReadSource::Base => {
-                    return Err(Self::malformed(
-                        "a base premise requires an explicit immutable base context",
-                    ));
+                    return Err(Self::malformed(ProofMalformed::MissingBase {
+                        rule,
+                        body_position,
+                    }));
                 }
             };
             if negated_atom_is_satisfied(atom, &subst, model) {
@@ -825,6 +1027,12 @@ where
                     rule,
                     body_position,
                 });
+            }
+        }
+
+        for (group, negation) in clause.negations().iter().enumerate() {
+            if negated_group_is_satisfied(negation, &subst, ctx, rule, group)? {
+                return Err(ProofError::NegatedGroupSatisfied { rule, group });
             }
         }
 
@@ -858,9 +1066,10 @@ where
     /// u64 node_count
     /// node_count times, in emission order:
     ///     u8  kind                                -- 0 axiom, 1 by_rule
-    ///     u64 len + bytes, four times             -- subject, predicate, object, graph
+    ///     u64 len + bytes, N times                -- subject, predicate, object[, graph]
     ///     if kind == 1:
     ///         u64 rule
+    ///         u64 head                            -- ordinal in the authored head conjunction
     ///         u64 premise_count
     ///         u64 premise position, premise_count times   -- each < this node's position
     /// ```
@@ -892,11 +1101,13 @@ where
                 ProofTerm::ByRule {
                     goal,
                     rule,
+                    head,
                     premises,
                 } => {
                     out.push(KIND_BY_RULE);
                     frame_fact::<N>(&mut out, goal);
                     out.extend_from_slice(&(*rule as u64).to_le_bytes());
+                    out.extend_from_slice(&(*head as u64).to_le_bytes());
                     out.extend_from_slice(&(premises.len() as u64).to_le_bytes());
                     for premise in premises {
                         let back = position[&premise.resident_index()];
@@ -979,14 +1190,16 @@ where
     /// [`check`](Self::check)'s re-derivation.
     pub fn decode(bytes: &[u8]) -> Result<(Self, ProofId), ProofError<N>> {
         let mut reader = Reader::new(bytes);
-        if reader.frame()? != Self::encoding_tag().as_bytes() {
-            return Err(Self::malformed(
-                "the proof encoding tag is absent or from another layout",
-            ));
+        let tag = reader.frame()?;
+        if tag != Self::encoding_tag().as_bytes() {
+            return Err(Self::malformed(ProofMalformed::Tag {
+                actual: Memory::new(&mut Resident).collect(tag.iter().copied())?,
+                expected: Self::encoding_tag(),
+            }));
         }
         let count = reader.length()?;
         if count == 0 {
-            return Err(Self::malformed("a proof has at least one node"));
+            return Err(Self::malformed(ProofMalformed::Empty));
         }
 
         let mut arena = Self::default();
@@ -998,6 +1211,7 @@ where
                 KIND_AXIOM => arena.axiom(goal)?,
                 KIND_BY_RULE => {
                     let rule = reader.length()?;
+                    let head = reader.length()?;
                     let premise_count = reader.length()?;
                     // Never sized from the stream: a forged count must not be able to ask
                     // for an allocation before its bytes have been shown to exist.
@@ -1005,30 +1219,34 @@ where
                     for _ in 0..premise_count {
                         let back = reader.length()?;
                         if back >= position {
-                            return Err(Self::malformed(
-                                "a premise reference must point at an earlier node",
-                            ));
+                            return Err(Self::malformed(ProofMalformed::ForwardReference {
+                                premise: back,
+                                position,
+                            }));
                         }
                         premises.push(ids[back]);
                     }
-                    arena.by_rule(goal, rule, &premises)?
+                    arena.by_rule_head(goal, rule, head, &premises)?
                 }
                 other => {
                     return Err(ProofError::Malformed {
-                        detail: format!("unknown proof node kind {other}"),
+                        detail: ProofMalformed::Kind {
+                            kind: other,
+                            position,
+                        },
                     });
                 }
             };
             ids.push(id);
         }
         if !reader.is_exhausted() {
-            return Err(Self::malformed(
-                "trailing bytes after the proof's last node",
-            ));
+            return Err(Self::malformed(ProofMalformed::Trailing {
+                bytes: reader.rest.len(),
+            }));
         }
         let root = *ids
             .last()
-            .ok_or_else(|| Self::malformed("a proof has at least one node"))?;
+            .ok_or_else(|| Self::malformed(ProofMalformed::Empty))?;
         Ok((arena, root))
     }
 }
@@ -1065,8 +1283,33 @@ where
     /// height is strictly below its consumer's, by the definition of proof height. Both
     /// components are content-derived, so the interning sequence, and hence every arena id,
     /// is a pure function of the evaluation.
-    pub fn of(evaluation: &Evaluation<TermInterner, N>) -> Result<Self, StorageError> {
-        let derivations = evaluation.derivations();
+    /// # Errors
+    /// Returns [`ProofError::DerivationsNotRecorded`] for a model-only result,
+    /// or the original storage failure while building the proof arena.
+    pub fn of(evaluation: &Evaluation<TermInterner, N>) -> Result<Self, ProofError<N>> {
+        let derivations = evaluation
+            .derivations()
+            .ok_or(ProofError::DerivationsNotRecorded)?;
+        Self::from_derivations(derivations)
+    }
+
+    /// Build independently checkable proofs for every published partial derivation.
+    ///
+    /// # Errors
+    /// Refuses disabled recording or original proof-arena storage admission failure.
+    pub fn of_partial(
+        model: &crate::seminaive::PartialModel<'_, TermInterner, N>,
+    ) -> Result<Self, ProofError<N>> {
+        Self::from_derivations(
+            model
+                .derivations()
+                .ok_or(ProofError::DerivationsNotRecorded)?,
+        )
+    }
+
+    fn from_derivations(
+        derivations: &[crate::seminaive::Derivation<N>],
+    ) -> Result<Self, ProofError<N>> {
         let mut order: Vec<usize> = (0..derivations.len()).collect();
         order.sort_by(|&left, &right| {
             (derivations[left].proof_height(), derivations[left].fact())
@@ -1085,7 +1328,12 @@ where
                 };
                 premises.push(premise);
             }
-            let root = arena.by_rule(derivation.fact().clone(), derivation.rule(), &premises)?;
+            let root = arena.by_rule_head(
+                derivation.fact().clone(),
+                derivation.rule(),
+                derivation.head(),
+                &premises,
+            )?;
             built.insert(derivation.fact(), root);
         }
 
@@ -1133,7 +1381,14 @@ fn match_atom<'r, 'f, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let surfaces = Arity::<N>::fact_terms(fact);
+    match_atom_surfaces(atom, Arity::<N>::fact_terms(fact), subst)
+}
+
+fn match_atom_surfaces<'r, 'f, const N: usize>(
+    atom: &'r ClauseAtom<N>,
+    surfaces: [&'f str; N],
+    subst: &mut BTreeMap<&'r str, &'f str>,
+) -> bool {
     for (term, surface) in atom.terms().into_iter().zip(surfaces) {
         match term {
             ClauseTerm::Var(name) => match subst.entry(name.as_str()) {
@@ -1157,6 +1412,79 @@ where
         }
     }
     true
+}
+
+/// Independently search the authored conjunction using lexical substitutions.
+/// One continuation per depth retains its original row cursor; no evaluator
+/// frame, reported witness or join plan decides this closed-world obligation.
+fn negated_group_is_satisfied<const N: usize>(
+    group: &crate::guard::Negation<N>,
+    substitution: &BTreeMap<&str, &str>,
+    context: &ProofContext<'_, N>,
+    rule: usize,
+    ordinal: usize,
+) -> Result<bool, ProofError<N>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut work = purrdf_lex::walk::WorkList::<_, 8>::new();
+    work.push((0, 0, substitution.clone()));
+    while let Some((depth, cursor, subst)) = work.pop() {
+        let Some(atom) = group.atoms().get(depth) else {
+            let mut accepted = true;
+            for (position, guard) in group.guards().iter().enumerate() {
+                let inputs = guard
+                    .inputs()
+                    .iter()
+                    .map(|variable| {
+                        subst.get(variable.as_str()).copied().ok_or_else(|| {
+                            ProofError::UnboundGuardVariable {
+                                rule,
+                                guard: position,
+                                variable: variable.clone(),
+                            }
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                accepted &= guard
+                    .operation()
+                    .filter(&inputs)
+                    .expect("caller callbacks were refused before checking premises");
+            }
+            if accepted {
+                return Ok(true);
+            }
+            continue;
+        };
+        let model = match atom.read_source() {
+            crate::clause::ReadSource::Evaluation => context.model,
+            crate::clause::ReadSource::Base if context.edb.has_base() => {
+                context.edb.read_source(crate::clause::ReadSource::Base)
+            }
+            crate::clause::ReadSource::Base => {
+                return Err(ProofError::MissingGroupBase {
+                    rule,
+                    group: ordinal,
+                    atom: depth,
+                });
+            }
+        };
+        for (row, terms) in model.rows_from(cursor) {
+            let mut extended = subst.clone();
+            if match_atom_surfaces(
+                atom,
+                terms.map(|id| model.interner().resolve(id)),
+                &mut extended,
+            ) {
+                work.try_push((depth, row.index() + 1, subst))
+                    .map_err(|_| StorageError::AllocationFailed)?;
+                work.try_push((depth + 1, 0, extended))
+                    .map_err(|_| StorageError::AllocationFailed)?;
+                break;
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// The lexical surface a clause term denotes under `subst`, or `None` for a free variable.
@@ -1285,9 +1613,10 @@ where
     /// Take `n` bytes, or report truncation.
     fn take(&mut self, n: usize) -> Result<&'a [u8], ProofError<N>> {
         if self.rest.len() < n {
-            return Err(ProofArena::<N>::malformed(
-                "the proof encoding ends inside a field",
-            ));
+            return Err(ProofArena::<N>::malformed(ProofMalformed::Truncated {
+                required: n,
+                remaining: self.rest.len(),
+            }));
         }
         let (head, tail) = self.rest.split_at(n);
         self.rest = tail;
@@ -1301,12 +1630,8 @@ where
 
     /// Read one little-endian `u64`.
     fn u64(&mut self) -> Result<u64, ProofError<N>> {
-        let (bytes, rest) = self
-            .rest
-            .split_first_chunk()
-            .ok_or_else(|| ProofArena::<N>::malformed("the proof encoding ends inside a field"))?;
-        self.rest = rest;
-        Ok(u64::from_le_bytes(*bytes))
+        Ok(purrdf_core::bytes::read_u64_le(self.take(8)?, 0)
+            .expect("the original field length was checked before decoding"))
     }
 
     /// Read one little-endian `u64` as a `usize`.
@@ -1315,8 +1640,12 @@ where
     /// written on a 64-bit host and read on `wasm32` must fail loudly instead of decoding to
     /// a different proof.
     fn length(&mut self) -> Result<usize, ProofError<N>> {
-        usize::try_from(self.u64()?).map_err(|_| {
-            ProofArena::<N>::malformed("a length in the proof encoding exceeds this target's usize")
+        let value = self.u64()?;
+        usize::try_from(value).map_err(|_| {
+            ProofArena::<N>::malformed(ProofMalformed::Length {
+                value,
+                maximum: usize::MAX,
+            })
         })
     }
 
@@ -1329,8 +1658,13 @@ where
     /// Read one length-prefixed UTF-8 surface.
     fn surface(&mut self) -> Result<String, ProofError<N>> {
         let bytes = self.frame()?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| {
-            ProofArena::<N>::malformed("a term surface in the proof encoding is not UTF-8")
+        let owned = Memory::new(&mut Resident).collect(bytes.iter().copied())?;
+        String::from_utf8(owned).map_err(|error| {
+            let cause = error.utf8_error();
+            ProofArena::<N>::malformed(ProofMalformed::Utf8 {
+                bytes: error.into_bytes(),
+                cause,
+            })
         })
     }
 
@@ -1345,6 +1679,54 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grouped_negative_proofs_redecide_complete_native_extensions() {
+        let atom = |s, p, o| {
+            ClauseAtom::triple(
+                ClauseTerm::var(s),
+                ClauseTerm::literal(p),
+                ClauseTerm::var(o),
+            )
+        };
+        let rule = DlClause::datalog(atom("x", "out", "y"), vec![atom("x", "edge", "y")])
+            .with_negations(vec![crate::guard::Negation::new(
+                vec![atom("x", "blocked", "z"), atom("z", "marker", "y")],
+                vec![crate::guard::Guard::not_equal("z", "y")],
+            )]);
+        let rules = [rule];
+        let mut edb = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for row in [
+            ["a", "edge", "b"],
+            ["a", "blocked", "b"],
+            ["b", "marker", "b"],
+            ["a", "blocked", "c"],
+        ] {
+            edb.insert_row(row).unwrap();
+        }
+        let mut model = edb.clone();
+        let given = Arity::<3>::fact(["a", "edge", "b"].map(str::to_owned));
+        let goal = Arity::<3>::fact(["a", "out", "b"].map(str::to_owned));
+        let mut arena = ProofArena::<3>::default();
+        let premise = arena.axiom(given).unwrap();
+        let root = arena.by_rule(goal.clone(), 0, &[premise]).unwrap();
+        // The b extension fails the native guard; the c extension lacks its
+        // second atom. Neither individual match refutes this conjunction.
+        assert_eq!(
+            arena.check(root, &ProofContext::new(&rules, &edb, &model)),
+            Ok(goal.clone())
+        );
+        model.insert_row(["c", "marker", "b"]).unwrap();
+        assert_eq!(
+            arena.check(root, &ProofContext::new(&rules, &edb, &model)),
+            Err(ProofError::NegatedGroupSatisfied { rule: 0, group: 0 })
+        );
+        model.remove_row(["c", "marker", "b"]).unwrap();
+        assert_eq!(
+            arena.check(root, &ProofContext::new(&rules, &edb, &model)),
+            Ok(goal)
+        );
+    }
+
     #[test]
     fn proof_capacity_preserves_axiom_and_rule_hits_before_admission() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace};
@@ -1375,7 +1757,7 @@ mod tests {
     use crate::store::Fact;
 
     use crate::clause::HeadDisjunct;
-    use crate::seminaive::{compile, evaluate};
+    use crate::seminaive::compile;
     use crate::synth_corpus;
 
     const P: &str = "https://example.org/p";
@@ -1459,12 +1841,22 @@ mod tests {
         for workload in synth_corpus::all() {
             let name = workload.name;
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-            let evaluation =
-                evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+            let evaluation = crate::seminaive::evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &crate::guard::NoGuards,
+                &crate::seminaive::EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None,
+            )
+            .expect("the corpus stays inside every ceiling");
             let proofs = EvaluationProofs::of(&evaluation).unwrap();
             assert_eq!(
                 proofs.roots().len(),
-                evaluation.derivations().len(),
+                evaluation
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
                 "{name}: one proof per derivation"
             );
 
@@ -1540,7 +1932,15 @@ mod tests {
             (0..exe.rule_count()).any(|index| exe.rule_entry(index).1.has_cyclic_subplan()),
             "the fixture must route through the triejoin, or it tests the binary join twice"
         );
-        let evaluation = evaluate(&exe, seed()).expect("the triangle stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the triangle stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         assert_eq!(proofs.roots().len(), n, "one derived fact per node");
 
@@ -1664,7 +2064,15 @@ mod tests {
             .by_rule(fact("a", T, "c"), 0, &[first, circular_premise])
             .unwrap();
         let exe = compile(rules.clone()).expect("the chain program compiles");
-        let evaluation = evaluate(&exe, chain_edb()).expect("the chain stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            chain_edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the chain stays inside every ceiling");
         assert!(
             evaluation.facts().contains(
                 &surface("a"),
@@ -1808,14 +2216,24 @@ mod tests {
     fn re_attributing_a_derivation_to_another_clause_is_rejected() {
         let workload = synth_corpus::transitive_closure(4);
         let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-        let evaluation =
-            evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            workload.edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the corpus stays inside every ceiling");
         let edb = workload.edb();
         let ctx = ProofContext::new(&workload.rules, &edb, evaluation.facts());
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
 
         let mut mutations = 0usize;
-        for derivation in evaluation.derivations() {
+        for derivation in evaluation
+            .derivations()
+            .expect("derivation recording was requested")
+        {
             for other in 0..workload.rules.len() {
                 if other == derivation.rule() {
                     continue;
@@ -1967,7 +2385,15 @@ mod tests {
         ];
         let seed = || store_of(&[("a", P, "b"), ("a", base, "b"), ("c", base, "d")]);
         let exe = compile(rules.clone()).expect("the fixture compiles");
-        let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
@@ -2075,7 +2501,7 @@ mod tests {
         let (arena, root) = chain_proof();
         assert_eq!(
             purrdf_hash::hex::Lower(&arena.digest(root)).to_string(),
-            "f0a9ff8c6ea22b070ff42b9cd0afbfb9517f4e88ad44913e1a093a51311642fb"
+            "387a8cd9cfd04190710eee298ba06761dcb85e521996c17d9f8c9c2bf8efc2ca"
         );
     }
 
@@ -2162,6 +2588,31 @@ mod tests {
         assert!(matches!(
             ProofArena::<4>::decode(&bad_utf8),
             Err(ProofError::Malformed { .. })
+        ));
+        let failure = ProofArena::<4>::decode(&bad_utf8).unwrap_err();
+        drop(bad_utf8);
+        let fields = purrdf_testkit::error_capture::Capture::read(&failure);
+        let detail = fields.child("detail");
+        assert_eq!(detail.code, "proof-utf8");
+        assert!(matches!(
+            detail.field("bytes"),
+            purrdf_hash::error::ErrorValue::Bytes([0xff, 0xfe])
+        ));
+        let utf8 = detail.child("cause");
+        assert!(matches!(
+            utf8.field("valid_up_to"),
+            purrdf_hash::error::ErrorValue::ByteCount(0)
+        ));
+        let failure = ProofArena::<4>::decode(&wrong_kind).unwrap_err();
+        let fields = purrdf_testkit::error_capture::Capture::read(&failure);
+        let detail = fields.child("detail");
+        assert!(matches!(
+            detail.field("kind"),
+            purrdf_hash::error::ErrorValue::Unsigned(9)
+        ));
+        assert!(matches!(
+            detail.field("position"),
+            purrdf_hash::error::ErrorValue::Unsigned(0)
         ));
     }
 
@@ -2266,7 +2717,15 @@ mod tests {
             ])
         };
         let exe = compile(rules.clone()).expect("the fixture compiles");
-        let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
@@ -2302,7 +2761,15 @@ mod tests {
             store
         };
         let exe = compile(rules.clone()).expect("the fixture compiles");
-        let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
@@ -2367,8 +2834,15 @@ mod tests {
     fn evaluation_proofs_are_addressable_and_lexically_ordered() {
         let workload = synth_corpus::transitive_closure(3);
         let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-        let evaluation =
-            evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            workload.edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the corpus stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let facts: Vec<&Fact> = proofs.roots().iter().map(|(fact, _)| fact).collect();
         let mut sorted = facts.clone();
@@ -2391,8 +2865,15 @@ mod tests {
         let workload = synth_corpus::same_generation(2);
         let build = || {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-            let evaluation =
-                evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+            let evaluation = crate::seminaive::evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &crate::guard::NoGuards,
+                &crate::seminaive::EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None,
+            )
+            .expect("the corpus stays inside every ceiling");
             let proofs = EvaluationProofs::of(&evaluation).unwrap();
             let encodings: Vec<(Fact, Vec<u8>, [u8; 32])> = proofs
                 .roots()
@@ -2420,7 +2901,10 @@ mod tests {
     fn rejections_render() {
         let errors: [ProofError; 9] = [
             ProofError::Malformed {
-                detail: "truncated".to_owned(),
+                detail: ProofMalformed::Truncated {
+                    required: 8,
+                    remaining: 0,
+                },
             },
             ProofError::NotAsserted {
                 goal: Box::new(fact("a", P, "b")),

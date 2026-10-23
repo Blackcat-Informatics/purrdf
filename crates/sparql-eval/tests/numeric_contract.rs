@@ -30,7 +30,7 @@ fn run(query: &str) -> Vec<Vec<Option<TermValue>>> {
     run_with(query, QueryOptions::EMPTY)
 }
 
-fn run_with(query: &str, options: QueryOptions<'_>) -> Vec<Vec<Option<TermValue>>> {
+fn run_with(query: &str, options: QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
@@ -71,7 +71,7 @@ fn a_decimal_avg_answers_when_its_running_sum_leaves_machine_words() {
         // The sum is 2^127; the mean exactly 2^126.
         (
             [typed(MAX, "decimal"), typed("1", "decimal")],
-            "85070591730234615865843651857942052864",
+            "85070591730234615865843651857942052864.0",
         ),
         // MAX − 0.5, exactly.
         (
@@ -103,7 +103,7 @@ fn sum_and_avg_results_read_back_as_themselves() {
         (
             "SUM",
             [typed(MAX, "decimal"), typed("1", "decimal")],
-            "170141183460469231731687303715884105728^^decimal",
+            "170141183460469231731687303715884105728.0^^decimal",
         ),
         (
             "SUM",
@@ -131,7 +131,9 @@ fn sum_and_avg_results_read_back_as_themselves() {
         assert_eq!(row[0], expected, "{aggregate} over {values:?}");
         let lexical = expected.split("^^").next().expect("a cell");
         assert_eq!(row[1].split("^^").next(), Some(lexical));
-        assert_eq!(row[2], format!("{lexical}^^decimal"));
+        // A cast spells the value canonically, without the computed result's point.
+        let canonical = lexical.strip_suffix(".0").unwrap_or(lexical);
+        assert_eq!(row[2], format!("{canonical}^^decimal"));
         assert_eq!(row[3], "true^^boolean");
     }
 }
@@ -319,7 +321,7 @@ fn statistical_aggregates_see_every_digit() {
         );
         assert_eq!(cell(rows[0][0].as_ref()), format!("{low}^^integer"));
         // The median interpolates, so it is a decimal of the middle value.
-        assert_eq!(cell(rows[0][1].as_ref()), format!("{mid}^^decimal"));
+        assert_eq!(cell(rows[0][1].as_ref()), format!("{mid}.0^^decimal"));
     }
 }
 
@@ -350,8 +352,8 @@ fn variances_divide_under_the_query_s_policy() {
     // 2/9 does not terminate: unbound under exact.
     assert_eq!(answer(&variance("VAR_POP", "1 1 2"), exact), "-");
     // The terminating neighbours answer exactly.
-    assert_eq!(answer(&variance("VAR_POP", "1 3"), exact), "1^^decimal");
-    assert_eq!(answer(&variance("VARIANCE", "1 3"), exact), "2^^decimal");
+    assert_eq!(answer(&variance("VAR_POP", "1 3"), exact), "1.0^^decimal");
+    assert_eq!(answer(&variance("VARIANCE", "1 3"), exact), "2.0^^decimal");
     // An N-digit policy rounds the variance to N digits, once.
     assert_eq!(
         answer(

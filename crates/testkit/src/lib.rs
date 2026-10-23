@@ -68,6 +68,7 @@
 #![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
 
 pub mod bench;
+pub mod error_capture;
 pub mod exact;
 pub mod golden;
 pub mod harness;

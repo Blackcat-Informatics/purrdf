@@ -149,7 +149,7 @@ impl ExtensionUsage {
     /// Record one site, merging if the same label appears twice (two constraints on
     /// one shape, say). Merging rather than overwriting: a report that silently kept
     /// the last of two texts would under-report the graph.
-    fn record(&mut self, site: String, text: &str, env: &ExtensionEnv) {
+    fn record(&mut self, site: String, text: &str, env: &ExtensionEnv<'_>) {
         // A text that does not parse under THIS environment is a real answer, not a
         // nothing, and it is recorded rather than skipped.
         //
@@ -179,7 +179,7 @@ impl ExtensionUsage {
 
 /// Parse `text` under `env`'s effective options — the same options the evaluation
 /// will use, which is the whole point of asking.
-fn parse(text: &str, env: &ExtensionEnv) -> Result<Query, String> {
+fn parse(text: &str, env: &ExtensionEnv<'_>) -> Result<Query, String> {
     SparqlParser::new()
         .parse_query_with(text, env.parser_options())
         .map_err(|e| e.to_string())
@@ -212,7 +212,7 @@ pub(crate) trait SparqlSink {
 /// The [`SparqlSink`] of [`Shapes::extension_usage`].
 struct UsageSink<'e> {
     usage: ExtensionUsage,
-    env: &'e ExtensionEnv,
+    env: &'e ExtensionEnv<'e>,
 }
 
 impl SparqlSink for UsageSink<'_> {
@@ -379,7 +379,7 @@ impl Shapes {
     /// See the [module docs](crate::extension_usage) for why this is the answerable
     /// direction of "will my relations be reached?".
     #[must_use]
-    pub fn extension_usage(&self, env: &ExtensionEnv) -> ExtensionUsage {
+    pub fn extension_usage(&self, env: &ExtensionEnv<'_>) -> ExtensionUsage {
         let mut sink = UsageSink {
             usage: ExtensionUsage::default(),
             env,

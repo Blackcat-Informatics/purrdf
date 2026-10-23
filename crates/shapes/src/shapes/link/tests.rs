@@ -48,6 +48,7 @@ fn leaf_shape(id: &str) -> Shape {
         messages: vec![],
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
         rules: Vec::new(),
     }

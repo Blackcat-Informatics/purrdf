@@ -5,6 +5,9 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # PURREMB v1: deterministic embedding companions for PurRDF packs
 
+[简体中文读者指南](PURREMB.reader.zh-Hans.md) covers scope, design boundaries,
+reader access, errors and security. This English document specifies the full format.
+
 ## 1. Scope and conformance
 
 PURREMB is the binary format carried by files whose conventional extension is
@@ -1662,8 +1665,8 @@ Embeddings can disclose source properties through inversion, membership
 inference, attribute inference, similarity probing, and correlation with public
 models. Approximate indexes can add graph structure, quantized centroids, labels,
 or search statistics that leak further information. Treat vectors and indexes as
-sensitive derived content even though they cannot reconstruct the source by
-format contract.
+sensitive derived content. The format itself provides no facility or guarantee
+for reconstructing source content; that does not rule out inference attacks.
 
 Retained canonical target identity bytes may directly disclose RDF IRIs, literal
 lexical forms, datatypes, language tags, and structural relationships. Corpus

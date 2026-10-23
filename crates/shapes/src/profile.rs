@@ -19,6 +19,7 @@ enum Identity {
     Legacy,
     Recommendation,
     WorkingDraft,
+    EditorsDraft,
 }
 
 /// An immutable, explicitly dated SHACL semantic law.
@@ -28,6 +29,17 @@ enum Identity {
 /// no unknown date is mapped to a nearby edition or to the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ShaclProfile(Identity);
+
+impl purrdf_hash::error::StructuredError for ShaclProfile {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant(match self {
+            Self(Identity::Legacy) => "shacl-profile-legacy",
+            Self(Identity::Recommendation) => "shacl-profile-rec-2017-07-20",
+            Self(Identity::WorkingDraft) => "shacl-profile-wd-2026-09-18",
+            Self(Identity::EditorsDraft) => "shacl-profile-ed-2026-10-16",
+        });
+    }
+}
 
 impl ShaclProfile {
     /// The existing compatibility law, including its frozen query restrictions.
@@ -42,6 +54,17 @@ impl ShaclProfile {
     /// SHACL Core WD 2026-09-17 and SPARQL WD 2026-09-18, with XPath 3.1.
     pub const WD_20260918: Self = Self(Identity::WorkingDraft);
 
+    /// The SHACL 1.2 Core and SPARQL Extensions editor's drafts at the
+    /// `w3c/data-shapes` commit `4cd469867a1cc6d2fff80e8a40723b26c695d67a`
+    /// (committed 2026-10-16), with XPath 3.1.
+    ///
+    /// This is [`Self::WD_20260918`] plus the semantics first published after
+    /// that working draft: node-expression `sh:deactivated` on SPARQL-based
+    /// constraints and `sh:expression` constraints, the `owl:versionIRI` step of
+    /// the SPARQL prefix path, the refusal of blank nodes as SPARQL-function
+    /// arguments, and rule sets as `sh:entailment` values.
+    pub const ED_20261016: Self = Self(Identity::EditorsDraft);
+
     /// The stable identifier accepted by [`Self::from_id`].
     #[must_use]
     pub const fn id(self) -> &'static str {
@@ -49,6 +72,7 @@ impl ShaclProfile {
             Identity::Legacy => "legacy",
             Identity::Recommendation => "shacl-rec-2017-07-20",
             Identity::WorkingDraft => "shacl-wd-2026-09-18",
+            Identity::EditorsDraft => "shacl-ed-2026-10-16",
         }
     }
 
@@ -62,6 +86,7 @@ impl ShaclProfile {
             "legacy" => Ok(Self::LEGACY),
             "shacl-rec-2017-07-20" => Ok(Self::REC_20170720),
             "shacl-wd-2026-09-18" => Ok(Self::WD_20260918),
+            "shacl-ed-2026-10-16" => Ok(Self::ED_20261016),
             _ => Err(UnsupportedProfile { id: id.to_owned() }),
         }
     }
@@ -73,6 +98,9 @@ impl ShaclProfile {
             Identity::Legacy => None,
             Identity::Recommendation => Some("https://www.w3.org/TR/2017/REC-shacl-20170720/"),
             Identity::WorkingDraft => Some("https://www.w3.org/TR/2026/WD-shacl12-core-20260917/"),
+            Identity::EditorsDraft => Some(
+                "https://github.com/w3c/data-shapes/blob/4cd469867a1cc6d2fff80e8a40723b26c695d67a/shacl12-core/index.html",
+            ),
         }
     }
 
@@ -85,7 +113,28 @@ impl ShaclProfile {
             Identity::WorkingDraft => {
                 Some("https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/")
             }
+            Identity::EditorsDraft => Some(
+                "https://github.com/w3c/data-shapes/blob/4cd469867a1cc6d2fff80e8a40723b26c695d67a/shacl12-sparql/index.html",
+            ),
         }
+    }
+
+    /// Whether this is a SHACL 1.2 law: the working draft or the editor's draft
+    /// that extends it. Every semantic the working draft states is shared by both.
+    #[must_use]
+    pub const fn is_shacl12(self) -> bool {
+        matches!(self.0, Identity::WorkingDraft | Identity::EditorsDraft)
+    }
+
+    /// Whether the engine reads the semantics first published after the working
+    /// draft ([`Self::ED_20261016`]) under this law.
+    ///
+    /// The editor's draft reads them. The compatibility law reads everything the
+    /// engine implements. The 2017 Recommendation and the working draft read
+    /// exactly their own texts, which state none of them.
+    #[must_use]
+    pub(crate) const fn reads_editors_draft_semantics(self) -> bool {
+        matches!(self.0, Identity::Legacy | Identity::EditorsDraft)
     }
 
     /// The required native XPath law's exact specification.
@@ -100,7 +149,7 @@ impl ShaclProfile {
             Identity::Recommendation => {
                 Some("https://www.w3.org/TR/2010/REC-xpath-functions-20101214/")
             }
-            Identity::WorkingDraft => {
+            Identity::WorkingDraft | Identity::EditorsDraft => {
                 Some("https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/")
             }
         }
@@ -116,7 +165,7 @@ impl ShaclProfile {
         match self.0 {
             Identity::Legacy => None,
             Identity::Recommendation => Some(Profile::Xpath20),
-            Identity::WorkingDraft => Some(Profile::Xpath31),
+            Identity::WorkingDraft | Identity::EditorsDraft => Some(Profile::Xpath31),
         }
     }
 
@@ -207,6 +256,12 @@ impl fmt::Display for UnsupportedProfile {
 
 impl std::error::Error for UnsupportedProfile {}
 
+impl purrdf_hash::error::StructuredError for UnsupportedProfile {
+    purrdf_hash::error_visit! {
+        @record self { id } => "shacl-unsupported-profile" { "id" => Text(&self.id) }
+    }
+}
+
 /// An explicit regex override incompatible with the selected dated SHACL law.
 ///
 /// Changing finite limits within the required law is compatible. This error
@@ -252,6 +307,15 @@ impl fmt::Display for XPathProfileConflict {
 }
 
 impl std::error::Error for XPathProfileConflict {}
+
+impl purrdf_hash::error::StructuredError for XPathProfileConflict {
+    purrdf_hash::error_visit! {
+        @record self { profile, required, requested } => "shacl-xpath-profile-conflict" {
+            "profile" => Record(&self.profile), "required" => Record(&self.required),
+            "requested" => Record(&self.requested),
+        }
+    }
+}
 
 /// The admitted law, source occurrences and existing native execution home of
 /// one immutable preparation/binding. No request is allocated for Legacy's
@@ -339,7 +403,8 @@ impl Request {
                 Err(error) => Err(match error {
                     crate::report::CompleteValidationError::Execution(_)
                     | crate::report::CompleteValidationError::Shapes(
-                        crate::error::ShapesError::Invalid(_),
+                        crate::error::ShapesError::Invalid(_)
+                        | crate::error::ShapesError::Processor(_),
                     ) => failure.map_or(error, crate::report::ReportFailure::into_public),
                     error => error,
                 }),
@@ -387,6 +452,22 @@ pub enum QueryPurpose {
     SelectExpression,
     /// A scalar expression's generated SELECT, with `$this` pre-bound.
     ScalarExpression,
+}
+
+impl purrdf_hash::error::StructuredError for QueryPurpose {
+    purrdf_hash::error_visit! {
+        SelectConstraint => "shacl-query-select-constraint" {},
+        SelectValidator => "shacl-query-select-validator" {},
+        AskValidator => "shacl-query-ask-validator" {},
+        ConstructRule => "shacl-query-construct-rule" {},
+        GlobalConstructRule => "shacl-query-global-construct-rule" {},
+        Function => "shacl-query-function" {},
+        TargetType => "shacl-query-target-type" {},
+        SelectTarget => "shacl-query-select-target" {},
+        AskTarget => "shacl-query-ask-target" {},
+        SelectExpression => "shacl-query-select-expression" {},
+        ScalarExpression => "shacl-query-scalar-expression" {},
+    }
 }
 
 impl QueryPurpose {
@@ -439,6 +520,18 @@ pub enum AdmissionReason {
     SubqueryProjection,
     /// The algebra has the wrong query form for its declared purpose.
     QueryForm,
+}
+
+impl purrdf_hash::error::StructuredError for AdmissionReason {
+    purrdf_hash::error_visit! {
+        ContextualApplication => "shacl-admission-contextual-application" {},
+        Minus => "shacl-admission-minus" {},
+        Service => "shacl-admission-service" {},
+        Values => "shacl-admission-values" {},
+        Assignment => "shacl-admission-assignment" {},
+        SubqueryProjection => "shacl-admission-subquery-projection" {},
+        QueryForm => "shacl-admission-query-form" {},
+    }
 }
 
 /// A structured query-admission failure, separate from a data violation.
@@ -520,3 +613,14 @@ impl fmt::Display for AdmissionRefusal {
 }
 
 impl std::error::Error for AdmissionRefusal {}
+
+impl purrdf_hash::error::StructuredError for AdmissionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { profile, purpose, reason, variable } => "shacl-admission-refusal" {
+            "profile" => Record(&self.profile), "purpose" => Record(&self.purpose),
+            "reason" => Record(&self.reason),
+            "variable" => Value(self.variable.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+        }
+    }
+}

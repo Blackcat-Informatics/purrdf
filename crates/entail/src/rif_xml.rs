@@ -16,7 +16,7 @@
 //! fetch. A relative reference left unresolved does not fail loudly, it silently denotes
 //! a different predicate than the author wrote — so this parser has no "no base in scope,
 //! keep the raw text" fallthrough. With no base in scope a relative reference is
-//! [`purrdf_iri::IriError::NoBase`], reported as [`EntailError::Parse`].
+//! [`purrdf_iri::IriError::NoBase`], retained by [`RifXmlError::Iri`].
 //!
 //! The structure mirrors `purrdf_rdf`'s RDF/XML codec rather than inventing a second one:
 //! one [`BaseScope`] rebound per element on the way down, and no RFC-3986 arithmetic of
@@ -37,6 +37,9 @@ use purrdf_iri::vocab::rif::NS as RIF_NS;
 /// The reserved XML namespace `xml:base` lives in (XML Base, §3).
 use purrdf_iri::vocab::xml::NS as XML_NS;
 use purrdf_xsd::datatype::XSD_NS;
+
+mod error;
+pub use error::{RifComponent, RifIriPhase, RifXmlError};
 
 /// One RIF `Import` directive. Fetching its location is deliberately caller-owned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,24 +71,29 @@ pub struct ParsedRifDocument {
 ///
 /// # Errors
 ///
-/// Returns [`EntailError::Parse`] for malformed XML, a non-absolute `base`, an
+/// Returns [`EntailError::RifXml`] for malformed XML, a non-absolute `base`, an
 /// unresolvable relative IRI reference, and every unsupported or unexpected construct;
 /// the parser never skips unknown semantics.
 pub fn parse_rif_xml(text: &str, base: Option<&str>) -> Result<ParsedRifDocument, EntailError> {
-    let scope = base_scope(base).map_err(EntailError::Parse)?;
-    parse_document(text, &scope).map_err(EntailError::Parse)
+    let scope = base_scope(base)?;
+    parse_document(text, &scope).map_err(EntailError::from)
 }
 
 /// The initial base scope: rooted at the caller's `base`, or empty when there is none.
 ///
 /// A caller-supplied base must be absolute (RFC-3986 §5.1's precondition), which
 /// [`BaseIri::parse`] checks once here so no resolution site downstream has to.
-fn base_scope(base: Option<&str>) -> Result<BaseScope, String> {
+fn base_scope(base: Option<&str>) -> Result<BaseScope, RifXmlError> {
     match base {
         None => Ok(BaseScope::empty()),
         Some(text) => BaseIri::parse(text)
             .map(|iri| BaseScope::rooted(iri, BaseOrigin::Caller))
-            .map_err(|error| format!("invalid base IRI {text:?}: {error}")),
+            .map_err(|cause| RifXmlError::Iri {
+                phase: RifIriPhase::CallerBase,
+                reference: text.to_owned(),
+                base: None,
+                cause,
+            }),
     }
 }
 
@@ -120,7 +128,7 @@ where
     Ok(ruleset)
 }
 
-fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, String> {
+fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, RifXmlError> {
     // The W3C RIF documents declare their namespace IRIs as internal general entities
     // (`<!DOCTYPE Document [ <!ENTITY rif "…"> … ]>`, used as `xmlns="&rif;"` and
     // `type="&xs;string"`), which XML 1.0 §5.1 obliges even a non-validating processor to
@@ -132,12 +140,16 @@ fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, Str
         dtd: Dtd::internal_subset(),
         ..Options::default()
     };
-    let document = Document::parse_with_options(text, options).map_err(|error| {
-        let (line, column) = error.line_column(text);
-        format!("{error} (line {line}, column {column})")
+    let document = Document::parse_with_options(text, options).map_err(|cause| {
+        let (line, column) = cause.line_column(text);
+        RifXmlError::Xml {
+            cause,
+            line,
+            column,
+        }
     })?;
     if document.declarations_unread() {
-        return Err("the document type declaration names an external DTD subset or references an external parameter entity, which is never fetched, so default attributes and entity declarations may be missing".to_owned());
+        return Err(RifXmlError::ExternalDeclarations);
     }
     let root = document.root_element();
     require(&root, "Document")?;
@@ -151,7 +163,12 @@ fn parse_document(text: &str, base: &BaseScope) -> Result<ParsedRifDocument, Str
             "directive" => collect_import(&child, &mut imports, &base)?,
             "payload" => parse_payload(&child, &mut ruleset, &base)?,
             "meta" | "id" => {}
-            other => return Err(format!("unexpected Document child <{other}>")),
+            other => {
+                return Err(RifXmlError::UnexpectedChild {
+                    parent: "Document",
+                    element: other.to_owned(),
+                });
+            }
         }
     }
     Ok(ParsedRifDocument { ruleset, imports })
@@ -161,7 +178,7 @@ fn collect_import(
     directive: &Node<'_, '_>,
     imports: &mut Vec<RifImport>,
     base: &BaseScope,
-) -> Result<(), String> {
+) -> Result<(), RifXmlError> {
     let import = only_element(directive, "Import")?;
     let base = enter(&import, base)?;
     let mut location = None;
@@ -175,11 +192,16 @@ fn collect_import(
             "location" => location = Some(iri_ref(&text_of(&child), &base)?),
             "profile" => profile = Some(iri_ref(&text_of(&child), &base)?),
             "meta" | "id" => {}
-            other => return Err(format!("unexpected Import child <{other}>")),
+            other => {
+                return Err(RifXmlError::UnexpectedChild {
+                    parent: "Import",
+                    element: other.to_owned(),
+                });
+            }
         }
     }
     imports.push(RifImport {
-        location: location.ok_or("Import without a <location>")?,
+        location: location.ok_or(RifComponent::ImportLocation)?,
         profile,
     });
     Ok(())
@@ -189,7 +211,7 @@ fn parse_payload(
     payload: &Node<'_, '_>,
     ruleset: &mut RuleSet,
     base: &BaseScope,
-) -> Result<(), String> {
+) -> Result<(), RifXmlError> {
     let group = only_element(payload, "Group")?;
     let base = enter(&group, base)?;
     for child in group.element_children() {
@@ -197,7 +219,12 @@ fn parse_payload(
         match local_name(&child)? {
             "sentence" => parse_sentence(&child, ruleset, &base)?,
             "meta" | "id" | "behavior" => {}
-            other => return Err(format!("unexpected Group child <{other}>")),
+            other => {
+                return Err(RifXmlError::UnexpectedChild {
+                    parent: "Group",
+                    element: other.to_owned(),
+                });
+            }
         }
     }
     Ok(())
@@ -207,7 +234,7 @@ fn parse_sentence(
     sentence: &Node<'_, '_>,
     ruleset: &mut RuleSet,
     base: &BaseScope,
-) -> Result<(), String> {
+) -> Result<(), RifXmlError> {
     let inner = single_element(sentence, "sentence")?;
     let base = enter(&inner, base)?;
     match local_name(&inner)? {
@@ -221,20 +248,28 @@ fn parse_sentence(
             ruleset.push_rule(parse_forall(&inner, &base)?);
             Ok(())
         }
-        other => Err(format!("unexpected sentence body <{other}>")),
+        other => Err(RifXmlError::UnexpectedNode {
+            position: "sentence body",
+            element: other.to_owned(),
+        }),
     }
 }
 
-fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, String> {
+fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, RifXmlError> {
     let mut formula = None;
     for child in forall.element_children() {
         match local_name(&child)? {
             "declare" | "meta" | "id" => {}
             "formula" => formula = Some(child),
-            other => return Err(format!("unexpected Forall child <{other}>")),
+            other => {
+                return Err(RifXmlError::UnexpectedChild {
+                    parent: "Forall",
+                    element: other.to_owned(),
+                });
+            }
         }
     }
-    let formula = formula.ok_or("Forall without a <formula>")?;
+    let formula = formula.ok_or(RifComponent::ForallFormula)?;
     let base = enter(&formula, base)?;
     let implies = single_element(&formula, "formula")?;
     require(&implies, "Implies")?;
@@ -255,16 +290,21 @@ fn parse_forall(forall: &Node<'_, '_>, base: &BaseScope) -> Result<Rule, String>
                 head = Some(parse_conjunction(&inner, &inner_base)?);
             }
             "meta" | "id" => {}
-            other => return Err(format!("unexpected Implies child <{other}>")),
+            other => {
+                return Err(RifXmlError::UnexpectedChild {
+                    parent: "Implies",
+                    element: other.to_owned(),
+                });
+            }
         }
     }
     Ok(Rule {
-        body: body.ok_or("Implies without an <if>")?,
-        head: head.ok_or("Implies without a <then>")?,
+        body: body.ok_or(RifComponent::ImpliesIf)?,
+        head: head.ok_or(RifComponent::ImpliesThen)?,
     })
 }
 
-fn parse_conjunction(node: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, String> {
+fn parse_conjunction(node: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, RifXmlError> {
     match local_name(node)? {
         "Frame" => parse_frame(node, base),
         "And" => {
@@ -278,16 +318,24 @@ fn parse_conjunction(node: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>,
                         atoms.extend(parse_frame(&inner, &inner_base)?);
                     }
                     "meta" | "id" => {}
-                    other => return Err(format!("unexpected And child <{other}>")),
+                    other => {
+                        return Err(RifXmlError::UnexpectedChild {
+                            parent: "And",
+                            element: other.to_owned(),
+                        });
+                    }
                 }
             }
             Ok(atoms)
         }
-        other => Err(format!("unexpected conjunction node <{other}>")),
+        other => Err(RifXmlError::UnexpectedNode {
+            position: "conjunction node",
+            element: other.to_owned(),
+        }),
     }
 }
 
-fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, String> {
+fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, RifXmlError> {
     require(frame, "Frame")?;
     let mut object = None;
     let mut slots = Vec::new();
@@ -301,12 +349,17 @@ fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, Stri
             }
             "slot" => slots.push(parse_slot(&child, &base)?),
             "meta" | "id" => {}
-            other => return Err(format!("unexpected Frame child <{other}>")),
+            other => {
+                return Err(RifXmlError::UnexpectedChild {
+                    parent: "Frame",
+                    element: other.to_owned(),
+                });
+            }
         }
     }
-    let subject = object.ok_or("Frame without an <object>")?;
+    let subject = object.ok_or(RifComponent::FrameObject)?;
     if slots.is_empty() {
-        return Err("Frame without any <slot>".to_owned());
+        return Err(RifComponent::FrameSlot.into());
     }
     Ok(slots
         .into_iter()
@@ -318,37 +371,40 @@ fn parse_frame(frame: &Node<'_, '_>, base: &BaseScope) -> Result<Vec<Atom>, Stri
         .collect())
 }
 
-fn parse_slot(slot: &Node<'_, '_>, base: &BaseScope) -> Result<(RifTerm, RifTerm), String> {
+fn parse_slot(slot: &Node<'_, '_>, base: &BaseScope) -> Result<(RifTerm, RifTerm), RifXmlError> {
     let mut children = slot.element_children();
-    let predicate_node = children.next().ok_or("slot without a predicate")?;
+    let predicate_node = children.next().ok_or(RifComponent::SlotPredicate)?;
     let predicate_base = enter(&predicate_node, base)?;
     let predicate = parse_term(&predicate_node, &predicate_base)?;
-    let value_node = children.next().ok_or("slot without a value")?;
+    let value_node = children.next().ok_or(RifComponent::SlotValue)?;
     let value_base = enter(&value_node, base)?;
     let value = parse_term(&value_node, &value_base)?;
     if children.next().is_some() {
-        return Err("slot with more than two children".to_owned());
+        return Err(RifXmlError::TooManyChildren {
+            context: "slot",
+            maximum: 2,
+            observed_at_least: 3,
+        });
     }
     Ok((predicate, value))
 }
 
-fn parse_term(node: &Node<'_, '_>, base: &BaseScope) -> Result<RifTerm, String> {
+fn parse_term(node: &Node<'_, '_>, base: &BaseScope) -> Result<RifTerm, RifXmlError> {
     match local_name(node)? {
         // A `Var` names a rule variable, not a resource: it is never an IRI reference.
         "Var" => Ok(RifTerm::Var(text_of(node))),
         "Const" => Ok(RifTerm::Const(parse_const(node, base)?)),
-        other => Err(format!("unexpected term node <{other}>")),
+        other => Err(RifXmlError::UnexpectedNode {
+            position: "term node",
+            element: other.to_owned(),
+        }),
     }
 }
 
-fn parse_const(node: &Node<'_, '_>, base: &BaseScope) -> Result<TermValue, String> {
+fn parse_const(node: &Node<'_, '_>, base: &BaseScope) -> Result<TermValue, RifXmlError> {
     // `type` is itself IRI-valued, so it resolves too. An absolute one resolves to
     // itself, which is why the RIF/XSD comparisons below are unaffected.
-    let kind = iri_ref(
-        node.attribute("type")
-            .ok_or("Const without a type attribute")?,
-        base,
-    )?;
+    let kind = iri_ref(node.attribute("type").ok_or(RifComponent::ConstType)?, base)?;
     let value = text_of(node);
     if kind.strip_prefix(RIF_NS) == Some("iri") {
         // The whole point of the base stack: this IRI becomes a rule-head or rule-body
@@ -358,9 +414,15 @@ fn parse_const(node: &Node<'_, '_>, base: &BaseScope) -> Result<TermValue, Strin
     } else if kind.starts_with(XSD_NS) {
         Ok(TermValue::typed_literal(value, kind))
     } else if kind.strip_prefix(RIF_NS) == Some("local") {
-        Err("rif:local const outside <meta> is unsupported".to_owned())
+        Err(RifXmlError::LocalConstant {
+            datatype: kind,
+            value,
+        })
     } else {
-        Err(format!("unsupported Const type {kind}"))
+        Err(RifXmlError::UnsupportedConstant {
+            datatype: kind,
+            value,
+        })
     }
 }
 
@@ -375,14 +437,19 @@ fn parse_const(node: &Node<'_, '_>, base: &BaseScope) -> Result<TermValue, Strin
 fn enter<'b>(
     element: &Node<'_, '_>,
     enclosing: &'b BaseScope,
-) -> Result<Cow<'b, BaseScope>, String> {
+) -> Result<Cow<'b, BaseScope>, RifXmlError> {
     let Some(directive) = element.attribute((XML_NS, "base")) else {
         return Ok(Cow::Borrowed(enclosing));
     };
     let mut scoped = enclosing.clone();
     scoped
         .rebind(directive, BaseOrigin::Enclosing)
-        .map_err(|error| format!("invalid xml:base {directive:?}: {error}"))?;
+        .map_err(|cause| RifXmlError::Iri {
+            phase: RifIriPhase::ElementBase,
+            reference: directive.to_owned(),
+            base: enclosing.current().cloned().map(Box::new),
+            cause,
+        })?;
     Ok(Cow::Owned(scoped))
 }
 
@@ -391,20 +458,25 @@ fn enter<'b>(
 /// RIF-XML admits relative references, so this is [`BaseScope::resolve`]. There is
 /// deliberately no "no base, keep the raw text" fallthrough — that is exactly how an
 /// unresolved relative IRI would become a rule predicate.
-fn iri_ref(value: &str, base: &BaseScope) -> Result<String, String> {
+fn iri_ref(value: &str, base: &BaseScope) -> Result<String, RifXmlError> {
     base.resolve(value)
         .map(|iri| iri.as_str().to_owned())
-        .map_err(|error| format!("{error} [{}]", error.diagnostic_code()))
+        .map_err(|cause| RifXmlError::Iri {
+            phase: RifIriPhase::Reference,
+            reference: value.to_owned(),
+            base: base.current().cloned().map(Box::new),
+            cause,
+        })
 }
 
-fn ground_fact(atom: Atom) -> Result<Fact, String> {
+fn ground_fact(atom: Atom) -> Result<Fact, RifXmlError> {
     Ok((const_of(atom.s)?, const_of(atom.p)?, const_of(atom.o)?))
 }
 
-fn const_of(term: RifTerm) -> Result<TermValue, String> {
+fn const_of(term: RifTerm) -> Result<TermValue, RifXmlError> {
     match term {
         RifTerm::Const(value) => Ok(value),
-        RifTerm::Var(name) => Err(format!("variable ?{name} in a ground fact")),
+        RifTerm::Var(name) => Err(crate::rif::RifVariableError::GroundFact(name).into()),
     }
 }
 
@@ -434,44 +506,51 @@ fn fill_dataset_facts(dataset: &RdfDataset, facts: &mut Vec<Fact>) {
     }));
 }
 
-fn local_name<'a>(node: &Node<'a, '_>) -> Result<&'a str, String> {
+fn local_name<'a>(node: &Node<'a, '_>) -> Result<&'a str, RifXmlError> {
     let tag = node.tag_name();
     match tag.namespace() {
         Some(RIF_NS) => Ok(tag.name()),
-        other => Err(format!(
-            "element <{}> is not in the RIF namespace (found {other:?})",
-            tag.name()
-        )),
+        other => Err(RifXmlError::Namespace {
+            element: tag.name().to_owned(),
+            actual: other.map(str::to_owned),
+        }),
     }
 }
 
-fn require(node: &Node<'_, '_>, expected: &str) -> Result<(), String> {
+fn require(node: &Node<'_, '_>, expected: &'static str) -> Result<(), RifXmlError> {
     let actual = local_name(node)?;
     if actual == expected {
         Ok(())
     } else {
-        Err(format!("expected <{expected}>, found <{actual}>"))
+        Err(RifXmlError::ExpectedElement {
+            expected,
+            actual: actual.to_owned(),
+        })
     }
 }
 
 fn single_element<'a, 'input>(
     node: &Node<'a, 'input>,
-    parent: &str,
-) -> Result<Node<'a, 'input>, String> {
+    parent: &'static str,
+) -> Result<Node<'a, 'input>, RifXmlError> {
     let mut children = node.element_children();
     let first = children
         .next()
-        .ok_or_else(|| format!("<{parent}> is empty"))?;
+        .ok_or(RifXmlError::Empty { context: parent })?;
     if children.next().is_some() {
-        return Err(format!("<{parent}> has more than one child element"));
+        return Err(RifXmlError::TooManyChildren {
+            context: parent,
+            maximum: 1,
+            observed_at_least: 2,
+        });
     }
     Ok(first)
 }
 
 fn only_element<'a, 'input>(
     node: &Node<'a, 'input>,
-    name: &str,
-) -> Result<Node<'a, 'input>, String> {
+    name: &'static str,
+) -> Result<Node<'a, 'input>, RifXmlError> {
     let child = single_element(node, name)?;
     require(&child, name)?;
     Ok(child)
@@ -589,19 +668,21 @@ mod tests {
     fn a_relative_iri_with_no_base_in_scope_is_a_hard_error() {
         let text = RIF.replace(&format!(" xml:base=\"{DOC_BASE}\""), "");
         let error = parse_rif_xml(&text, None).expect_err("no base can resolve `facts.ttl`");
-        let EntailError::Parse(message) = error else {
-            panic!("expected a parse error");
+        let EntailError::RifXml(original) = error else {
+            panic!("expected a native RIF document refusal");
         };
-        assert!(
-            message.contains("iri-relative-no-base"),
-            "the diagnostic must name the missing base, got: {message}"
-        );
+        assert!(matches!(original.as_ref(), RifXmlError::Iri {
+                phase: RifIriPhase::Reference, reference, base: None, cause,
+            } if reference == "facts.ttl" && cause.diagnostic_code() == "iri-relative-no-base"));
     }
 
     #[test]
     fn a_non_absolute_caller_base_is_refused_at_the_boundary() {
         let error = parse_rif_xml(RIF, Some("/not/absolute")).expect_err("a base must be absolute");
-        assert!(matches!(error, EntailError::Parse(_)));
+        assert!(matches!(error, EntailError::RifXml(original)
+            if matches!(original.as_ref(), RifXmlError::Iri {
+                phase: RifIriPhase::CallerBase, reference, base: None, ..
+            } if reference == "/not/absolute")));
     }
 
     #[test]
@@ -611,7 +692,10 @@ mod tests {
             .replace("</Frame>", "</Atom>");
         assert!(matches!(
             parse_rif_xml(&text, None),
-            Err(EntailError::Parse(_))
+            Err(EntailError::RifXml(original))
+                if matches!(original.as_ref(), RifXmlError::UnexpectedNode {
+                    position: "sentence body", element,
+                } if element == "Atom")
         ));
     }
 
@@ -658,7 +742,9 @@ mod tests {
         assert_ne!(referenced, RIF);
         assert!(matches!(
             parse_rif_xml(&referenced, None),
-            Err(EntailError::Parse(_))
+            Err(EntailError::RifXml(original))
+                if matches!(original.as_ref(), RifXmlError::Xml { cause, .. }
+                    if matches!(cause.kind(), purrdf_lex::xml::XmlErrorKind::ExternalEntity))
         ));
         let text = RIF.replacen("<Document", &format!("{declared}<Document"), 1);
         assert_eq!(
@@ -672,7 +758,8 @@ mod tests {
         );
         assert!(matches!(
             parse_rif_xml(&subset, None),
-            Err(EntailError::Parse(_))
+            Err(EntailError::RifXml(original))
+                if matches!(original.as_ref(), RifXmlError::ExternalDeclarations)
         ));
     }
 

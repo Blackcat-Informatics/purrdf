@@ -617,6 +617,21 @@ pub enum TemporalReadError {
     Storage(crate::bigint::LimbScratchError),
 }
 
+impl purrdf_hash::error::StructuredError for TemporalReadError {
+    purrdf_hash::error_visit! {
+        Invalid { datatype, reason } => "temporal-invalid" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        OutOfRange { datatype, reason } => "temporal-out-of-range" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        ConstructorRange { datatype, reason } => "temporal-constructor-range" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        Storage(error) => "temporal-storage" { "cause" => Cause(error) },
+    }
+}
+
 impl TemporalReadError {
     /// The existing F&O error classification without constructing owned text.
     #[must_use]
@@ -855,6 +870,21 @@ fn read_temporal_mode(
         }
         _ => return None,
     })
+}
+
+/// The seconds field of a `dateTime` or `time` lexical form, exactly as written:
+/// `"2023-12-25T10:30:05.500"` is `05.500`, `"10:30:00.250Z"` is `00.250`. This is
+/// what SPARQL `SECONDS` returns ("the seconds part of the lexical form of arg"),
+/// so a trailing zero of the fraction and a leading zero of the field survive,
+/// which the parsed value no longer records. `None` when `lexical` is not shaped
+/// like a time of day (no `hh:mm:ss` tail once a timezone is split off); the
+/// caller has already parsed `lexical`, so for a valid form the field is the text
+/// after its last `:`.
+#[must_use]
+pub fn seconds_field_text(lexical: &str) -> Option<&str> {
+    let (body, _) = split_tz(XsdDatatype::DateTime, lexical, lexical).ok()?;
+    let (_, field) = body.rsplit_once(':')?;
+    crate::numeric::is_decimal_lexical(field).then_some(field)
 }
 
 /// Parse the existing resident dateTime surface.
@@ -2699,6 +2729,7 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
         | XsdDatatype::Double
         | XsdDatatype::Boolean
         | XsdDatatype::String
+        | XsdDatatype::AnyUri
         | XsdDatatype::Duration
         | XsdDatatype::DayTimeDuration
         | XsdDatatype::YearMonthDuration
@@ -4713,6 +4744,39 @@ impl DateTime {
     #[must_use]
     pub fn owned_heap_bytes(&self) -> u64 {
         self.second.heap_bytes()
+    }
+
+    /// Copy exact fractional seconds into the original preparation account.
+    /// Calendar fields and the declared timezone are preserved verbatim. Publish
+    /// through [`Self::publish_detached`] before the value is shared.
+    ///
+    /// # Errors
+    /// Preserves native admission, layout and allocator refusal.
+    pub fn detached_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: self.hour,
+            minute: self.minute,
+            second: self.second.detached_with_memory(memory)?,
+            tz: self.tz,
+        })
+    }
+
+    /// Share the prepared seconds under their original immutable lease.
+    /// Clones then retain that owner without copying the limb buffer.
+    ///
+    /// # Errors
+    /// Returns native shared-control refusal before exposing an unowned value.
+    pub fn publish_detached(
+        &mut self,
+        original: &purrdf_lex::allocation::SharedOwned<()>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.second.publish_detached(original)
     }
     /// XSD canonical lexical form.
     #[must_use]

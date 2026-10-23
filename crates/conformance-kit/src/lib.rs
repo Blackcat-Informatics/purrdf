@@ -34,12 +34,26 @@ pub enum GradeError {
     Mismatch(String),
     /// The kernel could not establish canonical equality within its limits.
     Canonicalization(String),
+    /// A report subject has two records for one test: EARL asserts one outcome
+    /// per subject and test, so a second would contradict or shadow the first.
+    DuplicateAssertion {
+        /// The `earl:subject` IRI.
+        subject: String,
+        /// The `earl:test` IRI asserted twice.
+        case: String,
+    },
 }
 
 impl fmt::Display for GradeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (kind, message) = match self {
             Self::Storage(error) => return write!(f, "storage refused: {error}"),
+            Self::DuplicateAssertion { subject, case } => {
+                return write!(
+                    f,
+                    "duplicate assertion: subject {subject} has two records for test {case}"
+                );
+            }
             Self::Malformed(message) => ("malformed input", message),
             Self::Mismatch(message) => ("mismatch", message),
             Self::Canonicalization(message) => ("canonicalization refused", message),
@@ -65,7 +79,10 @@ impl From<purrdf_core::CanonError> for GradeError {
         match error {
             purrdf_core::CanonError::Storage(error) => Self::Storage(error),
             purrdf_core::CanonError::Invalid(error) => error.storage_error().map_or_else(
-                || Self::Canonicalization(purrdf_core::CanonError::Invalid(error).to_string()),
+                || {
+                    let cause: purrdf_core::CanonError = purrdf_core::CanonError::Invalid(error);
+                    Self::Canonicalization(cause.to_string())
+                },
                 Self::Storage,
             ),
             other => Self::Canonicalization(other.to_string()),

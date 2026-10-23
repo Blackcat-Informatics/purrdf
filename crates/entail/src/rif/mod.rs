@@ -15,8 +15,10 @@
 //! built-ins, negation, membership, or `External`) that the RIF SPARQL-entailment
 //! conformance cases exercise.
 
+mod error;
 pub mod eval;
 pub mod model;
 
+pub use error::RifVariableError;
 pub use eval::{materialize_rif, materialize_rif_until, materialize_rif_with};
 pub use model::{Atom, Fact, RifTerm, Rule, RuleSet};

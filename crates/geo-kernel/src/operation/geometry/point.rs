@@ -82,7 +82,7 @@ impl OperationImagePoint {
         for operation in chain.operations() {
             operation
                 .model()
-                .validate_presence(source.z(), epoch.as_ref())?;
+                .validate_presence(source.z(), epoch.as_ref(), &mut progress)?;
         }
         let image = {
             let mut nested = progress.nested(context.work_items(), 0, context.workspace_peak());
@@ -173,9 +173,11 @@ impl OperationImagePoint {
     ) -> Result<super::super::TransformResult, GeoError> {
         let mut progress = WorkProgress::new(observer);
         if context.reference() != self.reference() {
-            return Err(progress.retained_message(
-                "symbolic point/context target reference mismatch",
-                GeoError::Config,
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                self.reference(),
+                crate::ReferenceMismatchReason::SymbolicPointContext,
+                &mut progress,
             ));
         }
         context.begin(1)?;

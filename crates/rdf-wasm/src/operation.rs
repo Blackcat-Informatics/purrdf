@@ -247,7 +247,10 @@ impl JobError {
         match &self.text {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),
-            ErrorText::ReasoningQuery => ReasoningError::Query(self.diagnostic.clone()).to_string(),
+            ErrorText::ReasoningQuery => {
+                let error: ReasoningError = ReasoningError::Query(self.diagnostic.clone());
+                error.to_string()
+            }
         }
     }
 
@@ -449,8 +452,8 @@ impl JobRun<'_> {
     /// Request options carrying the run's sources and `env`.
     pub(crate) fn options<'o>(
         &'o self,
-        env: &'o purrdf_sparql_eval::ExtensionEnv,
-    ) -> QueryOptions<'o> {
+        env: &'o purrdf_sparql_eval::ExtensionEnv<'o>,
+    ) -> QueryOptions<'o, 'o> {
         QueryOptions::new()
             .with_env(env)
             .with_remote(
@@ -469,9 +472,9 @@ impl JobRun<'_> {
     /// `division`: the request options every SPARQL operation evaluates with.
     pub(crate) fn options_under<'o>(
         &'o self,
-        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        env: &'o purrdf_sparql_eval::ExtensionEnv<'o>,
         division: DivisionPolicy,
-    ) -> QueryOptions<'o> {
+    ) -> QueryOptions<'o, 'o> {
         self.options(env).with_division(division)
     }
 
@@ -479,11 +482,11 @@ impl JobRun<'_> {
     /// dated law was selected.
     fn selected_options<'o>(
         &'o self,
-        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        env: &'o purrdf_sparql_eval::ExtensionEnv<'o>,
         division: DivisionPolicy,
         xpath_regex: Option<Profile>,
         geo: &'o purrdf_validate::geo::GeoProfile,
-    ) -> QueryOptions<'o> {
+    ) -> QueryOptions<'o, 'o> {
         crate::xpath_regex::select(self.options_under(env, division).with_geo(geo), xpath_regex)
     }
 
@@ -538,6 +541,7 @@ pub(crate) struct ClosureInputs {
     pub(crate) premise_iris: Vec<String>,
     pub(crate) max_stored_facts: Option<u64>,
     pub(crate) max_join_steps: Option<u64>,
+    pub(crate) max_term_arena_bytes: Option<u64>,
 }
 
 /// Everything an operation is built from.
@@ -644,7 +648,7 @@ fn ungoverned_query(
 /// The aggregate environment a governed operation's `aggregateNamespace` requests.
 fn governed_env(
     aggregate_namespace: Option<&str>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, JobError> {
     // The ENTIRE wasm surface for the first-party statistical aggregate set: one
     // namespace string crosses the boundary, with no callback and no per-aggregate
     // marshaling; the general custom-aggregate seam is Rust-host-only.
@@ -790,8 +794,11 @@ impl OperationInput<'_> {
                     &closure.premise_iris,
                 )
                 .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
-                let limits =
-                    crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
+                let limits = crate::entail::wasm_limits(
+                    closure.max_stored_facts,
+                    closure.max_join_steps,
+                    closure.max_term_arena_bytes,
+                );
                 let env = governed_env(aggregate_namespace.as_deref())?;
                 let governors = run.governors(
                     ceilings
@@ -1009,10 +1016,8 @@ mod tests {
                 reasoning.presentation_json().as_deref(),
                 Some(expected.as_str())
             );
-            assert_eq!(
-                reasoning.rendered(),
-                ReasoningError::Query(original).to_string()
-            );
+            let expected: ReasoningError = ReasoningError::Query(original);
+            assert_eq!(reasoning.rendered(), expected.to_string());
         }
         assert!(
             JobError::diagnostic(RdfDiagnostic::error("native-sparql-eval", "x"))

@@ -986,6 +986,18 @@ impl GovernorState {
         amount: u64,
         reported: bool,
     ) -> Result<(), TrippedGovernor> {
+        self.charge_work_observed(dimension, amount, reported, |_| {})
+    }
+
+    /// Observe the exact increment at its atomic charge, including a crossing charge.
+    /// A sticky refusal performs no increment and therefore calls no observer.
+    fn charge_work_observed(
+        &self,
+        dimension: ResourceDimension,
+        amount: u64,
+        reported: bool,
+        record: impl FnOnce(u64),
+    ) -> Result<(), TrippedGovernor> {
         if !reported && let Some(&tripped) = self.tripped.get() {
             return Err(tripped);
         }
@@ -1001,6 +1013,7 @@ impl GovernorState {
             })
             .unwrap_or(0);
         let updated = previous.saturating_add(amount);
+        record(updated - previous);
 
         let limit = self.limits.get(dimension);
         if updated > limit {
@@ -1328,6 +1341,21 @@ impl GovernorState {
         self.charge_if_engaged(ResourceDimension::Fuel, point.cost())
     }
 
+    /// Charge engaged fuel and attribute exactly what this charge added, without a
+    /// racy counter snapshot. `reported` retains ordered worker replay's stop semantics.
+    pub(crate) fn charge_fuel_observed(
+        &self,
+        amount: u64,
+        reported: bool,
+        record: impl FnOnce(u64),
+    ) -> Result<(), TrippedGovernor> {
+        if self.is_engaged_in(ResourceDimension::Fuel) {
+            self.charge_work_observed(ResourceDimension::Fuel, amount, reported, record)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Record `observed` as a single observation of `dimension`, only if that dimension
     /// carries a ceiling.
     ///
@@ -1371,7 +1399,16 @@ impl GovernorState {
         &self,
         per_item: &[ItemCharge],
     ) -> Option<(usize, u64, TrippedGovernor)> {
-        self.fold_ordered_items(per_item, false)
+        self.fold_ordered_items(per_item, false, |_| {})
+    }
+
+    /// The ordered fold with exact attribution of each atomic fuel increment.
+    pub(crate) fn commit_ordered_items_observed(
+        &self,
+        per_item: &[ItemCharge],
+        record: impl FnMut(u64),
+    ) -> Option<(usize, u64, TrippedGovernor)> {
+        self.fold_ordered_items(per_item, false, record)
     }
 
     /// [`Self::commit_ordered_items`] for items whose work the stop signal was already
@@ -1385,7 +1422,7 @@ impl GovernorState {
         &self,
         per_item: &[ItemCharge],
     ) -> Option<(usize, u64, TrippedGovernor)> {
-        self.fold_ordered_items(per_item, true)
+        self.fold_ordered_items(per_item, true, |_| {})
     }
 
     /// The one ordered fold behind [`Self::commit_ordered_items`] and
@@ -1394,10 +1431,13 @@ impl GovernorState {
         &self,
         per_item: &[ItemCharge],
         reported: bool,
+        mut record: impl FnMut(u64),
     ) -> Option<(usize, u64, TrippedGovernor)> {
         let mut committed = 0_u64;
         for (index, item) in per_item.iter().enumerate() {
-            if let Err(tripped) = self.charge_work(ResourceDimension::Fuel, item.fuel, reported) {
+            if let Err(tripped) =
+                self.charge_work_observed(ResourceDimension::Fuel, item.fuel, reported, &mut record)
+            {
                 return Some((index, committed, tripped));
             }
             committed = committed.saturating_add(item.committed);
@@ -1867,7 +1907,28 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// conservative physical bounds instead of claiming exact effective counts.
 /// Changed orders move candidate, intermediate and scratch charges; consumers
 /// must remeasure their query ceilings even when complete answers are unchanged.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 20;
+///
+/// # v21
+///
+/// The point schedule stays unchanged. A decimal that an operator, function or
+/// aggregate computes is rendered with a decimal point and a fractional digit
+/// (`4.0`, not `4`), and `SECONDS` returns the seconds field of the lexical form,
+/// keeping its leading zero (`05.5`, `00`). Both lengthen the rendered text, so
+/// scratch charges and the corpus's pinned costs move even when the numeric value
+/// is unchanged; consumers must remeasure their scratch ceilings.
+///
+/// # v22
+///
+/// The point schedule stays unchanged. `SECONDS` copies the seconds field of its
+/// argument's lexical form (`05.500`, trailing zeros kept) instead of rendering the
+/// parsed value, so it no longer charges the decimal rendering work of a wide
+/// field and charges the bytes of the field as written. Unary plus returns its
+/// operand term as written, so it charges neither the unary operation nor a
+/// rendering. The render charge of a computed whole decimal wider than the inline
+/// representation prices the emitted text including its `.0`, two bytes more than
+/// before. Even when a query's answer is unchanged, its fuel and scratch cut points
+/// can move; consumers must remeasure those ceilings.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 22;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2256,7 +2317,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "6f856ca8ab7274b85908ac329bff7d8b806ac9e18f91f479ddb002bd07090a2f";
+    "d8dba125e92664037fdc00ef736906cb04bdfd4345bbfb4c0e6958c50204c4ac";
 
 #[cfg(test)]
 mod tests {
@@ -2546,6 +2607,38 @@ mod tests {
             "an unbounded dimension can never trip, and must never panic"
         );
         assert_eq!(state.consumed_in(ResourceDimension::Fuel), u64::MAX);
+    }
+
+    #[test]
+    fn fuel_observer_counts_crossing_saturation_and_reported_replay_exactly() {
+        for reported in [false, true] {
+            let state = GovernorState::new(&QueryGovernors::METERED.with_fuel(1));
+            let recorded = core::cell::Cell::new(0_u64);
+            let record = |units| recorded.set(recorded.get() + units);
+            assert!(state.charge_fuel_observed(2, reported, record).is_err());
+            assert_eq!(recorded.get(), 2, "the crossing charge is consumed");
+            assert!(state.charge_fuel_observed(3, reported, record).is_err());
+            assert_eq!(recorded.get(), if reported { 5 } else { 2 });
+            assert_eq!(recorded.get(), state.consumed_in(ResourceDimension::Fuel));
+        }
+        let state = GovernorState::new(&QueryGovernors::METERED);
+        let recorded = core::cell::Cell::new(0_u64);
+        let record = |units| recorded.set(recorded.get() + units);
+        // METERED uses MAX - 1 to keep the dimension engaged. Replayed work
+        // still saturates after that crossing, without recording another unit.
+        assert!(state.charge_fuel_observed(u64::MAX, true, record).is_err());
+        assert!(state.charge_fuel_observed(1, true, record).is_err());
+        assert_eq!(
+            recorded.get(),
+            u64::MAX,
+            "only the actual increment is recorded"
+        );
+        assert_eq!(recorded.get(), state.consumed_in(ResourceDimension::Fuel));
+        let unbounded = GovernorState::new(&QueryGovernors::UNBOUNDED);
+        assert_eq!(
+            unbounded.charge_fuel_observed(1, false, |_| panic!("fuel is disengaged")),
+            Ok(())
+        );
     }
 
     #[test]
@@ -2907,7 +3000,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 20);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 22);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(

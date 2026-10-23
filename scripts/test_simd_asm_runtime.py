@@ -333,32 +333,21 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(set(runtime.measure_all(gate, self.manifest, tuple(passing), lambda _c: None, options)),
                              {c.name for c in passing})
 
-    def test_complete_report_set_and_failure_cases(self):
-        identity = dict(schema=1, source="source", compiler="compiler", manifest="manifest")
-        for name in self.gate.CONFIG_NAMES:
-            runtime.atomic_json(self.root / (name + ".json"), dict(identity=identity, status="passed",
-                                cells={name: {site.id: "v0·f0·r0" for site in self.manifest.sites}}))
-        merged = runtime.merge_reports(self.gate, self.manifest, self.root, identity)
-        self.assertEqual(len(merged), 7 * len(self.manifest.sites))
-        path = self.root / "x86_64.json"
-        original = runtime.read_json(path)
-        for mutate in [lambda r: r.update(status="incomplete"),
-                       lambda r: r["identity"].update(source="stale"),
-                       lambda r: r["cells"]["x86_64"].clear()]:
-            bad = json.loads(json.dumps(original))
-            mutate(bad)
-            runtime.atomic_json(path, bad)
-            with self.assertRaises(self.gate.GateError):
+    def test_native_report_adapter_keeps_producer_receipt_authoritative(self):
+        identity = dict(schema=1, source="a" * 64, compiler="aggregator", manifest="b" * 64)
+        output = json.dumps(dict(cells={"x86_64": {"demo": "measured"}}))
+        with patch.object(runtime.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output, "")) as run:
+            self.assertEqual(runtime.merge_reports(self.gate, self.manifest, self.root, identity),
+                             {("demo", "x86_64"): "measured"})
+            request = json.loads(run.call_args.kwargs["input"])
+            self.assertNotIn("compiler", request)
+            self.assertEqual(request["source"], identity["source"])
+            self.assertEqual(request["manifest"], identity["manifest"])
+            self.assertEqual(request["configurations"], list(self.gate.CONFIG_NAMES))
+            self.assertEqual(request["sites"], sorted(self.manifest.ids()))
+        with patch.object(runtime.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "receipt mismatch")):
+            with self.assertRaisesRegex(self.gate.GateError, "receipt mismatch"):
                 runtime.merge_reports(self.gate, self.manifest, self.root, identity)
-        runtime.atomic_json(path, original)
-        duplicate = self.root / "duplicate.json"
-        runtime.atomic_json(duplicate, original)
-        with self.assertRaisesRegex(self.gate.GateError, "duplicate"):
-            runtime.merge_reports(self.gate, self.manifest, self.root, identity)
-        duplicate.unlink()
-        path.unlink()
-        with self.assertRaisesRegex(self.gate.GateError, "incomplete"):
-            runtime.merge_reports(self.gate, self.manifest, self.root, identity)
 
 
 def run_tests(gate):

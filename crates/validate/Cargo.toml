@@ -73,3 +73,7 @@ purrdf-xsd = { workspace = true }
 purrdf-stack = { workspace = true }
 purrdf-testkit = { workspace = true }
 purrdf-alloc-probe = { workspace = true }
+
+[[test]]
+name = "dl_proof_vectors"
+harness = false

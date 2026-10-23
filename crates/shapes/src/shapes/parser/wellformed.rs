@@ -877,12 +877,18 @@ impl Parser<'_> {
                     ));
                 }
             }
+            // SHACL 1.2 Core, "Deactivating Shapes and Constraints": the value is "a
+            // node expression that must have either true or false as the (only)
+            // output node". A structured expression is a blank node, and its
+            // well-formedness is its parse (`Parser::shape_deactivation_of`); any
+            // other node is a constant expression, whose output is itself.
             sh::DEACTIVATED => {
-                if super::node_expr::boolean_value(value).is_none() {
+                if !matches!(value, Term::BlankNode(_))
+                    && super::node_expr::boolean_value(value).is_none()
+                {
                     return Err(format!(
-                        "sh:deactivated on shape {shape} must be an xsd:boolean literal, got \
-                         {value}; a node-expression value of sh:deactivated is not evaluated by \
-                         this engine"
+                        "sh:deactivated on shape {shape} must be an xsd:boolean literal or a \
+                         node expression, got {value}"
                     ));
                 }
             }

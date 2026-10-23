@@ -2207,15 +2207,16 @@ impl AggregateExpression {
                 supplied: args.len(),
             }));
         }
-        if let Some((key, _)) = scalarvals
+        if let Some(index) = scalarvals
             .iter()
-            .find(|(key, _)| !scalarval_key_is_admitted(&function, key))
+            .position(|(key, _)| !scalarval_key_is_admitted(&function, key))
         {
+            let (key, _) = scalarvals
+                .into_iter()
+                .nth(index)
+                .expect("the rejected scalarval position exists");
             return Err(AggregateExpressionError::Scalarval(
-                AggregateScalarvalError {
-                    function,
-                    key: key.clone(),
-                },
+                AggregateScalarvalError { function, key },
             ));
         }
         if !order_by.is_empty() && !matches!(function, AggregateFunction::Fold) {
@@ -2396,6 +2397,16 @@ pub enum AggregateExpressionError {
 }
 
 impl AggregateExpressionError {
+    /// Original raw text capacity retained after construction scratch is dropped.
+    /// Function IRIs have intrinsic shared owners and are not raw parser grants.
+    #[must_use]
+    pub fn owned_text_bytes(&self) -> usize {
+        match self {
+            Self::Scalarval(error) => error.key.capacity(),
+            Self::Arity(_) | Self::OrderBy(_) => 0,
+        }
+    }
+
     /// The function that was refused, regardless of which arm this is —
     /// [`AggregateArityError::function`]/[`AggregateScalarvalError::function`]/
     /// [`AggregateOrderByError::function`] under the hood.
@@ -2419,17 +2430,27 @@ impl core::fmt::Display for AggregateExpressionError {
     }
 }
 
-impl std::error::Error for AggregateExpressionError {}
-
-impl From<AggregateArityError> for AggregateExpressionError {
-    fn from(error: AggregateArityError) -> Self {
-        Self::Arity(error)
+impl std::error::Error for AggregateExpressionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Arity(error) => Some(error),
+            Self::Scalarval(error) => Some(error),
+            Self::OrderBy(error) => Some(error),
+        }
     }
 }
 
-impl From<AggregateScalarvalError> for AggregateExpressionError {
-    fn from(error: AggregateScalarvalError) -> Self {
-        Self::Scalarval(error)
+purrdf_lex::variant_from!(AggregateExpressionError {
+    Arity(AggregateArityError),
+    Scalarval(AggregateScalarvalError),
+    OrderBy(AggregateOrderByError),
+});
+
+impl purrdf_hash::error::StructuredError for AggregateExpressionError {
+    purrdf_hash::error_visit! {
+        Arity(error) => "sparql-aggregate-arity" { "cause" => Cause(error) },
+        Scalarval(error) => "sparql-aggregate-scalarval" { "cause" => Cause(error) },
+        OrderBy(error) => "sparql-aggregate-order-by" { "cause" => Cause(error) },
     }
 }
 
@@ -2485,6 +2506,14 @@ impl core::fmt::Display for AggregateArityError {
 
 impl std::error::Error for AggregateArityError {}
 
+impl purrdf_hash::error::StructuredError for AggregateArityError {
+    purrdf_hash::error_visit! {
+        @record self { function, supplied } => "sparql-aggregate-arity-fields" {
+            "function" => Record(&self.function), "supplied" => Unsigned(self.supplied as u128),
+        }
+    }
+}
+
 /// Why [`AggregateExpression::new`] refused to build a value: `order_by`
 /// carried sort keys for a `function` other than [`AggregateFunction::Fold`].
 ///
@@ -2518,9 +2547,11 @@ impl core::fmt::Display for AggregateOrderByError {
 
 impl std::error::Error for AggregateOrderByError {}
 
-impl From<AggregateOrderByError> for AggregateExpressionError {
-    fn from(error: AggregateOrderByError) -> Self {
-        Self::OrderBy(error)
+impl purrdf_hash::error::StructuredError for AggregateOrderByError {
+    purrdf_hash::error_visit! {
+        @record self { function } => "sparql-aggregate-order-by-fields" {
+            "function" => Record(&self.function),
+        }
     }
 }
 
@@ -2560,6 +2591,14 @@ impl core::fmt::Display for AggregateScalarvalError {
 }
 
 impl std::error::Error for AggregateScalarvalError {}
+
+impl purrdf_hash::error::StructuredError for AggregateScalarvalError {
+    purrdf_hash::error_visit! {
+        @record self { function, key } => "sparql-aggregate-scalarval-fields" {
+            "function" => Record(&self.function), "key" => Text(&self.key),
+        }
+    }
+}
 
 /// The named SPARQL aggregate functions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -2664,6 +2703,20 @@ pub enum AggregateFunction {
     /// scalarval, or a wrong-typed scalarval value is refused with a typed
     /// error when the query is prepared, before any evaluation work is spent.
     Custom(NamedNode),
+}
+
+impl purrdf_hash::error::StructuredError for AggregateFunction {
+    purrdf_hash::error_visit! {
+        Count => "sparql-aggregate-count" {},
+        Sum => "sparql-aggregate-sum" {},
+        Avg => "sparql-aggregate-avg" {},
+        Min => "sparql-aggregate-min" {},
+        Max => "sparql-aggregate-max" {},
+        Sample => "sparql-aggregate-sample" {},
+        GroupConcat => "sparql-aggregate-group-concat" {},
+        Fold => "sparql-aggregate-fold" {},
+        Custom(iri) => "sparql-aggregate-custom" { "iri" => Iri(iri.as_str()) },
+    }
 }
 
 #[cfg(test)]

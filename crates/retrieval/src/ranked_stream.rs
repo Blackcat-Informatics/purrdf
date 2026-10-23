@@ -432,6 +432,24 @@ impl RowBlock {
     }
 }
 
+impl purrdf_hash::error::StructuredError for RowBlock {
+    purrdf_hash::error_visit! {
+        Undeclared => "retrieval-row-block-undeclared" {},
+        Declared(tag) => "retrieval-row-block-declared" { "tag" => Record(tag) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for StreamContract {
+    purrdf_hash::error_visit! {
+        @record self { duplicates, fidelity, domains, exclusion } => "retrieval-stream-contract" {
+            "duplicates" => Record(&self.duplicates),
+            "fidelity" => Record(&self.fidelity),
+            "domains" => Record(&self.domains),
+            "exclusion" => Record(&self.exclusion)
+        }
+    }
+}
+
 /// One row of a ranked stream: its rank, its contribution, the item it names,
 /// and the block that item was drawn from.
 ///
@@ -1121,6 +1139,30 @@ pub enum ProtocolError {
         /// receipt broke, rendered.
         reason: String,
     },
+}
+
+impl purrdf_hash::error::StructuredError for ProtocolError {
+    purrdf_hash::error_visit! {
+        NativeFailure(cause) => "ranked-stream-native-failure" { "cause" => Cause(cause) },
+        OutOfOrderRanks { expected, got } => "ranked-stream-out-of-order-ranks" { "expected" => Unsigned(u128::from(*expected)), "got" => Unsigned(u128::from(*got)) },
+        NonContiguousRanks { gap } => "ranked-stream-non-contiguous-ranks" { "gap" => Unsigned(u128::from(*gap)) },
+        DuplicateItem { item, stratum } => "ranked-stream-duplicate-item" { "item" => Text(item), "stratum" => Iri(stratum) },
+        OutsideDeclaredDomain { item, stratum, named_by } => "ranked-stream-outside-domain" { "item" => Text(item), "stratum" => Iri(stratum), "named_by" => Iri(named_by) },
+        UnbackedDomainDeclaration { stratum, declared, rank } => "ranked-stream-unbacked-domain" { "stratum" => Iri(stratum), "declared" => List(declared.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))), "rank" => Unsigned(u128::from(*rank)) },
+        BlockOutsideDeclaredDomain { item, stratum, block, declared } => "ranked-stream-block-outside-domain" { "item" => Text(item), "stratum" => Iri(stratum), "block" => Text(block), "declared" => List(declared.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))) },
+        CandidateInTwoBlocks { item, stratum, block, named_by, named_by_block } => "ranked-stream-candidate-in-two-blocks" { "item" => Text(item), "stratum" => Iri(stratum), "block" => Text(block), "named_by" => Iri(named_by), "named_by_block" => Text(named_by_block) },
+        ContributionMismatch { expected, got } => "ranked-stream-contribution-mismatch" { "expected" => Record(expected), "got" => Record(got) },
+        ForgedReceipt { declared, actual } => "ranked-stream-forged-receipt" { "declared" => Unsigned(u128::from(*declared)), "actual" => Unsigned(u128::from(*actual)) },
+        ErrorAfterRows { rows_before } => "ranked-stream-error-after-rows" { "rows_before" => Unsigned(u128::from(*rows_before)) },
+        NeverEndingSource => "ranked-stream-never-ending-source" {},
+        UncomputableContribution { rank, reason } => "ranked-stream-uncomputable-contribution" { "rank" => Unsigned(u128::from(*rank)), "reason" => Text(reason) },
+        ExclusionContradicted { item, stratum } => "ranked-stream-exclusion-contradicted" { "item" => Text(item), "stratum" => Iri(stratum) },
+        ExclusionLookupFailed { stratum, reason } => "ranked-stream-exclusion-lookup-failed" { "stratum" => Iri(stratum), "reason" => Text(reason) },
+        ExclusionUnavailable => "ranked-stream-exclusion-unavailable" {},
+        ReadFailed { stratum, rows_before, reason } => "ranked-stream-read-failed" { "stratum" => Iri(stratum), "rows_before" => Unsigned(u128::from(*rows_before)), "reason" => Text(reason) },
+        AttestationMoved { stratum, reason } => "ranked-stream-attestation-moved" { "stratum" => Iri(stratum), "reason" => Text(reason) },
+        ExclusionAttestationMoved { stratum, reason } => "ranked-stream-exclusion-attestation-moved" { "stratum" => Iri(stratum), "reason" => Text(reason) },
+    }
 }
 
 impl std::fmt::Display for ProtocolError {

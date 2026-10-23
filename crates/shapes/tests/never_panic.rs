@@ -283,12 +283,12 @@ fn stack_refusal_is_not_a_conformance_or_validation_report() {
     let report = validator.validate();
     let complete_report = complete.validate();
     drop(reserve);
-    assert!(
-        conformance
-            .unwrap_err()
-            .to_string()
-            .contains("stack margin")
+    let conformance = conformance.unwrap_err();
+    assert_eq!(
+        conformance.failure_class(),
+        purrdf_shapes::FailureClass::Processor
     );
+    assert!(conformance.to_string().contains("stack margin"));
     assert!(report.unwrap_err().contains("stack margin"));
     assert!(
         complete_report

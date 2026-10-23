@@ -99,11 +99,14 @@ impl PropertyFunction for Producer {
         if mode.is_bound(0) { 1 } else { ROWS }
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.asked
             .lock()
             .expect("the fixture's record is never poisoned")

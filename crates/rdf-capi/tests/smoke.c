@@ -7,6 +7,7 @@
 #include "purrdf.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,7 +151,7 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
     /* NULL limits: this native library's defaults, which are the limits the
      * artifact is written under. */
     if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
-                                            0, NULL, 0, NULL, NULL,
+                                            0, NULL, 0, NULL, NULL, NULL,
                                             &nquads, &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
@@ -359,7 +360,7 @@ static int check_vendored_imports(const char *premise_path,
     size_t len = 0;
 
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
-                                    import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                    import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                     &certificate,
                                     &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "graph_entails refused the vendored case: %s\n",
@@ -384,7 +385,7 @@ static int check_vendored_imports(const char *premise_path,
     /* The pattern-shaped entry point answers the same question the same way: a
      * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
     if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
-                                      import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                      import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                       &certificate,
                                       &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "certain_answers refused the vendored case\n");
@@ -402,7 +403,7 @@ static int check_vendored_imports(const char *premise_path,
     certificate = NULL;
 
     if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
-                                        import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                        import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                         &certificate,
                                         &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "verify_entailment refused the vendored case\n");
@@ -422,7 +423,7 @@ static int check_vendored_imports(const char *premise_path,
      * for THIS premise that is a refusal NAMING the document, never an answer
      * computed from a premise missing the axioms it told the caller about. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0, NULL, 0,
-                                    NULL, NULL, &answer, &certificate,
+                                    NULL, NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_PARSE_ERROR) {
         fprintf(stderr, "an unsupplied import was not refused\n");
         goto done;
@@ -444,7 +445,7 @@ static int check_vendored_imports(const char *premise_path,
     /* A NULL array with a NON-ZERO count is a caller error, refused before any
      * dereference rather than segfaulting. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1, NULL, 0,
-                                    NULL, NULL, &answer, &certificate,
+                                    NULL, NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_NULL_POINTER) {
         fprintf(stderr, "a null import array with a non-zero count was not refused\n");
         goto done;
@@ -577,6 +578,125 @@ static int regex_shape_conforms(const char *pattern_literal, const char *target,
     int conforms = contains_bytes(bytes, len, "\"shaclConforms\": true");
     purrdf_buffer_free(sarif);
     return conforms;
+}
+
+/* Validate `data` against `shapes` through `purrdf_shacl_validate_to_sarif_law` under
+ * the dated SHACL law `law` (NULL for the compatibility law) and XPath law `regex`
+ * (NULL for none). Returns the status; on success `*conforms_out` is the SARIF log's
+ * `shaclConforms`, and `*mentions_out` is whether the log names `needle`. On failure
+ * `message` receives the error message (empty on success). */
+static int32_t validate_under_law(const char *shapes, const char *base, const char *data,
+                                  const char *regex, const char *law, const char *needle,
+                                  int *mentions_out, char *message, size_t message_len) {
+    PurrdfBuffer *sarif = NULL;
+    PurrdfError *error = NULL;
+    message[0] = '\0';
+    int32_t rc = purrdf_shacl_validate_to_sarif_law(shapes, base, NULL, data, NULL, 0, NULL,
+                                                    NULL, 0, false, regex, law, &sarif, &error);
+    if (rc != PURRDF_STATUS_OK) {
+        if (error == NULL || sarif != NULL || purrdf_error_code(error) != rc) {
+            return -1000;
+        }
+        snprintf(message, message_len, "%s", purrdf_error_message(error));
+        purrdf_error_free(error);
+        return rc;
+    }
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    purrdf_buffer_data(sarif, &bytes, &len);
+    *mentions_out = contains_bytes(bytes, len, needle);
+    purrdf_buffer_free(sarif);
+    return rc;
+}
+
+/* The dated SHACL laws through the real header and linkage, each refusal beside its valid
+ * neighbour. `pre-binding-009` (a VALUES over a variable that is not pre-bound): the
+ * compatibility law refuses the shapes graph at load, the editor's-draft law
+ * (shacl-ed-2026-10-16) validates it. `prefixes-003` (a prefix declared through a
+ * version-IRI path): the working draft (shacl-wd-2026-09-18) refuses it at load, the
+ * editor's draft validates it. shacl-ed-2026-10-17 names no law. */
+static int check_shacl_law(void) {
+    const char *values_shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix ex: <http://example.com/ns#> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        "ex: sh:declare [ sh:namespace \"http://example.com/ns#\"^^xsd:anyURI ;\n"
+        "  sh:prefix \"ex\" ] .\n"
+        "ex:TestShape a sh:NodeShape ; sh:sparql ex:TestShape-sparql ;\n"
+        "  sh:targetNode ex:InvalidResource ; sh:targetNode ex:ValidResource1 .\n"
+        "ex:TestShape-sparql sh:prefixes ex: ; sh:select \"\"\"\n"
+        "  SELECT $this ?value WHERE {\n"
+        "    VALUES ?value { \"forbidden\" }\n"
+        "    $this ex:property ?value . }\"\"\" .\n";
+    const char *values_data =
+        "<http://example.com/ns#InvalidResource> <http://example.com/ns#property> "
+        "\"forbidden\" .\n"
+        "<http://example.com/ns#ValidResource1> <http://example.com/ns#property> "
+        "\"fine\" .\n";
+    const char *version_shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        "@prefix ex: <http://example.com/ns#> .\n"
+        "<http://example.com/base> owl:versionIRI <http://example.com/base/v1> ;\n"
+        "  sh:declare [ sh:namespace \"http://example.com/ns#\"^^xsd:anyURI ;\n"
+        "    sh:prefix \"ex\" ] .\n"
+        "<http://example.com/shapes> owl:imports <http://example.com/base/v1> ;\n"
+        "  owl:versionIRI <http://example.com/shapes/v2> ;\n"
+        "  sh:declare [ sh:namespace \"http://test.com/ns#\"^^xsd:anyURI ;\n"
+        "    sh:prefix \"test\" ] .\n"
+        "ex:TestSPARQL sh:prefixes <http://example.com/shapes/v2> ; sh:select \"\"\"\n"
+        "  SELECT $this ?value WHERE { $this ex:property ?value .\n"
+        "    FILTER (?value = test:Value) . }\"\"\" .\n"
+        "ex:TestShape a sh:NodeShape ; sh:sparql ex:TestSPARQL ;\n"
+        "  sh:targetNode ex:InvalidResource1 .\n";
+    const char *version_data =
+        "<http://example.com/ns#InvalidResource1> <http://example.com/ns#property> "
+        "<http://test.com/ns#Value> .\n";
+    const char *base = "https://example.org/suite/entry.ttl";
+    const char *ed = "shacl-ed-2026-10-16";
+    const char *wd = "shacl-wd-2026-09-18";
+    int mentions = 0;
+    char message[512];
+
+    int32_t rc = validate_under_law(values_shapes, base, values_data, NULL, NULL,
+                                    "InvalidResource", &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && strstr(message, "VALUES is not allowed") != NULL,
+          "the compatibility law refuses pre-binding-009 at load");
+    rc = validate_under_law(values_shapes, base, values_data, NULL, ed, "InvalidResource",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 1,
+          "the editor's draft validates pre-binding-009 and reports the invalid resource");
+    rc = validate_under_law(values_shapes, base, values_data, NULL, ed, "ValidResource1",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 0, "and not the valid one");
+
+    rc = validate_under_law(version_shapes, base, version_data, NULL, wd, "InvalidResource1",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && strstr(message, "undeclared prefix") != NULL,
+          "the working draft refuses prefixes-003 at load");
+    rc = validate_under_law(version_shapes, base, version_data, NULL, ed, "InvalidResource1",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 1, "the editor's draft validates prefixes-003");
+
+    const char *unknown[3] = {"shacl-ed-2026-10-17", "SHACL-ED-2026-10-16", ""};
+    for (int i = 0; i < 3; i++) {
+        rc = validate_under_law(version_shapes, base, version_data, NULL, unknown[i],
+                                "InvalidResource1", &mentions, message, sizeof message);
+        CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT &&
+                  strstr(message, "unsupported-profile") != NULL,
+              "an id no law has is the unsupported-profile status");
+    }
+    rc = validate_under_law(version_shapes, base, version_data, "xpath-2.0-2010-12-14", ed,
+                            "InvalidResource1", &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && strstr(message, "requires") != NULL,
+          "a dated law refuses an XPath override of another law");
+    rc = validate_under_law(version_shapes, base, version_data, "xpath-3.1-2017-03-21", ed,
+                            "InvalidResource1", &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 1,
+          "and accepts its own XPath law beside the refused one");
+    printf("shacl_law: the dated law is selected, refused and checked against its XPath law\n");
+    return 0;
 }
 
 /* The dated regular-expression laws through the real header and linkage. `(?:a)b` is a
@@ -813,8 +933,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
                            NULL, NULL, NULL, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
     purrdf_buffer_data(buffer, &bytes, &len);
-    CHECK(contains_bytes(bytes, len, "\"5.123456789012345678901\""),
-          "exact temporal seconds keep twenty-one fractional places");
+    CHECK(contains_bytes(bytes, len, "\"05.123456789012345678901\""),
+          "exact temporal seconds are the two-digit seconds field with twenty-one fractional places");
     purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "exact", &error);
@@ -1020,7 +1140,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.11.0` is pinned in tests/abi.rs. */
+     * literal `0.12.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1477,8 +1597,9 @@ int main(int argc, char **argv) {
                   PURRDF_STATUS_OK &&
               median_bound == 1,
           "?m is bound");
-    CHECK(median_view.lexical.len == 1 && median_view.lexical.ptr[0] == '2',
-          "MEDIAN of {1, 2, 3} is 2");
+    CHECK(median_view.lexical.len == 3 &&
+              memcmp(median_view.lexical.ptr, "2.0", 3) == 0,
+          "MEDIAN of {1, 2, 3} is the computed decimal 2.0");
     purrdf_rowcursor_free(median_rows);
     purrdf_dataset_free(median_dataset);
 
@@ -1493,7 +1614,7 @@ int main(int argc, char **argv) {
     PurrdfBuffer *entailment_report = NULL;
     rc = purrdf_query_entailment_governed(
         dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
-        0, NULL, NULL, NULL, &governors,
+        0, NULL, NULL, NULL, NULL, &governors,
         &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
         &entailment_report, &error);
@@ -1548,7 +1669,7 @@ int main(int argc, char **argv) {
         "PREFIX ex: <http://example.org/> "
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) "
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
-        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, "https://example.org/agg#",
+        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, NULL, "https://example.org/agg#",
         &governors,
         &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
@@ -1566,11 +1687,52 @@ int main(int argc, char **argv) {
                                 &entailed_median_bound) == PURRDF_STATUS_OK &&
               entailed_median_bound == 1,
           "entailed ?m is bound");
-    CHECK(entailed_median_view.lexical.len == 1 &&
-              entailed_median_view.lexical.ptr[0] == '2',
-          "MEDIAN of the entailed {1, 2, 3} is 2");
+    CHECK(entailed_median_view.lexical.len == 3 &&
+              memcmp(entailed_median_view.lexical.ptr, "2.0", 3) == 0,
+          "MEDIAN of the entailed {1, 2, 3} is the computed decimal 2.0");
+    const uint8_t *arena_report_bytes = NULL;
+    size_t arena_report_len = 0;
+    purrdf_buffer_data(entailed_median_report, &arena_report_bytes, &arena_report_len);
+    char *arena_report = dup_slice((Slice){(const char *)arena_report_bytes, arena_report_len});
+    CHECK(arena_report != NULL, "copy the baseline arena report");
+    const char *arena_prefix = "\nbudget term-arena-bytes ";
+    const char *arena_line = strstr(arena_report, arena_prefix);
+    CHECK(arena_line != NULL, "the baseline reports its original arena count");
+    char *arena_end = NULL;
+    const uint64_t arena_needed = strtoull(arena_line + strlen(arena_prefix), &arena_end, 10);
+    CHECK(arena_needed > 0 && *arena_end == '\n', "the arena count is exact");
+    free(arena_report);
+    char arena_counts[128];
+    snprintf(arena_counts, sizeof(arena_counts), "%" PRIu64 " observed, %" PRIu64 " permitted",
+             arena_needed, arena_needed - 1);
     purrdf_buffer_free(entailed_median_report);
     purrdf_rowcursor_free(entailed_median_rows);
+    entailed_median_report = NULL;
+    const uint64_t arena_limits[2] = {arena_needed - 1, arena_needed};
+    for (size_t arena_case = 0; arena_case < 2; ++arena_case) {
+        rc = purrdf_query_entailment_governed(
+            entailed_median_dataset, "ASK { ?s ?p ?o }", NULL, "rdfs", "",
+            NULL, NULL, 0, NULL, 0, NULL, NULL, &arena_limits[arena_case], NULL,
+            &governors, &entailment_outcome, &entailment_kind, NULL, NULL,
+            &entailment_boolean, &entailment_evidence, &entailment_partial,
+            &entailed_median_report, &error);
+        if (arena_case == 0) {
+            CHECK(rc != PURRDF_STATUS_OK && error != NULL &&
+                      entailed_median_report == NULL,
+                  "term-arena refusal returns no closure report");
+            CHECK(strstr(purrdf_error_message(error), "term arena bytes limit:") != NULL &&
+                      strstr(purrdf_error_message(error), arena_counts) != NULL &&
+                      strstr(purrdf_error_message(error), "purrdf_query_entailment_governed's max_term_arena_bytes") != NULL,
+                  "term-arena refusal preserves counts and names the actual C parameter");
+            purrdf_error_free(error);
+            error = NULL;
+        } else {
+            CHECK(rc == PURRDF_STATUS_OK && error == NULL && entailment_boolean == 1,
+                  "raising the actual C arena parameter completes the same query");
+            purrdf_buffer_free(entailed_median_report);
+            entailed_median_report = NULL;
+        }
+    }
     purrdf_dataset_free(entailed_median_dataset);
 
     /* C cancellation is a shareable monotone handle. */
@@ -2060,6 +2222,7 @@ int main(int argc, char **argv) {
     CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
     CHECK(check_xpath_regex() == 0, "the dated regular-expression laws");
+    CHECK(check_shacl_law() == 0, "the dated SHACL laws");
     CHECK(check_xsd_exact_numerics(dataset) == 0, "the exact XSD value space");
     CHECK(check_division_policy(dataset) == 0, "the division policy and expression errors");
 

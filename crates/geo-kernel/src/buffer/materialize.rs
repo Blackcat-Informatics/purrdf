@@ -269,20 +269,37 @@ impl OffsetRegion {
         observer: Option<&mut dyn MetricWorkObserver>,
         point_only: bool,
     ) -> Result<BufferMaterialization, GeoError> {
-        if profile.reference(target)? != self.source.reference()
-            || context.reference() != self.source.reference()
-        {
-            return Err(GeoError::config(
-                "buffer materialization requires its original actual geographic reference",
+        let target_reference = profile.reference(target)?;
+        if target_reference != self.source.reference() {
+            return Err(crate::BindingConfigError::reference_mismatch(
+                target_reference,
+                self.source.reference(),
+                crate::ReferenceMismatchReason::BufferMaterialization,
+                &mut WorkProgress::new(observer),
+            ));
+        }
+        if context.reference() != self.source.reference() {
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                self.source.reference(),
+                crate::ReferenceMismatchReason::BufferMaterialization,
+                &mut WorkProgress::new(observer),
             ));
         }
         if let Some(receipt) = receipt {
-            if receipt.source_id() != self.source.id()
-                || receipt.workspace_bytes() != self.source.retained_workspace_bytes()
-                || receipt.work_items() != self.source.preparation_work_items()
+            let expected = self.source.source_receipt();
+            if receipt.source_id() != expected.source_id()
+                || receipt.workspace_bytes() != expected.workspace_bytes()
+                || receipt.work_items() != expected.work_items()
             {
-                return Err(GeoError::config(
-                    "buffer receipt names a different original source",
+                return Err(GeoError::retained_failure(
+                    crate::SourcePreparationError::Receipt {
+                        consumer: crate::PreparationReceiptConsumer::BufferMaterialization,
+                        expected,
+                        actual: *receipt,
+                    },
+                    GeoError::SourcePreparation,
+                    observer,
                 ));
             }
             receipt.validate_context(context)?;
@@ -293,8 +310,16 @@ impl OffsetRegion {
         let general = !self.source.curves().is_empty()
             || !matches!(self.source.region(), PreparedRegion::Empty);
         if point_only && general {
-            return Err(GeoError::domain(
-                "point materialization requires a complete point collection",
+            return Err(GeoError::retained_failure_with_progress(
+                crate::GeometryDomainError::PointMaterialization {
+                    source: self.source.source_receipt(),
+                    points: self.source.points().len(),
+                    symbolic_points: self.source.symbolic_points().len(),
+                    curves: self.source.curves().len(),
+                    region: self.source.region().kind(),
+                },
+                GeoError::GeometryDomain,
+                &mut progress,
             ));
         }
         let source_bytes = if receipt.is_some() {
@@ -1591,7 +1616,7 @@ mod tests {
         drop(output);
         assert!(matches!(
             context.release_materialized_output(receipt.clone()),
-            Err(GeoError::Config(_))
+            Err(GeoError::ContextConfiguration(cause)) if matches!(&*cause, crate::ContextConfigError::OutputReceipt { reason: crate::OutputReceiptReason::LiveOwners, .. })
         ));
         drop(shared);
         context.release_materialized_output(receipt).unwrap();
@@ -1803,10 +1828,16 @@ mod tests {
                     < &decimal("0.2")
             );
         }
-        assert!(matches!(
-            offset.materialize_points(&profile, &crs, &mut context),
-            Err(GeoError::Domain(_))
-        ));
+        let error = offset
+            .materialize_points(&profile, &crs, &mut context)
+            .unwrap_err();
+        assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+            if matches!(&**cause, crate::GeometryDomainError::PointMaterialization { source, points: 0, symbolic_points: 0, curves: 1, region: crate::PreparedRegionKind::Empty }
+                if source == &offset.source().source_receipt())));
+        assert_eq!(
+            error.detail(),
+            "point materialization requires a complete point collection"
+        );
     }
 
     #[test]

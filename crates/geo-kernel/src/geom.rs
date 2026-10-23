@@ -62,6 +62,12 @@ use crate::exact::Rat;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Crs(purrdf_lex::allocation::SharedText);
 
+impl purrdf_hash::error::StructuredError for Crs {
+    purrdf_hash::error_visit! {
+        @tuple self (_owner) => "coordinate-reference" { "iri" => Iri(self.as_str()) }
+    }
+}
+
 impl Crs {
     /// Actual owned identifier String capacity, excluding the enclosing value.
     /// Admission callers count it before retaining or copying the identifier.
@@ -74,11 +80,11 @@ impl Crs {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if `iri` is empty. An empty IRI names no system and
+    /// [`GeoError::CrsConfiguration`] if `iri` is empty. An empty IRI names no system and
     /// would make every CRS comparison below succeed against every other empty
     /// one, which is the silent-agreement failure this type exists to prevent.
     ///
-    /// [`GeoError::Config`] if `iri` is not an absolute IRI reference: OGC
+    /// [`GeoError::CrsConfiguration`] if `iri` is not an absolute IRI reference: OGC
     /// 22-047r1's `wktLiteral` requirement is that the prefix be "a valid
     /// absolute IRI, as defined in [RFC 3987], enclosed in angled brackets", so a
     /// value with no scheme, or one carrying whitespace or control characters, is
@@ -126,48 +132,33 @@ impl Crs {
         storage: Option<&crate::carrier::CarrierStorage<'_>>,
     ) -> Result<(), GeoError> {
         use purrdf_iri::{IriError, IriReadError};
-        if iri.is_empty() {
-            return Err(crate::carrier::text_error(
-                storage,
-                format_args!(
-                    "a coordinate reference system IRI may not be empty; PurRDF mints no vocabulary \
-                 IRIs, so the CRS a geometry literal omits must be supplied by the caller's \
-                 GeoVocab",
-                ),
-                GeoError::Config,
-            ));
-        }
         // The same RFC 3987 scanner used by BaseIri, without a parsed source
-        // copy. Its exact lexical cause stays admitted while rendering it.
+        // copy. Its exact lexical cause stays in the original diagnostic.
         let result = crate::carrier::with_storage(storage, |memory| {
-            let error = match purrdf_iri::is_absolute_with_memory(iri, memory) {
-                Ok(true) => return Ok(None),
-                Ok(false) => IriError::NonAbsoluteBase(memory.string(iri)?),
-                Err(IriReadError::Lexical(error)) => error,
-                Err(IriReadError::Storage(error)) => return Err(error),
-            };
-            let original_text = error.owned_text_bytes();
-            let message = memory.format(&format_args!(
-                "a coordinate reference system must be named by an ABSOLUTE IRI, and {iri:?} is \
-                 not one ({error}); OGC 22-047r1 requires the wktLiteral prefix to be \"a valid \
-                 absolute IRI, as defined in [RFC 3987], enclosed in angled brackets\". Storing an \
-                 invalid one verbatim would both fail to match an identical-looking declared \
-                 system — reporting a unit the caller did declare as undeclared — and render a \
-                 wktLiteral no conformant consumer can read"
-            ));
-            drop(error);
-            let released = memory.release_bytes(original_text);
-            match message {
-                Ok(message) => {
-                    released?;
-                    Ok(Some(message))
+            memory.try_scope(|memory| {
+                if iri.is_empty() {
+                    return memory
+                        .boxed(crate::CrsError::Empty)
+                        .map(|cause| Some(GeoError::CrsConfiguration(cause)));
                 }
-                Err(error) => Err(error),
-            }
+                let error = match purrdf_iri::is_absolute_with_memory(iri, memory) {
+                    Ok(true) => return Ok(None),
+                    Ok(false) => IriError::NonAbsoluteBase(memory.string(iri)?),
+                    Err(IriReadError::Lexical(error)) => error,
+                    Err(IriReadError::Storage(error)) => return Err(error),
+                };
+                let cause = crate::CrsError::Iri {
+                    iri: memory.string(iri)?,
+                    cause: error,
+                };
+                memory
+                    .boxed(cause)
+                    .map(|cause| Some(GeoError::CrsConfiguration(cause)))
+            })
         })
         .map_err(GeoError::Storage)?;
         match result {
-            Some(message) => Err(GeoError::Config(message)),
+            Some(error) => Err(error),
             None => Ok(()),
         }
     }
@@ -204,6 +195,15 @@ pub enum CoordDim {
     Xym,
     /// `x y z m` — with both.
     Xyzm,
+}
+
+impl purrdf_hash::error::StructuredError for CoordDim {
+    purrdf_hash::error_visit! {
+        Xy => "coordinate-dimension-xy" {},
+        Xyz => "coordinate-dimension-xyz" {},
+        Xym => "coordinate-dimension-xym" {},
+        Xyzm => "coordinate-dimension-xyzm" {},
+    }
 }
 
 /// Each dimension's spellings, in declaration order: its name (`XYZ`) and its
@@ -268,6 +268,22 @@ pub struct Coord {
     y: Rat,
     z: Option<Rat>,
     m: Option<Rat>,
+}
+
+impl purrdf_hash::error::StructuredError for Coord {
+    purrdf_hash::error_visit! {
+        @record self { x, y, z, m } => "coordinate" {
+            "x" => Record(&self.x), "y" => Record(&self.y),
+            "z" => Value(match &self.z {
+                Some(value) => purrdf_hash::error::ErrorValue::Record(value),
+                None => purrdf_hash::error::ErrorValue::Absent,
+            }),
+            "m" => Value(match &self.m {
+                Some(value) => purrdf_hash::error::ErrorValue::Record(value),
+                None => purrdf_hash::error::ErrorValue::Absent,
+            })
+        }
+    }
 }
 
 impl Coord {
@@ -565,7 +581,7 @@ impl Geometry {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Literal`] when the body is not a geometry:
+    /// [`GeoError::GeometryShape`] when the body is not a geometry:
     ///
     /// * a coordinate whose own ordinates disagree with `dim`;
     /// * a `LineString` with exactly one position (a curve needs two ends);
@@ -579,28 +595,7 @@ impl Geometry {
     /// predicates about, and refusing them would reject data a conforming store
     /// must carry.
     pub fn new(dim: CoordDim, body: GeometryBody) -> Result<Self, GeoError> {
-        Self::new_admitted(dim, body, None)
-    }
-
-    pub(crate) fn new_admitted(
-        dim: CoordDim,
-        body: GeometryBody,
-        storage: Option<&crate::carrier::CarrierStorage<'_>>,
-    ) -> Result<Self, GeoError> {
-        Self::new_checked(dim, body, |error| {
-            crate::carrier::literal_error(storage, format_args!("{error}"))
-        })
-    }
-
-    pub(crate) fn new_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
-        dim: CoordDim,
-        body: GeometryBody,
-        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-    ) -> Result<Self, GeoError> {
-        Self::new_checked(dim, body, |error| match memory.format(&error) {
-            Ok(message) => GeoError::Literal(message),
-            Err(error) => GeoError::Storage(error),
-        })
+        Self::new_checked(dim, body, geometry_shape_error)
     }
 
     /// Keep the native structural diagnostic in its original retained account.
@@ -611,14 +606,14 @@ impl Geometry {
         progress: &mut crate::context::WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
         Self::new_checked(dim, body, |error| {
-            progress.retained_error(|memory| memory.format(&error).map(GeoError::Literal))
+            progress.retained_error(|_| Ok(geometry_shape_error(error)))
         })
     }
 
     fn new_checked(
         dim: CoordDim,
         body: GeometryBody,
-        failure: impl FnOnce(ShapeFailure) -> GeoError,
+        failure: impl FnOnce(GeometryShapeReason) -> GeoError,
     ) -> Result<Self, GeoError> {
         check_body(dim, &body).map_err(failure)?;
         Ok(Self { dim, body })
@@ -756,21 +751,41 @@ impl Geometry {
 /// One level deep by construction: a collection's members are already geometries,
 /// each checked when it was built, so a collection is checked only for its members'
 /// dimensions and no walk descends into them.
-enum ShapeFailure {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GeometryShapeReason {
+    /// A coordinate disagrees with the geometry's declared dimension.
     CoordinateDimension {
+        /// Original declared dimension.
         declared: CoordDim,
+        /// Original coordinate dimension.
         actual: CoordDim,
     },
+    /// A member disagrees with the collection's declared dimension.
     CollectionDimension {
+        /// Original collection dimension.
         declared: CoordDim,
+        /// Original member dimension.
         actual: CoordDim,
     },
+    /// A line has exactly one position.
     SinglePositionLine,
+    /// A ring has fewer than four positions; retains its original count.
     ShortRing(usize),
+    /// The final planar position does not repeat the first.
     OpenRing,
 }
 
-impl fmt::Display for ShapeFailure {
+impl purrdf_hash::error::StructuredError for GeometryShapeReason {
+    purrdf_hash::error_visit! {
+        CoordinateDimension { declared, actual } => "geometry-coordinate-dimension" { "declared" => Record(declared), "actual" => Record(actual) },
+        CollectionDimension { declared, actual } => "geometry-collection-dimension" { "declared" => Record(declared), "actual" => Record(actual) },
+        SinglePositionLine => "geometry-single-position-line" {},
+        ShortRing(count) => "geometry-short-ring" { "count" => Unsigned(*count as u128) },
+        OpenRing => "geometry-open-ring" {},
+    }
+}
+
+impl fmt::Display for GeometryShapeReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CoordinateDimension { declared, actual } => write!(
@@ -803,7 +818,43 @@ impl fmt::Display for ShapeFailure {
     }
 }
 
-fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), ShapeFailure> {
+impl std::error::Error for GeometryShapeReason {}
+
+/// Original geometry-model refusal and its carrier context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GeometryShapeError {
+    /// Original model requirement that failed.
+    pub reason: GeometryShapeReason,
+    /// Whether materializing a well-formed GeoJSON value exposed this refusal.
+    pub geojson_context: bool,
+}
+impl purrdf_hash::error::StructuredError for GeometryShapeError {
+    purrdf_hash::error_visit! {
+        @record self { reason, geojson_context } => "geometry-shape" {
+            "reason" => Cause(&self.reason), "geojson_context" => Boolean(self.geojson_context)
+        }
+    }
+}
+impl fmt::Display for GeometryShapeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.geojson_context {
+            f.write_str(
+                "this geo:geoJSONLiteral is well-formed JSON but does not denote a geometry: ",
+            )?;
+        }
+        fmt::Display::fmt(&self.reason, f)
+    }
+}
+purrdf_lex::error_source!(GeometryShapeError, reason);
+
+fn geometry_shape_error(reason: GeometryShapeReason) -> GeoError {
+    GeoError::GeometryShape(GeometryShapeError {
+        reason,
+        geojson_context: false,
+    })
+}
+
+fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), GeometryShapeReason> {
     match body {
         GeometryBody::Point(point) => point.as_ref().map_or(Ok(()), |c| check_coord(dim, c)),
         GeometryBody::LineString(coords) => check_line(dim, coords),
@@ -821,7 +872,7 @@ fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), ShapeFailure> {
             if member.dim == dim {
                 Ok(())
             } else {
-                Err(ShapeFailure::CollectionDimension {
+                Err(GeometryShapeReason::CollectionDimension {
                     declared: dim,
                     actual: member.dim,
                 })
@@ -830,26 +881,26 @@ fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), ShapeFailure> {
     }
 }
 
-fn check_coord(dim: CoordDim, coord: &Coord) -> Result<(), ShapeFailure> {
+fn check_coord(dim: CoordDim, coord: &Coord) -> Result<(), GeometryShapeReason> {
     if coord.dim() == dim {
         return Ok(());
     }
-    Err(ShapeFailure::CoordinateDimension {
+    Err(GeometryShapeReason::CoordinateDimension {
         declared: dim,
         actual: coord.dim(),
     })
 }
 
-fn check_line(dim: CoordDim, coords: &CoordSeq) -> Result<(), ShapeFailure> {
+fn check_line(dim: CoordDim, coords: &CoordSeq) -> Result<(), GeometryShapeReason> {
     if coords.len() == 1 {
-        return Err(ShapeFailure::SinglePositionLine);
+        return Err(GeometryShapeReason::SinglePositionLine);
     }
     coords.iter().try_for_each(|c| check_coord(dim, c))
 }
 
-fn check_ring(dim: CoordDim, ring: &CoordSeq) -> Result<(), ShapeFailure> {
+fn check_ring(dim: CoordDim, ring: &CoordSeq) -> Result<(), GeometryShapeReason> {
     if ring.len() < 4 {
-        return Err(ShapeFailure::ShortRing(ring.len()));
+        return Err(GeometryShapeReason::ShortRing(ring.len()));
     }
     ring.iter().try_for_each(|c| check_coord(dim, c))?;
     let first = &ring[0];
@@ -861,7 +912,7 @@ fn check_ring(dim: CoordDim, ring: &CoordSeq) -> Result<(), ShapeFailure> {
     if first.same_planar(last) {
         Ok(())
     } else {
-        Err(ShapeFailure::OpenRing)
+        Err(GeometryShapeReason::OpenRing)
     }
 }
 
@@ -911,17 +962,12 @@ impl GeometryLiteral {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Domain`] naming both systems when they differ. This crate
+    /// [`GeoError::GeometryDomain`] retaining both systems when they differ. This crate
     /// reprojects nothing, so comparing coordinates across two systems would be
     /// arithmetic on numbers that do not describe the same space — the refusal is
     /// the only honest answer available to it.
     pub fn require_same_crs(&self, other: &Self) -> Result<(), GeoError> {
-        if self.crs == other.crs {
-            return Ok(());
-        }
-        Err(GeoError::domain(
-            CrsPairDisplay(&self.crs, &other.crs).to_string(),
-        ))
+        self.require_same_crs_with_progress(other, &mut crate::context::WorkProgress::integer(None))
     }
 
     pub(crate) fn require_same_crs_with_progress(
@@ -932,24 +978,9 @@ impl GeometryLiteral {
         if self.crs == other.crs {
             return Ok(());
         }
-        Err(progress.retained_error(|memory| {
-            memory
-                .format(&CrsPairDisplay(&self.crs, &other.crs))
-                .map(|message| GeoError::Domain(message.into()))
-        }))
-    }
-}
-
-struct CrsPairDisplay<'a>(&'a Crs, &'a Crs);
-impl fmt::Display for CrsPairDisplay<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "the two geometries are in different coordinate reference systems (<{}> and <{}>); \
-             purrdf-geo reprojects nothing, so it refuses rather than treating their ordinates \
-             as comparable",
-            self.0, self.1
-        )
+        Err(crate::GeometryDomainError::crs_pair(
+            &self.crs, &other.crs, progress,
+        ))
     }
 }
 
@@ -957,6 +988,7 @@ impl fmt::Display for CrsPairDisplay<'_> {
 mod tests {
     use super::{
         Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral,
+        GeometryShapeError, GeometryShapeReason,
     };
     use crate::error::GeoError;
     use crate::exact::Rat;
@@ -1025,8 +1057,15 @@ mod tests {
 
     #[test]
     fn a_crs_iri_must_be_an_absolute_iri_and_ordinary_ones_still_are() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         // Empty names no system.
-        assert!(matches!(Crs::new(""), Err(GeoError::Config(_))));
+        let empty = Crs::new("").unwrap_err();
+        assert_eq!(
+            Capture::read(&empty).child("cause").code,
+            "crs-empty-identifier"
+        );
         // Whitespace-padded. This is the one that mattered: it was accepted
         // verbatim, never compared equal to the identical-looking declared
         // system, and was re-emitted into an unreadable wktLiteral.
@@ -1041,11 +1080,25 @@ mod tests {
             "//example.org/crs",
             "1http://example.org/",
             "http://example.org/<x>",
+            "https://example.org/%Q0",
         ] {
+            let original = bad.to_owned();
+            let error = Crs::new(original).unwrap_err();
+            let cloned = error.clone();
+            drop(error);
+            let fields = Capture::read(&cloned).child("cause");
+            assert_eq!(fields.code, "crs-invalid-identifier");
+            assert!(matches!(fields.field("iri"), ErrorValue::Iri(value) if value == bad));
+            assert!(!cloned.is_expression_error());
             assert!(
-                matches!(Crs::new(bad), Err(GeoError::Config(_))),
-                "{bad:?} is not an absolute IRI and must be refused"
+                std::error::Error::source(&cloned)
+                    .unwrap()
+                    .source()
+                    .is_some()
             );
+            if bad == "https://example.org/%Q0" {
+                assert_eq!(fields.child("cause").code, "iri-bad-percent-encoding");
+            }
         }
         // The neighbouring VALID cases. This type still mints nothing and still
         // takes the caller's IRI byte-exactly; the check must not have narrowed
@@ -1075,9 +1128,36 @@ mod tests {
             Crs::new("http://example.org/crs/other").expect("iri"),
             Geometry::empty(CoordDim::Xy, GeometryKind::Point),
         );
-        assert!(matches!(a.require_same_crs(&b), Err(GeoError::Domain(_))));
+        let error = a.require_same_crs(&b).unwrap_err();
+        let mut progress = crate::context::WorkProgress::integer(None);
+        let metered = a
+            .require_same_crs_with_progress(&b, &mut progress)
+            .unwrap_err();
+        assert_eq!(error.original(), metered.original());
         // The neighbouring VALID case.
         assert!(a.require_same_crs(&a.clone()).is_ok());
+        let first = a.crs().as_str().to_owned();
+        let second = b.crs().as_str().to_owned();
+        drop((a, b));
+        for error in [error, metered] {
+            let last = error.clone();
+            drop(error);
+            let fields = purrdf_testkit::error_capture::Capture::read(&last).child("cause");
+            assert_eq!(fields.code, "geometry-crs-mismatch");
+            assert!(
+                matches!(fields.field("first"), purrdf_hash::error::ErrorValue::Iri(value) if value == first)
+            );
+            assert!(
+                matches!(fields.field("second"), purrdf_hash::error::ErrorValue::Iri(value) if value == second)
+            );
+            assert!(last.is_expression_error());
+            assert_eq!(
+                last.detail(),
+                format!(
+                    "the two geometries are in different coordinate reference systems (<{first}> and <{second}>); purrdf-geo reprojects nothing, so it refuses rather than treating their ordinates as comparable"
+                )
+            );
+        }
     }
 
     // ---- dimension -------------------------------------------------------
@@ -1101,7 +1181,13 @@ mod tests {
         let three_d = Coord::new(r(1), r(2), Some(r(3)), None);
         assert!(matches!(
             Geometry::new(CoordDim::Xy, GeometryBody::Point(Some(three_d.clone()))),
-            Err(GeoError::Literal(_))
+            Err(GeoError::GeometryShape(GeometryShapeError {
+                reason: GeometryShapeReason::CoordinateDimension {
+                    declared: CoordDim::Xy,
+                    actual: CoordDim::Xyz
+                },
+                geojson_context: false
+            }))
         ));
         // The neighbouring VALID case: the same coordinate under the dimension it
         // actually carries.
@@ -1114,7 +1200,10 @@ mod tests {
     fn a_one_position_line_is_refused_but_two_and_zero_are_not() {
         assert!(matches!(
             Geometry::new(CoordDim::Xy, GeometryBody::LineString(seq(&[(0, 0)]))),
-            Err(GeoError::Literal(_))
+            Err(GeoError::GeometryShape(GeometryShapeError {
+                reason: GeometryShapeReason::SinglePositionLine,
+                geojson_context: false
+            }))
         ));
         assert!(
             Geometry::new(
@@ -1135,12 +1224,18 @@ mod tests {
         let short = vec![seq(&[(0, 0), (1, 0), (0, 0)])];
         assert!(matches!(
             Geometry::new(CoordDim::Xy, GeometryBody::Polygon(short)),
-            Err(GeoError::Literal(_))
+            Err(GeoError::GeometryShape(GeometryShapeError {
+                reason: GeometryShapeReason::ShortRing(3),
+                geojson_context: false
+            }))
         ));
         let unclosed = vec![seq(&[(0, 0), (1, 0), (0, 1), (2, 2)])];
         assert!(matches!(
             Geometry::new(CoordDim::Xy, GeometryBody::Polygon(unclosed)),
-            Err(GeoError::Literal(_))
+            Err(GeoError::GeometryShape(GeometryShapeError {
+                reason: GeometryShapeReason::OpenRing,
+                geojson_context: false
+            }))
         ));
         // The neighbouring VALID case.
         let closed = vec![seq(&[(0, 0), (1, 0), (0, 1), (0, 0)])];
@@ -1189,7 +1284,13 @@ mod tests {
                 CoordDim::Xyz,
                 GeometryBody::GeometryCollection(vec![flat.clone()])
             ),
-            Err(GeoError::Literal(_))
+            Err(GeoError::GeometryShape(GeometryShapeError {
+                reason: GeometryShapeReason::CollectionDimension {
+                    declared: CoordDim::Xyz,
+                    actual: CoordDim::Xy
+                },
+                geojson_context: false
+            }))
         ));
         // The neighbouring VALID case.
         assert!(Geometry::new(CoordDim::Xy, GeometryBody::GeometryCollection(vec![flat])).is_ok());

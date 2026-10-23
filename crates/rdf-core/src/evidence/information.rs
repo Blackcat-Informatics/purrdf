@@ -17,6 +17,13 @@ pub enum StandpointKey {
     Declared(Digest32),
 }
 
+impl purrdf_hash::error::StructuredError for StandpointKey {
+    purrdf_hash::error_visit! {
+        Unscoped => "evidence-standpoint-unscoped" {},
+        Declared(id) => "evidence-standpoint-declared" { "identity" => Bytes(id.as_bytes()) },
+    }
+}
+
 /// A canonical finite override map over a uniform information value.
 ///
 /// Combining maps applies FOUR pointwise. An ordinary supported row has no

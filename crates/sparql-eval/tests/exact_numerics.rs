@@ -48,7 +48,7 @@ fn values(values: &[(&str, &str)]) -> Arc<RdfDataset> {
 fn run(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     let query = format!("PREFIX xsd: <{XSD}>\nPREFIX ex: <{EX}>\n{query}");
     NativeSparqlEngine::new().query_with_options_view(
@@ -92,7 +92,7 @@ fn eval(expression: &str) -> String {
     eval_with(expression, QueryOptions::EMPTY)
 }
 
-fn eval_with(expression: &str, options: QueryOptions<'_>) -> String {
+fn eval_with(expression: &str, options: QueryOptions<'_, '_>) -> String {
     let result = run(
         &empty(),
         &format!("SELECT ({expression} AS ?y) WHERE {{}}"),
@@ -245,15 +245,15 @@ fn numeric_functions_and_promotion_are_exact() {
     let big = format!("{}.5", "1".repeat(40));
     assert_eq!(
         eval(&format!("ROUND({big})")),
-        format!("{}2^^decimal", "1".repeat(39))
+        format!("{}2.0^^decimal", "1".repeat(39))
     );
     assert_eq!(
         eval(&format!("FLOOR({big})")),
-        format!("{}^^decimal", "1".repeat(40))
+        format!("{}.0^^decimal", "1".repeat(40))
     );
     assert_eq!(
         eval(&format!("CEIL({big})")),
-        format!("{}2^^decimal", "1".repeat(39))
+        format!("{}2.0^^decimal", "1".repeat(39))
     );
     assert_eq!(eval(&format!("ABS(-{big})")), format!("{big}^^decimal"));
     assert_eq!(

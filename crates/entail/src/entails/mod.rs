@@ -538,7 +538,7 @@ fn prepare(
 /// the absence of a run and has no boundary list to correct. Written as a total match so a
 /// later error that starts carrying a report has to decide here rather than silently ship the
 /// pre-merge boundary.
-pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
+pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E> {
     match error {
         EntailError::Inconsistent(run) => {
             let (witness, report) = run.into_parts();
@@ -549,8 +549,15 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
         }
         other @ (EntailError::Storage(_)
         | EntailError::Build(_)
+        | EntailError::Dataset { .. }
         | EntailError::Parse(_)
+        | EntailError::OwlSyntax(_)
+        | EntailError::RifXml(_)
+        | EntailError::RifVariable(_)
+        | EntailError::Decision(_)
+        | EntailError::KeyMembership(_)
         | EntailError::Evaluate(_)
+        | EntailError::Maintenance(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
         | EntailError::RoleHierarchy(_)
@@ -564,7 +571,8 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::ProofsNotRecorded
         | EntailError::Stopped
         | EntailError::Canonicalization(_)
-        | EntailError::Unsatisfiable) => other,
+        | EntailError::Unsatisfiable
+        | EntailError::Collection(_)) => other,
     }
 }
 

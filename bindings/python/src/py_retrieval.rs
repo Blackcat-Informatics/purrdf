@@ -801,7 +801,7 @@ fn build_dataset(call: &Call) -> Result<Arc<RdfDataset>, String> {
 fn build_registry(
     data: &RdfDataset,
     producers: &[Producer],
-) -> Result<PropertyFunctionRegistry, String> {
+) -> Result<PropertyFunctionRegistry<'static>, String> {
     if producers.is_empty() {
         return Err(
             "no ranked producers declared; PurRDF mints no vocabulary, so there is no default \
@@ -1029,7 +1029,9 @@ fn build_profile(weights: &[(String, i128)], decay: DecayRule) -> Result<FusionP
 }
 
 /// Plan the call's request against a registry built from its producers.
-fn run_plan(call: &Call) -> Result<(Arc<RdfDataset>, PropertyFunctionRegistry, Plan), String> {
+fn run_plan(
+    call: &Call,
+) -> Result<(Arc<RdfDataset>, PropertyFunctionRegistry<'static>, Plan), String> {
     let data = build_dataset(call)?;
     let registry = build_registry(&data, &call.producers)?;
     let planned = crate::retrieval::plan(&call.request, &registry, &call.statistics)

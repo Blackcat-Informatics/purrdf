@@ -236,6 +236,12 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
 /// signature and its behaviour, so this is additive and rides the same bump.
 ///
+/// The same additive surface includes `purrdf_shacl_validate_to_sarif_law`, the validation
+/// entry point with a nullable `shacl_profile` after `regex_profile`: the stable id of one
+/// exact, dated SHACL law (`shacl-rec-2017-07-20`, `shacl-wd-2026-09-18` or
+/// `shacl-ed-2026-10-16`), decoded by `purrdf_validate::complete_profile`. Every existing
+/// prototype keeps its signature and its behaviour.
+///
 /// The same additive surface includes the native geographic session and point-index
 /// create/call/free families and the five `*_with_geo` query/update entry points.
 /// These use opaque owned handles and an explicit selected geographic profile;
@@ -258,7 +264,16 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// admission refusal from a malformed shapes graph; error accessors retain the
 /// diagnostic. No earlier status is renumbered, and the wildcard-free status test
 /// pins the appended value.
-pub const PURRDF_ABI_MINOR: u32 = 11;
+///
+/// # `0.11.0` → `0.12.0`: caller-controlled regime term arenas
+///
+/// Seven prototypes gain nullable `const uint64_t *max_term_arena_bytes` after
+/// `max_join_steps`: the four `purrdf_entail_` materialization/conclusion services
+/// and `purrdf_query_entailment_governed` with its XPath and geo variants. This
+/// inserts an argument before existing controls/out-pointers and requires every
+/// affected C caller to rebuild. Null retains the engine default; a supplied
+/// limit is enforced and arena refusals name the actual calling parameter.
+pub const PURRDF_ABI_MINOR: u32 = 12;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

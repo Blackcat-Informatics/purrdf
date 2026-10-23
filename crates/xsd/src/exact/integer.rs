@@ -23,7 +23,7 @@ use crate::bigint::BigInt;
 /// canonical — a value has exactly one representation — so the derived
 /// equality and hash are value equality and value hash, and the small-value path
 /// costs one checked machine operation and no allocation (the `exact` bench
-/// measures it against the bounded `i128` path).
+/// measures it beside the public value dispatch over the same tower).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Integer(Repr);
 
@@ -32,6 +32,20 @@ pub struct Integer(Repr);
 enum Repr {
     Small(i128),
     Big(BigInt),
+}
+
+impl purrdf_hash::error::StructuredError for Integer {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let Self(value) = self;
+        visitor.variant("xsd-integer");
+        visitor.value(
+            Some("value"),
+            match value {
+                Repr::Small(value) => purrdf_hash::error::ErrorValue::Signed(*value),
+                Repr::Big(value) => purrdf_hash::error::ErrorValue::Record(value),
+            },
+        );
+    }
 }
 
 impl Integer {
@@ -208,7 +222,7 @@ impl Integer {
         self.sub_using(rhs, &crate::bigint::scratch::Fallible)
     }
 
-    /// Multiply through the same schoolbook/Karatsuba implementation.
+    /// Multiply through the same native schoolbook/recursive/transform dispatch.
     /// # Errors
     /// Returns physical destination refusal without infallible fallback.
     pub fn try_mul(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {

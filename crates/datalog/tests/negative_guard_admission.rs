@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
-use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator, GuardReads, Negation};
+use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator, GuardReads, GuardRows, Negation};
 use purrdf_datalog::seminaive::{
     BudgetResource, EvalError, EvalOptions, compile, evaluate_guarded,
 };
@@ -19,14 +19,14 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 struct Answers {
     /// Constructed before opening the allocation window, then moved to the caller.
-    rows: Mutex<Option<Vec<Vec<String>>>>,
+    rows: Mutex<Option<GuardRows>>,
 }
 
 impl GuardEvaluator for Answers {
     fn evaluate(
         &self,
         call: &GuardCall<'_>,
-    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+    ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
         match call.guard.name() {
             "expand" => self
                 .rows
@@ -85,7 +85,9 @@ fn nested_refusal_stops_owned_local_expansion_and_preserves_exact_boundaries() {
     let exact_boundary = 2 * ROWS + 3;
     for ceiling in [0, nested_boundary, exact_boundary - 1, exact_boundary] {
         let answers = Answers {
-            rows: Mutex::new(Some((0..ROWS).map(|_| vec![surface.clone()]).collect())),
+            rows: Mutex::new(Some(
+                (0..ROWS).map(|_| vec![surface.clone().into()]).collect(),
+            )),
         };
         let seeded = input.clone();
         let options = EvalOptions::default().with_max_join_steps(ceiling);

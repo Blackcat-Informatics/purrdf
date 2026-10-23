@@ -382,7 +382,7 @@ fn supplementary_han_and_unknown_units_remain_searchable() {
         .substring(fragment)
         .expect("one fragment");
     assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].term.documents(), [0]);
+    assert_eq!(evidence[0].term.documents().collect::<Vec<_>>(), [0]);
     assert_eq!(evidence[0].ranges.len(), 1);
     assert_eq!(
         &evidence[0].term.text()[evidence[0].ranges[0].clone()],

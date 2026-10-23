@@ -108,11 +108,14 @@ impl PropertyFunction for Expand {
         2
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let input = args.get(0);
         let recorded = input.map_or_else(
             || format!("{}:-", args.mode().code()),
@@ -253,7 +256,7 @@ fn run_relation_with(
 /// Run `body` as `SELECT ?q ?out WHERE { body }` over `data` in `env`, whose relation
 /// records into `invocations`.
 fn run_in(
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     data: &RdfDataset,
     invocations: &Mutex<Vec<String>>,
     body: &str,
@@ -1030,11 +1033,14 @@ impl PropertyFunction for Pairs {
         4
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let key = args.get(0).map(key_of);
         self.invocations
             .lock()
@@ -1711,7 +1717,7 @@ impl CustomAggregate for FirstLiteral {
 }
 
 /// The environment `relation`, registered at `iri`, runs in beside [`FirstLiteral`].
-fn aggregating_env(iri: &str, relation: Arc<dyn PropertyFunction>) -> ExtensionEnv {
+fn aggregating_env(iri: &str, relation: Arc<dyn PropertyFunction>) -> ExtensionEnv<'static> {
     let mut aggregates = AggregateRegistry::default();
     aggregates.register(FIRST_LITERAL, Arc::new(FirstLiteral));
     let mut relations = PropertyFunctionRegistry::new();
@@ -1788,7 +1794,7 @@ fn aggregate_table() -> Vec<(TermValue, TermValue)> {
         (TermValue::typed_literal("3", XSD_INTEGER), "3/1"),
         (TermValue::typed_literal("4", XSD_INTEGER), "4/1"),
         (TermValue::typed_literal("1.5", XSD_DECIMAL), "1.5/1"),
-        (TermValue::typed_literal("4", XSD_DECIMAL), "4.0/1"),
+        (TermValue::typed_literal("4.0", XSD_DECIMAL), "4.0/1"),
         (TermValue::simple_literal("delta"), "delta/1"),
     ]
     .into_iter()
@@ -1851,7 +1857,7 @@ fn aggregates_failing_on_present_values_answer_the_bottom_up_join_and_never_invo
     );
     let sums: (&[(&str, &str)], &[&str]) = (&[("3", "3/1"), ("4", "4/1")], &["bf:3", "bf:4"]);
     let averages: (&[(&str, &str)], &[&str]) =
-        (&[("1.5", "1.5/1"), ("4", "4.0/1")], &["bf:1.5", "bf:4"]);
+        (&[("1.5", "1.5/1"), ("4.0", "4.0/1")], &["bf:1.5", "bf:4.0"]);
     let first_literal = format!("AGG(<{FIRST_LITERAL}>, ?v)");
     let forms: [(&str, String, _); 9] = [
         ("MAX(STR(?v))", text.clone(), strings),

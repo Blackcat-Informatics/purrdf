@@ -229,7 +229,7 @@ fn vector_space_of(terms: &[String]) -> Arc<HnswSpace> {
 
 /// The read `search` takes: every stratum on demand.
 fn on_demand(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &Cardinalities,
     dataset: &RdfDataset,
     request: &RetrievalRequest,
@@ -250,7 +250,7 @@ fn on_demand(
 
 /// The same answer, read materialised: `execute` at the planned depths, then `fuse`.
 fn materialised(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &Cardinalities,
     dataset: &RdfDataset,
     request: &RetrievalRequest,
@@ -396,7 +396,7 @@ fn text_pair_registry(
     dataset: &RdfDataset,
     pair: &TextPair,
     basis: ExclusionBasis,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let sides = [
         (
@@ -601,7 +601,7 @@ fn hnsw_pair_registry(
     dataset: &RdfDataset,
     pair: &HnswPair,
     basis: ExclusionBasis,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text_relation = TextSearchRelation::new(text_index(dataset, &note_predicate()));

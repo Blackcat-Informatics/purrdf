@@ -128,12 +128,12 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
     assert_ne!(index.source_fingerprint(), quad.source_fingerprint());
     assert_eq!(
         purrdf_hash::hex::encode(&index.fingerprint()),
-        "f3db46450a4276ea8b854b8e7b3c2746c625603e9f60884650c0ae4b71bc0806",
+        "a3b848138dd6e067908437f62a086b82f3ecda0104cee1b0943b41d67b9b239a",
         "the graph-free index identity"
     );
     assert_eq!(
         purrdf_hash::hex::encode(&index.source_fingerprint()),
-        "437159b6041d315f3d10e109b0e977c2301615708e64eae09e6eaf6b9319a9fa",
+        "b857dde328bad38b1551da367e6a4991d2b2fa86e6efe1568573b9ca774ff7ed",
         "the graph-free source identity"
     );
 
@@ -256,7 +256,7 @@ pub(crate) fn graph_free_rdf12_partitions_and_named_refusal() {
 pub(crate) struct Fixture {
     pub(crate) dataset: Arc<RdfDataset>,
     pub(crate) index: Arc<TextIndex>,
-    pub(crate) env: ExtensionEnv,
+    pub(crate) env: ExtensionEnv<'static>,
 }
 impl Fixture {
     /// `graph` is deliberately hidden by the occurrence relation's row schema.
@@ -2103,7 +2103,7 @@ struct EvidenceAnswer {
 fn evidence_answer(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     claims: &dyn purrdf_sparql_eval::evidence_exec::EvidenceSource<purrdf_core::TermId>,
     disabled: bool,
 ) -> EvidenceAnswer {
@@ -2163,7 +2163,7 @@ fn evidence_answer(
 fn equal_evidence(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     claims: &dyn purrdf_sparql_eval::evidence_exec::EvidenceSource<purrdf_core::TermId>,
 ) -> EvidenceAnswer {
     let literal = evidence_answer(dataset, query, options, claims, true);

@@ -255,6 +255,16 @@ ownership, and all limits. Complete examples are in
   entry: the thrown `Error`'s `code` on a SPARQL or shapes-graph entry (a SHACL-SPARQL
   query's refusal included), on either lane, and the `code` of the `ShaclProductRefusal`
   a product entry throws (its `dimension` is `undefined`).
+- `shaclProfile` — `shaclValidateToSarif` takes a `shaclProfile` argument (after
+  `xpathRegex`; its asynchronous twin takes it in its options object): the stable id of
+  one exact SHACL law, `"shacl-rec-2017-07-20"` (the 2017 Recommendation),
+  `"shacl-wd-2026-09-18"` (the SHACL 1.2 working draft) or `"shacl-ed-2026-10-16"` (the
+  data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under; typed as
+  `ShaclLaw`). It is the law `purrdf validate --shacl-profile` selects on the CLI.
+  Absent, the compatibility law runs, unchanged. An id that names no law throws with the
+  `unsupported-profile` status, a shapes graph the selected law's text refuses throws at
+  load, and an `xpathRegex` naming a law other than the one the dated law requires
+  throws. Node-expression and SPARQL 1.2 RL entries are law-independent.
 - `QueryEngine.divisionPolicy` — the precision of every `xsd:integer`/`xsd:decimal`
   quotient (`/` and `AVG`) the engine forms: `"exact"`, `"N"` (`N` fractional digits
   truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,

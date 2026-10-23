@@ -25,6 +25,10 @@ impl fmt::Display for IntegerRangeError {
 
 impl std::error::Error for IntegerRangeError {}
 
+impl purrdf_hash::error::StructuredError for IntegerRangeError {
+    purrdf_hash::error_visit! { @record self {} => "cbor-integer-out-of-range" {} }
+}
+
 impl Integer {
     /// `-2^64`, the most negative integer major type 1 carries.
     pub const MIN: Self = Self(-(1_i128 << 64));
@@ -172,6 +176,63 @@ pub enum Value {
     Array(Vec<Self>),
     /// Major type 5: key/value pairs in order, repeats retained.
     Map(Vec<(Self, Self)>),
+}
+
+impl purrdf_hash::error::StructuredError for Value {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Integer(value) => {
+                visitor.variant("cbor-integer");
+                visitor.value(Some("value"), ErrorValue::Signed(value.get()));
+            }
+            Self::Bytes(value) => {
+                visitor.variant("cbor-bytes");
+                visitor.value(Some("value"), ErrorValue::Bytes(value));
+            }
+            Self::Float(value) => {
+                visitor.variant("cbor-float");
+                visitor.value(Some("bits"), ErrorValue::Float64Bits(value.to_bits()));
+            }
+            Self::Text(value) => {
+                visitor.variant("cbor-text");
+                visitor.value(Some("value"), ErrorValue::Text(value));
+            }
+            Self::Bool(value) => {
+                visitor.variant("cbor-boolean");
+                visitor.value(Some("value"), ErrorValue::Boolean(*value));
+            }
+            Self::Null => visitor.variant("cbor-null"),
+            Self::Simple(value) => {
+                visitor.variant("cbor-simple");
+                visitor.value(Some("value"), ErrorValue::Unsigned(u128::from(*value)));
+            }
+            Self::Tag(tag, value) => {
+                visitor.variant("cbor-tag");
+                visitor.value(Some("tag"), ErrorValue::Unsigned(u128::from(*tag)));
+                visitor.value(Some("value"), ErrorValue::Record(&**value));
+            }
+            Self::Array(values) => {
+                visitor.variant("cbor-array");
+                visitor.begin_list(Some("values"), values.len());
+                for value in values {
+                    visitor.value(None, ErrorValue::Record(value));
+                }
+                visitor.end_list();
+            }
+            Self::Map(pairs) => {
+                visitor.variant("cbor-map");
+                visitor.begin_list(Some("pairs"), pairs.len());
+                for (key, value) in pairs {
+                    visitor.begin_record(None, "cbor-map-entry");
+                    visitor.value(Some("key"), ErrorValue::Record(key));
+                    visitor.value(Some("value"), ErrorValue::Record(value));
+                    visitor.end_record();
+                }
+                visitor.end_list();
+            }
+        }
+    }
 }
 
 impl Value {

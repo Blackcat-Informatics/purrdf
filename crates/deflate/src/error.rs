@@ -16,6 +16,14 @@ pub enum Alphabet {
     Distance,
 }
 
+impl purrdf_hash::error::StructuredError for Alphabet {
+    purrdf_hash::error_visit! {
+        CodeLength => "deflate-code-length" {},
+        LiteralLength => "deflate-literal-length" {},
+        Distance => "deflate-distance" {},
+    }
+}
+
 impl fmt::Display for Alphabet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -145,6 +153,43 @@ pub enum Error {
     Empty,
 }
 
+impl purrdf_hash::error::StructuredError for Error {
+    purrdf_hash::error_visit! {
+        InvalidBlockType => "deflate-invalid-block-type" {},
+        StoredLengthMismatch { len, nlen } => "deflate-stored-length" {
+            "len" => Unsigned(u128::from(*len)), "nlen" => Unsigned(u128::from(*nlen)),
+        },
+        TooManyLengthCodes { count } => "deflate-too-many-length-codes" { "count" => Unsigned(u128::from(*count)) },
+        RepeatWithoutPrevious => "deflate-repeat-without-previous" {},
+        CodeLengthsOverrun => "deflate-code-lengths-overrun" {},
+        OversubscribedCode { alphabet } => "deflate-oversubscribed-code" { "alphabet" => Record(alphabet) },
+        MissingEndOfBlock => "deflate-missing-end-of-block" {},
+        InvalidCode { alphabet } => "deflate-invalid-code" { "alphabet" => Record(alphabet) },
+        InvalidLengthSymbol { symbol } => "deflate-invalid-length-symbol" { "symbol" => Unsigned(u128::from(*symbol)) },
+        InvalidDistanceSymbol { symbol } => "deflate-invalid-distance-symbol" { "symbol" => Unsigned(u128::from(*symbol)) },
+        DistanceTooFar { distance, available } => "deflate-distance-too-far" {
+            "distance" => ByteCount(u128::from(*distance)), "available" => ByteCount(u128::from(*available)),
+        },
+        Truncated => "deflate-truncated" {},
+        LimitExceeded { limit } => "deflate-limit-exceeded" { "limit" => ByteCount(u128::from(*limit)) },
+        TrailingData => "deflate-trailing-data" {},
+        NotGzip => "gzip-not-gzip" {},
+        UnsupportedMethod { method } => "gzip-unsupported-method" { "method" => Unsigned(u128::from(*method)) },
+        ReservedFlags { flags } => "gzip-reserved-flags" { "flags" => Unsigned(u128::from(*flags)) },
+        HeaderCrcMismatch { stored, computed } => "gzip-header-crc-mismatch" {
+            "stored" => Unsigned(u128::from(*stored)), "computed" => Unsigned(u128::from(*computed)),
+        },
+        CrcMismatch { member, stored, computed } => "gzip-crc-mismatch" {
+            "member" => Unsigned(u128::from(*member)), "stored" => Unsigned(u128::from(*stored)), "computed" => Unsigned(u128::from(*computed)),
+        },
+        SizeMismatch { member, stored, computed } => "gzip-size-mismatch" {
+            "member" => Unsigned(u128::from(*member)), "stored" => Unsigned(u128::from(*stored)), "computed" => Unsigned(u128::from(*computed)),
+        },
+        TrailingGarbage { offset } => "gzip-trailing-garbage" { "offset" => ByteCount(u128::from(*offset)) },
+        Empty => "gzip-empty" {},
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -231,13 +276,14 @@ impl std::error::Error for Error {}
 
 impl From<Error> for std::io::Error {
     /// Truncation maps to `UnexpectedEof`, everything else to `InvalidData`; the
-    /// typed error stays reachable through `get_ref` / `into_inner`.
+    /// typed error stays reachable through the standard source chain and the
+    /// shared structured I/O bridge.
     fn from(error: Error) -> Self {
         let kind = if error == Error::Truncated {
             std::io::ErrorKind::UnexpectedEof
         } else {
             std::io::ErrorKind::InvalidData
         };
-        Self::new(kind, error)
+        purrdf_hash::error::io_error(kind, error)
     }
 }

@@ -29,6 +29,7 @@ pub use geometry::{
 };
 pub use grid::TransformOutputGrid;
 pub use models::{BilinearGrid, GridNode, Polynomial2d, PolynomialTerm};
+pub use models::{GridLocationRefusal, GridMissingNode};
 pub use models_inverse::{BilinearGridInverse, MetricSourceDomain, Polynomial2dInverse};
 pub use transverse::{Hemisphere, ProjectionDifferential, TransverseMercator, ZoneFamily};
 
@@ -346,6 +347,13 @@ pub enum CoordinateUnit {
     Metres,
 }
 
+impl purrdf_hash::error::StructuredError for CoordinateUnit {
+    purrdf_hash::error_visit! {
+        Degrees => "operation-unit-degrees" {},
+        Metres => "operation-unit-metres" {},
+    }
+}
+
 impl CoordinateUnit {
     /// The frozen scalar output grid: angular XY uses fifteen decimal places;
     /// metres and any height ordinate use six. Proof refinement never changes it.
@@ -370,6 +378,14 @@ pub struct OperationReference {
     pub swapped_axes: bool,
 }
 
+impl purrdf_hash::error::StructuredError for OperationReference {
+    purrdf_hash::error_visit! {
+        @record self { realization, unit, swapped_axes } => "operation-reference" {
+            "realization" => Record(&self.realization), "unit" => Record(&self.unit), "swapped_axes" => Boolean(self.swapped_axes)
+        }
+    }
+}
+
 /// Closed, exact rectangle supplied as a model's admitted applicability.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Applicability {
@@ -381,6 +397,14 @@ pub struct Applicability {
     pub south: Rat,
     /// Inclusive second-coordinate upper bound.
     pub north: Rat,
+}
+impl purrdf_hash::error::StructuredError for Applicability {
+    purrdf_hash::error_visit! {
+        @record self { west, east, south, north } => "operation-applicability" {
+            "west" => Record(&self.west), "east" => Record(&self.east),
+            "south" => Record(&self.south), "north" => Record(&self.north)
+        }
+    }
 }
 
 crate::context::retained::native_detached_fields!(Applicability {
@@ -478,18 +502,24 @@ impl Applicability {
         values: &crate::numerical::ExactValues<'_>,
         progress: &mut WorkProgress<'_>,
     ) -> Result<(), GeoError> {
-        if !values
+        let axis = if !values
             .compare(west, east)
             .map_err(GeoError::NumericalScratch)?
             .is_lt()
-            || !values
-                .compare(south, north)
-                .map_err(GeoError::NumericalScratch)?
-                .is_lt()
         {
-            return Err(progress.retained_message(
-                "operation applicability must have positive extents",
-                GeoError::Config,
+            Some(crate::measure::Ordinate::X)
+        } else if !values
+            .compare(south, north)
+            .map_err(GeoError::NumericalScratch)?
+            .is_lt()
+        {
+            Some(crate::measure::Ordinate::Y)
+        } else {
+            None
+        };
+        if let Some(axis) = axis {
+            return Err(crate::BindingConfigError::applicability(
+                west, east, south, north, axis, progress,
             ));
         }
         Ok(())
@@ -513,6 +543,27 @@ pub struct OperationPoint {
     pub z: Option<Rat>,
     /// Explicit observation epoch as an exact decimal year.
     pub epoch: Option<Rat>,
+}
+
+crate::context::retained::native_detached_fields!(OperationPoint {
+    native: [x, y, z, epoch],
+    copy: []
+});
+
+impl purrdf_hash::error::StructuredError for OperationPoint {
+    purrdf_hash::error_visit! {
+        @record self { x, y, z, epoch } => "operation-point" {
+            "x" => Record(&self.x), "y" => Record(&self.y),
+            "z" => Value(match &self.z {
+                Some(value) => purrdf_hash::error::ErrorValue::Record(value),
+                None => purrdf_hash::error::ErrorValue::Absent,
+            }),
+            "epoch" => Value(match &self.epoch {
+                Some(value) => purrdf_hash::error::ErrorValue::Record(value),
+                None => purrdf_hash::error::ErrorValue::Absent,
+            })
+        }
+    }
 }
 
 impl OperationPoint {
@@ -781,10 +832,14 @@ impl CoordinateOperation {
         model.validate_with(values, progress)?;
         let (input, output) = model.units();
         if source.unit != input || target.unit != output {
-            return Err(progress.retained_message(
-                "operation units disagree with model input/output units",
-                GeoError::Config,
-            ));
+            return Err(crate::BindingConfigError::OperationUnits {
+                source,
+                target,
+                input,
+                output,
+                law: model.descriptor(),
+            }
+            .into_geo(progress));
         }
         let law = SemanticLawId::from_digest(hash_fields(OPERATION_LAW, [model.descriptor()]));
         let mut identity = purrdf_hash::blake3::Hasher::new();
@@ -1100,10 +1155,18 @@ impl CoordinateOperation {
                 parameters.inverse = !parameters.inverse;
                 OperationModel::Similarity2d(parameters)
             }
-            _ => {
-                return Err(GeoError::Config(
+            OperationModel::Polynomial2d(_)
+            | OperationModel::BilinearGrid(_)
+            | OperationModel::Polynomial2dInverse(_)
+            | OperationModel::BilinearGridInverse(_) => {
+                return Err(GeoError::BindingConfiguration(
                     memory
-                        .string("model requires an explicitly certified inverse domain")
+                        .boxed(crate::BindingConfigError::InverseDomain {
+                            operation: self.id,
+                            source: self.source,
+                            target: self.target,
+                            law: self.model().descriptor(),
+                        })
                         .map_err(GeoError::Storage)?,
                 ));
             }
@@ -1349,16 +1412,22 @@ impl OperationChain {
         progress: &mut WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
         if operations.is_empty() {
-            return Err(
-                progress.retained_message("coordinate operation chain is empty", GeoError::Config)
-            );
+            return Err(crate::BindingConfigError::EmptyOperationChain {
+                operation_count: operations.len(),
+                compiled: false,
+            }
+            .into_geo(progress));
         }
-        for pair in operations.windows(2) {
+        for (index, pair) in operations.windows(2).enumerate() {
             if pair[0].target != pair[1].source {
-                return Err(progress.retained_message(
-                    "coordinate operation chain has unmatched reference boundaries",
-                    GeoError::Config,
-                ));
+                return Err(crate::BindingConfigError::ChainBoundary {
+                    index,
+                    preceding_operation: pair[0].id,
+                    following_operation: pair[1].id,
+                    target: pair[0].target,
+                    source: pair[1].source,
+                }
+                .into_geo(progress));
             }
         }
         let mut identity = purrdf_hash::blake3::Hasher::new();
@@ -1482,12 +1551,17 @@ impl OperationChain {
         progress: &mut WorkProgress<'_>,
     ) -> Result<OperationPoint, GeoError> {
         for operation in &self.operations {
-            operation.model.validate_presence(coordinate.z(), epoch)?;
+            operation
+                .model
+                .validate_presence(coordinate.z(), epoch, progress)?;
         }
-        let first = self
-            .operations
-            .first()
-            .ok_or_else(|| GeoError::config("empty compiled operation chain"))?;
+        let first = self.operations.first().ok_or_else(|| {
+            crate::BindingConfigError::EmptyOperationChain {
+                operation_count: self.operations.len(),
+                compiled: true,
+            }
+            .into_geo(progress)
+        })?;
         let input = prepare_source_point(
             &first.model,
             [coordinate.x(), coordinate.y()],
@@ -1511,8 +1585,14 @@ impl OperationChain {
         for operation in &self.operations {
             operation
                 .model
-                .validate_presence(coordinate.z(), epoch)
-                .map_err(|_| MathError::Domain("source image panel lacks actual model metadata"))?;
+                .validate_presence(coordinate.z(), epoch, progress)
+                .map_err(|error| {
+                    GeoError::math_validation_failure(
+                        error,
+                        crate::OperationValidationContext::SourceMetadata,
+                        progress,
+                    )
+                })?;
         }
         let first = self.operations.first().expect("compiled nonempty chain");
         let source = if first.source.swapped_axes {
@@ -1524,8 +1604,14 @@ impl OperationChain {
             .ok_or(MathError::WorkExhausted)?;
         math.admit_exact_cost(cost)?;
         progress.math_poll(math)?;
-        let point = make_source_point(&first.model, source, coordinate.z(), epoch)
-            .map_err(|_| MathError::Domain("source image panel outside declared model domain"))?;
+        let point = make_source_point(&first.model, source, coordinate.z(), epoch, progress)
+            .map_err(|error| {
+                GeoError::math_validation_failure(
+                    error,
+                    crate::OperationValidationContext::SourceDomain,
+                    progress,
+                )
+            })?;
         progress.math_poll(math)?;
         for operation in &self.operations {
             let cost = operation
@@ -1541,8 +1627,14 @@ impl OperationChain {
             progress.math_poll(math)?;
             operation
                 .model
-                .validate_metadata(&point)
-                .map_err(|_| MathError::Domain("source image panel lacks actual model metadata"))?;
+                .validate_metadata(&point, progress)
+                .map_err(|error| {
+                    GeoError::math_validation_failure(
+                        error,
+                        crate::OperationValidationContext::SourceMetadata,
+                        progress,
+                    )
+                })?;
             progress.math_poll(math)?;
         }
         Ok(point)
@@ -1557,7 +1649,7 @@ impl OperationChain {
         for operation in &self.operations {
             operation
                 .model
-                .validate_presence(input.z.as_ref(), input.epoch.as_ref())?;
+                .validate_presence(input.z.as_ref(), input.epoch.as_ref(), progress)?;
             let cost = operation
                 .model
                 .validation_cost(
@@ -1569,7 +1661,9 @@ impl OperationChain {
                 .ok_or(GeoError::ArithmeticOverflow(
                     "operation metadata validation cost",
                 ))?;
-            progress.exact(context, cost, || operation.model.validate_metadata(input))?;
+            progress.exact_with(context, cost, |_, progress| {
+                operation.model.validate_metadata(input, progress)
+            })?;
         }
         Ok(())
     }
@@ -1583,16 +1677,22 @@ impl OperationChain {
         for operation in &self.operations {
             operation
                 .model
-                .validate_presence(point.z.as_ref(), point.epoch.as_ref())?;
+                .validate_presence(point.z.as_ref(), point.epoch.as_ref(), progress)?;
         }
-        let first = self
-            .operations
-            .first()
-            .ok_or_else(|| GeoError::config("empty compiled operation chain"))?;
-        let last = self
-            .operations
-            .last()
-            .ok_or_else(|| GeoError::config("empty compiled operation chain"))?;
+        let first = self.operations.first().ok_or_else(|| {
+            crate::BindingConfigError::EmptyOperationChain {
+                operation_count: self.operations.len(),
+                compiled: true,
+            }
+            .into_geo(progress)
+        })?;
+        let last = self.operations.last().ok_or_else(|| {
+            crate::BindingConfigError::EmptyOperationChain {
+                operation_count: self.operations.len(),
+                compiled: true,
+            }
+            .into_geo(progress)
+        })?;
         let input = prepare_source_point(
             &first.model,
             [&point.x, &point.y],
@@ -1963,7 +2063,7 @@ pub(super) fn prepare_source_point(
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
 ) -> Result<OperationPoint, GeoError> {
-    model.validate_presence(height, epoch)?;
+    model.validate_presence(height, epoch, progress)?;
     let normalized = if swapped_axes {
         [source[1], source[0]]
     } else {
@@ -1972,8 +2072,8 @@ pub(super) fn prepare_source_point(
     let cost = source_preparation_cost(model, normalized, height, epoch).ok_or(
         GeoError::ArithmeticOverflow("operation source preparation cost"),
     )?;
-    progress.exact(context, cost, || {
-        make_source_point(model, normalized, height, epoch)
+    progress.exact_with(context, cost, |_, progress| {
+        make_source_point(model, normalized, height, epoch, progress)
     })
 }
 
@@ -2002,6 +2102,7 @@ fn make_source_point(
     source: [&Rat; 2],
     height: Option<&Rat>,
     epoch: Option<&Rat>,
+    progress: &mut WorkProgress<'_>,
 ) -> Result<OperationPoint, GeoError> {
     let point = OperationPoint {
         x: source[0].clone(),
@@ -2009,7 +2110,7 @@ fn make_source_point(
         z: height.cloned(),
         epoch: epoch.cloned(),
     };
-    model.validate_point(&point)?;
+    model.validate_point(&point, progress)?;
     Ok(point)
 }
 
@@ -2443,11 +2544,14 @@ mod tests {
             assert_eq!(output.law_id(), chain.law);
             assert!(context.work_items() < ExecutionLimits::GEOMETRY.max_work_items);
         }
-        for source in [point("121", "31.23"), point("117", "-1")] {
-            assert!(matches!(
-                chain.apply(&source, &mut context),
-                Err(GeoError::Domain { .. })
-            ));
+        for (source, reason) in [
+            (point("121", "31.23"), crate::TransverseInputReason::Zone),
+            (point("117", "-1"), crate::TransverseInputReason::Hemisphere),
+        ] {
+            let error = chain.apply(&source, &mut context).unwrap_err();
+            assert!(error.is_domain_error());
+            assert!(matches!(error.original(), GeoError::TransverseInput(cause)
+                if cause.reason == reason && cause.point.as_ref().is_some_and(|point| *point == source)));
         }
         for source_axes in [false, true] {
             for projected_axes in [false, true] {

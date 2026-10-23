@@ -235,6 +235,20 @@ fn reifier_syntax_is_refused_not_read_as_a_triple_term() {
 fn relative_selector_with_no_base_is_refused() {
     let err = parse_shape_map("<alice>@<http://a.example/S>", None).unwrap_err();
     assert!(err.to_string().contains("iri-relative-no-base"), "{err}");
+    let retained = err.clone();
+    drop(err);
+    let fields = purrdf_testkit::error_capture::Capture::read(&retained);
+    assert_eq!(fields.code, "shex-iri");
+    assert!(matches!(
+        fields.field("lexical"),
+        purrdf_hash::error::ErrorValue::Text("alice")
+    ));
+    assert_eq!(fields.child("cause").code, "iri-relative-no-base");
+    assert!(
+        std::error::Error::source(&retained)
+            .unwrap()
+            .is::<purrdf_iri::IriError>()
+    );
     let map = parse_shape_map(
         "<alice>@<http://a.example/S>",
         Some("http://a.example/dir/"),

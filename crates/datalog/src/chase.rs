@@ -98,7 +98,7 @@
 //! * [`ChaseError::UnboundHeadVariable`] — a head variable that is neither existentially
 //!   quantified nor bound by the body cannot be grounded without fabricating a term.
 //! * [`ChaseError::BudgetExhausted`] — the stored-fact or join-step limit in force
-//!   ([`EvalOptions`]), or the fixed term-arena ceiling, was passed.
+//!   ([`EvalOptions`]), or the caller-selected term-arena ceiling, was passed.
 //!
 //! The forms that DO fire are the atomic head (a Datalog rule), the conjunctive head
 //! (`m = 1`, several conjuncts, no existential) and the single-disjunct existential head.
@@ -129,9 +129,7 @@ use crate::id::TermId;
 use crate::plan::{
     ATOM_ARITY, POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT,
 };
-use crate::seminaive::{
-    BudgetReport, BudgetResource, EvalOptions, MAX_TERM_ARENA_BYTES, render_capacity_refusal,
-};
+use crate::seminaive::{BudgetReport, BudgetResource, EvalOptions, render_capacity_refusal};
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
 
@@ -169,14 +167,14 @@ impl ClassKey {
         }
     }
 
-    /// This refinement, rendered for a diagnostic.
-    fn render(&self) -> String {
+    /// Borrow the existing diagnostic spelling, without rendering an operand.
+    fn diagnostic_text(&self) -> &str {
         match self {
             // The default graph's surface is the EMPTY surface, which would render as
             // nothing at all; name it instead of printing a blank.
-            Self::Const(surface) if surface.is_empty() => "(default graph)".to_owned(),
-            Self::Const(surface) => surface.clone(),
-            Self::Wildcard => "*".to_owned(),
+            Self::Const(surface) if surface.is_empty() => "(default graph)",
+            Self::Const(surface) => surface,
+            Self::Wildcard => "*",
         }
     }
 }
@@ -259,23 +257,121 @@ impl<const N: usize> Position<N> {
                 .zip(&other.keys)
                 .all(|(left, right)| left.compatible(right))
     }
+}
 
-    /// This position, rendered for a diagnostic — for example
-    /// `[s=?, p=<https://example.org/type>, o=<https://example.org/C>, g=(default graph)]`.
-    fn render(&self) -> String {
-        let rendered: Vec<String> = Slot::ALL[..N]
-            .iter()
-            .enumerate()
-            .map(|(index, slot)| {
-                let key = if index == self.slot.index() {
-                    "?".to_owned()
-                } else {
-                    self.keys[index].render()
-                };
-                format!("{}={key}", slot.name())
-            })
-            .collect();
-        format!("[{}]", rendered.join(", "))
+/// Original refined position retained by a termination refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChasePosition {
+    slot: Slot,
+    keys: Vec<ClassKey>,
+}
+
+impl ChasePosition {
+    fn capture<const N: usize>(position: &Position<N>) -> Self {
+        Self {
+            slot: position.slot,
+            keys: position.keys.to_vec(),
+        }
+    }
+
+    fn diagnostic_keys(&self) -> impl Iterator<Item = &str> {
+        self.keys.iter().enumerate().map(|(index, key)| {
+            if index == self.slot.index() {
+                "?"
+            } else {
+                key.diagnostic_text()
+            }
+        })
+    }
+
+    fn diagnostic_chars(&self) -> impl Iterator<Item = char> + '_ {
+        "[".chars()
+            .chain(self.diagnostic_keys().enumerate().flat_map(|(index, key)| {
+                (if index == 0 { "" } else { ", " })
+                    .chars()
+                    .chain(Slot::ALL[index].name().chars())
+                    .chain("=".chars())
+                    .chain(key.chars())
+            }))
+            .chain("]".chars())
+    }
+}
+
+impl Ord for ChasePosition {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // Preserve the previous rendered diagnostic ordering, borrowing the
+        // exact components rather than allocating a presentation as a sort key.
+        self.diagnostic_chars()
+            .cmp(other.diagnostic_chars())
+            .then_with(|| self.slot.cmp(&other.slot))
+            .then_with(|| self.keys.cmp(&other.keys))
+    }
+}
+
+impl PartialOrd for ChasePosition {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl fmt::Display for ChasePosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[")?;
+        for (index, text) in self.diagnostic_keys().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}={text}", Slot::ALL[index].name())?;
+        }
+        f.write_str("]")
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ChasePosition {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self { slot, keys } = self;
+        visitor.variant("chase-position");
+        visitor.value(Some("slot"), ErrorValue::Code(slot.name()));
+        purrdf_hash::error::visit_list(
+            visitor,
+            Some("keys"),
+            keys.iter().map(|key| ErrorValue::Record(key)),
+        );
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ClassKey {
+    purrdf_hash::error_visit! {
+        Const(surface) => "chase-position-constant" { "surface" => Text(surface) },
+        Wildcard => "chase-position-wildcard" {},
+    }
+}
+
+/// The existential edge whose return path prevented termination certification.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TerminationViolation {
+    /// Original position at the beginning of the edge.
+    pub from: ChasePosition,
+    /// Original existential destination position.
+    pub to: ChasePosition,
+}
+
+impl purrdf_hash::error::StructuredError for TerminationViolation {
+    purrdf_hash::error_visit! {
+        @record self { from, to } => "chase-existential-cycle" {
+            "from" => Record(&self.from), "to" => Record(&self.to)
+        }
+    }
+}
+
+impl fmt::Display for TerminationViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "existential edge {} -> {} lies in a cycle, so the restricted chase may not terminate",
+            self.from, self.to
+        )
     }
 }
 
@@ -382,7 +478,7 @@ pub enum ChaseTermination {
     /// refuses rather than risk a fixpoint that never closes.
     Unbounded {
         /// One diagnostic per offending edge, sorted and deduplicated.
-        violations: Vec<String>,
+        violations: Vec<TerminationViolation>,
     },
 }
 
@@ -390,6 +486,17 @@ impl ChaseTermination {
     /// Whether the analysis certified termination.
     pub fn is_certified(&self) -> bool {
         matches!(self, Self::WeaklyAcyclic { .. })
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ChaseTermination {
+    purrdf_hash::error_visit! {
+        WeaklyAcyclic { positions, existential_edges } => "chase-weakly-acyclic" {
+            "positions" => Unsigned(*positions as u128), "existential_edges" => Unsigned(*existential_edges as u128)
+        },
+        Unbounded { violations } => "chase-unbounded" {
+            "violations" => List(violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value)))
+        },
     }
 }
 
@@ -484,15 +591,13 @@ pub fn certify<const N: usize>(program: &[DlClause<N>]) -> ChaseTermination {
 
     // A special edge `(u, v)` violates weak acyclicity exactly when `v` reaches `u`: the
     // null created at `v` can flow back to a position that creates another null.
-    let mut violations: Vec<String> = Vec::new();
+    let mut violations = Vec::new();
     for (from, to) in &special {
         if reaches(&adjacency, to, from) {
-            violations.push(format!(
-                "existential edge {} -> {} lies in a cycle, so the restricted chase may not \
-                 terminate",
-                from.render(),
-                to.render()
-            ));
+            violations.push(TerminationViolation {
+                from: ChasePosition::capture(from),
+                to: ChasePosition::capture(to),
+            });
         }
     }
     violations.sort();
@@ -679,7 +784,7 @@ pub enum ChaseError {
     /// list, so the diagnostic points at the edges to fix.
     NonTerminating {
         /// The offending existential edges, sorted and deduplicated.
-        violations: Vec<String>,
+        violations: Vec<TerminationViolation>,
     },
     /// An EXISTENTIAL head has more than one disjunct.
     ///
@@ -749,7 +854,7 @@ pub enum ChaseError {
     ///
     /// The limits are the stored-fact and join-step limits of the caller's [`EvalOptions`]
     /// ([`chase_with`]; the target's defaults for [`chase`] and [`chase_until`]) and the
-    /// fixed [`MAX_TERM_ARENA_BYTES`], charged exactly as [`crate::seminaive::evaluate`]
+    /// caller-selected [`EvalOptions::max_term_arena_bytes`], charged exactly as [`crate::seminaive::evaluate`]
     /// charges them. There is never a truncated answer presented as complete.
     BudgetExhausted {
         /// Which ceiling.
@@ -769,6 +874,24 @@ pub enum ChaseError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for ChaseError {
+    purrdf_hash::error_visit! {
+        BaseReadClause { clause } => "chase-base-read-clause" { "clause" => Unsigned(*clause as u128) },
+        NoOutputClause { clause } => "chase-no-output-clause" { "clause" => Unsigned(*clause as u128) },
+        Storage(cause) => "chase-storage" { "cause" => Cause(cause) },
+        NeverDerive(cause) => "chase-never-derive" { "cause" => Cause(cause) },
+        NonTerminating { violations } => "chase-non-terminating" { "violations" => List(violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))) },
+        DisjunctiveExistentialHead { clause, disjuncts } => "chase-disjunctive-existential-head" { "clause" => Unsigned(*clause as u128), "disjuncts" => Unsigned(*disjuncts as u128) },
+        DisjunctiveHead { clause, disjuncts } => "chase-disjunctive-head" { "clause" => Unsigned(*clause as u128), "disjuncts" => Unsigned(*disjuncts as u128) },
+        InconsistencyClause { clause } => "chase-inconsistency-clause" { "clause" => Unsigned(*clause as u128) },
+        NegatedBodyAtom { clause, body_index } => "chase-negated-body-atom" { "clause" => Unsigned(*clause as u128), "body_index" => Unsigned(*body_index as u128) },
+        GuardedClause { clause } => "chase-guarded-clause" { "clause" => Unsigned(*clause as u128) },
+        UnboundHeadVariable { clause, variable } => "chase-unbound-head-variable" { "clause" => Unsigned(*clause as u128), "variable" => Text(variable) },
+        BudgetExhausted { resource, report } => "chase-budget-exhausted" { "resource" => Record(resource), "report" => Record(report) },
+        Stopped { report } => "chase-stopped" { "report" => Record(report) },
+    }
+}
+
 impl fmt::Display for ChaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -783,11 +906,16 @@ impl fmt::Display for ChaseError {
             Self::Storage(error) => error.fmt(f),
             Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
             Self::NonTerminating { violations } => {
-                write!(
-                    f,
-                    "the restricted chase is not certified to terminate on this program: {}",
-                    violations.join("; ")
-                )
+                f.write_str(
+                    "the restricted chase is not certified to terminate on this program: ",
+                )?;
+                for (index, violation) in violations.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str("; ")?;
+                    }
+                    fmt::Display::fmt(violation, f)?;
+                }
+                Ok(())
             }
             Self::DisjunctiveExistentialHead { clause, disjuncts } => write!(
                 f,
@@ -828,7 +956,7 @@ impl fmt::Display for ChaseError {
                     Some(rendered) => write!(f, "the chase did not complete: {rendered}"),
                     None => write!(
                         f,
-                        "the chase exceeded a fixed ceiling ({resource:?}): {} join step(s), \
+                        "the chase exceeded a configured ceiling ({resource:?}): {} join step(s), \
                          {} stored fact(s), {} term arena byte(s)",
                         report.join_steps(),
                         report.stored_facts(),
@@ -1191,7 +1319,7 @@ where
     fn report(&self) -> BudgetReport {
         BudgetReport::new(
             self.meter.consumed,
-            self.store.row_count(),
+            self.store.retained_rows(),
             self.store.term_bytes(),
         )
         .governed_by(&self.options)
@@ -1216,7 +1344,7 @@ where
                 report,
             });
         }
-        if report.term_arena_bytes() > MAX_TERM_ARENA_BYTES {
+        if report.term_arena_bytes() as u64 > report.term_arena_limit() {
             return Err(ChaseError::BudgetExhausted {
                 resource: BudgetResource::TermArenaBytes,
                 report,
@@ -1373,8 +1501,8 @@ where
 /// # Budgets
 ///
 /// Consumption is charged against the target's default stored-fact and join-step limits
-/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the fixed
-/// [`MAX_TERM_ARENA_BYTES`], exactly as [`crate::seminaive::evaluate`] charges them, and
+/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the caller-selected
+/// [`EvalOptions::max_term_arena_bytes`], exactly as [`crate::seminaive::evaluate`] charges them, and
 /// passing one is a refusal ([`ChaseError::BudgetExhausted`]) carrying an accurate report —
 /// never a truncated answer.
 ///
@@ -1552,22 +1680,14 @@ where
         if fresh.is_empty() {
             break; // the natural fixpoint: this round derived nothing new
         }
-        // Every fact here is absent from the store and unique within the round, so the
-        // projection is exact rather than an over-estimate: the limit is decided before a
-        // single row is inserted.
-        let projected = state.store.row_count().saturating_add(fresh.len());
-        if u64::try_from(projected).unwrap_or(u64::MAX) > options.max_stored_facts() {
-            return Err(ChaseError::BudgetExhausted {
-                resource: BudgetResource::StoredFacts,
-                report: BudgetReport::new(
-                    state.meter.consumed,
-                    projected,
-                    state.store.term_bytes(),
-                )
-                .governed_by(options),
-            });
-        }
         for derivation in fresh {
+            state
+                .report()
+                .admit_fact()
+                .map_err(|report| ChaseError::BudgetExhausted {
+                    resource: BudgetResource::StoredFacts,
+                    report,
+                })?;
             let fact = &derivation.fact;
             state.store.insert_row(Arity::<N>::fact_terms(fact))?;
             state.derivations.push(derivation);
@@ -2036,12 +2156,19 @@ mod tests {
         let ChaseTermination::Unbounded { violations } = &termination else {
             panic!("expected an unbounded verdict: {termination:?}");
         };
-        assert_ne!(violations.as_slice(), [] as [String; 0]);
+        assert_ne!(violations.as_slice(), []);
         let mut sorted = violations.clone();
         sorted.sort();
         sorted.dedup();
         assert_eq!(&sorted, violations, "violations are sorted and deduped");
-        assert!(violations[0].contains("lies in a cycle"), "{violations:?}");
+        let presented: Vec<_> = violations.iter().map(ToString::to_string).collect();
+        let mut presentation_order = presented.clone();
+        presentation_order.sort();
+        assert_eq!(presented, presentation_order);
+        assert!(
+            violations[0].to_string().contains("lies in a cycle"),
+            "{violations:?}"
+        );
         assert!(termination.to_string().contains("not weakly acyclic"));
 
         let refusal = chase(&program, store_of(&[("a", R, "b")]))
@@ -2053,6 +2180,21 @@ mod tests {
             }
         );
         assert!(refusal.to_string().contains("not certified to terminate"));
+        drop(program);
+        let fields = purrdf_testkit::error_capture::Capture::read(&refusal);
+        let edges = fields.records("violations");
+        assert!(!edges.is_empty());
+        for edge in edges {
+            assert_eq!(edge.code, "chase-existential-cycle");
+            for endpoint in ["from", "to"] {
+                let position = edge.child(endpoint);
+                assert!(matches!(
+                    position.field("slot"),
+                    purrdf_hash::error::ErrorValue::Code(_)
+                ));
+                assert_eq!(position.records("keys").len(), 4);
+            }
+        }
     }
 
     /// The constant-refined `type(?x, <C>) → ∃?y. ( p(?x, ?y) ∧ type(?y, <D>) )` IS weakly
@@ -2546,7 +2688,9 @@ mod tests {
     /// readable nodes.
     #[test]
     fn a_position_renders_its_slot_and_refinement() {
-        let rendered = Position::of(&concept("?x", CONCEPT_C), Slot::Subject).render();
+        let rendered =
+            ChasePosition::capture(&Position::of(&concept("?x", CONCEPT_C), Slot::Subject))
+                .to_string();
         assert_eq!(
             rendered,
             format!(
@@ -2555,7 +2699,8 @@ mod tests {
                 iri(CONCEPT_C)
             )
         );
-        let wildcard = Position::of(&role("?x", P, "?y"), Slot::Subject).render();
+        let wildcard =
+            ChasePosition::capture(&Position::of(&role("?x", P, "?y"), Slot::Subject)).to_string();
         assert_eq!(
             wildcard,
             format!("[s=?, p={}, o=*, g=(default graph)]", iri(P))

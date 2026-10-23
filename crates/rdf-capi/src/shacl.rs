@@ -246,6 +246,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
                 import_count,
                 subclass_of_in_shapes_graph,
                 std::ptr::null(),
+                std::ptr::null(),
                 out_buffer,
             )
         })
@@ -303,15 +304,78 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif_xpath_regex(
                 import_count,
                 subclass_of_in_shapes_graph,
                 regex_profile,
+                std::ptr::null(),
                 out_buffer,
             )
         })
     }
 }
 
-/// The one body of [`purrdf_shacl_validate_to_sarif`] and
-/// [`purrdf_shacl_validate_to_sarif_xpath_regex`]. `regex_profile` is null for the
-/// entry point that has no such parameter.
+/// [`purrdf_shacl_validate_to_sarif_xpath_regex`] under a caller-selected SHACL law.
+///
+/// `shacl_profile` (nullable, NUL-terminated UTF-8) is the stable id of one exact, dated
+/// SHACL law the validation runs under: `shacl-rec-2017-07-20` (the 2017 Recommendation),
+/// `shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the
+/// data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under). The id is
+/// decoded once, exactly, by `purrdf_validate::complete_profile`, the one home for that
+/// decoding, and it is the law `purrdf validate --shacl-profile` selects. NULL is
+/// [`purrdf_shacl_validate_to_sarif_xpath_regex`]: the compatibility law, unchanged.
+///
+/// An id that names no law (`shacl-ed-2026-10-17`, another letter case, the empty string)
+/// is `PURRDF_STATUS_INVALID_ARGUMENT` whose message leads with the `unsupported-profile`
+/// status; no nearby edition is substituted. A dated law carries its own XPath bundle, so a
+/// `regex_profile` naming another law is `PURRDF_STATUS_INVALID_ARGUMENT`; naming the same
+/// law, or NULL, runs the dated law under its own. A shapes graph the law's text refuses
+/// (the working draft refuses a prefix declared through a version-IRI path that the
+/// editor's draft admits) is refused at load with the shapes-graph status, never validated
+/// under another law.
+///
+/// # Safety
+/// As [`purrdf_shacl_validate_to_sarif_xpath_regex`]; `shacl_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif_law(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    shacl_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            validate_entry(
+                "purrdf_shacl_validate_to_sarif_law",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                conformance_disallows,
+                conformance_disallows_count,
+                import_iris,
+                import_documents,
+                import_count,
+                subclass_of_in_shapes_graph,
+                regex_profile,
+                shacl_profile,
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_shacl_validate_to_sarif`],
+/// [`purrdf_shacl_validate_to_sarif_xpath_regex`] and [`purrdf_shacl_validate_to_sarif_law`].
+/// `regex_profile` and `shacl_profile` are null for an entry point that has no such
+/// parameter.
 #[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
@@ -329,6 +393,7 @@ unsafe fn validate_entry(
     import_count: usize,
     subclass_of_in_shapes_graph: bool,
     regex_profile: *const c_char,
+    shacl_profile: *const c_char,
     out_buffer: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     unsafe {
@@ -350,8 +415,15 @@ unsafe fn validate_entry(
         let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
         let graph = opt_cstr_to_str(shapes_graph_iri)?;
         let regex = decode_regex_profile(regex_profile)?;
-        let bytes = match regex {
-            None => validate_to_sarif_bytes(
+        let law = purrdf_validate::requested_shacl_profile(opt_cstr_to_str(shacl_profile)?, regex)
+            .map_err(|message| {
+                PurrdfError::new(
+                    PurrdfStatus::InvalidArgument,
+                    format!("shacl_profile {message}, or NULL for the compatibility law"),
+                )
+            })?;
+        let bytes = match (regex, law) {
+            (None, None) => validate_to_sarif_bytes(
                 shapes,
                 base,
                 graph,
@@ -361,18 +433,18 @@ unsafe fn validate_entry(
                 subclass_of_in_shapes_graph,
             )
             .map_err(PurrdfError::shapes)?,
-            Some(profile) => validate_to_sarif_string_with_xpath_regex(
-                shapes,
-                base,
-                graph,
-                data,
-                &sarif_options(&disallows, subclass_of_in_shapes_graph)
-                    .map_err(PurrdfError::shapes)?,
-                &imports,
-                Some(profile),
-            )
-            .map_err(law_error)?
-            .into_bytes(),
+            (regex, law) => {
+                let mut options = sarif_options(&disallows, subclass_of_in_shapes_graph)
+                    .map_err(PurrdfError::shapes)?;
+                if let Some(law) = law {
+                    options.validation = options.validation.with_profile(law);
+                }
+                validate_to_sarif_string_with_xpath_regex(
+                    shapes, base, graph, data, &options, &imports, regex,
+                )
+                .map_err(law_error)?
+                .into_bytes()
+            }
         };
         *out_buffer = into_handle(PurrdfBuffer(bytes));
         Ok(PurrdfStatus::Ok)

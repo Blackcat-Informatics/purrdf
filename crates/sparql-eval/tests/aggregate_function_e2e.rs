@@ -39,7 +39,7 @@ const UNREGISTERED_IRI: &str = "http://example.org/agg#nope";
 // weighted sum exercises DISTINCT deduping the FULL argument tuple rather than a single
 // column: two rows sharing `value` but differing in `weight` must both be folded in.
 
-fn registry() -> ExtensionEnv {
+fn registry() -> ExtensionEnv<'static> {
     let mut registry = AggregateRegistry::default();
     registry.register(
         SUM_IRI,
@@ -63,7 +63,7 @@ fn registry() -> ExtensionEnv {
 }
 
 /// The environment a fixture registry is interpreted in.
-fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv {
+fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv<'static> {
     ExtensionEnv::over_aggregates(aggregates).expect("the fixture declarations read cleanly")
 }
 
@@ -126,7 +126,7 @@ fn dataset() -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn run(ds: &Arc<RdfDataset>, query: &str, options: QueryOptions<'_>) -> SparqlResult {
+fn run(ds: &Arc<RdfDataset>, query: &str, options: QueryOptions<'_, '_>) -> SparqlResult {
     NativeSparqlEngine::new()
         .query_with_options_view(&**ds, request(query), options)
         .expect("query")
@@ -444,7 +444,7 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
 
 const STAT_NS: &str = "http://example.org/agg/";
 
-fn statistical_registry() -> ExtensionEnv {
+fn statistical_registry() -> ExtensionEnv<'static> {
     let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(STAT_NS);
     ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
@@ -671,14 +671,14 @@ fn distinct_interacts_with_a_statistical_member() {
          WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
     );
     let distinct_result = run(&ds, &query, with_env(&reg));
-    assert_eq!(stat_lex(&rows(&distinct_result)[0], 0), "15");
+    assert_eq!(stat_lex(&rows(&distinct_result)[0], 0), "15.0");
 
     let query_plain = format!(
         "SELECT (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?median) \
          WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
     );
     let plain_result = run(&ds, &query_plain, with_env(&reg));
-    assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10");
+    assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10.0");
 }
 
 /// `ex:mval` over five subjects: values {1, 2, 3, 4, 5} — chosen (rather than
@@ -724,7 +724,7 @@ fn moments_stddev_variance_and_var_pop_end_to_end() {
     );
     assert_eq!(
         stat_lex(&result_rows[0], 1),
-        "2",
+        "2.0",
         "population variance over {{1,2,3,4,5}}: 10/5, integer-valued decimal has no point"
     );
     let stddev: f64 = stat_lex(&result_rows[0], 2).parse().expect("double");

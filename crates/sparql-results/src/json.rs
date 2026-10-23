@@ -175,10 +175,10 @@ fn write_base_body<W: TextOut + ?Sized>(result: &SparqlResult, out: &mut W) -> R
                         // variable header is a structural violation rather than a
                         // panic site.
                         let var = variables.get(column).ok_or_else(|| {
-                            Error::MalformedTerm(format!(
-                                "binding column {column} has no variable header (row has {} vars)",
-                                variables.len()
-                            ))
+                            Error::MalformedTerm(crate::MalformedResult::MissingHeader {
+                                column,
+                                variables: variables.len(),
+                            })
                         })?;
                         if !first {
                             out.push(',');
@@ -419,9 +419,10 @@ fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(
                 // RDF predicates must be IRIs; a non-IRI predicate has no valid SRJ
                 // "predicate" form → hard-fail per the serializer contract.
                 if !matches!(p.as_ref(), TermValue::Iri(_)) {
-                    return Err(Error::MalformedTerm(
-                        "triple-term predicate is not an IRI".to_string(),
-                    ));
+                    return Err(Error::MalformedTerm(crate::MalformedResult::Predicate {
+                        term: p.as_ref().clone(),
+                        cause: purrdf_core::NonIriPredicate,
+                    }));
                 }
                 out.push_str("{\"type\":\"triple\",\"value\":{\"subject\":");
                 held.extend([
@@ -968,9 +969,10 @@ mod term_walk_tests {
             return json_binding(value, out);
         };
         if !matches!(p.as_ref(), TermValue::Iri(_)) {
-            return Err(Error::MalformedTerm(
-                "triple-term predicate is not an IRI".to_string(),
-            ));
+            return Err(Error::MalformedTerm(crate::MalformedResult::Predicate {
+                term: p.as_ref().clone(),
+                cause: purrdf_core::NonIriPredicate,
+            }));
         }
         out.push_str("{\"type\":\"triple\",\"value\":{\"subject\":");
         reference(s, out)?;

@@ -76,6 +76,19 @@ pub enum LedgerError {
     InvalidFrameAlternative,
 }
 
+impl purrdf_hash::error::StructuredError for LedgerError {
+    purrdf_hash::error_visit! {
+        InvalidReifier => "ledger-invalid-reifier" {},
+        InvalidPredicate => "ledger-invalid-predicate" {},
+        Reason(cause) => "ledger-reason" { "cause" => Cause(cause) },
+        InvalidSolution => "ledger-invalid-solution" {},
+        MissingNode(key) => "ledger-missing-node" { "key" => Record(key) },
+        InvalidAcceptance => "ledger-invalid-acceptance" {},
+        InvalidAnnotation => "ledger-invalid-annotation" {},
+        InvalidFrameAlternative => "ledger-invalid-frame-alternative" {},
+    }
+}
+
 impl core::fmt::Display for LedgerError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

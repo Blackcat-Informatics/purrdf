@@ -71,7 +71,11 @@ Recorded prepared clashes carry a source derivation and the actual finite
 current-support prefix. The checker validates each supplied step against its own
 ontology and refutation assumptions, then checks the bound and inhabitant. It
 does not rerun the producer's schema closure or trust its cached verdict. These
-traces use the canonical v4 DL proof layout; other DL proof bytes remain v3.
+traces use the shared v5 DL application arena. Merge closures use v6; NI-only
+reserved-root branches use v7 with an explicit branch discriminator. Their
+reserved choices are exhaustive even before an ordinary count is violated.
+The consumer also checks NI saturation before accepting a blocked completion.
+Legacy proof layouts remain decodable with their original evidence limits.
 Preparation-refusal receipts use service layout v3; other service bytes remain
 v2. Native support recording preserves its first typed obstruction and discloses
 truncation while leaving search verdicts and counters unchanged. Proofs retain

@@ -246,6 +246,26 @@ pub struct DlCertificate {
     peak_depth: u64,
 }
 
+impl purrdf_hash::error::StructuredError for DlCertificate {
+    purrdf_hash::error_visit! {
+        @record self {
+            schema_obstruction, storage_refusal, exhausted, stopped, boundaries,
+            steps, budget, work, work_budget, decisions, peak_nodes, disjunctions, peak_depth
+        } => "owl-dl-certificate" {
+            "schema_obstruction" => Value(self.schema_obstruction.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |original| purrdf_hash::error::ErrorValue::Record(original))),
+            "storage_refusal" => Value(self.storage_refusal.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |original| purrdf_hash::error::ErrorValue::Cause(original))),
+            "exhausted" => Boolean(self.exhausted), "stopped" => Boolean(self.stopped),
+            "boundaries" => List(self.boundaries.iter().map(|boundary| purrdf_hash::error::ErrorValue::Record(boundary))),
+            "steps" => Unsigned(u128::from(self.steps)), "budget" => Unsigned(u128::from(self.budget)),
+            "work" => Unsigned(u128::from(self.work)), "work_budget" => Unsigned(u128::from(self.work_budget)),
+            "decisions" => Unsigned(u128::from(self.decisions)),
+            "peak_nodes" => Unsigned(u128::from(self.peak_nodes)),
+            "disjunctions" => Unsigned(u128::from(self.disjunctions)),
+            "peak_depth" => Unsigned(u128::from(self.peak_depth)),
+        }
+    }
+}
+
 impl DlCertificate {
     /// A class preparation refusal never means an exhaustive no-clash result.
     #[must_use]
@@ -791,6 +811,12 @@ impl<'a> Session<'a> {
             Some(recording) => recording.decide(self.kb, assumptions, self.budget),
             None => decide(self.kb, assumptions, self.budget),
         };
+        self.observe(decision);
+        decision
+    }
+
+    /// Tally the original decision once, regardless of its recording mode.
+    fn observe(&mut self, decision: Decision) {
         self.steps = self.steps.saturating_add(decision.steps);
         self.work = self.work.saturating_add(decision.work);
         self.decisions += 1;
@@ -802,7 +828,17 @@ impl<'a> Session<'a> {
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
         self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
         self.peak_depth = self.peak_depth.max(decision.peak_depth);
-        decision
+    }
+
+    /// Report an already executed decision through the ordinary certificate owner.
+    pub(crate) fn certificate_for_decision(
+        kb: &'a Kb,
+        budget: Budget,
+        decision: Decision,
+    ) -> DlCertificate {
+        let mut session = Self::new(kb, budget, None);
+        session.observe(decision);
+        session.certificate(kb.boundaries())
     }
 
     /// Whether `assumptions` REFUTE — i.e. whether the conclusion they negate is entailed.

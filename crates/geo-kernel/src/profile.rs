@@ -51,6 +51,12 @@ impl GeoBindingId {
     }
 }
 
+impl purrdf_hash::error::StructuredError for GeoBindingId {
+    purrdf_hash::error_visit! {
+        @tuple self (digest) => "geo-binding-id" { "digest" => Bytes(digest.as_bytes()) }
+    }
+}
+
 impl SemanticLawId {
     pub(crate) const fn from_digest(digest: Digest32) -> Self {
         Self(digest)
@@ -132,6 +138,13 @@ pub enum AxisOrder {
     LatLon,
 }
 
+impl purrdf_hash::error::StructuredError for AxisOrder {
+    purrdf_hash::error_visit! {
+        LonLat => "axis-order-longitude-latitude" {},
+        LatLon => "axis-order-latitude-longitude" {},
+    }
+}
+
 /// An exact oblate ellipsoid prepared independently of any datum transformation.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PreparedEllipsoid {
@@ -141,6 +154,16 @@ pub struct PreparedEllipsoid {
     normal_minimum: Metres,
     normal_maximum: Metres,
     eccentricity_squared: Rat,
+}
+
+impl purrdf_hash::error::StructuredError for PreparedEllipsoid {
+    purrdf_hash::error_visit! {
+        @record self { semimajor, inverse_flattening, semiminor, normal_minimum, normal_maximum, eccentricity_squared } => "prepared-ellipsoid" {
+            "semimajor" => Record(&self.semimajor), "inverse_flattening" => Record(&self.inverse_flattening),
+            "semiminor" => Record(&self.semiminor), "normal_minimum" => Record(self.normal_minimum.exact()),
+            "normal_maximum" => Record(self.normal_maximum.exact()), "eccentricity_squared" => Record(&self.eccentricity_squared)
+        }
+    }
 }
 
 crate::context::retained::native_detached_fields!(PreparedEllipsoid {
@@ -234,7 +257,7 @@ impl PreparedEllipsoid {
         let produced = budget.exact_values_observed(
             cost,
             |values, progress| {
-                let value = Self::new_admitted(&semimajor, &inverse_flattening, values)?;
+                let value = Self::new_admitted(&semimajor, &inverse_flattening, values, progress)?;
                 crate::context::retained::produce_persistent_numeric(value, progress)
             },
             observer,
@@ -334,14 +357,18 @@ impl PreparedEllipsoid {
         semimajor: &Rat,
         inverse_flattening: &Rat,
         values: &crate::numerical::ExactValues<'_>,
+        progress: &mut crate::context::WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
         if !values
             .compare(semimajor, &Rat::zero())
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(GeoError::InvalidEllipsoid(
-                "semimajor axis must be positive",
+            return Err(crate::EllipsoidInputError::capture(
+                semimajor,
+                inverse_flattening,
+                crate::EllipsoidRequirement::PositiveSemimajor,
+                progress,
             ));
         }
         if !values
@@ -349,8 +376,11 @@ impl PreparedEllipsoid {
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(GeoError::InvalidEllipsoid(
-                "inverse flattening must exceed one",
+            return Err(crate::EllipsoidInputError::capture(
+                semimajor,
+                inverse_flattening,
+                crate::EllipsoidRequirement::InverseFlatteningAboveOne,
+                progress,
             ));
         }
         let flattening = values
@@ -513,6 +543,15 @@ pub struct GeographicReference {
     // Derived immutable metadata. It never participates in reference equality
     // or hashing, and each axis binding computes exactly the original preimage.
     identity: std::sync::OnceLock<GeoBindingId>,
+}
+
+impl purrdf_hash::error::StructuredError for GeographicReference {
+    // Identity is a derived cache, never inspected or initialized by this view.
+    purrdf_hash::error_visit! {
+        @record self { ellipsoid, datum, axes, identity } => "geographic-reference" {
+            "ellipsoid" => Record(&self.ellipsoid), "datum" => Record(&self.datum), "axes" => Record(&self.axes)
+        }
+    }
 }
 
 impl crate::context::NativeDetached for GeographicReference {
@@ -721,6 +760,20 @@ pub struct ExecutionLimits {
     pub max_scratch_destinations: u32,
 }
 
+impl purrdf_hash::error::StructuredError for ExecutionLimits {
+    purrdf_hash::error_visit! {
+        @record self { max_output_elements, max_work_items, max_workspace_bytes, max_iterations, max_subdivision_levels, max_precision_bits, max_scratch_destinations } => "geo-execution-limits" {
+            "max_output_elements" => Unsigned(u128::from(self.max_output_elements)),
+            "max_work_items" => Unsigned(u128::from(self.max_work_items)),
+            "max_workspace_bytes" => ByteCount(u128::from(self.max_workspace_bytes)),
+            "max_iterations" => Unsigned(u128::from(self.max_iterations)),
+            "max_subdivision_levels" => Unsigned(u128::from(self.max_subdivision_levels)),
+            "max_precision_bits" => Unsigned(u128::from(self.max_precision_bits)),
+            "max_scratch_destinations" => Unsigned(u128::from(self.max_scratch_destinations))
+        }
+    }
+}
+
 impl ExecutionLimits {
     /// No caller resource ceiling beyond each counter's checked representation.
     /// Mathematical-law output grids and typed numerical failures are unchanged.
@@ -752,6 +805,14 @@ pub struct ExecutionPolicy {
     id: ExecutionPolicyId,
 }
 
+impl purrdf_hash::error::StructuredError for ExecutionPolicy {
+    purrdf_hash::error_visit! {
+        @record self { limits, id } => "geo-execution-policy" {
+            "limits" => Record(&self.limits), "id" => Bytes(self.id.0.as_bytes())
+        }
+    }
+}
+
 impl ExecutionPolicy {
     /// Validate explicitly supplied limits before numerical work or allocation.
     ///
@@ -768,9 +829,7 @@ impl ExecutionPolicy {
             || limits.max_precision_bits == 0
             || limits.max_scratch_destinations == 0
         {
-            return Err(GeoError::InvalidExecutionPolicy(
-                "admission limits must be positive",
-            ));
+            return Err(GeoError::InvalidExecutionPolicy(limits));
         }
         let fields = [
             limits.max_output_elements,
@@ -1187,7 +1246,45 @@ mod tests {
     }
 
     #[test]
+    fn ellipsoid_refusals_retain_both_exact_inputs_and_the_first_failed_requirement() {
+        use purrdf_testkit::error_capture::Capture;
+
+        for (semimajor, inverse, requirement, code) in [
+            (
+                Rat::zero(),
+                Rat::zero(),
+                crate::EllipsoidRequirement::PositiveSemimajor,
+                "ellipsoid-positive-semimajor",
+            ),
+            (
+                Rat::parse_decimal("0.125").unwrap(),
+                Rat::one(),
+                crate::EllipsoidRequirement::InverseFlatteningAboveOne,
+                "ellipsoid-inverse-flattening-above-one",
+            ),
+        ] {
+            let error = PreparedEllipsoid::new(semimajor.clone(), inverse.clone()).unwrap_err();
+            let cloned = error.clone();
+            drop(error);
+            let fields = Capture::read(cloned.original()).child("cause");
+            assert_eq!(fields.code, "ellipsoid-input");
+            assert_eq!(fields.child("requirement").code, code);
+            let GeoError::InvalidEllipsoid(cause) = cloned.original() else {
+                panic!("original exact input refusal")
+            };
+            assert_eq!(cause.semimajor, semimajor);
+            assert_eq!(cause.inverse_flattening, inverse);
+            assert_eq!(cause.requirement, requirement);
+            assert_eq!(cloned.detail(), requirement.message());
+            assert!(std::error::Error::source(cloned.original()).is_some());
+        }
+    }
+
+    #[test]
     fn insufficient_positive_precision_is_admitted_as_a_policy() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let mut limits = ExecutionLimits::GEOMETRY;
         limits.max_precision_bits = 1;
         assert!(ExecutionPolicy::new(limits).is_ok());
@@ -1196,5 +1293,67 @@ mod tests {
             ExecutionPolicy::new(limits),
             Err(GeoError::InvalidExecutionPolicy(_))
         ));
+        for limits in [
+            ExecutionLimits {
+                max_output_elements: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+            ExecutionLimits {
+                max_work_items: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+            ExecutionLimits {
+                max_workspace_bytes: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+            ExecutionLimits {
+                max_iterations: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+            ExecutionLimits {
+                max_subdivision_levels: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+            ExecutionLimits {
+                max_precision_bits: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+            ExecutionLimits {
+                max_scratch_destinations: 0,
+                ..ExecutionLimits::UNBOUNDED
+            },
+        ] {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = ExecutionPolicy::new(limits).unwrap_err();
+            let allocations = window.close();
+            assert_eq!(allocations.allocations, 0);
+            assert_eq!(error, GeoError::InvalidExecutionPolicy(limits));
+            let fields = Capture::read(&error).child("limits");
+            for (field, original) in [
+                (
+                    "max_output_elements",
+                    u128::from(limits.max_output_elements),
+                ),
+                ("max_work_items", u128::from(limits.max_work_items)),
+                (
+                    "max_workspace_bytes",
+                    u128::from(limits.max_workspace_bytes),
+                ),
+                ("max_iterations", u128::from(limits.max_iterations)),
+                (
+                    "max_subdivision_levels",
+                    u128::from(limits.max_subdivision_levels),
+                ),
+                ("max_precision_bits", u128::from(limits.max_precision_bits)),
+                (
+                    "max_scratch_destinations",
+                    u128::from(limits.max_scratch_destinations),
+                ),
+            ] {
+                assert!(
+                    matches!(fields.field(field), ErrorValue::Unsigned(value) | ErrorValue::ByteCount(value) if value == original)
+                );
+            }
+        }
     }
 }

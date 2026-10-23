@@ -240,8 +240,10 @@ fn controls() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     if !matches!(
         Reasoner::with_proofs(&refused_count),
-        Err(purrdf_entail::EntailError::Parse(detail))
-            if detail.contains("4294967295") && detail.contains("4294967294")
+        Err(purrdf_entail::EntailError::OwlSyntax(error))
+            if matches!(error.as_ref(), purrdf_entail::OwlSyntaxError::CardinalityRange {
+                value: u32::MAX, maximum, ..
+            } if *maximum == u32::MAX - 1)
     ) {
         return Err(
             "portable boundary did not preserve the typed unrepresentable-count refusal".to_owned(),
@@ -331,53 +333,4 @@ fn controls() -> Result<(), String> {
         return Err("native schema construction ignored a latched stop".to_owned());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::{check_dl_proof, prove_to_string};
-    use super::*;
-
-    /// Seal only the new vectors from real native production output. Existing
-    /// historical vectors are retained byte for byte, never regenerated here.
-    #[test]
-    #[ignore = "one-time native sealing after independent semantic/owner checks"]
-    fn seal_schema_vectors() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/dl-proof.vectors");
-        let old = std::fs::read_to_string(&path).unwrap();
-        let mut out = old
-            .split("@case schema-preparation-")
-            .next()
-            .unwrap()
-            .to_owned();
-        while !out.ends_with("\n\n") {
-            out.push('\n');
-        }
-        for (index, case) in cases().into_iter().enumerate() {
-            if index != 0 {
-                out.push('\n');
-            }
-            let produced = prove_to_string(&case.input, case.service, case.argument, 0, 0).unwrap();
-            assert_eq!(produced.answer(), case.answer, "{}", case.name);
-            let checked = check_dl_proof(
-                &case.input,
-                case.service,
-                case.argument,
-                produced.answer(),
-                produced.certificate(),
-                produced.proof_document(),
-            )
-            .unwrap();
-            assert!(
-                checked.contains("unattested 0\n"),
-                "{}: {checked}",
-                case.name
-            );
-            writeln!(out, "@case {}\n@service {}\n@argument\n{}\n@input\n{}@answer\n{}@proof\n{}@check\n{}@end",
-                case.name, case.service, case.argument, case.input, produced.answer(), produced.proof_document(), checked).unwrap();
-        }
-        controls().unwrap();
-        std::fs::write(path, out).unwrap();
-    }
 }

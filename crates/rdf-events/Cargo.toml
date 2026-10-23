@@ -24,8 +24,11 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only, ZERO dependencies: this crate IS the protocol both sides depend on, so
-# it must not pull either side (no purrdf-core, no purrdf-gts) into its tree.
+# The protocol uses only the shared root; neither purrdf-core nor purrdf-gts
+# belongs in its dependency tree.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_events"
+
+[dependencies]
+purrdf-hash.workspace = true

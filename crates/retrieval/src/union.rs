@@ -90,6 +90,55 @@ impl UnionProducer {
     }
 }
 
+impl purrdf_hash::error::StructuredError for UnionCandidate {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self { ranks, block } = self;
+        visitor.variant("retrieval-union-candidate");
+        visitor.value(
+            Some("block"),
+            block
+                .as_ref()
+                .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+        );
+        visitor.begin_list(Some("ranks"), ranks.len());
+        for (producer, values) in ranks.iter() {
+            visitor.begin_record(None, "retrieval-producer-ranks");
+            visitor.value(Some("producer"), ErrorValue::Iri(producer.as_str()));
+            purrdf_hash::error::visit_list(
+                visitor,
+                Some("ranks"),
+                values
+                    .iter()
+                    .map(|rank| ErrorValue::Unsigned(u128::from(*rank))),
+            );
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
+}
+
+impl purrdf_hash::error::StructuredError for UnionProducer {
+    purrdf_hash::error_visit! {
+        @record self { requested_depth, status, contract, announced, settled, rows_pulled,
+            rows_materialised, rows_emitted, receipt_verified, completed_prefix, read_error,
+            settlement_error } => "retrieval-union-producer" {
+            "requested_depth" => Unsigned(u128::from(self.requested_depth)),
+            "status" => Value(self.status.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "contract" => Value(self.contract.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "announced" => Value(self.announced.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "settled" => Value(self.settled.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "rows_pulled" => Unsigned(u128::from(self.rows_pulled)),
+            "rows_materialised" => Value(self.rows_materialised.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
+            "rows_emitted" => Value(self.rows_emitted.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
+            "receipt_verified" => Boolean(self.receipt_verified),
+            "completed_prefix" => Boolean(self.completed_prefix),
+            "read_error" => Value(self.read_error.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Cause(value))),
+            "settlement_error" => Value(self.settlement_error.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Cause(value)))
+        }
+    }
+}
+
 /// A candidate set with no relevance score, top-k truncation or ranking.
 ///
 /// Lexical key order is its canonical set representation, not a relevance order.
@@ -110,6 +159,62 @@ pub struct CandidateUnion {
     pub producer_bindings: SharedWorkspace<Vec<ProducerBinding>>,
     /// Original selection/rejection decisions.
     pub producer_decisions: SharedWorkspace<Vec<ProducerDecision>>,
+}
+
+impl purrdf_hash::error::StructuredError for CandidateUnion {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            plan_id,
+            candidates,
+            producers,
+            completed_prefix,
+            unserved_terms,
+            producer_bindings,
+            producer_decisions,
+        } = self;
+        visitor.variant("retrieval-candidate-union");
+        visitor.value(Some("plan_id"), ErrorValue::Record(plan_id));
+        visitor.value(
+            Some("completed_prefix"),
+            ErrorValue::Boolean(*completed_prefix),
+        );
+        visitor.begin_list(Some("candidates"), candidates.len());
+        for (term, candidate) in candidates.iter() {
+            visitor.begin_record(None, "retrieval-union-entry");
+            visitor.value(Some("term"), ErrorValue::Term(term));
+            visitor.value(Some("candidate"), ErrorValue::Record(candidate));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visitor.begin_list(Some("producers"), producers.len());
+        for (iri, producer) in producers.iter() {
+            visitor.begin_record(None, "retrieval-union-producer-entry");
+            visitor.value(Some("producer"), ErrorValue::Iri(iri.as_str()));
+            visitor.value(Some("observation"), ErrorValue::Record(producer));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visit_list(
+            visitor,
+            Some("unserved_terms"),
+            unserved_terms.iter().map(|value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("producer_bindings"),
+            producer_bindings
+                .iter()
+                .map(|value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("producer_decisions"),
+            producer_decisions
+                .iter()
+                .map(|value| ErrorValue::Record(value)),
+        );
+    }
 }
 
 /// A refusal of an inconsistent candidate stage or the original ranked protocol.
@@ -140,6 +245,21 @@ pub enum UnionError {
     },
     /// The shared native ranked-stream protocol refused.
     Protocol(ProtocolError),
+}
+
+impl purrdf_hash::error::StructuredError for UnionError {
+    purrdf_hash::error_visit! {
+        DepthMismatch { stratum, executed, requested } => "retrieval-union-depth-mismatch" {
+            "stratum" => Iri(stratum.as_str()),
+            "executed" => Value(executed.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
+            "requested" => Value(requested.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
+        },
+        InconsistentExecution { reason } => "retrieval-union-inconsistent-execution" { "reason" => Text(reason) },
+        RowsPastDepth { stratum, rank, depth } => "retrieval-union-rows-past-depth" {
+            "stratum" => Iri(stratum.as_str()), "rank" => Unsigned(u128::from(*rank)), "depth" => Unsigned(u128::from(*depth)),
+        },
+        Protocol(cause) => "retrieval-union-protocol" { "cause" => Cause(cause) },
+    }
 }
 
 impl fmt::Display for UnionError {
@@ -187,6 +307,16 @@ pub struct UnionFailure<'d> {
     /// This moves the already-admitted arena; no new evidence storage is
     /// allocated after refusal and every producer's settlement remains visible.
     pub execution: CandidateExecutionResult<'d>,
+}
+
+impl purrdf_hash::error::StructuredError for UnionFailure<'_> {
+    purrdf_hash::error_visit! {
+        @record self { cause, partial, execution } => "retrieval-union-failure" {
+            "cause" => Cause(&self.cause),
+            "partial" => Value(self.partial.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "execution" => Record(&self.execution)
+        }
+    }
 }
 impl fmt::Display for UnionFailure<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -848,6 +978,30 @@ mod admission_failure_tests {
             ))
         ));
         assert!(failure.partial.is_none());
+        let fields = purrdf_testkit::error_capture::Capture::read(&failure);
+        assert_eq!(fields.code, "retrieval-union-failure");
+        assert!(matches!(
+            fields.field("partial"),
+            purrdf_hash::error::ErrorValue::Absent
+        ));
+        let execution_fields = fields.child("execution");
+        let read_fields = execution_fields.records("streams");
+        assert_eq!(read_fields.len(), 2);
+        for read in read_fields {
+            assert!(matches!(
+                read.field("requested_depth"),
+                purrdf_hash::error::ErrorValue::Unsigned(3)
+            ));
+            let settlement = read.child("admission_failure_settlement");
+            assert!(matches!(
+                settlement.field("kind"),
+                purrdf_hash::error::ErrorValue::Code("settled")
+            ));
+            assert!(matches!(
+                settlement.field("attestation"),
+                purrdf_hash::error::ErrorValue::Absent
+            ));
+        }
         let mut retained = failure.execution;
         assert_eq!(retained.plan_id, plan_id);
         assert_eq!(retained.streams.as_slice().as_ptr(), original_buffer);
@@ -899,5 +1053,20 @@ mod admission_failure_tests {
                 .iter()
                 .all(|read| matches!(read.admission_failure_settlement, Some(Ok(None))))
         );
+        let failure = UnionFailure {
+            cause: primary.unwrap(),
+            partial: Some(partial),
+            execution: retained,
+        };
+        drop(workspace);
+        let fields = purrdf_testkit::error_capture::Capture::read(&failure);
+        let partial = fields.child("partial");
+        assert!(matches!(
+            partial.field("completed_prefix"),
+            purrdf_hash::error::ErrorValue::Boolean(false)
+        ));
+        assert!(partial.records("candidates").is_empty());
+        assert!(partial.records("producers").is_empty());
+        assert_eq!(fields.child("execution").records("streams").len(), 2);
     }
 }

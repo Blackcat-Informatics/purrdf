@@ -15,12 +15,13 @@
 //! because it changes no answer. A run that is not stopped returns precisely the answer
 //! it would have returned with no signal attached — the poll is a load and a branch at a
 //! round boundary, and the rounds are the ones the fixpoint was going to run anyway — and a
-//! run that IS stopped returns **no answer at all**: a typed refusal
+//! complete-only call that IS stopped returns a typed refusal
 //! ([`EvalError::Stopped`](crate::seminaive::EvalError::Stopped),
 //! [`ChaseError::Stopped`](crate::chase::ChaseError::Stopped)) carrying the consumption
-//! measured up to that point. There is no third outcome, so there is no partial closure a
-//! consumer could mistake for a complete one and no schedule of charges that would have to
-//! be versioned, frozen or pinned.
+//! measured up to that point. [`crate::seminaive::EvaluationSession`] retains a
+//! stopped execution, exposes its certified facts through a distinct
+//! [`crate::seminaive::PartialModel`], and accepts a fresh signal on resume.
+//! It cannot return a complete model before the original execution finishes.
 //!
 //! What this buys is the honesty of a host's wall deadline. A materialized closure is
 //! routinely the expensive half of an entailment-regime query, so a deadline that bounds
@@ -42,30 +43,8 @@
 //! make a run irreproducible if this crate read one — so the signal arrives as a trait
 //! object and this crate only ever asks it a yes/no question.
 
-use core::fmt::Debug;
-
-/// A caller-owned, latching stop request polled at a fixpoint's round boundary.
-///
-/// See the [module documentation](self) for the contract every implementation is bound by
-/// (latching, cheap, data-independent) and for why a stop signal is admitted where a
-/// caller-supplied budget is refused.
-///
-/// `Send + Sync` because a host builds one signal and shares it across whatever threads it
-/// runs work on; `Debug` because it is reachable from types this crate derives `Debug` for.
-pub trait StopSignal: Send + Sync + Debug {
-    /// Whether the caller has asked this run to stop. Latching: see the trait
-    /// documentation.
-    fn stopped(&self) -> bool;
-}
-
-/// Poll `stop`, treating "no signal at all" as "not stopped".
-///
-/// The one place `Option<&dyn StopSignal>` is read, so an ungoverned run pays exactly one
-/// null check per round and every governed one polls through the same expression.
-#[inline]
-pub(crate) fn is_stopped(stop: Option<&dyn StopSignal>) -> bool {
-    stop.is_some_and(StopSignal::stopped)
-}
+pub use purrdf_core::StopSignal;
+pub(crate) use purrdf_core::governor::is_stopped;
 
 #[cfg(test)]
 mod tests {

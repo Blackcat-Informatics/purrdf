@@ -29,7 +29,7 @@ const SEARCH: &str = "http://example.org/pf#search";
 const NOTE: &str = "http://example.org/note";
 
 /// Four documents: two hold `alpha beta`, one only `gamma`, one neither.
-fn fixture() -> (Arc<RdfDataset>, PropertyFunctionRegistry) {
+fn fixture() -> (Arc<RdfDataset>, PropertyFunctionRegistry<'static>) {
     let mut builder = RdfDatasetBuilder::new();
     let note = builder.intern_iri(NOTE).unwrap();
     for (local, text) in [

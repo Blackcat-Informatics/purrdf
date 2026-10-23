@@ -180,7 +180,7 @@ const PINNED: [(Compression, Table, &str); 10] = [
     ),
 ];
 
-#[test]
+/// Verify all ten frozen file digests across both compression modes.
 fn seeded_files_are_the_pinned_bytes() {
     let mut observed = Vec::new();
     for compression in [Compression::Uncompressed, Compression::Zstd] {
@@ -194,3 +194,5 @@ fn seeded_files_are_the_pinned_bytes() {
         .collect();
     assert_eq!(observed, pinned);
 }
+
+purrdf_testkit::harness_main!(seeded_files_are_the_pinned_bytes);

@@ -253,8 +253,7 @@ pub fn verify_embedding_source(
         exact_digest.as_bytes(),
     )?;
 
-    let pack = PackView::from_bytes(source_bytes)
-        .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+    let pack = PackView::from_bytes(source_bytes).map_err(EmbeddingError::source_pack)?;
     if mode == SourceVerificationMode::Exact {
         return Ok(SourceVerificationReport {
             mode,
@@ -264,8 +263,7 @@ pub fn verify_embedding_source(
         });
     }
 
-    let certified = verify_pack(source_bytes)
-        .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+    let certified = verify_pack(source_bytes).map_err(EmbeddingError::source_pack)?;
     compare_digest(
         DigestKind::CertifiedRdf,
         &source.certified_rdf_digest(),
@@ -312,8 +310,7 @@ pub fn verify_external_pack(
     let expected = binding
         .certified_rdf_digest()
         .ok_or(EmbeddingError::Missing("external certified RDF digest"))?;
-    let certified = verify_pack(bytes)
-        .map_err(|error| EmbeddingError::InvalidExternalPack(error.to_string()))?;
+    let certified = verify_pack(bytes).map_err(EmbeddingError::external_pack)?;
     compare_digest(DigestKind::CertifiedRdf, &expected, certified.as_bytes())?;
     Ok(RdfcDigest::from_raw(*certified.as_bytes()))
 }
@@ -642,14 +639,12 @@ fn verify_source_ordinals(
     embedding: &EmbeddingView<'_>,
     pack: &PackView<'_>,
 ) -> Result<u64, EmbeddingError> {
-    let dataset = dataset_from_view(pack)
-        .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+    let dataset = dataset_from_view(pack).map_err(EmbeddingError::source_pack)?;
     // The refusal REASON is carried through rather than replaced by a fixed string:
     // canonicalization now refuses for two different reasons, and a pack rejected for
     // carrying reserved vocabulary must not be reported as one that merely ran out of
     // budget — the first is an attempt to forge an identity, the second is not.
-    let canonical = try_canonicalize(&dataset)
-        .map_err(|err| EmbeddingError::InvalidSourcePack(err.to_string()))?;
+    let canonical = try_canonicalize(&dataset).map_err(EmbeddingError::source_pack)?;
     let dataset_target = embedding.source().dataset_target_id();
     let mut checked = 0u64;
 

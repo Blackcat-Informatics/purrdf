@@ -351,7 +351,10 @@ impl Registry {
         let Some(declared) = declared.as_object() else {
             return Err(SchemaError::InvalidKeyword {
                 location: format!("{metaschema}#/$vocabulary"),
-                reason: "`$vocabulary` must be an object".to_owned(),
+                reason: crate::KeywordRefusal::Requirement {
+                    expected: crate::KeywordRequirement::VocabularyObject,
+                    actual: declared.clone(),
+                },
             });
         };
         let mut vocabularies = Vocabularies::NONE;
@@ -387,7 +390,9 @@ fn refuse_repeated_members(uri: &str, document: &Value) -> Result<(), SchemaErro
                 if let Some(name) = object.first_duplicate() {
                     return Err(SchemaError::InvalidKeyword {
                         location: format!("{uri}#{}", location(&steps, at)),
-                        reason: format!("the object repeats the member name {name:?}"),
+                        reason: crate::KeywordRefusal::RepeatedMember {
+                            name: name.to_owned(),
+                        },
                     });
                 }
                 for (name, member) in object.iter() {
@@ -457,14 +462,17 @@ fn declared_schema(document: &Value) -> Option<&str> {
 pub(crate) fn resolve(base: &str, reference: &str) -> Result<String, SchemaError> {
     let base_iri = purrdf_iri::parse(base).map_err(|error| SchemaError::InvalidUri {
         uri: base.to_owned(),
-        reason: error.to_string(),
+        reason: crate::UriRefusal::Parse(error),
     })?;
     base_iri
         .resolve(reference)
         .map(|resolved| resolved.as_str().to_owned())
         .map_err(|error| SchemaError::InvalidUri {
             uri: reference.to_owned(),
-            reason: error.to_string(),
+            reason: crate::UriRefusal::Resolve {
+                base: base.to_owned(),
+                cause: error,
+            },
         })
 }
 
@@ -473,12 +481,12 @@ pub(crate) fn resolve(base: &str, reference: &str) -> Result<String, SchemaError
 fn absolute_without_fragment(uri: &str) -> Result<String, SchemaError> {
     let parsed = purrdf_iri::parse(uri).map_err(|error| SchemaError::InvalidUri {
         uri: uri.to_owned(),
-        reason: error.to_string(),
+        reason: crate::UriRefusal::Parse(error),
     })?;
     if !parsed.has_scheme() {
         return Err(SchemaError::InvalidUri {
             uri: uri.to_owned(),
-            reason: "a retrieval URI must be absolute".to_owned(),
+            reason: crate::UriRefusal::RetrievalRelative,
         });
     }
     match uri.split_once('#') {
@@ -486,7 +494,7 @@ fn absolute_without_fragment(uri: &str) -> Result<String, SchemaError> {
         Some((base, "")) => Ok(base.to_owned()),
         Some(_) => Err(SchemaError::InvalidUri {
             uri: uri.to_owned(),
-            reason: "a resource URI may not carry a non-empty fragment".to_owned(),
+            reason: crate::UriRefusal::Fragment,
         }),
     }
 }
@@ -692,7 +700,9 @@ impl<'r> Scan<'r> {
         {
             return Err(SchemaError::InvalidIdentifier {
                 location: format!("{}#{pointer}", entry.uri),
-                reason: format!("the anchor {name:?} is declared twice in one resource"),
+                reason: crate::IdentifierRefusal::RepeatedAnchor {
+                    name: name.to_owned(),
+                },
             });
         }
         entry.anchors.insert(name.to_owned(), pointer.to_owned());
@@ -723,7 +733,9 @@ impl<'r> Scan<'r> {
             let Some(name) = anchor.as_str().filter(|name| dialect.is_anchor_name(name)) else {
                 return Err(SchemaError::InvalidIdentifier {
                     location: format!("{}#{pointer}/{keyword}", self.resource(resource).uri),
-                    reason: format!("{anchor} is not an anchor name"),
+                    reason: crate::IdentifierRefusal::Anchor {
+                        value: anchor.clone(),
+                    },
                 });
             };
             self.add_anchor(resource, name, pointer, dynamic)?;
@@ -783,7 +795,7 @@ fn identifier(
     let Some(id) = id.as_str() else {
         return Err(SchemaError::InvalidIdentifier {
             location: location(),
-            reason: "`$id` must be a string".to_owned(),
+            reason: crate::IdentifierRefusal::IdType { value: id.clone() },
         });
     };
     let resolved = resolve(base, id)?;
@@ -794,19 +806,28 @@ fn identifier(
             // Draft-07 Core §8.2.3: a plain-name fragment is a
             // location-independent identifier; any other fragment has no
             // defined meaning.
-            let name = percent::decode(fragment)
-                .ok()
-                .map(std::borrow::Cow::into_owned)
+            let decoded =
+                percent::decode(fragment).map_err(|cause| SchemaError::InvalidIdentifier {
+                    location: location(),
+                    reason: crate::IdentifierRefusal::PlainFragment {
+                        id: id.to_owned(),
+                        cause: Some(cause),
+                    },
+                })?;
+            let name = Some(decoded.into_owned())
                 .filter(|name| dialect.is_anchor_name(name))
                 .ok_or_else(|| SchemaError::InvalidIdentifier {
                     location: location(),
-                    reason: format!("`$id` {id:?} has a fragment that is not a plain name"),
+                    reason: crate::IdentifierRefusal::PlainFragment {
+                        id: id.to_owned(),
+                        cause: None,
+                    },
                 })?;
             Ok((uri.to_owned(), Some(name)))
         }
         Some(_) => Err(SchemaError::InvalidIdentifier {
             location: location(),
-            reason: format!("`$id` {id:?} may not carry a non-empty fragment"),
+            reason: crate::IdentifierRefusal::NonEmptyFragment { id: id.to_owned() },
         }),
     }
 }

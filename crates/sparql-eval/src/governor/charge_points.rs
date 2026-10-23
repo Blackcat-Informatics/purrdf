@@ -893,11 +893,14 @@ impl crate::property_fn::PropertyFunction for CountingRelation {
         self.declared
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &crate::property_fn::PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn crate::property_fn::PfCursor>, EvalError> {
+    ) -> Result<Box<dyn crate::property_fn::PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.opens.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(CountingCursor {
             rows: self.rows.clone(),
@@ -937,7 +940,7 @@ impl crate::property_fn::PfCursor for CountingCursor {
 /// A registry holding `relation` under [`PF`].
 fn pf_registry(
     relation: Arc<dyn crate::property_fn::PropertyFunction>,
-) -> crate::property_fn::PropertyFunctionRegistry {
+) -> crate::property_fn::PropertyFunctionRegistry<'static> {
     let mut registry = crate::property_fn::PropertyFunctionRegistry::new();
     registry.register(PF, relation);
     registry
@@ -984,7 +987,7 @@ fn pf_dataset(links: usize) -> Arc<RdfDataset> {
 fn run_with_relations(
     pattern: &GraphPattern,
     dataset: &RdfDataset,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     governors: &QueryGovernors,
 ) -> (Run, Vec<crate::governor::NodeCharges>) {
     let state = Arc::new(GovernorState::new(governors));
@@ -997,14 +1000,34 @@ fn run_with_relations(
         .with_property_functions(relations)
         .with_charge_ledger(Arc::clone(&ledger));
     let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+    recorded_run(evaluated.rows().len(), &state, &ledger)
+}
+
+/// Every fixture verifies the ledger against the original governor receipt,
+/// including finite stops and ordered worker replay.
+fn recorded_run(
+    rows: usize,
+    state: &GovernorState,
+    ledger: &crate::governor::ledger::ChargeLedger,
+) -> (Run, Vec<crate::governor::NodeCharges>) {
     let evidence = state.evidence();
+    let ledger = ledger.snapshot();
+    let fuel = evidence.consumed_in(ResourceDimension::Fuel);
+    assert_eq!(
+        ledger
+            .iter()
+            .map(crate::NodeCharges::fuel_total)
+            .sum::<u64>(),
+        fuel,
+        "the ledger attributes every consumed unit, including a ceiling crossing"
+    );
     (
         Run {
-            rows: evaluated.rows().len(),
-            fuel: evidence.consumed_in(ResourceDimension::Fuel),
+            rows,
+            fuel,
             tripped: evidence.tripped(),
         },
-        ledger.snapshot(),
+        ledger,
     )
 }
 
@@ -1210,14 +1233,17 @@ fn a_property_function_call_trips_at_the_same_point_parallel_and_sequential() {
 
     let parallel = {
         let _guard = force_parallel_for_test(true);
-        run_with_relations(&pattern, &dataset, &registry, &governors).0
+        run_with_relations(&pattern, &dataset, &registry, &governors)
     };
     let sequential = {
         let _guard = force_parallel_for_test(false);
-        run_with_relations(&pattern, &dataset, &registry, &governors).0
+        run_with_relations(&pattern, &dataset, &registry, &governors)
     };
 
-    assert!(parallel.tripped.is_some(), "the fixture must actually trip");
+    assert!(
+        parallel.0.tripped.is_some(),
+        "the fixture must actually trip"
+    );
     assert_eq!(
         parallel, sequential,
         "a relation's charges are folded in source-item order, so which strategy ran cannot \
@@ -1495,15 +1521,7 @@ fn run_with_aggregates(
         ctx = ctx.with_aggregates(registry);
     }
     let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
-    let evidence = state.evidence();
-    (
-        Run {
-            rows: evaluated.rows().len(),
-            fuel: evidence.consumed_in(ResourceDimension::Fuel),
-            tripped: evidence.tripped(),
-        },
-        ledger.snapshot(),
-    )
+    recorded_run(evaluated.rows().len(), &state, &ledger)
 }
 
 /// A `Commutative` custom `SUM`-alike over a single numeric-lexical argument — the same

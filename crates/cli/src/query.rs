@@ -217,7 +217,13 @@ impl<'a> RelationSpecs<'a> {
         engine: &NativeSparqlEngine,
         view: &D,
         aggregates: Option<&'a AggregateRegistry>,
-    ) -> Result<(Option<PropertyFunctionRegistry>, Option<Arc<PreparedQuery>>), CliError> {
+    ) -> Result<
+        (
+            Option<PropertyFunctionRegistry<'static>>,
+            Option<Arc<PreparedQuery>>,
+        ),
+        CliError,
+    > {
         let relations = path_relation::build_registry(view, self.specs)?;
         let Some(registry) = relations else {
             return Ok((None, None));
@@ -242,8 +248,8 @@ impl<'a> RelationSpecs<'a> {
 /// options from `&env`.
 fn engine_env(
     aggregates: Option<&AggregateRegistry>,
-    relations: Option<&PropertyFunctionRegistry>,
-) -> Result<ExtensionEnv, CliError> {
+    relations: Option<&PropertyFunctionRegistry<'static>>,
+) -> Result<ExtensionEnv<'static>, CliError> {
     ExtensionEnv::over(
         relations
             .cloned()
@@ -255,10 +261,10 @@ fn engine_env(
 
 /// The evaluation options a lane runs under, over an environment the caller holds.
 fn engine_options<'a>(
-    env: &'a ExtensionEnv,
+    env: &'a ExtensionEnv<'a>,
     geo: &'a purrdf_validate::geo::GeoProfile,
     division: DivisionPolicy,
-) -> EngineQueryOptions<'a> {
+) -> EngineQueryOptions<'a, 'a> {
     EngineQueryOptions::new()
         .with_geo(geo)
         .with_env(env)
@@ -630,7 +636,7 @@ fn entailed_query<D: DatasetView>(
     regime: &str,
     closure: &EntailmentClosure<'_>,
     governors: &QueryGovernors,
-    options: EngineQueryOptions<'_>,
+    options: EngineQueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
 ) -> Result<GovernedEntailment, CliError> {
@@ -654,9 +660,8 @@ fn entailed_query<D: DatasetView>(
         }
         Err(purrdf::ReasoningError::Entailment(EntailError::Inconsistent(run))) => {
             report::surface(report_target, run.report())?;
-            Err(CliError::Runtime(
-                EntailError::Inconsistent(run).to_string(),
-            ))
+            let error: EntailError = EntailError::Inconsistent(run);
+            Err(CliError::Runtime(error.to_string()))
         }
         Err(purrdf::ReasoningError::Entailment(other)) => Err(report::entailment_refusal(
             regime,

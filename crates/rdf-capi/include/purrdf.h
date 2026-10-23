@@ -268,6 +268,12 @@
  * APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
  * signature and its behaviour, so this is additive and rides the same bump.
  *
+ * The same additive surface includes `purrdf_shacl_validate_to_sarif_law`, the validation
+ * entry point with a nullable `shacl_profile` after `regex_profile`: the stable id of one
+ * exact, dated SHACL law (`shacl-rec-2017-07-20`, `shacl-wd-2026-09-18` or
+ * `shacl-ed-2026-10-16`), decoded by `purrdf_validate::complete_profile`. Every existing
+ * prototype keeps its signature and its behaviour.
+ *
  * The same additive surface includes the native geographic session and point-index
  * create/call/free families and the five `*_with_geo` query/update entry points.
  * These use opaque owned handles and an explicit selected geographic profile;
@@ -290,8 +296,17 @@
  * admission refusal from a malformed shapes graph; error accessors retain the
  * diagnostic. No earlier status is renumbered, and the wildcard-free status test
  * pins the appended value.
+ *
+ * # `0.11.0` → `0.12.0`: caller-controlled regime term arenas
+ *
+ * Seven prototypes gain nullable `const uint64_t *max_term_arena_bytes` after
+ * `max_join_steps`: the four `purrdf_entail_` materialization/conclusion services
+ * and `purrdf_query_entailment_governed` with its XPath and geo variants. This
+ * inserts an argument before existing controls/out-pointers and requires every
+ * affected C caller to rebuild. Null retains the engine default; a supplied
+ * limit is enforced and arena refusals name the actual calling parameter.
  */
-#define PURRDF_ABI_MINOR 11
+#define PURRDF_ABI_MINOR 12
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -1464,7 +1479,8 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `max_stored_facts` bounds the facts each evaluation store may hold and
  * `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
  * `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
- * 1048576 join steps natively — or point at an exact limit. A run past either fails
+ * 1048576 join steps natively — or point at an exact limit. `max_term_arena_bytes`
+ * bounds retained term surfaces, defaulting to 16777216 bytes. A run past a limit fails
  * the call naming the limit, the numbers and the parameter that raises it; a run inside
  * them returns exactly the closure larger limits would, and the report's
  * `contract-hash` names the calculus under the limits in force.
@@ -1485,7 +1501,7 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_nquads` and `out_report` must be writable pointers; `out_error` must be
  * null or writable.
  */
@@ -1499,6 +1515,7 @@ int32_t purrdf_entail_materialize_to_nquads(const char *document,
                                             size_t premise_iri_count,
                                             const uint64_t *max_stored_facts,
                                             const uint64_t *max_join_steps,
+                                            const uint64_t *max_term_arena_bytes,
                                             PurrdfBuffer **out_nquads,
                                             PurrdfBuffer **out_report,
                                             PurrdfError **out_error);
@@ -1894,7 +1911,7 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -1908,6 +1925,7 @@ int32_t purrdf_entail_certain_answers(const char *regime,
                                       size_t premise_iri_count,
                                       const uint64_t *max_stored_facts,
                                       const uint64_t *max_join_steps,
+                                      const uint64_t *max_term_arena_bytes,
                                       PurrdfBuffer **out_answer,
                                       PurrdfBuffer **out_certificate,
                                       PurrdfError **out_error);
@@ -1956,7 +1974,7 @@ int32_t purrdf_entail_certain_answers(const char *regime,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -1970,6 +1988,7 @@ int32_t purrdf_entail_graph_entails(const char *regime,
                                     size_t premise_iri_count,
                                     const uint64_t *max_stored_facts,
                                     const uint64_t *max_join_steps,
+                                    const uint64_t *max_term_arena_bytes,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
                                     PurrdfError **out_error);
@@ -2009,7 +2028,7 @@ int32_t purrdf_entail_graph_entails(const char *regime,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -2023,6 +2042,7 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
                                         size_t premise_iri_count,
                                         const uint64_t *max_stored_facts,
                                         const uint64_t *max_join_steps,
+                                        const uint64_t *max_term_arena_bytes,
                                         PurrdfBuffer **out_answer,
                                         PurrdfBuffer **out_certificate,
                                         PurrdfError **out_error);
@@ -2943,7 +2963,7 @@ int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
  * the call. When `import_count` is non-zero, `import_iris` and `import_documents` must
  * each address at least `import_count` non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many.
- * `max_stored_facts` and `max_join_steps` must each be null or readable.
+ * `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or readable.
  */
 int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          const char *query,
@@ -2957,6 +2977,7 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          size_t premise_iri_count,
                                          const uint64_t *max_stored_facts,
                                          const uint64_t *max_join_steps,
+                                         const uint64_t *max_term_arena_bytes,
                                          const char *aggregate_namespace,
                                          const PurrdfQueryGovernors *governors,
                                          int32_t *out_outcome,
@@ -2994,6 +3015,7 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
                                                      size_t premise_iri_count,
                                                      const uint64_t *max_stored_facts,
                                                      const uint64_t *max_join_steps,
+                                                     const uint64_t *max_term_arena_bytes,
                                                      const char *aggregate_namespace,
                                                      const char *regex_profile,
                                                      const PurrdfQueryGovernors *governors,
@@ -3155,6 +3177,7 @@ int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
                                                   size_t premise_iri_count,
                                                   const uint64_t *max_stored_facts,
                                                   const uint64_t *max_join_steps,
+                                                  const uint64_t *max_term_arena_bytes,
                                                   const char *aggregate_namespace,
                                                   const char *regex_profile,
                                                   const PurrdfQueryGovernors *governors,
@@ -3561,6 +3584,45 @@ int32_t purrdf_shacl_validate_to_sarif_xpath_regex(const char *shapes_ttl,
                                                    const char *regex_profile,
                                                    PurrdfBuffer **out_buffer,
                                                    PurrdfError **out_error);
+
+/**
+ * [`purrdf_shacl_validate_to_sarif_xpath_regex`] under a caller-selected SHACL law.
+ *
+ * `shacl_profile` (nullable, NUL-terminated UTF-8) is the stable id of one exact, dated
+ * SHACL law the validation runs under: `shacl-rec-2017-07-20` (the 2017 Recommendation),
+ * `shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the
+ * data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under). The id is
+ * decoded once, exactly, by `purrdf_validate::complete_profile`, the one home for that
+ * decoding, and it is the law `purrdf validate --shacl-profile` selects. NULL is
+ * [`purrdf_shacl_validate_to_sarif_xpath_regex`]: the compatibility law, unchanged.
+ *
+ * An id that names no law (`shacl-ed-2026-10-17`, another letter case, the empty string)
+ * is `PURRDF_STATUS_INVALID_ARGUMENT` whose message leads with the `unsupported-profile`
+ * status; no nearby edition is substituted. A dated law carries its own XPath bundle, so a
+ * `regex_profile` naming another law is `PURRDF_STATUS_INVALID_ARGUMENT`; naming the same
+ * law, or NULL, runs the dated law under its own. A shapes graph the law's text refuses
+ * (the working draft refuses a prefix declared through a version-IRI path that the
+ * editor's draft admits) is refused at load with the shapes-graph status, never validated
+ * under another law.
+ *
+ * # Safety
+ * As [`purrdf_shacl_validate_to_sarif_xpath_regex`]; `shacl_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shacl_validate_to_sarif_law(const char *shapes_ttl,
+                                           const char *shapes_base_iri,
+                                           const char *shapes_graph_iri,
+                                           const char *data_nt,
+                                           const char *const *conformance_disallows,
+                                           size_t conformance_disallows_count,
+                                           const char *const *import_iris,
+                                           const char *const *import_documents,
+                                           size_t import_count,
+                                           bool subclass_of_in_shapes_graph,
+                                           const char *regex_profile,
+                                           const char *shacl_profile,
+                                           PurrdfBuffer **out_buffer,
+                                           PurrdfError **out_error);
 
 /**
  * Validate a CHANGE to a data graph (N-Triples) against a shapes graph (Turtle),

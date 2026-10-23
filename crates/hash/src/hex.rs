@@ -160,6 +160,22 @@ impl Display for HexError {
 
 impl core::error::Error for HexError {}
 
+impl crate::error::StructuredError for HexError {
+    crate::error_visit! {
+        OddLength { len } => "hex-odd-length" {
+            "len" => ByteCount(*len as u128),
+        },
+        InvalidDigit { offset, byte } => "hex-invalid-digit" {
+            "offset" => ByteCount(*offset as u128),
+            "byte" => Unsigned(u128::from(*byte)),
+        },
+        OutputTooShort { needed, available } => "hex-output-too-short" {
+            "needed" => ByteCount(*needed as u128),
+            "available" => ByteCount(*available as u128),
+        },
+    }
+}
+
 // --- Rendering ---------------------------------------------------------------
 
 /// The digit of nibble `n` (`0..16`), as comparisons only.
@@ -717,6 +733,14 @@ pub fn decode_32_canonical(text: &str) -> Option<[u8; 32]> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Digest32([u8; 32]);
+
+impl crate::error::StructuredError for Digest32 {
+    fn visit<'error>(&'error self, visitor: &mut dyn crate::error::ErrorVisitor<'error>) {
+        let Self(bytes) = self;
+        visitor.variant("digest32");
+        visitor.value(Some("bytes"), crate::error::ErrorValue::Bytes(bytes));
+    }
+}
 
 impl Digest32 {
     /// The digest length in bytes.

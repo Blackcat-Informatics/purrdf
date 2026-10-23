@@ -93,13 +93,13 @@ pub use crate::owl_dl::bounds::{
 
 use std::collections::BTreeSet;
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 
 use crate::EntailError;
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::graph::{Assumptions, Budget};
 use crate::owl_dl::parser::Vocab;
-use crate::owl_dl::query::{build_data_index, collect_named_classes};
+use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 
@@ -113,6 +113,9 @@ pub mod realize;
 
 #[cfg(test)]
 pub(crate) mod schema_tests;
+
+#[cfg(test)]
+mod borrowed_tests;
 
 pub use axiom::DlAxiom;
 pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
@@ -133,7 +136,11 @@ use classify::{Subsumptions, subsumes};
 use proof::{ClaimBasis as Basis, refutation_claim};
 use realize::is_instance;
 
-/// The OWL 2 Direct-Semantics reasoning services over one dataset.
+/// The OWL 2 Direct-Semantics reasoning services prepared directly from a dataset view.
+///
+/// Preparation reads the caller's view without first materializing a concrete RDF
+/// dataset. The resulting knowledge base owns its decoded reasoning state; the
+/// source view does not need to outlive construction.
 ///
 /// See the [module docs](self) for the service list, the certificate discipline, and why
 /// three of the six take `&mut self`.
@@ -252,9 +259,11 @@ impl Reasoner {
     /// # Errors
     ///
     /// [`EntailError::Parse`] on a malformed OWL class-expression graph;
+    /// [`EntailError::SourceRead`] when the view refuses a term or a completed
+    /// source read. No reasoner is published from an incomplete source prefix.
     /// [`EntailError::Build`] or [`EntailError::Unsatisfiable`] if applying an
     /// `owl:hasKey` axiom exhausts the tableau or finds the ontology already unsatisfiable.
-    pub fn new(ds: &RdfDataset) -> Result<Self, EntailError> {
+    pub fn new<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
         Self::build(ds, None)
     }
 
@@ -274,48 +283,78 @@ impl Reasoner {
     ///
     /// # Errors
     ///
-    /// The same three [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
+    /// The failures [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
     /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
     /// term, or an exhausted n-degree search budget) — `ds` is wholly caller-supplied here,
     /// so this comes back as a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same
     /// input.
-    pub fn with_proofs(ds: &RdfDataset) -> Result<Self, EntailError> {
-        let input = crate::owl_dl::proof::try_ontology_identity(ds)
-            .map_err(EntailError::Canonicalization)?;
-        Self::build(ds, Some(input))
+    pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
+        Self::recorded(ds, SchemaPreparationBudget::default(), None)
     }
 
     /// Construct with preparation resource ceilings selected before schema encoding.
     /// A refused preparation is observable and every service remains undecided.
     /// # Errors
     /// The same source/ontology failures as [`Self::new`].
-    pub fn with_preparation_budget(
-        ds: &RdfDataset,
+    pub fn with_preparation_budget<D: DatasetView>(
+        ds: &D,
         budget: SchemaPreparationBudget,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::build_with_preparation(ds, None, budget, None)
     }
 
     /// Record proofs with the same before-preparation resource policy.
     /// # Errors
     /// The source/ontology and canonicalization failures of [`Self::with_proofs`].
-    pub fn with_proofs_and_preparation_budget(
-        ds: &RdfDataset,
+    pub fn with_proofs_and_preparation_budget<D: DatasetView>(
+        ds: &D,
         budget: SchemaPreparationBudget,
-    ) -> Result<Self, EntailError> {
-        let input = crate::owl_dl::proof::try_ontology_identity(ds)
-            .map_err(EntailError::Canonicalization)?;
-        Self::build_with_preparation(ds, Some(input), budget, None)
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        Self::recorded(ds, budget, None)
+    }
+
+    /// Record proofs while retaining one caller stop signal from input identity
+    /// computation through ontology preparation and every decision search. The
+    /// explicit budget applies before schema preparation, as in
+    /// [`Self::with_proofs_and_preparation_budget`]. A non-stopped run has the
+    /// same input identity, decisions and replayable proofs.
+    ///
+    /// # Errors
+    /// The source/profile failures of [`Self::with_proofs`], or
+    /// [`EntailError::Stopped`] if preparation is cancelled. A later stopped
+    /// search reports its actual undecided result and stop receipt.
+    pub fn with_proofs_and_stop<D: DatasetView>(
+        ds: &D,
+        budget: SchemaPreparationBudget,
+        stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        Self::recorded(ds, budget, Some(stop))
+    }
+
+    fn recorded<D: DatasetView>(
+        ds: &D,
+        budget: SchemaPreparationBudget,
+        stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        let input = match stop.as_deref() {
+            Some(stop) => crate::owl_dl::proof::try_ontology_identity_with_stop(ds, stop),
+            None => crate::owl_dl::proof::try_ontology_identity(ds),
+        }
+        .map_err(|error| match error {
+            purrdf_core::CanonError::Stopped => EntailError::Stopped,
+            error => EntailError::Canonicalization(error),
+        })?;
+        Self::build_with_preparation(ds, Some(input), budget, stop)
     }
 
     /// Retain a caller's stop signal at the original parser and decision boundaries.
     /// # Errors
     /// Source/ontology failures or [`EntailError::Stopped`] during construction.
-    pub fn with_stop(
-        ds: &RdfDataset,
+    pub fn with_stop<D: DatasetView>(
+        ds: &D,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::build_with_preparation(ds, None, SchemaPreparationBudget::default(), Some(stop))
     }
 
@@ -367,29 +406,53 @@ impl Reasoner {
     }
 
     /// The shared body of the two constructors: `input` present is recording on.
-    fn build(ds: &RdfDataset, input: Option<[u8; 32]>) -> Result<Self, EntailError> {
+    fn build<D: DatasetView>(
+        ds: &D,
+        input: Option<[u8; 32]>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::build_with_preparation(ds, input, SchemaPreparationBudget::default(), None)
     }
 
-    fn build_with_preparation(
-        ds: &RdfDataset,
+    fn build_with_preparation<D: DatasetView>(
+        ds: &D,
         input: Option<[u8; 32]>,
         preparation: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
-    ) -> Result<Self, EntailError> {
-        let mut kb = Kb::from_dataset_with_preparation(ds, stop, preparation)?;
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        let mut kb = Kb::from_dataset_recording(ds, stop, preparation, input)?;
+        let signal = kb.stop.clone();
+        let mut poll = || {
+            if purrdf_core::governor::is_stopped(signal.as_deref()) {
+                Err(EntailError::Stopped)
+            } else {
+                Ok(())
+            }
+        };
+        poll()?;
         let vocab = Vocab::intern(&mut kb.interner);
-        let index = build_data_index(ds, &mut kb.interner);
-        let named = collect_named_classes(&kb.interner, &index, &vocab);
+        let index = build_data_index_until(ds, &mut kb.interner, &mut poll)?;
+        let named = collect_named_classes_until(&kb.interner, &index, &vocab, &mut poll)?;
         let classes: Vec<(u32, u32)> = named
             .iter()
-            .map(|&c| (c, kb.table.intern(class_concept(&vocab, c))))
-            .collect();
-        let individuals: Vec<u32> = kb.individuals.iter().copied().collect();
-        kb.finalize()?;
+            .map(|&c| {
+                poll()?;
+                Ok((c, kb.table.intern(class_concept(&vocab, c))))
+            })
+            .collect::<Result<_, EntailError<D::ReadError>>>()?;
+        let individuals: Vec<u32> = kb
+            .individuals
+            .iter()
+            .map(|&individual| {
+                poll()?;
+                Ok(individual)
+            })
+            .collect::<Result<_, EntailError<D::ReadError>>>()?;
+        kb.finalize_until(&mut poll)?;
+        poll()?;
         let budget = Budget::for_kb(&kb);
         let boundaries = kb.boundaries().clone();
         let fresh = FreshSymbols::for_interner(&kb.interner);
+        poll()?;
         Ok(Self {
             kb,
             vocab,
@@ -495,9 +558,37 @@ impl Reasoner {
     /// # Errors
     ///
     /// [`EntailError::ProofsNotRecorded`] when this reasoner came from [`Reasoner::new`].
-    pub fn proof_context(self) -> Result<crate::DlProofContext, EntailError> {
+    pub fn proof_context(self) -> Result<crate::DlProofContext<'static>, EntailError> {
         let input = self.input.ok_or(EntailError::ProofsNotRecorded)?;
         Ok(crate::DlProofContext::of_prepared_kb(self.kb, input))
+    }
+
+    /// Borrow this consumer's prepared source for the same native proof checker.
+    ///
+    /// Prepare the consumer's question first, as for [`Self::proof_context`]. No
+    /// source parsing, canonicalization, knowledge-base clone or search is run.
+    /// The context derives only the native clauses and their contract. Its borrow
+    /// prevents changing question preparation until it is dropped;
+    /// afterwards this reasoner remains available for subsequent services.
+    ///
+    /// ```compile_fail
+    /// use purrdf_core::RdfDataset;
+    /// use purrdf_entail::reasoner::{Question, Reasoner};
+    /// fn mutate_while_checking(dataset: &RdfDataset) {
+    ///     let mut consumer = Reasoner::with_proofs(dataset).unwrap();
+    ///     let context = consumer.borrowed_proof_context().unwrap();
+    ///     consumer.prepare(&Question::Consistency).unwrap();
+    ///     let _ = context.input();
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// [`EntailError::ProofsNotRecorded`] for an unrecorded reasoner.
+    pub fn borrowed_proof_context(&self) -> Result<crate::DlProofContext<'_>, EntailError> {
+        let input = self.input.ok_or(EntailError::ProofsNotRecorded)?;
+        Ok(crate::DlProofContext::borrowing_prepared_kb(
+            &self.kb, input,
+        ))
     }
 
     /// The question [`Reasoner::classify`] answers over this reasoner's own class list.

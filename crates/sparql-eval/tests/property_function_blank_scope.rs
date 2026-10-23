@@ -110,11 +110,14 @@ impl PropertyFunction for Spy {
         self.inner.rows_per_invocation(mode)
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.unobserved.lock().expect("unpoisoned").push(
             (0..args.flattened().count())
                 .map(|pos| args.is_unobserved(pos))
@@ -124,18 +127,18 @@ impl PropertyFunction for Spy {
     }
 }
 
-fn env_with(relation: Arc<dyn PropertyFunction>) -> ExtensionEnv {
+fn env_with(relation: Arc<dyn PropertyFunction>) -> ExtensionEnv<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(TAG, relation);
     ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
-fn env() -> ExtensionEnv {
+fn env() -> ExtensionEnv<'static> {
     env_with(Arc::new(tag_rows()))
 }
 
 /// Run `query`, answering `(variables, sorted rows)` or the error text.
-fn run_in(env: &ExtensionEnv, query: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+fn run_in(env: &ExtensionEnv<'_>, query: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
             &*dataset(),

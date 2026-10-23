@@ -54,6 +54,8 @@ purrdf-text.workspace = true
 purrdf-hash.workspace = true
 
 [dev-dependencies]
+# Inspect the scoped-base owners carried by retrieval's shared foundations.
+purrdf-iri.workspace = true
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread
 # natively, the running stack under a fresh floor on wasm32.
 purrdf-stack = { workspace = true }
@@ -75,6 +77,10 @@ test = true
 
 # Complete native semantic expectations on the shared harness.
 # Actual WASM behaviors are selected separately in `make wasm-test`.
+[[test]]
+name = "structured_foundations"
+harness = false
+
 [[test]]
 name = "wasm_determinism"
 harness = false

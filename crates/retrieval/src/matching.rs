@@ -156,6 +156,16 @@ pub(crate) enum PlacementError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for PlacementError {
+    purrdf_hash::error_visit! {
+        NoAcceptedAlternative { term_index } => "placement-no-accepted-alternative" { "term_index" => Unsigned(u128::from(*term_index)) },
+        MissingFacet { term_index, facet } => "placement-missing-facet" { "term_index" => Unsigned(u128::from(*term_index)), "facet" => Record(facet) },
+        Unrenderable { term_index, facet, reason } => "placement-unrenderable" { "term_index" => Unsigned(u128::from(*term_index)), "facet" => Record(facet), "reason" => Text(reason) },
+        PositionConflict { position } => "placement-position-conflict" { "position" => Unsigned(*position as u128) },
+        NoSatisfiableMode { invocation, declared } => "placement-no-satisfiable-mode" { "invocation" => Code(invocation), "declared" => List(declared.iter().map(|value| purrdf_hash::error::ErrorValue::Code(value))) },
+    }
+}
+
 impl std::fmt::Display for PlacementError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

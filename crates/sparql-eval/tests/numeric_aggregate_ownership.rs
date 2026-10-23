@@ -29,7 +29,7 @@ fn exact_sum_and_avg_keep_output_admitted_through_clone_and_extraction() {
     let input = format!("1{zeros}");
     let expected = vec![vec![
         Some(TermValue::typed_literal(format!("2{zeros}"), XSD_INTEGER)),
-        Some(TermValue::typed_literal(input.clone(), XSD_DECIMAL)),
+        Some(TermValue::typed_literal(format!("{input}.0"), XSD_DECIMAL)),
     ]];
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(&pair_query(&input), None).unwrap();
@@ -196,10 +196,10 @@ fn capacity_refusal_never_becomes_a_poisoned_or_partial_aggregate() {
     );
     assert_eq!(
         rows[0][1],
-        Some(TermValue::typed_literal(input, XSD_DECIMAL))
+        Some(TermValue::typed_literal(format!("{input}.0"), XSD_DECIMAL))
     );
 }
-fn statistical_env() -> purrdf_sparql_eval::extension_env::ExtensionEnv {
+fn statistical_env() -> purrdf_sparql_eval::extension_env::ExtensionEnv<'static> {
     let mut aggregates = purrdf_sparql_eval::AggregateRegistry::default();
     aggregates.register_statistical_aggregates("http://example.org/stat#");
     purrdf_sparql_eval::extension_env::ExtensionEnv::new(
@@ -227,7 +227,7 @@ fn all_ten_native_statistics_keep_original_owners_through_every_query_door() {
     let expected_rows = expected.solutions().unwrap().1;
     assert_eq!(
         expected_rows[0][0],
-        Some(TermValue::typed_literal("2", XSD_DECIMAL))
+        Some(TermValue::typed_literal("2.0", XSD_DECIMAL))
     );
     assert_eq!(expected_rows[0][1], expected_rows[0][0]);
     assert_eq!(
@@ -410,9 +410,9 @@ fn statistical_big_integer_states_and_outputs_are_physically_admitted() {
     let first = format!("1{zeros}");
     let last = format!("3{zeros}");
     let expected = vec![vec![
-        Some(TermValue::typed_literal(format!("2{zeros}"), XSD_DECIMAL)),
+        Some(TermValue::typed_literal(format!("2{zeros}.0"), XSD_DECIMAL)),
         Some(TermValue::typed_literal(
-            format!("1{}", "0".repeat(8192)),
+            format!("1{}.0", "0".repeat(8192)),
             XSD_DECIMAL,
         )),
         Some(TermValue::typed_literal(first.clone(), XSD_INTEGER)),

@@ -280,7 +280,12 @@ mod tests {
                 assert_eq!(sink.next_id, ids, "all component identities reused");
                 let mut raw = sink.inner.take().expect("not finished");
                 let error = raw.finish().expect_err("deep terms are refused at freeze");
-                assert!(matches!(error, purrdf_events::EventError::Message(_)));
+                assert!(matches!(error, purrdf_events::EventError::Native(_)));
+                let diagnostic = std::error::Error::source(&error)
+                    .and_then(std::error::Error::source)
+                    .and_then(|cause| cause.downcast_ref::<purrdf::RdfDiagnostic>())
+                    .expect("freezing retains its original native diagnostic");
+                assert_eq!(diagnostic.code, "rdf-ir-triple-nesting-limit");
                 assert!(
                     error.to_string().contains("rdf-ir-triple-nesting-limit"),
                     "{error}"

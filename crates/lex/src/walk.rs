@@ -65,8 +65,8 @@ mod sort;
 
 pub use scalar::{DebugScalar, write_debug_scalars};
 pub use sort::{
-    try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by, try_partition_unique_by,
-    try_sort_unstable_by,
+    HeapSortFrame, try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by,
+    try_partition_unique_by, try_sort_unstable_by,
 };
 
 /// A buffer owner that reserves storage before publishing vector elements.
@@ -796,6 +796,12 @@ pub enum DebugWriteError {
     Format(fmt::Error),
     /// Original work-list storage could not be grown.
     Storage(crate::allocation::StorageError),
+}
+impl crate::error::StructuredError for DebugWriteError {
+    purrdf_hash::error_visit! {
+        Format(cause) => "debug-format" { "cause" => Cause(cause) },
+        Storage(cause) => "debug-storage" { "cause" => Cause(cause) },
+    }
 }
 crate::variant_from!(DebugWriteError {
     Format(fmt::Error),

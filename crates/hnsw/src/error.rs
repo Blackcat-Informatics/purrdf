@@ -10,8 +10,93 @@
 
 use std::fmt;
 
+mod matrix;
+pub use matrix::MatrixRefusal;
+mod payload;
+pub use payload::PayloadRefusal;
+mod guard_payload;
+pub use guard_payload::GuardPayloadRefusal;
+mod profile;
+pub use profile::{CoordinateValue, ProfileRefusal};
+
 /// A result whose error is an [`HnswError`].
 pub type Result<T> = std::result::Result<T, HnswError>;
+
+/// Original container refusal or unresolved coordinates at the HNSW adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingFailure {
+    /// Original container failure.
+    Container(purrdf_core::EmbeddingError),
+    /// Undeclared vector space.
+    MissingVectorSpace(purrdf_core::VectorSpaceId),
+    /// Undeclared target set.
+    MissingTargetSet(purrdf_core::TargetSetId),
+    /// No matrix joins these coordinates.
+    MissingMatrix {
+        /// Requested target set.
+        target_set: purrdf_core::TargetSetId,
+        /// Requested vector space.
+        vector_space: purrdf_core::VectorSpaceId,
+    },
+    /// Row count exceeds this target's index range.
+    RowCount {
+        /// Original row count.
+        value: u64,
+        /// Largest addressable index.
+        maximum: usize,
+    },
+    /// Effective dimension exceeds this target's index range.
+    Dimension {
+        /// Original dimension.
+        value: u32,
+        /// Largest addressable index.
+        maximum: usize,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for EmbeddingFailure {
+    purrdf_hash::error_visit! {
+        Container(cause) => "hnsw-embedding-container" { "cause" => Cause(cause) },
+        MissingVectorSpace(id) => "hnsw-embedding-missing-vector-space" { "id" => Record(id) },
+        MissingTargetSet(id) => "hnsw-embedding-missing-target-set" { "id" => Record(id) },
+        MissingMatrix { target_set, vector_space } => "hnsw-embedding-missing-matrix" {
+            "target_set" => Record(target_set), "vector_space" => Record(vector_space),
+        },
+        RowCount { value, maximum } => "hnsw-embedding-row-count" {
+            "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(*maximum as u128),
+        },
+        Dimension { value, maximum } => "hnsw-embedding-dimension" {
+            "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(*maximum as u128),
+        },
+    }
+}
+
+impl fmt::Display for EmbeddingFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Container(cause) => cause.fmt(f),
+            Self::MissingVectorSpace(id) => write!(f, "the artifact declares no vector space {id}"),
+            Self::MissingTargetSet(id) => write!(f, "the artifact declares no target set {id}"),
+            Self::MissingMatrix {
+                target_set,
+                vector_space,
+            } => write!(
+                f,
+                "the artifact holds no matrix joining target set {target_set} to vector space {vector_space}"
+            ),
+            Self::RowCount {
+                value: _,
+                maximum: _,
+            } => f.write_str("the matrix row count does not fit this platform's index range"),
+            Self::Dimension {
+                value: _,
+                maximum: _,
+            } => f.write_str("the effective dimension does not fit this platform's index range"),
+        }
+    }
+}
+
+purrdf_lex::error_source!(EmbeddingFailure { Container });
 
 /// Everything that can go wrong building, decoding, or searching an [`crate::HnswIndex`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,16 +108,18 @@ pub enum HnswError {
     InvalidParameter {
         /// Which parameter (`M`, `M0`, `ef_construction`, `ef_search`).
         name: &'static str,
-        /// The value that was supplied, rendered.
-        value: String,
+        /// The original supplied value.
+        value: usize,
+        /// Inclusive lower bound at the failing comparison.
+        minimum: usize,
         /// Why the value is refused.
         reason: &'static str,
     },
 
     /// The parameter set is well-formed on its own but cannot describe this matrix.
     ParameterValidation {
-        /// What the parameters and the matrix disagree about.
-        description: String,
+        /// Original matrix or connectivity refusal.
+        cause: MatrixRefusal,
     },
 
     /// A vector component is not finite.
@@ -65,8 +152,8 @@ pub enum HnswError {
 
     /// The requested distance metric has no kernel this crate can evaluate.
     UnsupportedMetric {
-        /// The metric's stable identifier, rendered.
-        metric: String,
+        /// Original metric identity, parameter encoding and canonical bytes.
+        metric: purrdf_core::DistanceMetric,
     },
 
     /// A search or payload operation needed a graph that holds no nodes.
@@ -75,7 +162,7 @@ pub enum HnswError {
     /// A payload is structurally malformed.
     InvalidPayload {
         /// What is wrong with the bytes.
-        reason: String,
+        reason: PayloadRefusal,
     },
 
     /// A payload declares a format version this decoder does not implement.
@@ -161,7 +248,7 @@ pub enum HnswError {
     /// A PURREMB artifact held no derived index naming this profile.
     MissingIndexGuard {
         /// What was searched and what was expected.
-        description: String,
+        implementations: [&'static str; 2],
     },
 
     /// A PURREMB artifact held more than one derived index naming this profile.
@@ -176,27 +263,65 @@ pub enum HnswError {
 
     /// A guard claims this profile but its contents disagree with the profile spec.
     GuardProfile {
-        /// Which field disagrees and how.
-        description: String,
+        /// Which field disagrees and how. The cold payload is boxed at the
+        /// physically fallible resident profile-construction boundary.
+        cause: Box<ProfileRefusal>,
     },
 
     /// The index payload is detached or absent, so it cannot be verified or searched.
     PayloadUnavailable {
         /// Why the bytes could not be obtained.
-        description: String,
+        cause: GuardPayloadRefusal,
     },
 
     /// The inline payload does not match the guard's committed SHA-256 and length.
     PayloadCommitment {
         /// What the guard committed and what the bytes actually are.
-        description: String,
+        cause: GuardPayloadRefusal,
     },
 
     /// A PURREMB container operation failed.
     Embedding {
-        /// The container error, rendered.
-        description: String,
+        /// Original container or adapter cause.
+        cause: EmbeddingFailure,
     },
+}
+
+impl purrdf_hash::error::StructuredError for HnswError {
+    purrdf_hash::error_visit! {
+        Workspace(cause) => "hnsw-workspace" { "cause" => Cause(cause) },
+        InvalidParameter { name, value, minimum, reason } => "hnsw-invalid-parameter" {
+            "name" => Code(name), "value" => Unsigned(*value as u128),
+            "minimum" => Unsigned(*minimum as u128), "reason" => Text(reason),
+        },
+        ParameterValidation { cause } => "hnsw-parameter-validation" { "cause" => Cause(cause) },
+        NonFiniteComponent { row, column } => "hnsw-non-finite-component" { "row" => Unsigned(*row as u128), "column" => Unsigned(*column as u128) },
+        ZeroNorm { row } => "hnsw-zero-norm" { "row" => Unsigned(*row as u128) },
+        NonFiniteDistance { row } => "hnsw-non-finite-distance" { "row" => Unsigned(*row as u128) },
+        RowOutOfBounds { index, max } => "hnsw-row-out-of-bounds" { "index" => Unsigned(*index as u128), "max" => Unsigned(*max as u128) },
+        UnsupportedMetric { metric } => "hnsw-unsupported-metric" { "metric" => Record(metric) },
+        EmptyGraph => "hnsw-empty-graph" {},
+        InvalidPayload { reason } => "hnsw-invalid-payload" { "reason" => Cause(reason) },
+        VersionMismatch { expected, actual } => "hnsw-version-mismatch" { "expected" => Unsigned(u128::from(*expected)), "actual" => Unsigned(u128::from(*actual)) },
+        ArithmeticMismatch { arithmetic, actual } => "hnsw-arithmetic-mismatch" { "arithmetic" => Code(arithmetic), "actual" => Unsigned(u128::from(*actual)) },
+        ArithmeticPathUnavailable { recorded, available } => "hnsw-arithmetic-path-unavailable" {
+            "recorded" => Unsigned(u128::from(*recorded)), "available" => Unsigned(u128::from(*available)),
+        },
+        ArithmeticBuildMismatch { recorded, here } => "hnsw-arithmetic-build-mismatch" { "recorded" => Record(recorded), "here" => Record(here) },
+        FloatEnvironment(cause) => "hnsw-float-environment" { "cause" => Cause(cause) },
+        ArithmeticOverflow => "hnsw-arithmetic-overflow" {},
+        AddressSpaceExceeded { required, maximum } => "hnsw-address-space-exceeded" {
+            "required" => ByteCount(u128::from(*required)), "maximum" => ByteCount(u128::from(*maximum)),
+        },
+        MissingIndexGuard { implementations } => "hnsw-missing-index-guard" {
+            "implementations" => List(implementations.iter().map(|value| purrdf_hash::error::ErrorValue::Code(value))),
+        },
+        AmbiguousIndexGuard { count } => "hnsw-ambiguous-index-guard" { "count" => Unsigned(*count as u128) },
+        GuardProfile { cause } => "hnsw-guard-profile" { "cause" => Cause(cause.as_ref()) },
+        PayloadUnavailable { cause } => "hnsw-payload-unavailable" { "cause" => Cause(cause) },
+        PayloadCommitment { cause } => "hnsw-payload-commitment" { "cause" => Cause(cause) },
+        Embedding { cause } => "hnsw-embedding" { "cause" => Cause(cause) },
+    }
 }
 
 impl fmt::Display for HnswError {
@@ -206,10 +331,11 @@ impl fmt::Display for HnswError {
             Self::InvalidParameter {
                 name,
                 value,
+                minimum: _,
                 reason,
             } => write!(f, "invalid parameter {name} = {value}: {reason}"),
-            Self::ParameterValidation { description } => {
-                write!(f, "parameters do not describe this matrix: {description}")
+            Self::ParameterValidation { cause } => {
+                write!(f, "parameters do not describe this matrix: {cause}")
             }
             Self::NonFiniteComponent { row, column } => write!(
                 f,
@@ -232,7 +358,7 @@ impl fmt::Display for HnswError {
             }
             Self::UnsupportedMetric { metric } => write!(
                 f,
-                "the distance metric {metric} has no evaluable kernel; only cosine, \
+                "the distance metric {metric:?} has no evaluable kernel; only cosine, \
                  negative dot, and squared Euclidean are ranked here"
             ),
             Self::EmptyGraph => write!(f, "the graph holds no nodes"),
@@ -284,8 +410,13 @@ impl fmt::Display for HnswError {
                 "the index would need {required} bytes, which exceeds the {maximum} \
                  addressable on this target"
             ),
-            Self::MissingIndexGuard { description } => {
-                write!(f, "no HNSW derived index: {description}")
+            Self::MissingIndexGuard {
+                implementations: [exact, reassociated],
+            } => {
+                write!(
+                    f,
+                    "no HNSW derived index: the artifact holds no derived index whose implementation is `{exact}` or `{reassociated}`; register one with `guard::derived_index`"
+                )
             }
             Self::AmbiguousIndexGuard { count } => write!(
                 f,
@@ -293,23 +424,17 @@ impl fmt::Display for HnswError {
                  profile alone cannot choose one without answering from an index the caller \
                  did not name"
             ),
-            Self::GuardProfile { description } => {
-                write!(
-                    f,
-                    "the HNSW guard disagrees with its profile: {description}"
-                )
+            Self::GuardProfile { cause } => {
+                write!(f, "the HNSW guard disagrees with its profile: {cause}")
             }
-            Self::PayloadUnavailable { description } => {
-                write!(f, "the HNSW payload is unavailable: {description}")
+            Self::PayloadUnavailable { cause } => {
+                write!(f, "the HNSW payload is unavailable: {cause}")
             }
-            Self::PayloadCommitment { description } => {
-                write!(f, "the HNSW payload commitment fails: {description}")
+            Self::PayloadCommitment { cause } => {
+                write!(f, "the HNSW payload commitment fails: {cause}")
             }
-            Self::Embedding { description } => {
-                write!(
-                    f,
-                    "the PURREMB container refused the HNSW index: {description}"
-                )
+            Self::Embedding { cause } => {
+                write!(f, "the PURREMB container refused the HNSW index: {cause}")
             }
         }
     }
@@ -319,6 +444,12 @@ impl std::error::Error for HnswError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Workspace(error) => Some(error),
+            Self::FloatEnvironment(error) => Some(error),
+            Self::Embedding { cause } => Some(cause),
+            Self::ParameterValidation { cause } => Some(cause),
+            Self::InvalidPayload { reason } => Some(reason),
+            Self::PayloadUnavailable { cause } | Self::PayloadCommitment { cause } => Some(cause),
+            Self::GuardProfile { cause } => Some(cause.as_ref()),
             _ => None,
         }
     }
@@ -337,7 +468,7 @@ impl From<purrdf_core::EmbeddingError> for HnswError {
             return Self::FloatEnvironment(refusal);
         }
         Self::Embedding {
-            description: error.to_string(),
+            cause: EmbeddingFailure::Container(error),
         }
     }
 }
@@ -359,22 +490,31 @@ mod tests {
         let cases = [
             HnswError::InvalidParameter {
                 name: "M",
-                value: "1".to_owned(),
+                value: 1,
+                minimum: 2,
                 reason: "must be at least 2",
             },
             HnswError::ParameterValidation {
-                description: "zero rows".to_owned(),
+                cause: MatrixRefusal::ZeroRows { dimensions: 8 },
             },
             HnswError::NonFiniteComponent { row: 0, column: 1 },
             HnswError::ZeroNorm { row: 2 },
             HnswError::NonFiniteDistance { row: 3 },
             HnswError::RowOutOfBounds { index: 9, max: 8 },
             HnswError::UnsupportedMetric {
-                metric: "extension".to_owned(),
+                metric: purrdf_core::DistanceMetric::Extension {
+                    identifier: "https://example.org/metric".to_owned(),
+                    parameter_encoding: "application/cbor".to_owned(),
+                    parameters: vec![1, 2, 3],
+                },
             },
             HnswError::EmptyGraph,
             HnswError::InvalidPayload {
-                reason: "short".to_owned(),
+                reason: PayloadRefusal::Truncated {
+                    available: 0,
+                    at: 0,
+                    count: 8,
+                },
             },
             HnswError::VersionMismatch {
                 expected: 1,
@@ -414,20 +554,29 @@ mod tests {
                 maximum: 5,
             },
             HnswError::MissingIndexGuard {
-                description: "no guard names the profile".to_owned(),
+                implementations: [
+                    crate::IMPLEMENTATION_ID,
+                    crate::IMPLEMENTATION_ID_REASSOCIATED,
+                ],
             },
             HnswError::AmbiguousIndexGuard { count: 2 },
-            HnswError::GuardProfile {
-                description: "parameter encoding differs".to_owned(),
-            },
+            crate::profile::profile_error(ProfileRefusal::MissingParameter { name: "M0" }),
             HnswError::PayloadUnavailable {
-                description: "the payload is detached".to_owned(),
+                cause: GuardPayloadRefusal::Detached {
+                    guard: purrdf_core::IndexId::from_raw([1; 32]),
+                },
             },
             HnswError::PayloadCommitment {
-                description: "the length differs".to_owned(),
+                cause: GuardPayloadRefusal::Length {
+                    guard: purrdf_core::IndexId::from_raw([1; 32]),
+                    expected: 10,
+                    actual: 9,
+                },
             },
             HnswError::Embedding {
-                description: "structure refused".to_owned(),
+                cause: EmbeddingFailure::Container(purrdf_core::EmbeddingError::Malformed(
+                    "structure refused",
+                )),
             },
         ];
         // The build refusal names both shapes as feature lists and both identities, and

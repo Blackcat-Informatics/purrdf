@@ -257,13 +257,13 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "cli": ("--conclusion",),
     },
     # The evaluation limits, one `MaterializeLimits` on the boundary: every host spells
-    # the stored-fact and join-step limits as its own two arguments.
+    # the stored-fact, join-step and term-arena limits as its own three arguments.
     "limits": {
-        "python": ("max_stored_facts", "max_join_steps"),
-        "wasm": ("max_stored_facts", "max_join_steps"),
-        "dts": ("maxStoredFacts", "maxJoinSteps"),
-        "capi": ("max_stored_facts", "max_join_steps"),
-        "cli": ("--max-stored-facts", "--max-join-steps"),
+        "python": ("max_stored_facts", "max_join_steps", "max_term_arena_bytes"),
+        "wasm": ("max_stored_facts", "max_join_steps", "max_term_arena_bytes"),
+        "dts": ("maxStoredFacts", "maxJoinSteps", "maxTermArenaBytes"),
+        "capi": ("max_stored_facts", "max_join_steps", "max_term_arena_bytes"),
+        "cli": ("--max-stored-facts", "--max-join-steps", "--max-term-arena-bytes"),
     },
     "imports": {
         "python": ("imports",),
@@ -1113,8 +1113,8 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         "bindings/python/src/py_entail.rs",
         lambda text: _swap(
             text,
-            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]",
-            "#[pyo3(signature = (regime, data, pattern, imports, *, max_stored_facts=None, max_join_steps=None))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]",
         ),
     ),
     (

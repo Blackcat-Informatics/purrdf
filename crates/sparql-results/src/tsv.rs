@@ -6,7 +6,7 @@
 //!
 //! TSV is defined **only** for SELECT variable bindings; ASK (`Boolean`) and
 //! CONSTRUCT (`Graph`) have no TSV representation and hard-fail with
-//! [`Error::Format`]. The header is the `?`-prefixed variable names, rows are
+//! [`Error::UnsupportedResult`]. The header is the `?`-prefixed variable names, rows are
 //! separated by LF, and each bound cell uses SPARQL/Turtle term syntax via the
 //! kernel-backed [`crate::term::ntriples_token`] (`<iri>`, `"lex"` /
 //! `"lex"@lang` / `"lex"^^<dt>`, `_:label`, or the non-asserting triple term
@@ -17,7 +17,7 @@
 //!
 //! TSV has NO quoting mechanism at all, unlike CSV's RFC-4180 quoting — so a
 //! variable NAME containing a raw tab/CR/LF (which would silently shift a
-//! later column, or start a phantom record) is a hard [`Error::Format`] at
+//! later column, or start a phantom record) is a hard [`Error::TsvHeader`] at
 //! the header rather than emitted raw; see [`to_tsv`].
 //!
 //! TSV is a flat exit gate with no extension point: a populated
@@ -35,8 +35,8 @@ use purrdf_core::sink::TextOut;
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] for `Boolean` (ASK) and `Graph` (CONSTRUCT)
-/// results, which W3C TSV does not define, and for a variable name that
+/// Returns [`Error::UnsupportedResult`] for `Boolean` (ASK) and `Graph` (CONSTRUCT)
+/// results, which W3C TSV does not define, and [`Error::TsvHeader`] for a variable name that
 /// contains a literal tab, CR, or LF — TSV has no quoting mechanism to escape
 /// one inside the header, so emitting it raw would silently corrupt the
 /// column/record structure a reader relies on.  Returns
@@ -75,16 +75,16 @@ pub(crate) fn write_tsv<W: TextOut + ?Sized>(
             variables, rows, ..
         } => (variables, rows),
         SparqlResult::Boolean(_) => {
-            return Err(Error::Format(
-                "SPARQL Results TSV is defined only for SELECT variable bindings, not ASK"
-                    .to_string(),
-            ));
+            return Err(Error::UnsupportedResult {
+                format: crate::SparqlResultsFormat::Tsv,
+                ask: true,
+            });
         }
         SparqlResult::Graph(_) => {
-            return Err(Error::Format(
-                "SPARQL Results TSV is defined only for SELECT variable bindings, not CONSTRUCT graphs"
-                    .to_string(),
-            ));
+            return Err(Error::UnsupportedResult {
+                format: crate::SparqlResultsFormat::Tsv,
+                ask: false,
+            });
         }
     };
 
@@ -132,7 +132,7 @@ pub(crate) fn write_tsv<W: TextOut + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] if `var` contains a literal tab, CR, or LF. TSV
+/// Returns [`Error::TsvHeader`] if `var` contains a literal tab, CR, or LF. TSV
 /// (unlike CSV) has no quoting mechanism, so those bytes cannot be escaped —
 /// emitting one raw would either shift every later header field (a tab) or
 /// start a phantom header record (a CR/LF), which no conformant reader could
@@ -141,10 +141,9 @@ pub(crate) fn write_tsv<W: TextOut + ?Sized>(
 /// controlled structural character rather than splicing it in unescaped.
 fn check_var_header(var: &str) -> Result<(), Error> {
     if var.contains(['\t', '\n', '\r']) {
-        return Err(Error::Format(format!(
-            "variable name {var:?} contains a tab/CR/LF, which SPARQL Results TSV \
-             has no way to escape in the header"
-        )));
+        return Err(Error::TsvHeader {
+            variable: var.to_owned(),
+        });
     }
     Ok(())
 }
@@ -155,9 +154,10 @@ fn check_var_header(var: &str) -> Result<(), Error> {
 /// refusal has to precede byte one.
 fn check_row_width(row_len: usize, variable_count: usize) -> Result<(), Error> {
     if row_len > variable_count {
-        return Err(Error::MalformedTerm(format!(
-            "solution row has {row_len} bindings but only {variable_count} variables are projected"
-        )));
+        return Err(Error::MalformedTerm(crate::MalformedResult::RowWidth {
+            bindings: row_len,
+            variables: variable_count,
+        }));
     }
     Ok(())
 }
@@ -341,7 +341,10 @@ mod tests {
     fn boolean_is_format_error() {
         let err = to_tsv(&SparqlResult::Boolean(false), &ResultProvenance::default())
             .expect_err("ask rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::UnsupportedResult { ask: true, .. }),
+            "expected result-form refusal: {err:?}"
+        );
     }
 
     #[test]
@@ -362,7 +365,10 @@ mod tests {
             &ResultProvenance::default(),
         )
         .expect_err("graph rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::UnsupportedResult { ask: false, .. }),
+            "expected result-form refusal: {err:?}"
+        );
     }
 
     #[test]
@@ -410,7 +416,10 @@ mod tests {
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("tab in variable name must be rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::TsvHeader { .. }),
+            "expected header refusal: {err:?}"
+        );
     }
 
     #[test]
@@ -424,7 +433,10 @@ mod tests {
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("newline in variable name must be rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::TsvHeader { .. }),
+            "expected header refusal: {err:?}"
+        );
     }
 
     #[test]
@@ -438,7 +450,10 @@ mod tests {
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("CR in variable name must be rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::TsvHeader { .. }),
+            "expected header refusal: {err:?}"
+        );
     }
 
     #[test]

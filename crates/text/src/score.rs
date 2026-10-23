@@ -489,12 +489,13 @@ pub(crate) fn matches_predicate<'a, P: CorpusProfile>(
     document: u32,
     terms: impl IntoIterator<Item = &'a str>,
     predicate: Option<&TermValue>,
+    workspace: &WorkspaceCapability,
 ) -> Result<bool, TextError> {
     let Some(predicate) = predicate else {
         return Ok(true);
     };
     for term in terms {
-        if index.term_frequency_in_predicate(document, term, predicate)? != 0 {
+        if index.term_frequency_in_predicate_owned(document, term, predicate, workspace)? != 0 {
             return Ok(true);
         }
     }
@@ -840,13 +841,16 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
         return Ok(AdmittedVec::new(workspace));
     }
     let occurrences_count = terms.iter().try_fold(0usize, |count, term| {
-        let run =
-            usize::try_from(index.document_frequency(partition, term)).map_err(|_| overflow())?;
+        let run = usize::try_from(admitted(
+            index.document_frequency_owned(partition, term, workspace),
+        )?)
+        .map_err(|_| overflow())?;
         count.checked_add(run).ok_or_else(overflow)
     })?;
     let mut occurrences = admitted(AdmittedVec::with_capacity(occurrences_count, workspace))?;
     for (ordinal, term) in terms.iter().enumerate() {
-        for (document, counts) in index.field_postings(partition, term) {
+        for posting in admitted(index.field_postings_owned(partition, term, workspace))? {
+            let (document, counts) = admitted(posting)?;
             admitted(occurrences.push(CandidateOccurrence {
                 document,
                 ordinal,
@@ -925,7 +929,10 @@ fn prepare_terms_owned<'c, 'p, P: CorpusProfile>(
 ) -> Result<PreparedQuery<'c, 'p>, TextError> {
     let mut frequencies = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
     for &term in terms {
-        admitted(frequencies.push((term, index.document_frequency(partition, term))))?;
+        admitted(frequencies.push((
+            term,
+            admitted(index.document_frequency_owned(partition, term, workspace))?,
+        )))?;
     }
     corpus.prepare_query_owned(&frequencies, workspace)
 }
@@ -1012,7 +1019,7 @@ pub(crate) fn score_located_owned<P: CorpusProfile>(
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
 ) -> Result<(BoundedScore, usize), TextError> {
-    let Some(partition) = index.partition_key_of(document) else {
+    let Some(partition) = admitted(index.partition_key_of_owned(document, workspace))? else {
         return Err(query_error(
             workspace,
             NativeDiagnosticKind::Data,

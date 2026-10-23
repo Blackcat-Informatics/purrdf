@@ -3215,19 +3215,11 @@ def load_shacl12_type_counts() -> dict[str, int]:
 
 
 _SHACL12_HARNESS = _REPO / "crates" / "shapes" / "tests" / "w3c12_conformance.rs"
-# The node-expression grader both SHACL 1.2 harnesses (library and CLI) share; it owns
-# the table of entries whose approved result spells a decimal non-canonically, and
-# its count pin.
-_SHACL12_NODE_EXPR_GRADER = (
-    _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "node_expr_grading.rs"
-)
 _SHACL12_UNLISTED_ROW = "SHACL 1.2 unlisted vendored files"
 
 
 def load_shacl12_category_pins() -> dict[str, int]:
-    """The SHACL 1.2 harness's own pins for the categories the matrix folds into
-    one XFail/Skip column: non-canonical expected decimals
-    (``NON_CANONICAL_EXPECTATIONS_COUNT``, in the shared node-expression grader),
+    """The SHACL 1.2 harness's own pins for the categories the matrix reports apart:
     entries of unlisted
     vendored files (``W3C12_UNLISTED_ENTRIES``) and those graded with a delta
     (``UNLISTED_FILE_DELTAS_COUNT``). The harness asserts each against what it
@@ -3236,9 +3228,9 @@ def load_shacl12_category_pins() -> dict[str, int]:
     """
     pins: dict[str, int] = {}
     for key, name, path in (
-        ("noncanonical", "NON_CANONICAL_EXPECTATIONS_COUNT", _SHACL12_NODE_EXPR_GRADER),
         ("unlisted", "W3C12_UNLISTED_ENTRIES", _SHACL12_HARNESS),
         ("delta", "UNLISTED_FILE_DELTAS_COUNT", _SHACL12_HARNESS),
+        ("spec", "SPEC_CONTRADICTED_COUNT", _SHACL12_CORPUS),
     ):
         text = _read(path)
         rel = path.relative_to(_REPO)
@@ -3254,12 +3246,11 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
 
     The pass figure and the approved-suite total (pass + XFail/Skip) come from the
     generated matrix row; the unlisted files' figure from their own row; the
-    per-family sizes from the harness's discovery pins; and the split of the
-    XFail/Skip column (the non-canonical expected decimals) from the harness's
-    category pins. The sources are cross-checked — approved plus unlisted must be
-    the discovered total, and the non-canonical expected decimals must be the
-    whole XFail/Skip column (the XFAIL ledger is empty) — so they cannot drift
-    apart behind prose that quotes one of them.
+    per-family sizes from the harness's discovery pins. The sources are
+    cross-checked — approved plus unlisted must be the discovered total, and the
+    XFail/Skip column must equal the pinned SPEC_CONTRADICTED count (the XFAIL
+    ledger is empty) — so they cannot
+    drift apart behind prose that quotes one of them.
     """
     passed, xskip = matrix[_SHACL12_ROW]
     listed = passed + xskip
@@ -3278,10 +3269,10 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             f"harness pins {cats['unlisted']} unlisted entries, but {pins} pin "
             f"{counts['total']} discovered tests"
         )
-    if cats["noncanonical"] != xskip:
+    if xskip != cats["spec"]:
         raise SystemExit(
             f"check-doc-claims: the matrix row {_SHACL12_ROW!r} has {xskip} in XFail/Skip "
-            f"but {catsrc} pin {cats['noncanonical']} non-canonical expected decimals"
+            f"but the XFAIL ledger is empty and SPEC_CONTRADICTED pins {cats['spec']}"
         )
     if unlisted_passed != cats["unlisted"]:
         raise SystemExit(
@@ -3289,12 +3280,11 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             f"{unlisted_passed} but {catsrc} pin {cats['unlisted']} unlisted entries"
         )
     families = {k: counts[k] for k in ("validate", "evalnodeexpr", "infer", "srl")}
-    split = {"noncanonical": cats["noncanonical"]}
     return [
         Claim(
             "the W3C SHACL 1.2 count in the book's SHACL chapter",
             _BOOK_SHACL,
-            _flow(r"counted on their own line \((?P<passed>\d+)/(?P<total>\d+)\)"),
+            _flow(r"1\.2 suite passes as approved \((?P<passed>\d+)/(?P<total>\d+)[,)]"),
             {"passed": passed, "total": listed},
             mat,
         ),
@@ -3314,20 +3304,18 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             _BOOK_SHACL,
             _flow(
                 r"upstream manifest lists (?P<listed>\d+) of them\. Of those, "
-                r"(?P<passed>\d+) pass as approved and (?P<noncanonical>\d+) are counted "
-                r"apart because their approved result spells a decimal non-canonically, "
-                r"as described below, and the expected-failure ledger is empty\. The "
-                r"other (?P<unlisted>\d+) are entries of vendored files"
+                r"(?P<passed>\d+) pass as approved and the expected-failure ledger is "
+                r"empty\. The remaining (?P<unlisted>\d+) entry belongs to a vendored file"
             ),
-            {"listed": listed, "passed": passed, **split, "unlisted": cats["unlisted"]},
+            {"listed": listed, "passed": passed, "unlisted": cats["unlisted"]},
             f"{mat}; {catsrc}",
         ),
         Claim(
             "the SHACL 1.2 scoreboard line quoted in the book's SHACL chapter",
             _BOOK_SHACL,
-            r"W3C12 TOTAL: passed (?P<passed>\d+), non-canonical-expected-decimal "
-            r"(?P<noncanonical>\d+), xfailed (?P<xfailed>\d+), ledger (?P<ledger>\d+)",
-            {"passed": passed, **split, "xfailed": 0, "ledger": 0},
+            r"W3C12 TOTAL: passed (?P<passed>\d+), spec-contradicted (?P<spec>\d+), "
+            r"xfailed (?P<xfailed>\d+), ledger (?P<ledger>\d+)",
+            {"passed": passed, "spec": cats["spec"], "xfailed": 0, "ledger": 0},
             f"{mat}; {catsrc}",
         ),
         Claim(
@@ -3351,15 +3339,13 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
                 r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, (?P<infer>\d+) `sht:Infer` "
                 r"and (?P<srl>\d+) SPARQL 1.2 RL tests\) runs, and of the "
                 r"(?P<listed>\d+) an upstream manifest lists, (?P<passed>\d+) pass as "
-                r"approved and (?P<noncanonical>\d+) are counted apart as non-canonical "
-                r"expected decimals, with an empty expected-failure ledger"
+                r"approved,\s+with an empty expected-failure ledger"
             ),
             {
                 "total": counts["total"],
                 **families,
                 "listed": listed,
                 "passed": passed,
-                **split,
             },
             f"{mat}; {pins}; {catsrc}",
         ),
@@ -3374,24 +3360,23 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             "the root README's SHACL 1.2 headline",
             _README,
             _flow(r"\*\*(?P<passed>\d+)/(?P<total>\d+) passing\*\* on the vendored "
-                  r"W3C SHACL 1.2 test suite \((?P<noncanonical>\d+) approved results "
-                  r"spell a computed decimal non-canonically"),
-            {"passed": passed, "total": listed, **split},
+                  r"W3C SHACL 1.2 test suite\."),
+            {"passed": passed, "total": listed},
             f"{mat}; {catsrc}",
         ),
         Claim(
             "the root README's SHACL 1.2 scoreboard row",
             _README,
             r"\| SHACL 1\.2 \| W3C shacl12-test-suite \(`vectors/shacl12/`\) \| "
-            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · (?P<noncanonical>\d+) "
-            r"non-canonical expected decimals · "
-            r"(?P<ledgered>\d+) ledgered; (?P<unlisted>\d+) unlisted vendored files "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · "
+            r"(?P<ledgered>\d+) ledgered expected failures, (?P<spec>\d+) "
+            r"spec-contradicted \(`hasLang-example`\); (?P<unlisted>\d+) unlisted vendored files "
             r"graded apart \|",
             {
                 "passed": passed,
                 "total": listed,
-                **split,
                 "ledgered": 0,
+                "spec": cats["spec"],
                 "unlisted": cats["unlisted"],
             },
             f"{mat}; {catsrc}",
@@ -3401,17 +3386,18 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             _CONFORMANCE,
             r"\| SHACL 1\.2 \| W3C `shacl12-test-suite`, `vectors/shacl12/tests/` \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass as approved · "
-            r"(?P<noncanonical>\d+) non-canonical expected decimals \(graded by the XSD "
-            r"1\.1 canonical spelling\) · (?P<ledgered>\d+) "
-            r"ledgered, of the (?P<listed>\d+) an upstream manifest lists; "
+            r"(?P<ledgered>\d+) "
+            r"ledgered expected failures, (?P<spec>\d+) spec-contradicted "
+            r"\(`node-expr/shnex-sparql/hasLang-example`\), "
+            r"of the (?P<listed>\d+) an upstream manifest lists; "
             r"(?P<discovered>\d+) discovered: "
             r"(?P<validate>\d+) `sht:Validate`, (?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, "
             r"(?P<infer>\d+) `sht:Infer`, (?P<srl>\d+) SPARQL 1\.2 RL \|",
             {
                 "passed": passed,
                 "total": listed,
-                **split,
                 "ledgered": 0,
+                "spec": cats["spec"],
                 "listed": listed,
                 "discovered": counts["total"],
                 **families,
@@ -3442,8 +3428,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
                 r"the harness discovers all \*\*(?P<total>\d+)\*\* entries of the "
                 r"vendored W3C `shacl12-test-suite`\. Of the \*\*(?P<listed>\d+)\*\* an "
                 r"upstream manifest lists, it passes \*\*(?P<passed>\d+) / "
-                r"(?P<listed2>\d+)\*\* as approved, with \*\*(?P<noncanonical>\d+) "
-                r"non-canonical expected decimals\*\* counted apart, and an empty "
+                r"(?P<listed2>\d+)\*\* as approved, with an empty "
                 r"expected-failure ledger\. The (?P<total2>\d+) are "
                 r"(?P<validate>\d+) `sht:Validate`"
             ),
@@ -3452,7 +3437,6 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
                 "listed": listed,
                 "passed": passed,
                 "listed2": listed,
-                **split,
                 "total2": counts["total"],
                 "validate": counts["validate"],
             },

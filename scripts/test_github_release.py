@@ -241,7 +241,7 @@ class PublicationTests(unittest.TestCase):
     def test_missing_immutable_assets_fail_without_any_mutation(self):
         self.published()
         self.github.record["assets"] = []
-        with self.assertRaisesRegex(publisher.ReleaseError, "exactly five"):
+        with self.assertRaisesRegex(publisher.ReleaseError, "exactly 7"):
             self.publish()
         self.assertEqual(set(self.github.events), {"tag", "read"})
 

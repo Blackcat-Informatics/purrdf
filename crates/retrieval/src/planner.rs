@@ -431,7 +431,7 @@ const PPM_UNIT: u64 = 1_000_000;
 ///   module's header.
 pub fn plan(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     statistics: &impl Statistics,
 ) -> Result<Plan, PlanError> {
     for constraint in &request.constraints {
@@ -471,7 +471,7 @@ pub(crate) enum DepthPolicy<'a> {
 pub(crate) fn plan_read(
     terms: &[RequestTerm],
     policy: DepthPolicy<'_>,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     statistics: &impl Statistics,
 ) -> Result<crate::plan::PlanParts, PlanError> {
     // 1. A malformed term cannot be planned, and no later stage could repair

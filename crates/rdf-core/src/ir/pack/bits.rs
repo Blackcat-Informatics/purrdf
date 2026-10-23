@@ -41,6 +41,16 @@ pub enum PackBitsError {
     Malformed(&'static str),
 }
 
+impl purrdf_hash::error::StructuredError for PackBitsError {
+    purrdf_hash::error_visit! {
+        Truncated { needed, found } => "pack-bits-truncated" {
+            "needed" => ByteCount(*needed as u128),
+            "found" => ByteCount(*found as u128),
+        },
+        Malformed(message) => "pack-bits-malformed" { "message" => Text(message) },
+    }
+}
+
 impl fmt::Display for PackBitsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

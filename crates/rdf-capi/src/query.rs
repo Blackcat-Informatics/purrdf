@@ -984,7 +984,7 @@ unsafe fn query_governed_entry(
 /// the call. When `import_count` is non-zero, `import_iris` and `import_documents` must
 /// each address at least `import_count` non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many.
-/// `max_stored_facts` and `max_join_steps` must each be null or readable.
+/// `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or readable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query_entailment_governed(
     dataset: *const PurrdfDataset,
@@ -999,6 +999,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     aggregate_namespace: *const c_char,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
@@ -1028,6 +1029,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 premise_iri_count,
                 max_stored_facts,
                 max_join_steps,
+                max_term_arena_bytes,
                 aggregate_namespace,
                 std::ptr::null(),
                 governors,
@@ -1069,6 +1071,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_xpath_regex(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
     governors: *const PurrdfQueryGovernors,
@@ -1099,6 +1102,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_xpath_regex(
                 premise_iri_count,
                 max_stored_facts,
                 max_join_steps,
+                max_term_arena_bytes,
                 aggregate_namespace,
                 regex_profile,
                 governors,
@@ -1136,6 +1140,7 @@ unsafe fn query_entailment_governed_entry(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
     governors: *const PurrdfQueryGovernors,
@@ -1189,13 +1194,8 @@ unsafe fn query_entailment_governed_entry(
         )?;
         let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
             .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-        let limits = purrdf_validate::MaterializeLimits {
-            // SAFETY: the caller's contract — null or readable.
-            max_stored_facts: max_stored_facts.as_ref().copied(),
-            // SAFETY: the caller's contract — null or readable.
-            max_join_steps: max_join_steps.as_ref().copied(),
-            host: purrdf_validate::RegimeHost::CAbi,
-        };
+        let limits =
+            crate::entail::c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes);
         let governors = decode_governors(governors)?;
         let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
         let regex = decode_regex_profile(regex_profile)?;
@@ -1469,7 +1469,7 @@ unsafe fn update_governed_entry(
 /// the environment reads every declaration.
 fn aggregate_env(
     aggregates: Option<&AggregateRegistry>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, PurrdfError> {
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, PurrdfError> {
     purrdf_sparql_eval::ExtensionEnv::over_aggregates(
         aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
     )
@@ -1625,6 +1625,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_with_geo(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
     governors: *const PurrdfQueryGovernors,
@@ -1655,6 +1656,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_with_geo(
                 premise_iri_count,
                 max_stored_facts,
                 max_join_steps,
+                max_term_arena_bytes,
                 aggregate_namespace,
                 regex_profile,
                 governors,
@@ -1902,6 +1904,7 @@ mod tests {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,
@@ -2008,6 +2011,7 @@ mod tests {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,
@@ -2067,6 +2071,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::from_ref(&steps),
+                    std::ptr::null(),
                     std::ptr::null(),
                     &raw const governors,
                     &raw mut outcome,
@@ -2153,6 +2158,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -2262,6 +2268,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 namespace.as_ptr(),
                 &raw const governors,
                 &raw mut outcome,
@@ -2294,7 +2301,10 @@ mod tests {
         assert_eq!(bound, 1, "?m is bound");
         let view = unsafe { view.assume_init() };
         let lexical = unsafe { view.lexical.as_str() }.expect("UTF-8 lexical form");
-        assert_eq!(lexical, "2", "MEDIAN of the entailed {{1, 2, 3}} is 2");
+        assert_eq!(
+            lexical, "2.0",
+            "MEDIAN of the entailed {{1, 2, 3}} is the computed decimal 2.0"
+        );
 
         unsafe {
             purrdf_buffer_free(report);
@@ -2473,7 +2483,10 @@ mod tests {
         assert_eq!(bound, 1, "?m is bound");
         let view = unsafe { view.assume_init() };
         let lexical = unsafe { view.lexical.as_str() }.expect("UTF-8 lexical form");
-        assert_eq!(lexical, "2", "MEDIAN of {{1, 2, 3}} is 2");
+        assert_eq!(
+            lexical, "2.0",
+            "MEDIAN of {{1, 2, 3}} is the computed decimal 2.0"
+        );
 
         unsafe {
             purrdf_rowcursor_free(rows);
@@ -2594,7 +2607,10 @@ mod tests {
         let TermValue::Literal { lexical_form, .. } = cell else {
             panic!("?m must be a literal, got {cell:?}");
         };
-        assert_eq!(lexical_form, "2");
+        assert_eq!(
+            lexical_form, "2.0",
+            "the stored MEDIAN of {{1, 2, 3}} is the computed decimal 2.0"
+        );
 
         unsafe { purrdf_dataset_free(dataset) };
     }

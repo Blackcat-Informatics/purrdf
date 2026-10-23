@@ -15,6 +15,7 @@ mod format;
 mod query;
 mod session;
 mod stack;
+pub(crate) use query::SegmentedSourceVersion;
 
 pub use build::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,6 +138,8 @@ pub enum SegmentedError {
     Storage(purrdf_lex::allocation::StorageError),
     /// Original malformed statistical-record or domain-codec failure.
     Statistics(super::pack::bits::PackBitsError),
+    /// Original native failure while decoding a compressed dictionary block.
+    Compression(purrdf_deflate::Error),
     /// The host could not complete a requested read.
     Provider {
         /// Fixed host operation label; retaining an error never allocates text.
@@ -193,6 +196,9 @@ impl std::fmt::Display for SegmentedError {
         match self {
             Self::Storage(error) => error.fmt(f),
             Self::Statistics(error) => write!(f, "invalid segmented statistics: {error}"),
+            Self::Compression(error) => {
+                write!(f, "invalid compressed segmented dictionary: {error}")
+            }
             Self::Provider {
                 operation,
                 host_code,
@@ -228,6 +234,7 @@ impl std::fmt::Display for SegmentedError {
 purrdf_lex::error_source!(SegmentedError {
     Storage,
     Statistics,
+    Compression,
     SharedOwnership
 });
 

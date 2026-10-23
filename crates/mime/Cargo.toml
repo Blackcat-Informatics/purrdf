@@ -36,6 +36,10 @@ purrdf-testkit.workspace = true
 name = "lossless"
 harness = false
 
+[[test]]
+name = "structured_errors"
+harness = false
+
 [[example]]
 name = "gen_serialized_corpus"
 test = false

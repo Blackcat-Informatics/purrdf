@@ -132,7 +132,7 @@ use crate::{sink, source};
 ///
 /// # Errors
 ///
-/// [`CliError::Usage`] when `--shapes -` is given (stdin has no retrieval IRI to derive
+/// [`CliError::Usage`] when `--shapes -` is given without `--base` (stdin has no retrieval IRI to derive
 /// a base from, so a relative reference in it would silently resolve to nothing), when a
 /// relative `--shapes-graph` has no base to resolve against, or when an `--import` pair is
 /// malformed, resolves nothing the shapes graph imports, or is never reached by the import

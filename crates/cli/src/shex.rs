@@ -362,18 +362,15 @@ fn check_map_syntax(options: &ShexOptions<'_>) -> Result<(), CliError> {
 /// own: that one names `@base`/`BASE`/`xml:base`, which are DOCUMENT directives, and a `MAP` is
 /// argv text that no document reaches — the identical wrong-remedy shape `describe --iri`,
 /// `validate --shapes-graph` and `entails --import` each fixed for their own surface. The
-/// shared [`purrdf_iri::IriError::diagnostic_code`] still travels, inside the library's
-/// rendered reason, so the failure groups with every other IRI failure in this toolkit.
+/// shared [`purrdf_iri::IriError::diagnostic_code`] selects the remedy directly
+/// from the original native error.
 fn map_refusal(map: &str, error: &ShexError) -> CliError {
     if let ShexError::Iri { lexical, reason } = error
-        && reason.starts_with(RELATIVE_NO_BASE)
+        && reason.diagnostic_code() == RELATIVE_NO_BASE
     {
-        // `reason` is the library's `{code}: {IriError}`, and `IriError`'s `Display` ENDS with
-        // its own remedy — the `@base`/`xml:base` one. Interpolating it here and then adding
-        // the remedy that actually applies would print two remedies, one of them wrong, which
-        // is the exact defect `validate --shapes-graph` was fixed for. So the condition is
-        // restated from the parts and the library's sentence is not used at all; only the
-        // shared CODE travels, which is the part every consumer switches on.
+        // The library's Display includes its document-specific remedy. Build
+        // this argument's sentence from the original lexical value and code,
+        // so it gives only the remedy that applies to the command line.
         return CliError::Usage(format!(
             "MAP `{map}`: {RELATIVE_NO_BASE}: the reference `{lexical}` is a relative IRI \
              reference with no base in scope, so it denotes no node. A shape map is a \

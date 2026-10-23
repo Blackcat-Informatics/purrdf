@@ -197,13 +197,13 @@ pub struct UserFunction {
 /// equality compares that identity rather than its rendered message.
 #[derive(Clone)]
 pub struct UserFunctionRefusal {
-    cause: Arc<dyn std::error::Error + Send + Sync>,
+    cause: Arc<dyn purrdf_hash::error::NativeError>,
     observer: Option<Arc<dyn UserFunctionAdmission>>,
 }
 
 impl UserFunctionRefusal {
     /// Retain an exact caller-owned cause. This allocates only on refusal.
-    pub fn new(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub fn new(cause: impl purrdf_hash::error::NativeError + 'static) -> Self {
         Self {
             cause: Arc::new(cause),
             observer: None,
@@ -232,6 +232,14 @@ impl UserFunctionRefusal {
 }
 
 purrdf_hash::debug_non_exhaustive!(UserFunctionRefusal { cause });
+
+impl purrdf_hash::error::StructuredError for UserFunctionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { cause, observer } => "sparql-user-function-refusal" {
+            "cause" => Cause(&*self.cause),
+        }
+    }
+}
 
 impl PartialEq for UserFunctionRefusal {
     fn eq(&self, other: &Self) -> bool {
@@ -469,6 +477,11 @@ impl NativeFnContext<'_> {
     #[must_use]
     pub const fn workspace(&self) -> &WorkspaceCapability {
         self.workspace
+    }
+
+    /// Whether this invocation has already recorded its original governor stop.
+    pub(crate) fn has_stopped(&self) -> bool {
+        self.stopped.get().is_some()
     }
 
     /// Preserve the first actual physical failure without rendering a second
@@ -746,6 +759,16 @@ pub enum Arity {
     },
     /// At least `n` arguments (no upper bound).
     AtLeast(usize),
+}
+
+impl purrdf_hash::error::StructuredError for Arity {
+    purrdf_hash::error_visit! {
+        Exact(count) => "function-arity-exact" { "count" => Unsigned(*count as u128) },
+        Range { min, max } => "function-arity-range" {
+            "minimum" => Unsigned(*min as u128), "maximum" => Unsigned(*max as u128),
+        },
+        AtLeast(minimum) => "function-arity-at-least" { "minimum" => Unsigned(*minimum as u128) },
+    }
 }
 
 impl Arity {
@@ -1407,7 +1430,7 @@ impl BoundFunctionRegistry {
     /// IRI to different relation implementations, which is precisely the
     /// distinction [`RegistryId`] exists to draw.
     #[must_use]
-    pub fn admits(&self, env: &crate::extension_env::ExtensionEnv) -> bool {
+    pub fn admits(&self, env: &crate::extension_env::ExtensionEnv<'_>) -> bool {
         self.bodies.is_empty() || self.env == env.id()
     }
 }
@@ -2433,6 +2456,17 @@ mod tests {
         }
 
         impl std::error::Error for InvocationCause {}
+
+        impl purrdf_hash::error::StructuredError for InvocationCause {
+            fn visit<'error>(
+                &'error self,
+                visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>,
+            ) {
+                let Self(body, _fault_injection) = self;
+                visitor.variant("test-invocation-cause");
+                visitor.value(Some("body"), purrdf_hash::error::ErrorValue::Text(body));
+            }
+        }
 
         /// A native-only admission oracle. All refused bodies have the same Display
         /// message; the observer must recover their actual typed body identities.

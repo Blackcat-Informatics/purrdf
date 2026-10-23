@@ -6,17 +6,21 @@
 //! Detached proof JSON is read by the workspace's one JSON reader,
 //! [`purrdf_lex::json`], under its default depth cap.
 
+mod hex_error;
+pub use hex_error::Hex32Error;
+mod proof_error;
+pub use proof_error::ProofError;
+
 use purrdf_hash::Domain;
+use purrdf_hash::blake3::RecordHasher;
 use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 use purrdf_lex::cbor::Value;
+use purrdf_lex::cbor::head;
 use purrdf_lex::json::{self, Object, Value as Json};
 
 use crate::reader::{as_i128, as_idx};
-use crate::wire::{
-    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
-    unwrap_header,
-};
+use crate::wire::{MAGIC, VERSION, content_id, header_id, iter_items, map_get, unwrap_header};
 
 /// Stable detached proof schema tag emitted by [`Proof::to_json`].
 pub const PROOF_SCHEMA: &str = "gts-mmr-proof-v1";
@@ -96,6 +100,24 @@ impl std::fmt::Display for MmrStateError {
 }
 
 impl std::error::Error for MmrStateError {}
+
+impl purrdf_hash::error::StructuredError for MmrStateError {
+    purrdf_hash::error_visit! {
+        PeakCount { count, expected, actual } => "gts-mmr-peak-count" {
+            "count" => Unsigned(u128::from(*count)), "expected" => Unsigned(*expected as u128),
+            "actual" => Unsigned(*actual as u128),
+        },
+        PeakHeight { peak, expected, actual } => "gts-mmr-peak-height" {
+            "peak" => Unsigned(*peak as u128), "expected" => Unsigned(*expected as u128),
+            "actual" => Unsigned(*actual as u128),
+        },
+        PeakHashLength { peak, actual } => "gts-mmr-peak-hash-length" {
+            "peak" => Unsigned(*peak as u128), "actual" => Unsigned(*actual as u128),
+            "expected" => Unsigned(32),
+        },
+        CountOverflow => "gts-mmr-count-overflow" { "maximum" => Unsigned(u128::from(u64::MAX)) },
+    }
+}
 
 /// The portable, incremental commitment frontier of an ordered MMR.
 ///
@@ -178,30 +200,24 @@ impl MmrPeaks {
             .count
             .checked_add(1)
             .ok_or(MmrStateError::CountOverflow)?;
-        let mut carried = MmrPeak {
-            height: 0,
-            hash: leaf_hash(self.count, frame_id),
-        };
-        while self
-            .peaks
-            .last()
-            .is_some_and(|peak| peak.height == carried.height)
-        {
+        let mut height = 0;
+        let mut hash = leaf_hash(self.count, frame_id);
+        while self.peaks.last().is_some_and(|peak| peak.height == height) {
             let left = self.peaks.pop().expect("matching left peak exists");
-            let height = carried.height + 1;
-            carried = MmrPeak {
-                height,
-                hash: parent_hash(height, &left.hash, &carried.hash),
-            };
+            height += 1;
+            hash = parent_hash(height, &left.hash, &hash);
         }
-        self.peaks.push(carried);
+        self.peaks.push(MmrPeak {
+            height,
+            hash: hash.to_vec(),
+        });
         self.count = count;
         Ok(())
     }
 
     /// Commit to the count and ordered peaks using the existing root preimage.
     pub fn root(&self) -> Vec<u8> {
-        root_hash(self.count, &self.peaks)
+        root_hash(self.count, &self.peaks).to_vec()
     }
 }
 
@@ -253,50 +269,53 @@ struct Node {
     height: usize,
     start: usize,
     end: usize,
-    hash: Vec<u8>,
+    hash: [u8; 32],
     left: Option<Box<Self>>,
     right: Option<Box<Self>>,
 }
 
-fn uint(n: u64) -> Value {
-    Value::from(n)
+// Arrays contain only definite-length text, unsigned integers and byte strings:
+// streaming their heads through the shared CBOR encoder is already canonical.
+// BLAKE3's Write implementation is infallible; only its fixed stack state and
+// CBOR's nine-byte header buffer are needed, regardless of payload length.
+fn node_hasher(domain: Domain, arity: u64, coordinate: u64) -> RecordHasher {
+    let mut hash = RecordHasher::new();
+    hash_head(&mut hash, head::ARRAY, arity);
+    head::write_text(&mut hash, domain.as_str()).expect("BLAKE3 writes cannot fail");
+    hash_head(&mut hash, head::UNSIGNED, coordinate);
+    hash
 }
 
-fn leaf_hash(index: u64, frame_id: &[u8]) -> Vec<u8> {
-    blake3_256(&canonical(&Value::Array(vec![
-        LEAF_DOMAIN.as_str().into(),
-        uint(index),
-        Value::Bytes(frame_id.to_vec()),
-    ])))
-    .to_vec()
+fn hash_head(hash: &mut RecordHasher, major: u8, argument: u64) {
+    head::write_head(hash, major, argument).expect("BLAKE3 writes cannot fail");
 }
 
-fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> Vec<u8> {
-    blake3_256(&canonical(&Value::Array(vec![
-        PARENT_DOMAIN.as_str().into(),
-        uint(parent_height as u64),
-        Value::Bytes(left.to_vec()),
-        Value::Bytes(right.to_vec()),
-    ])))
-    .to_vec()
+fn hash_bytes(hash: &mut RecordHasher, bytes: &[u8]) {
+    head::write_bytes(hash, bytes).expect("BLAKE3 writes cannot fail");
 }
 
-fn root_hash(count: u64, peaks: &[MmrPeak]) -> Vec<u8> {
-    let peak_values: Vec<Value> = peaks
-        .iter()
-        .map(|peak| {
-            Value::Array(vec![
-                uint(peak.height as u64),
-                Value::Bytes(peak.hash.clone()),
-            ])
-        })
-        .collect();
-    blake3_256(&canonical(&Value::Array(vec![
-        ROOT_DOMAIN.as_str().into(),
-        uint(count),
-        Value::Array(peak_values),
-    ])))
-    .to_vec()
+fn leaf_hash(index: u64, frame_id: &[u8]) -> [u8; 32] {
+    let mut hash = node_hasher(LEAF_DOMAIN, 3, index);
+    hash_bytes(&mut hash, frame_id);
+    *hash.finalize().as_bytes()
+}
+
+fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> [u8; 32] {
+    let mut hash = node_hasher(PARENT_DOMAIN, 4, parent_height as u64);
+    hash_bytes(&mut hash, left);
+    hash_bytes(&mut hash, right);
+    *hash.finalize().as_bytes()
+}
+
+fn root_hash(count: u64, peaks: &[MmrPeak]) -> [u8; 32] {
+    let mut hash = node_hasher(ROOT_DOMAIN, 3, count);
+    hash_head(&mut hash, head::ARRAY, peaks.len() as u64);
+    for peak in peaks {
+        hash_head(&mut hash, head::ARRAY, 2);
+        hash_head(&mut hash, head::UNSIGNED, peak.height as u64);
+        hash_bytes(&mut hash, &peak.hash);
+    }
+    *hash.finalize().as_bytes()
 }
 
 fn build_nodes(frame_ids: &[Vec<u8>]) -> Vec<Node> {
@@ -340,7 +359,7 @@ fn peak_list(nodes: &[Node]) -> Vec<MmrPeak> {
         .iter()
         .map(|node| MmrPeak {
             height: node.height,
-            hash: node.hash.clone(),
+            hash: node.hash.to_vec(),
         })
         .collect()
 }
@@ -366,7 +385,7 @@ fn peak_fold(frame_ids: &[Vec<u8>]) -> Vec<MmrPeak> {
 /// The root commits to both the frame count and the ordered peak list, so
 /// adding a frame changes the root even when an earlier proof path is reused.
 pub fn root(frame_ids: &[Vec<u8>]) -> Vec<u8> {
-    root_hash(frame_ids.len() as u64, &peak_fold(frame_ids))
+    root_hash(frame_ids.len() as u64, &peak_fold(frame_ids)).to_vec()
 }
 
 fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
@@ -381,7 +400,7 @@ fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
             path.push(ProofStep {
                 parent_height: node.height,
                 side: ProofSide::Right,
-                hash: right.hash.clone(),
+                hash: right.hash.to_vec(),
             });
             return true;
         }
@@ -389,7 +408,7 @@ fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
         path.push(ProofStep {
             parent_height: node.height,
             side: ProofSide::Left,
-            hash: left.hash.clone(),
+            hash: left.hash.to_vec(),
         });
         return true;
     }
@@ -416,7 +435,7 @@ pub fn prove(frame_ids: &[Vec<u8>], target_index: usize) -> Option<Proof> {
         count: frame_ids.len(),
         leaf_index: target_index,
         frame_id: frame_ids[target_index].clone(),
-        root: root_hash(frame_ids.len() as u64, &peaks),
+        root: root_hash(frame_ids.len() as u64, &peaks).to_vec(),
         peak_index,
         peaks,
         path,
@@ -434,90 +453,102 @@ fn expected_peak_heights(count: u64) -> Vec<usize> {
     heights
 }
 
-fn peak_width(height: usize) -> Result<usize, String> {
-    let shift = u32::try_from(height).map_err(|_| format!("peak height {height} is too large"))?;
+fn peak_width(height: usize) -> Result<usize, ProofError> {
+    let shift = u32::try_from(height).map_err(|_| ProofError::PeakHeight { height })?;
     1usize
         .checked_shl(shift)
-        .ok_or_else(|| format!("peak height {height} is too large"))
+        .ok_or(ProofError::PeakHeight { height })
 }
 
 fn peak_index_for_leaf(
     count: usize,
     heights: &[usize],
     leaf_index: usize,
-) -> Result<usize, String> {
+) -> Result<usize, ProofError> {
     if leaf_index >= count {
-        return Err(format!(
-            "leaf_index {leaf_index} is outside covered count {count}"
-        ));
+        return Err(ProofError::LeafRange { leaf_index, count });
     }
     let mut start = 0usize;
     for (index, height) in heights.iter().enumerate() {
         let width = peak_width(*height)?;
         let end = start
             .checked_add(width)
-            .ok_or_else(|| "peak ranges overflow usize".to_string())?;
+            .ok_or(ProofError::PeakRangeOverflow { start, width })?;
         if leaf_index >= start && leaf_index < end {
             return Ok(index);
         }
         start = end;
     }
-    Err(format!(
-        "peak ranges do not cover leaf_index {leaf_index} for count {count}"
-    ))
+    Err(ProofError::Uncovered { leaf_index, count })
 }
 
 /// Verify a detached proof without access to the original GTS file.
 ///
 /// Verification checks shape first, then recomputes the leaf-to-peak path and
 /// final root using the same domain-separated preimages as [`root`].
-pub fn verify_proof(proof: &Proof) -> Result<(), String> {
+pub fn verify_proof(proof: &Proof) -> Result<(), ProofError> {
     if proof.frame_id.len() != 32 {
-        return Err("frame_id must be 32 bytes".to_string());
+        return Err(ProofError::DigestLength {
+            field: "frame_id",
+            actual: proof.frame_id.len(),
+        });
     }
     if proof.root.len() != 32 {
-        return Err("root must be 32 bytes".to_string());
+        return Err(ProofError::DigestLength {
+            field: "root",
+            actual: proof.root.len(),
+        });
     }
     if proof.leaf_index >= proof.count {
-        return Err(format!(
-            "leaf_index {} is outside covered count {}",
-            proof.leaf_index, proof.count
-        ));
+        return Err(ProofError::LeafRange {
+            leaf_index: proof.leaf_index,
+            count: proof.count,
+        });
     }
     if proof.peak_index >= proof.peaks.len() {
-        return Err(format!("peak_index {} is out of range", proof.peak_index));
+        return Err(ProofError::PeakIndex {
+            actual: proof.peak_index,
+            available: proof.peaks.len(),
+        });
     }
     let expected_heights = expected_peak_heights(proof.count as u64);
     let actual_heights: Vec<usize> = proof.peaks.iter().map(|peak| peak.height).collect();
     if actual_heights != expected_heights {
-        return Err(format!(
-            "peak heights {:?} do not match count {}",
-            actual_heights, proof.count
-        ));
+        return Err(ProofError::PeakHeights {
+            actual: actual_heights,
+            count: proof.count,
+        });
     }
     let computed_peak_index = peak_index_for_leaf(proof.count, &actual_heights, proof.leaf_index)?;
     if computed_peak_index != proof.peak_index {
-        return Err(format!(
-            "leaf_index {} belongs to peak {}, not {}",
-            proof.leaf_index, computed_peak_index, proof.peak_index
-        ));
+        return Err(ProofError::LeafPeak {
+            leaf_index: proof.leaf_index,
+            expected: computed_peak_index,
+            actual: proof.peak_index,
+        });
     }
     for peak in &proof.peaks {
         if peak.hash.len() != 32 {
-            return Err("peak hash must be 32 bytes".to_string());
+            return Err(ProofError::DigestLength {
+                field: "peak hash",
+                actual: peak.hash.len(),
+            });
         }
     }
     let mut carried = leaf_hash(proof.leaf_index as u64, &proof.frame_id);
     let mut height = 0usize;
     for step in &proof.path {
         if step.hash.len() != 32 {
-            return Err("path hash must be 32 bytes".to_string());
+            return Err(ProofError::DigestLength {
+                field: "path hash",
+                actual: step.hash.len(),
+            });
         }
         if step.parent_height != height + 1 {
-            return Err(format!(
-                "path parent height {} does not follow height {}",
-                step.parent_height, height
-            ));
+            return Err(ProofError::ParentHeight {
+                parent: step.parent_height,
+                previous: height,
+            });
         }
         carried = match step.side {
             ProofSide::Left => parent_hash(step.parent_height, &step.hash, &carried),
@@ -527,17 +558,23 @@ pub fn verify_proof(proof: &Proof) -> Result<(), String> {
     }
     let peak = &proof.peaks[proof.peak_index];
     if height != peak.height {
-        return Err(format!(
-            "path height {height} does not reach peak height {}",
-            peak.height
-        ));
+        return Err(ProofError::PathHeight {
+            actual: height,
+            expected: peak.height,
+        });
     }
-    if carried != peak.hash {
-        return Err("proof path does not reconstruct the selected peak".to_string());
+    if carried.as_slice() != peak.hash.as_slice() {
+        return Err(ProofError::PeakMismatch {
+            actual: carried.to_vec(),
+            expected: peak.hash.clone(),
+        });
     }
     let computed_root = root_hash(proof.count as u64, &proof.peaks);
-    if computed_root != proof.root {
-        return Err("proof peaks do not reconstruct the declared root".to_string());
+    if computed_root.as_slice() != proof.root.as_slice() {
+        return Err(ProofError::RootMismatch {
+            actual: computed_root.to_vec(),
+            expected: proof.root.clone(),
+        });
     }
     Ok(())
 }
@@ -630,55 +667,79 @@ impl Proof {
     }
 
     /// Parse the stable detached proof JSON form.
-    pub fn from_json(text: &str) -> Result<Self, String> {
+    pub fn from_json(text: &str) -> Result<Self, ProofError> {
         proof_from_json(text)
     }
 }
 
-fn object<'a>(json: &'a Json, context: &str) -> Result<&'a Object, String> {
-    json.as_object()
-        .ok_or_else(|| format!("{context} must be a JSON object"))
+fn object<'a>(json: &'a Json, context: &str) -> Result<&'a Object, ProofError> {
+    json.as_object().ok_or_else(|| ProofError::JsonObject {
+        context: context.to_owned(),
+        actual: json.clone(),
+    })
 }
 
-fn array_items<'a>(json: &'a Json, context: &str) -> Result<&'a [Json], String> {
+fn array_items<'a>(json: &'a Json, context: &str) -> Result<&'a [Json], ProofError> {
     json.as_array()
         .map(Vec::as_slice)
-        .ok_or_else(|| format!("{context} must be a JSON array"))
+        .ok_or_else(|| ProofError::JsonArray {
+            context: context.to_owned(),
+            actual: json.clone(),
+        })
 }
 
-fn get<'a>(entries: &'a Object, key: &str) -> Result<&'a Json, String> {
-    entries
-        .get(key)
-        .ok_or_else(|| format!("proof JSON missing {key:?}"))
+fn get<'a>(entries: &'a Object, key: &str) -> Result<&'a Json, ProofError> {
+    entries.get(key).ok_or_else(|| ProofError::JsonMissing {
+        field: key.to_owned(),
+    })
 }
 
-fn string_field<'a>(entries: &'a Object, key: &str) -> Result<&'a str, String> {
-    get(entries, key)?
-        .as_str()
-        .ok_or_else(|| format!("{key:?} must be a string"))
+fn string_field<'a>(entries: &'a Object, key: &str) -> Result<&'a str, ProofError> {
+    let actual = get(entries, key)?;
+    actual.as_str().ok_or_else(|| ProofError::JsonString {
+        field: key.to_owned(),
+        actual: actual.clone(),
+    })
 }
 
-fn usize_field(entries: &Object, key: &str) -> Result<usize, String> {
-    let value = get(entries, key)?
-        .as_u64()
-        .ok_or_else(|| format!("{key:?} must be an unsigned integer"))?;
-    usize::try_from(value).map_err(|_| format!("{key:?} is too large for this platform"))
+fn usize_field(entries: &Object, key: &str) -> Result<usize, ProofError> {
+    let actual = get(entries, key)?;
+    let value = actual.as_u64().ok_or_else(|| ProofError::JsonUnsigned {
+        field: key.to_owned(),
+        actual: actual.clone(),
+    })?;
+    usize::try_from(value).map_err(|_| ProofError::JsonPlatform {
+        field: key.to_owned(),
+        actual: value,
+    })
 }
 
-fn proof_from_json(text: &str) -> Result<Proof, String> {
-    let json = json::read(text).map_err(|error| format!("invalid proof JSON: {error}"))?;
+fn proof_from_json(text: &str) -> Result<Proof, ProofError> {
+    let json = json::read(text).map_err(ProofError::Json)?;
     let entries = object(&json, "proof")?;
     let schema = string_field(entries, "schema")?;
     if schema != PROOF_SCHEMA {
-        return Err(format!("unsupported proof schema {schema:?}"));
+        return Err(ProofError::Unsupported {
+            declaration: "proof schema",
+            actual: schema.to_owned(),
+            allowed: &[PROOF_SCHEMA],
+        });
     }
     let hash = string_field(entries, "hash")?;
     if hash != HASH_ALGORITHM {
-        return Err(format!("unsupported hash algorithm {hash:?}"));
+        return Err(ProofError::Unsupported {
+            declaration: "hash algorithm",
+            actual: hash.to_owned(),
+            allowed: &[HASH_ALGORITHM],
+        });
     }
     let preimage = string_field(entries, "preimage")?;
     if preimage != PREIMAGE_VERSION {
-        return Err(format!("unsupported preimage version {preimage:?}"));
+        return Err(ProofError::Unsupported {
+            declaration: "preimage version",
+            actual: preimage.to_owned(),
+            allowed: &[PREIMAGE_VERSION],
+        });
     }
     let peaks = array_items(get(entries, "peaks")?, "peaks")?
         .iter()
@@ -689,7 +750,7 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
                 hash: parse_hex_32(string_field(item, "hash")?)?,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, ProofError>>()?;
     let path = array_items(get(entries, "path")?, "path")?
         .iter()
         .map(|item| {
@@ -697,7 +758,13 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
             let side = match string_field(item, "side")? {
                 "left" => ProofSide::Left,
                 "right" => ProofSide::Right,
-                other => return Err(format!("unsupported proof side {other:?}")),
+                other => {
+                    return Err(ProofError::Unsupported {
+                        declaration: "proof side",
+                        actual: other.to_owned(),
+                        allowed: &["left", "right"],
+                    });
+                }
             };
             Ok(ProofStep {
                 parent_height: usize_field(item, "parent_height")?,
@@ -705,7 +772,7 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
                 hash: parse_hex_32(string_field(item, "hash")?)?,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, ProofError>>()?;
     Ok(Proof {
         count: usize_field(entries, "count")?,
         leaf_index: usize_field(entries, "leaf_index")?,
@@ -719,15 +786,13 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
 
 /// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix and
 /// digits of either case ([`purrdf_hash::hex::decode_32`]).
-pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
+pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, Hex32Error> {
     let trimmed = input.trim();
     let raw = trimmed.strip_prefix("blake3:").unwrap_or(trimmed);
     if raw.len() != 64 {
-        return Err("expected a 32-byte hex value".to_string());
+        return Err(Hex32Error::Length { actual: raw.len() });
     }
-    purrdf_hash::hex::decode_32(raw)
-        .map(Vec::from)
-        .ok_or_else(|| "hex value contains a non-hex character".to_string())
+    purrdf_hash::hex::decode(raw).map_err(Hex32Error::Digits)
 }
 
 fn is_header_item(item: &Value) -> bool {
@@ -739,34 +804,53 @@ fn is_header_item(item: &Value) -> bool {
 
 /// Create a detached proof for `target_frame_id` from a file that carries an
 /// intact `index.mmr` covering that frame.
-pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> {
+pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, ProofError> {
     if target_frame_id.len() != 32 {
-        return Err("target frame id must be 32 bytes".to_string());
+        return Err(ProofError::DigestLength {
+            field: "target frame id",
+            actual: target_frame_id.len(),
+        });
     }
     let (items, torn) = iter_items(data);
     if let Some(offset) = torn {
-        return Err(format!(
-            "input has a torn trailing CBOR item at byte {offset}"
-        ));
+        return Err(ProofError::Torn { offset });
     }
     if items.is_empty() {
-        return Err("input is empty".to_string());
+        return Err(ProofError::Empty);
     }
     let mut item_index = 0usize;
     let mut candidate: Option<Proof> = None;
     while item_index < items.len() {
-        let header = unwrap_header(&items[item_index].1)
-            .map_err(|e| format!("item {item_index} is not a segment header: {e}"))?;
+        let header = unwrap_header(&items[item_index].1).map_err(|cause| ProofError::Header {
+            item: item_index,
+            cause,
+        })?;
         if map_get(header, "gts").and_then(Value::as_text) != Some(MAGIC)
             || map_get(header, "v").and_then(as_i128) != Some(i128::from(VERSION))
         {
-            return Err(format!("item {item_index} is not a GTS v1 header"));
+            return Err(ProofError::NotHeader {
+                item: item_index,
+                actual: Value::Map(header.clone()),
+            });
         }
         let computed_header = header_id(header);
         let stored_header = match map_get(header, "id") {
             Some(Value::Bytes(id)) if id.as_slice() == computed_header.as_slice() => id.clone(),
-            Some(Value::Bytes(_)) => return Err(format!("header {item_index} id mismatch")),
-            _ => return Err(format!("header {item_index} is missing id")),
+            Some(Value::Bytes(actual)) => {
+                return Err(ProofError::FileIdMismatch {
+                    item: item_index,
+                    header: true,
+                    actual: actual.clone(),
+                    expected: computed_header,
+                });
+            }
+            actual => {
+                return Err(ProofError::FileMissingId {
+                    item: item_index,
+                    header: true,
+                    actual: actual.cloned(),
+                });
+            }
         };
         let mut expected_prev = stored_header.clone();
         let mut frame_ids: Vec<Vec<u8>> = Vec::new();
@@ -774,17 +858,39 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
         while item_index < items.len() && !is_header_item(&items[item_index].1) {
             let abs_item = item_index;
             let Value::Map(frame) = &items[item_index].1 else {
-                return Err(format!("item {abs_item} frame is not a map"));
+                return Err(ProofError::NotFrame {
+                    item: abs_item,
+                    actual: items[item_index].1.clone(),
+                });
             };
             let computed = content_id(frame);
             match map_get(frame, "id") {
                 Some(Value::Bytes(stored)) if stored.as_slice() == computed.as_slice() => {}
-                Some(Value::Bytes(_)) => return Err(format!("item {abs_item} id mismatch")),
-                _ => return Err(format!("item {abs_item} is missing id")),
+                Some(Value::Bytes(actual)) => {
+                    return Err(ProofError::FileIdMismatch {
+                        item: abs_item,
+                        header: false,
+                        actual: actual.clone(),
+                        expected: computed,
+                    });
+                }
+                actual => {
+                    return Err(ProofError::FileMissingId {
+                        item: abs_item,
+                        header: false,
+                        actual: actual.cloned(),
+                    });
+                }
             }
             match map_get(frame, "prev") {
                 Some(Value::Bytes(prev)) if prev.as_slice() == expected_prev.as_slice() => {}
-                _ => return Err(format!("item {abs_item} prev mismatch")),
+                actual => {
+                    return Err(ProofError::PrevMismatch {
+                        item: abs_item,
+                        actual: actual.cloned(),
+                        expected: expected_prev,
+                    });
+                }
             }
             expected_prev.clone_from(&computed);
             frame_ids.push(computed);
@@ -807,22 +913,37 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
                 };
                 let covered_limit = frame_ids.len().saturating_sub(1);
                 if count > covered_limit {
-                    return Err(format!(
-                        "item {abs_item} index covers {count} frame(s), but only \
-                         {covered_limit} precede the index"
-                    ));
+                    return Err(ProofError::IndexCount {
+                        item: abs_item,
+                        count,
+                        limit: covered_limit,
+                    });
                 }
                 if count == 0 {
                     if head.as_slice() != stored_header.as_slice() {
-                        return Err(format!("item {abs_item} empty index head mismatch"));
+                        return Err(ProofError::IndexHead {
+                            item: abs_item,
+                            empty: true,
+                            actual: head.clone(),
+                            expected: stored_header,
+                        });
                     }
                 } else if frame_ids[count - 1].as_slice() != head.as_slice() {
-                    return Err(format!("item {abs_item} index head mismatch"));
+                    return Err(ProofError::IndexHead {
+                        item: abs_item,
+                        empty: false,
+                        actual: head.clone(),
+                        expected: frame_ids[count - 1].clone(),
+                    });
                 }
                 let covered = &frame_ids[..count];
                 let computed_root = root(covered);
                 if computed_root.as_slice() != mmr_root.as_slice() {
-                    return Err(format!("item {abs_item} index mmr mismatch"));
+                    return Err(ProofError::IndexRoot {
+                        item: abs_item,
+                        actual: mmr_root.clone(),
+                        expected: computed_root,
+                    });
                 }
                 if let Some(target_index) = covered
                     .iter()
@@ -834,12 +955,141 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
             item_index += 1;
         }
     }
-    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", Lower(target_frame_id)))
+    candidate.ok_or_else(|| ProofError::NotCovered {
+        target: target_frame_id.to_vec(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::{blake3_256, canonical};
+
+    #[test]
+    fn streamed_node_preimages_match_canonical_trees_without_allocations() {
+        let coordinates = [
+            0,
+            23,
+            24,
+            255,
+            256,
+            65_535,
+            65_536,
+            u64::from(u32::MAX),
+            1_u64 << 32,
+            u64::MAX,
+        ];
+        let lengths = [0, 23, 24, 255, 256, 65_535, 65_536];
+        for coordinate in coordinates {
+            for length in lengths {
+                let bytes = vec![0x91; length];
+                let peaks = vec![MmrPeak {
+                    height: 63,
+                    hash: bytes.clone(),
+                }];
+                let expected_leaf = blake3_256(&canonical(&Value::Array(vec![
+                    LEAF_DOMAIN.as_str().into(),
+                    coordinate.into(),
+                    Value::Bytes(bytes.clone()),
+                ])));
+                let expected_parent = blake3_256(&canonical(&Value::Array(vec![
+                    PARENT_DOMAIN.as_str().into(),
+                    63_u64.into(),
+                    Value::Bytes(bytes.clone()),
+                    Value::Bytes(bytes.clone()),
+                ])));
+                let expected_root = blake3_256(&canonical(&Value::Array(vec![
+                    ROOT_DOMAIN.as_str().into(),
+                    coordinate.into(),
+                    Value::Array(vec![Value::Array(vec![
+                        63_u64.into(),
+                        Value::Bytes(bytes.clone()),
+                    ])]),
+                ])));
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let leaf = leaf_hash(coordinate, &bytes);
+                let parent = parent_hash(63, &bytes, &bytes);
+                let root = root_hash(coordinate, &peaks);
+                let measured = window.close();
+                assert_eq!(leaf, expected_leaf);
+                assert_eq!(parent, expected_parent);
+                assert_eq!(root, expected_root);
+                assert_eq!(measured.allocations, 0, "{measured:?}");
+                assert_eq!(measured.requested_bytes, 0, "{measured:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn frontier_carries_allocate_only_the_public_digest() {
+        // Existing frontier capacity accommodates the resulting single peak;
+        // all three parents must carry through fixed-size internal digests.
+        let mut frontier = MmrPeaks::from_parts(7, synthetic_peaks(7)).expect("valid frontier");
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        frontier.push(&[42; 32]).expect("append fits");
+        let measured = window.close();
+        assert_eq!(frontier.count(), 8);
+        assert_eq!(frontier.peaks().len(), 1);
+        assert_eq!(frontier.peaks()[0].height, 3);
+        assert_eq!(measured.allocations, 1, "{measured:?}");
+        assert_eq!(measured.requested_bytes, 32, "{measured:?}");
+
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let root = frontier.root();
+        let measured = window.close();
+        assert_eq!(root.len(), 32);
+        assert_eq!(measured.allocations, 1, "{measured:?}");
+        assert_eq!(measured.requested_bytes, 32, "{measured:?}");
+    }
+
+    #[test]
+    fn original_frontier_and_envelope_refusals_expose_native_fields() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let error = MmrPeaks::from_parts(u64::MAX, Vec::new()).unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-mmr-peak-count");
+        assert!(
+            matches!(fields.field("count"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(matches!(fields.field("expected"), ErrorValue::Unsigned(64)));
+        assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(0)));
+        for (peak, code) in [
+            (
+                MmrPeak {
+                    height: 1,
+                    hash: vec![0; 32],
+                },
+                "gts-mmr-peak-height",
+            ),
+            (
+                MmrPeak {
+                    height: 0,
+                    hash: vec![0; 31],
+                },
+                "gts-mmr-peak-hash-length",
+            ),
+        ] {
+            let error = MmrPeaks::from_parts(1, vec![peak]).unwrap_err();
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, code);
+            assert!(matches!(fields.field("peak"), ErrorValue::Unsigned(0)));
+        }
+        assert!(MmrPeaks::from_parts(0, Vec::new()).is_ok());
+        let error = crate::cose::parse_sign1(&[]).expect_err("empty envelope");
+        assert_eq!(Capture::read(&error).code, "gts-sign1-malformed");
+        // A constructed nested component control, not a cryptographic failure run.
+        let error = crate::cose::Sign1Error::Composite(crate::cose::composite::Error::MlDsa(
+            crate::mldsa65::Error::NonceExhausted,
+        ));
+        let component = std::error::Error::source(&error).unwrap();
+        assert!(component.is::<crate::cose::composite::Error>());
+        assert!(component.source().unwrap().is::<crate::mldsa65::Error>());
+        assert_eq!(
+            Capture::read(&error).child("cause").child("cause").code,
+            "mldsa65-nonce-exhausted"
+        );
+    }
 
     fn id(n: u8) -> Vec<u8> {
         vec![n; 32]
@@ -870,7 +1120,7 @@ mod tests {
     #[test]
     fn a_proof_string_keeps_raw_non_ascii_scalars_whole() {
         let error = Proof::from_json(&with_schema("\"caf\u{e9} \u{1f431}\"")).unwrap_err();
-        assert!(error.contains("caf\u{e9} \u{1f431}"), "{error}");
+        assert!(error.to_string().contains("caf\u{e9} \u{1f431}"), "{error}");
         let (proof, text) = proof_and_json();
         assert_eq!(Proof::from_json(&text), Ok(proof));
     }
@@ -878,7 +1128,7 @@ mod tests {
     #[test]
     fn a_proof_string_decodes_escapes_and_surrogate_pairs() {
         let error = Proof::from_json(&with_schema(r#""\ud83d\ude00""#)).unwrap_err();
-        assert!(error.contains('\u{1f600}'), "{error}");
+        assert!(error.to_string().contains('\u{1f600}'), "{error}");
         let (proof, _) = proof_and_json();
         assert_eq!(
             Proof::from_json(&with_schema(r#""\u0067ts-mmr-proof-v1""#)),
@@ -896,7 +1146,7 @@ mod tests {
         ] {
             let error = Proof::from_json(&with_schema(spelling)).unwrap_err();
             assert!(
-                error.starts_with("invalid proof JSON"),
+                error.to_string().starts_with("invalid proof JSON"),
                 "{spelling}: {error}"
             );
         }
@@ -907,7 +1157,10 @@ mod tests {
         let (proof, _) = proof_and_json();
         assert_eq!(Proof::from_json(&with_nested_member(32)), Ok(proof));
         let error = Proof::from_json(&with_nested_member(10_000)).unwrap_err();
-        assert!(error.starts_with("invalid proof JSON"), "{error}");
+        assert!(
+            error.to_string().starts_with("invalid proof JSON"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -997,7 +1250,7 @@ mod tests {
     /// The tree-building computation `root` used before the peaks-only fold.
     fn root_via_tree(frame_ids: &[Vec<u8>]) -> Vec<u8> {
         let nodes = build_nodes(frame_ids);
-        root_hash(frame_ids.len() as u64, &peak_list(&nodes))
+        root_hash(frame_ids.len() as u64, &peak_list(&nodes)).to_vec()
     }
 
     #[test]
@@ -1288,10 +1541,7 @@ mod tests {
         preimage.extend_from_slice(&left);
         preimage.extend_from_slice(b"\x58\x20");
         preimage.extend_from_slice(&right);
-        assert_eq!(
-            parent_hash(63, &left, &right),
-            blake3_256(&preimage).to_vec()
-        );
+        assert_eq!(parent_hash(63, &left, &right), blake3_256(&preimage));
     }
 
     #[test]

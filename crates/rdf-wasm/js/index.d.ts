@@ -120,6 +120,15 @@ export interface GovernorOptions {
  */
 export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
 
+/**
+ * The stable id of one exact, dated SHACL law: the 2017 Recommendation
+ * (`shacl-rec-2017-07-20`), the SHACL 1.2 working draft (`shacl-wd-2026-09-18`) or the
+ * data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under
+ * (`shacl-ed-2026-10-16`). Ids are matched exactly; any other string is refused with the
+ * `unsupported-profile` status, and no nearby edition is substituted.
+ */
+export type ShaclLaw = "shacl-rec-2017-07-20" | "shacl-wd-2026-09-18" | "shacl-ed-2026-10-16";
+
 export interface QueryOptions {
   readonly base?: string | null;
   /**
@@ -207,6 +216,8 @@ export interface EntailmentQueryOptions extends GovernedQueryOptions {
    * `queryEntailmentGoverned's maxJoinSteps`.
    */
   readonly maxJoinSteps?: bigint | number | null;
+  /** Maximum bytes of interned term spellings in the entailment closure. */
+  readonly maxTermArenaBytes?: bigint | number | null;
 }
 
 export interface QueryRawOptions extends QueryOptions {
@@ -1769,6 +1780,8 @@ export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
   readonly maxStoredFacts?: bigint | number | null;
   /** The closure's join-step limit, exactly as on `EntailmentQueryOptions`. */
   readonly maxJoinSteps?: bigint | number | null;
+  /** The closure's term-arena byte limit, exactly as on `EntailmentQueryOptions`. */
+  readonly maxTermArenaBytes?: bigint | number | null;
 }
 
 export interface AsyncUpdateOptions extends QueryOptions, AsyncHostOptions {}
@@ -2037,6 +2050,8 @@ export function entailMaterialize(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  /** Retained term-surface bytes; omitted, 16777216. */
+  maxTermArenaBytes?: bigint,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
@@ -2318,7 +2333,8 @@ export function entailExplainConclusion(
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
  * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailCertainAnswers's maxStoredFacts` or `entailCertainAnswers's maxJoinSteps`.
+ * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
@@ -2329,6 +2345,7 @@ export function entailCertainAnswers(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2353,7 +2370,8 @@ export function entailCertainAnswers(
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
  * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailGraphEntails's maxStoredFacts` or `entailGraphEntails's maxJoinSteps`.
+ * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailGraphEntails(
   regime: EntailmentRegime | string,
@@ -2364,6 +2382,7 @@ export function entailGraphEntails(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2383,7 +2402,8 @@ export function entailGraphEntails(
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
  * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailVerifyEntailment's maxStoredFacts` or `entailVerifyEntailment's maxJoinSteps`.
+ * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailVerifyEntailment(
   regime: EntailmentRegime | string,
@@ -2394,6 +2414,7 @@ export function entailVerifyEntailment(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2837,6 +2858,14 @@ export interface ShaclSarifMessage {
  * selects no law throws, naming the accepted ones. A pattern the law's grammar refuses
  * stays an ordinary validation result; a resource refusal throws with the resource's code
  * and no report.
+ *
+ * `shaclProfile` is the exact dated SHACL law the validation runs under (see
+ * {@link ShaclLaw}), the same law the CLI selects as `purrdf validate --shacl-profile`.
+ * Omitted, the compatibility law runs, unchanged. An id that names no law throws with the
+ * `unsupported-profile` status; a shapes graph the law's text refuses (the working draft
+ * refuses a prefix declared through a version-IRI path that the editor's draft admits)
+ * throws at load; and an `xpathRegex` that names a law other than the one the dated SHACL
+ * law requires throws.
  */
 export function shaclValidateToSarif(
   shapesTtl: string,
@@ -2848,6 +2877,7 @@ export function shaclValidateToSarif(
   shapesGraph?: string,
   subClassOfInShapesGraph?: boolean,
   xpathRegex?: XPathRegexLaw,
+  shaclProfile?: ShaclLaw,
 ): string;
 
 /**
@@ -3101,6 +3131,12 @@ export interface AsyncShaclOptions extends AsyncHostOptions {}
  */
 export interface AsyncShaclValidationOptions extends AsyncShaclOptions {
   readonly xpathRegex?: XPathRegexLaw | null;
+  /**
+   * The exact dated SHACL law (see {@link ShaclLaw}), which only `shaclValidateToSarifAsync`
+   * takes, as its synchronous twin takes it as its last argument. Another twin refuses it by
+   * name rather than ignoring it.
+   */
+  readonly shaclProfile?: ShaclLaw | null;
 }
 
 /**

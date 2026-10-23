@@ -127,6 +127,7 @@ use crate::eval::{EvalCtx, eval_evaluated};
 use crate::expr::xsd_of;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
+use crate::parallel::{OrderedRows, par_loop_try_map_owned};
 use crate::parsed_value::ParsedValue;
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
@@ -2303,7 +2304,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         // the per-group worker's attestation must reach the parent's receipt.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         let snapshot = ctx.loop_snapshot(groups.len());
-        let (minted, harvests) = crate::parallel::par_loop_try_map_init_fallible(
+        let (minted, harvests): (OrderedRows<_>, _) = par_loop_try_map_owned(
             ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             &groups,
@@ -5678,20 +5679,26 @@ mod tests {
             fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
                 self.0.rows_per_invocation(mode)
             }
-            fn open(
+            fn open<'cursor>(
                 &self,
                 args: &PfArgs<'_>,
                 ceiling: Option<u64>,
-            ) -> Result<Box<dyn PfCursor>, EvalError> {
+            ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+            where
+                Self: 'cursor,
+            {
                 self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
                     .and_then(crate::WorkspaceCursor::into_resident)
             }
-            fn open_admitted(
+            fn open_admitted<'cursor>(
                 &self,
                 _args: &PfArgs<'_>,
                 ceiling: Option<u64>,
                 workspace: crate::WorkspaceCapability,
-            ) -> Result<crate::WorkspaceCursor, EvalError> {
+            ) -> Result<crate::WorkspaceCursor<'cursor>, EvalError>
+            where
+                Self: 'cursor,
+            {
                 let mut rows = AdmittedVec::new(&workspace);
                 let count = ceiling.map_or(usize::MAX, |limit| {
                     usize::try_from(limit).unwrap_or(usize::MAX)
@@ -6404,9 +6411,9 @@ mod tests {
         };
         let seq = eval(&group, &mut ctx).expect("avg");
         let result = agg_lex(&ds, &ctx, &seq, "avg");
-        // AVG(2, 4) = 6 / 2 = 3 — result is decimal (integer ÷ integer → decimal);
-        // XSD 1.1 whole-decimal lexical has no point ("3", not "3.0").
-        assert_eq!(result, "3", "AVG(2,4) should be 3, got {result}");
+        // AVG(2, 4) = 6 / 2 = 3 — result is decimal (integer ÷ integer → decimal),
+        // spelled with its point like every computed whole decimal.
+        assert_eq!(result, "3.0", "AVG(2,4) should be 3.0, got {result}");
     }
 
     #[test]
@@ -6633,7 +6640,7 @@ mod tests {
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
         assert_eq!(
             result.as_deref(),
-            Some(max.as_str()),
+            Some(format!("{max}.0").as_str()),
             "AVG({{i128::MAX, i128::MAX}}) must answer i128::MAX exactly, not unbound"
         );
     }
@@ -8614,7 +8621,7 @@ mod tests {
             "VAR_POP's chunked within-group fold must agree with the sequential one"
         );
         assert_eq!(
-            var_sequential, "4",
+            var_sequential, "4.0",
             "population variance of REPEATS copies of the known dataset is still exactly 4"
         );
 
@@ -8850,28 +8857,30 @@ mod numeric_chain_tests {
         const ROWS: usize = 2048;
         let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
+        // A computed whole decimal carries its point.
+        let sum = format!("{big}.0");
         let mut group = vec![lit("0", XDEC); ROWS];
         group[chunk_size - 1] = lit(big, XDEC);
         group[chunk_size] = lit(big, XDEC);
         group[chunk_size + 1] = lit(&format!("-{big}"), XDEC);
         assert_eq!(
             sequential(ValueAggregate::Sum, &group),
-            Some(lit(big, XDEC))
+            Some(lit(&sum, XDEC))
         );
         assert_eq!(
             partial_sum_tree(&group, chunk_size, ValueAggregate::Sum),
-            Some(lit(big, XDEC)),
+            Some(lit(&sum, XDEC)),
             "the tree and the chain are both exact"
         );
         assert_eq!(
             fold_values(ValueAggregate::Sum, &group).expect("fold"),
-            Some(lit(big, XDEC))
+            Some(lit(&sum, XDEC))
         );
 
         let mut neighbour = group.clone();
         neighbour[chunk_size] = lit("0", XDEC);
         let expected = sequential(ValueAggregate::Sum, &neighbour);
-        assert_eq!(expected, Some(lit("0", XDEC)));
+        assert_eq!(expected, Some(lit("0.0", XDEC)));
         assert_eq!(
             fold_values(ValueAggregate::Sum, &neighbour).expect("fold"),
             expected

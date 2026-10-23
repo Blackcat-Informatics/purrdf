@@ -9,7 +9,7 @@ use crate::{GeoError, Metres, MetricContext, MetricWorkContinuation, MetricWorkO
 use purrdf_xsd::integer::ExactOperation::{RationalCompare, RationalDivide, RationalMultiply};
 
 /// The physical dimension selects the declared linear factor or its square.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MetricDimension {
     /// A linear distance, curve length or perimeter.
     Length,
@@ -17,10 +17,26 @@ pub enum MetricDimension {
     Area,
 }
 
-#[derive(Clone, Copy)]
-enum Direction {
+impl purrdf_hash::error::StructuredError for MetricDimension {
+    purrdf_hash::error_visit! {
+        Length => "metric-dimension-length" {},
+        Area => "metric-dimension-area" {},
+    }
+}
+
+/// Direction of an exact physical-unit conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MetricUnitDirection {
+    /// Convert a quantity in SI units to the declared output unit.
     FromMetres,
+    /// Convert a quantity in a declared input unit to SI units.
     ToMetres,
+}
+impl purrdf_hash::error::StructuredError for MetricUnitDirection {
+    purrdf_hash::error_visit! {
+        FromMetres => "metric-unit-from-metres" {},
+        ToMetres => "metric-unit-to-metres" {},
+    }
 }
 
 /// Convert an exact SI metric into an explicitly declared positive output unit.
@@ -40,7 +56,7 @@ pub fn convert_unit(
         value,
         metres_per_unit,
         dimension,
-        Direction::FromMetres,
+        MetricUnitDirection::FromMetres,
         context,
         &mut progress,
     )
@@ -64,7 +80,7 @@ pub fn convert_unit_metered(
         value,
         metres_per_unit,
         dimension,
-        Direction::FromMetres,
+        MetricUnitDirection::FromMetres,
         context,
         &mut progress,
     )
@@ -107,7 +123,7 @@ pub(super) fn to_metres(
         value,
         metres_per_unit,
         MetricDimension::Length,
-        Direction::ToMetres,
+        MetricUnitDirection::ToMetres,
         context,
         progress,
     )
@@ -118,7 +134,7 @@ fn convert(
     value: &Rat,
     metres_per_unit: &Rat,
     dimension: MetricDimension,
-    direction: Direction,
+    direction: MetricUnitDirection,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
 ) -> Result<Rat, GeoError> {
@@ -129,8 +145,14 @@ fn convert(
             Ok(values.compare(metres_per_unit, &Rat::zero())?.is_gt())
         })?;
     if !positive {
-        return Err(GeoError::config(
-            "metric output units require a positive linear metre factor",
+        return Err(crate::MetricUnitError::capture(
+            crate::MetricUnitReason::NonPositiveFactor,
+            value,
+            metres_per_unit,
+            None,
+            dimension,
+            direction,
+            progress,
         ));
     }
     let squared;
@@ -145,12 +167,27 @@ fn convert(
         }
     };
     match direction {
-        Direction::FromMetres => admission.rational(RationalDivide, &[value, factor], 1, || {
-            value
-                .div(factor)
-                .ok_or_else(|| GeoError::config("positive metric unit factor required"))
-        }),
-        Direction::ToMetres => {
+        MetricUnitDirection::FromMetres => {
+            let quotient =
+                admission.rational(
+                    RationalDivide,
+                    &[value, factor],
+                    1,
+                    || Ok(value.div(factor)),
+                )?;
+            quotient.ok_or_else(|| {
+                crate::MetricUnitError::capture(
+                    crate::MetricUnitReason::MissingQuotient,
+                    value,
+                    metres_per_unit,
+                    Some(factor),
+                    dimension,
+                    direction,
+                    progress,
+                )
+            })
+        }
+        MetricUnitDirection::ToMetres => {
             admission.expression_result(RationalMultiply, &[value, factor], 1, |values| {
                 Ok(values.multiply(value, factor)?)
             })
@@ -162,6 +199,64 @@ fn convert(
 mod tests {
     use super::*;
     use crate::{ExecutionLimits, ExecutionPolicy, GeographicReference};
+
+    #[test]
+    fn rejected_unit_factors_preserve_original_exact_operands_and_direction() {
+        use purrdf_testkit::error_capture::Capture;
+
+        for dimension in [MetricDimension::Length, MetricDimension::Area] {
+            for factor in [
+                Rat::zero(),
+                Rat::new(crate::Int::from_i64(-3), crate::Int::from_i64(7)).unwrap(),
+            ] {
+                let value = Rat::new(crate::Int::from_i64(5), crate::Int::from_i64(11)).unwrap();
+                let mut context = MetricContext::wgs84().unwrap();
+                let outward = convert_unit(&value, &factor, dimension, &mut context).unwrap_err();
+                let inward = metres_from_unit(&value, &factor, &mut context).unwrap_err();
+                for (error, dimension, direction) in [
+                    (outward, dimension, MetricUnitDirection::FromMetres),
+                    (
+                        inward,
+                        MetricDimension::Length,
+                        MetricUnitDirection::ToMetres,
+                    ),
+                ] {
+                    let GeoError::MetricUnit(cause) = &error else {
+                        panic!("native conversion operands")
+                    };
+                    assert_eq!(&*cause.value, &value);
+                    assert_eq!(&*cause.factor, &factor);
+                    assert_eq!(cause.reason, crate::MetricUnitReason::NonPositiveFactor);
+                    assert_eq!(cause.dimension, dimension);
+                    assert_eq!(cause.direction, direction);
+                    assert!(cause.divisor.is_none());
+                    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                    let last = error.clone();
+                    assert_eq!(window.close().allocations, 0);
+                    drop(error);
+                    let fields = Capture::read(&last).child("cause");
+                    assert_eq!(fields.code, "metric-unit");
+                    assert_eq!(
+                        fields.child("reason").code,
+                        "metric-unit-nonpositive-factor"
+                    );
+                    assert_eq!(
+                        fields.child("dimension").code,
+                        if dimension == MetricDimension::Length {
+                            "metric-dimension-length"
+                        } else {
+                            "metric-dimension-area"
+                        }
+                    );
+                    assert!(!last.is_expression_error());
+                    assert_eq!(
+                        last.detail(),
+                        "metric output units require a positive linear metre factor"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn dimensions_square_the_declared_factor_without_resetting_work() {

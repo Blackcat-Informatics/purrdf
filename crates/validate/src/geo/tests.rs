@@ -1654,27 +1654,48 @@ fn scale_and_configuration_refusals_keep_machine_readable_original_parameters() 
         )
     });
     assert_eq!(record["target_metres"], "-2");
-    for (error, field, detail) in [
+    let error =
+        purrdf_geo_kernel::PreparedEllipsoid::new(Rat::from_i64(-2), Rat::from_i64(3)).unwrap_err();
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "invalid-ellipsoid");
+    assert_eq!(record["reason"], "semimajor axis must be positive");
+    assert_eq!(record["semimajor"], "-2");
+    assert_eq!(record["inverse_flattening"], "3");
+    let limits = purrdf_geo_kernel::ExecutionLimits {
+        max_precision_bits: 0,
+        max_work_items: u64::MAX,
+        ..purrdf_geo_kernel::ExecutionLimits::GEOMETRY
+    };
+    let error = purrdf_geo_kernel::ExecutionPolicy::new(limits).unwrap_err();
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "invalid-policy");
+    assert_eq!(record["reason"], "admission limits must be positive");
+    for (name, value) in [
+        ("max_output_elements", limits.max_output_elements),
+        ("max_work_items", limits.max_work_items),
+        ("max_workspace_bytes", limits.max_workspace_bytes),
+        ("max_iterations", u64::from(limits.max_iterations)),
         (
-            GeoError::InvalidEllipsoid("original axes must be positive"),
-            "reason",
-            "original axes must be positive",
+            "max_subdivision_levels",
+            u64::from(limits.max_subdivision_levels),
         ),
+        ("max_precision_bits", u64::from(limits.max_precision_bits)),
         (
-            GeoError::InvalidExecutionPolicy("precision must be positive"),
-            "reason",
-            "precision must be positive",
-        ),
-        (
-            GeoError::ArithmeticOverflow("complete output count"),
-            "operation",
-            "complete output count",
+            "max_scratch_destinations",
+            u64::from(limits.max_scratch_destinations),
         ),
     ] {
-        let record =
-            native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
-        assert_eq!(record[field], detail);
+        assert_eq!(record["limits"][name], Value::from(value));
     }
+    let record = native_output(|decode| {
+        super::encode::refusal(
+            &GeoCallError::Engine(GeoError::ArithmeticOverflow("complete output count")),
+            decode,
+        )
+    });
+    assert_eq!(record["operation"], "complete output count");
     let session = GeoSession::default();
     let record = response(
         &session,
@@ -1691,6 +1712,109 @@ fn scale_and_configuration_refusals_keep_machine_readable_original_parameters() 
     assert_eq!(record["error"]["target_metres"], "0.0000000001");
     assert!(record["error"].get("minimum_metres").is_some());
     assert!(record.get("result").is_none());
+}
+
+#[test]
+fn native_math_and_vocabulary_refusals_preserve_host_classes_and_fields() {
+    use purrdf_geo_kernel::{Crs, GeoVocabBuilder};
+    use purrdf_xsd::math::MathError;
+    let error = GeoError::NativeMath(MathError::Domain("original numerical domain"));
+    assert!(error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "domain");
+    assert_eq!(record["reason"], "original numerical domain");
+    let error = GeoError::NativeMath(MathError::PrecisionExhausted);
+    assert!(!error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "engine-refusal");
+    let crs = Crs::new("https://example.org/crs/planar").unwrap();
+    let vocab = GeoVocabBuilder::new(
+        "https://example.org/geo/",
+        "https://example.org/geof/",
+        crs.clone(),
+        crs.clone(),
+    )
+    .unwrap()
+    .declare_crs_unit(&crs, "https://example.org/unit/metre")
+    .unwrap()
+    .build();
+    assert!(
+        vocab
+            .require_unit(&crs, "https://example.org/unit/metre")
+            .is_ok()
+    );
+    let error = vocab
+        .require_unit(&crs, "https://example.org/unit/foot")
+        .unwrap_err();
+    assert!(error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "domain");
+    assert_eq!(record["cause"]["code"], "vocabulary-unit-mismatch");
+    assert_eq!(record["cause"]["crs"], crs.as_str());
+    assert_eq!(
+        record["cause"]["declared"],
+        "https://example.org/unit/metre"
+    );
+    assert_eq!(
+        record["cause"]["requested"],
+        "https://example.org/unit/foot"
+    );
+    let other = Crs::new("https://example.org/crs/undeclared").unwrap();
+    let error = vocab
+        .require_unit(&other, "https://example.org/unit/metre")
+        .unwrap_err();
+    assert!(!error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "configuration");
+    assert_eq!(record["cause"]["code"], "vocabulary-undeclared-unit");
+    assert_eq!(record["cause"]["crs"], other.as_str());
+    let error =
+        GeoVocabBuilder::new("", "https://example.org/geof/", crs.clone(), crs).unwrap_err();
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "configuration");
+    assert_eq!(record["cause"]["code"], "vocabulary-empty-namespace");
+    assert_eq!(
+        record["cause"]["namespace"]["code"],
+        "vocabulary-namespace-core"
+    );
+
+    let crs = Crs::new("https://example.org/crs/planar").unwrap();
+    let other = Crs::new("https://example.org/crs/other").unwrap();
+    let point = purrdf_geo_kernel::wkt::parse("POINT (0 0)", &crs).unwrap();
+    assert!(purrdf_geo_kernel::geojson::write(&point, &crs, 3).is_ok());
+    for (error, expected) in [
+        (
+            purrdf_geo_kernel::wkt::parse("POINT (broken)", &crs).unwrap_err(),
+            "literal",
+        ),
+        (
+            purrdf_geo_kernel::geojson::parse(r#"{"type":"Unknown"}"#, &crs).unwrap_err(),
+            "literal",
+        ),
+        (
+            purrdf_geo_kernel::geojson::write(&point, &other, 3).unwrap_err(),
+            "domain",
+        ),
+        (
+            purrdf_geo_kernel::index::GeoIndexConfig::new(
+                Vec::new(),
+                purrdf_geo_kernel::index::GraphSelector::Any,
+            )
+            .unwrap_err(),
+            "configuration",
+        ),
+    ] {
+        assert_eq!(error.is_configuration_error(), expected == "configuration");
+        assert_eq!(error.is_domain_error(), expected == "domain");
+        let record =
+            native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+        assert_eq!(record["code"], expected);
+    }
 }
 
 #[test]

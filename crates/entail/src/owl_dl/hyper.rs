@@ -175,7 +175,7 @@
 //! later one is directly blocked; and only unblocked nodes are expanded, each by boundedly
 //! many successors (one per at-least atom, times its number). The round cap
 //! ([`step_cap`](crate::owl_dl::graph::step_cap)) remains a hard backstop, so a termination bug surfaces as an
-//! [`EntailError::Build`] rather than a hang.
+//! [`EntailError::Decision`] with its original certificate rather than a hang.
 //!
 //! ## The one boundary this blocking does not cross
 //!
@@ -194,7 +194,7 @@
 //!
 //! # Two ways to ask
 //!
-//! [`consistent`] answers `bool` and turns an exhausted budget into [`EntailError::Build`] — the
+//! [`consistent`] answers `bool` and turns an exhausted budget into [`EntailError::Decision`] — the
 //! shape the query-directed materialization layer wants, where a truncated search has no
 //! honest answer to return. [`decide`] answers a [`Decision`], which carries the round count
 //! and an `exhausted` flag instead of throwing one; that is what the reasoner services need,
@@ -337,6 +337,7 @@ impl<N> Ground<N> {
 /// The alternatives alone do not say what generated them, and a proof term that could not name
 /// the clause instance would leave a checker nothing to regenerate them from.
 pub(crate) struct BranchSite {
+    introduction_only: bool,
     /// The clause whose disjunctive head produced the alternatives.
     index: usize,
     /// The node variable `0` was bound to.
@@ -344,8 +345,7 @@ pub(crate) struct BranchSite {
     /// The matcher's binding frame.
     frame: Vec<usize>,
     /// How many leading alternatives came from [`ground_head`] — the rest are the `NI`-rule's,
-    /// which are appended by [`Hyper::append_ni_alternatives`] and are NOT regenerable from the
-    /// clause alone.
+    /// with zero for an NI-only branch over the original at-most source binding.
     head_alternatives: usize,
 }
 
@@ -436,10 +436,41 @@ enum ApplySite<'f> {
     },
     /// Nothing replayable: a non-recording run, or a branch point past the recording ceiling.
     Unrecorded,
+    /// A consumer-checked application whose native mutations are being observed.
+    Observed { application: usize },
+    Closing {
+        application: usize,
+        original: &'f super::support::Application,
+        expected: &'f MergeStep,
+        checked: &'f std::cell::Cell<bool>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ReplayGoal<'a> {
+    Clash { clause: usize, frame: &'a [usize] },
+    Merge(&'a MergeStep),
+}
+
+struct Introduction<'s> {
+    origin: &'s super::graph::NominalId,
+    role: Role,
+    filler: u32,
+    bound: u32,
+}
+
+/// One independently checked replay and its requested native mutation owner.
+#[derive(Debug)]
+pub(crate) struct ReplaySupport {
+    pub(crate) frame: Vec<NodeRef>,
+    pub(crate) facts: Vec<super::proof::ProofFact>,
+    pub(crate) mutations: Option<super::graph::changes::Journal>,
 }
 
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
 struct Hyper<'a> {
+    /// NI is inapplicable without a nominal concept in the prepared calculus.
+    has_nominals: bool,
     /// The completion graph operations over the knowledge base.
     g: Graph<'a>,
     /// The DL-clauses derived from it.
@@ -536,9 +567,7 @@ pub(crate) fn decide_recording(
             .support_budget(budget);
     }
     let mut st = h.g.init_state(assumptions);
-    if kb.schema.stats.contradictions != 0 {
-        st.support = super::support::Cursor::Active(None);
-    }
+    st.support = super::support::Cursor::Active(None);
     let decision = h.run(st);
     let trace = h
         .trace
@@ -550,12 +579,60 @@ pub(crate) fn decide_recording(
 pub(crate) fn replay_current_support(
     kb: &Kb,
     assumptions: &Assumptions<'_>,
-    applications: &[super::support::Application],
+    applications: &[&super::support::Application],
     clause: usize,
     frame: &[usize],
     branches: &[BranchStep],
-) -> Result<(Vec<NodeRef>, Vec<super::proof::ProofFact>), super::proof::DlProofError> {
-    Hyper::replay_support(kb, assumptions, applications, clause, frame, branches)
+    journal: Option<super::graph::changes::Journal>,
+) -> Result<ReplaySupport, super::proof::DlProofError> {
+    Hyper::replay_support_inner(
+        kb,
+        assumptions,
+        applications,
+        ReplayGoal::Clash { clause, frame },
+        branches,
+        journal,
+    )
+}
+
+/// Check a recorded merge's original prefix and closing native inequality.
+pub(crate) fn replay_merge_support(
+    kb: &Kb,
+    assumptions: &Assumptions<'_>,
+    applications: &[&super::support::Application],
+    step: &MergeStep,
+    branches: &[BranchStep],
+    journal: Option<super::graph::changes::Journal>,
+) -> Result<ReplaySupport, super::proof::DlProofError> {
+    Hyper::replay_support_inner(
+        kb,
+        assumptions,
+        applications,
+        ReplayGoal::Merge(step),
+        branches,
+        journal,
+    )
+}
+
+/// Exercise the same independent replay with its native observation journal enabled.
+#[cfg(test)]
+pub(crate) fn replay_observing_support(
+    kb: &Kb,
+    assumptions: &Assumptions<'_>,
+    applications: &[&super::support::Application],
+    clause: usize,
+    frame: &[usize],
+    branches: &[BranchStep],
+    journal: super::graph::changes::Journal,
+) -> Result<ReplaySupport, super::proof::DlProofError> {
+    Hyper::replay_support_inner(
+        kb,
+        assumptions,
+        applications,
+        ReplayGoal::Clash { clause, frame },
+        branches,
+        Some(journal),
+    )
 }
 
 impl Hyper<'_> {
@@ -615,10 +692,18 @@ impl Hyper<'_> {
 ///
 /// # Errors
 ///
-/// [`EntailError::Build`] if either cap is exceeded (a termination-bug backstop for the
-/// round cap, and the honest ceiling on per-round work for the other).
+/// [`EntailError::Decision`] retains the original search certificate when either
+/// cap is exceeded. Native storage refusals and cancellation remain distinct.
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
-    let decision = decide(kb, assumptions, Budget::for_kb(kb));
+    let budget = Budget::for_kb(kb);
+    decision_result(kb, budget, decide(kb, assumptions, budget))
+}
+
+pub(crate) fn decision_result(
+    kb: &Kb,
+    budget: Budget,
+    decision: Decision,
+) -> Result<bool, EntailError> {
     if let Some(original) = decision.storage_refusal {
         return Err(super::roles::RoleHierarchyError::Storage(original).into());
     }
@@ -626,11 +711,10 @@ pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool,
         return Err(EntailError::Stopped);
     }
     if decision.exhausted {
-        return Err(EntailError::Build(
-            "OWL-Direct hypertableau exceeded its search budget (possible non-termination, or an \
-             ontology whose per-round work is beyond the work cap)"
-                .to_owned(),
-        ));
+        return Err(
+            crate::reasoner::certificate::Session::certificate_for_decision(kb, budget, decision)
+                .into(),
+        );
     }
     Ok(decision.consistent)
 }
@@ -652,6 +736,7 @@ impl<'a> Hyper<'a> {
         let g = Graph::new(kb, budget.work);
         let clauses = derive(g.kb());
         let mut hyper = Self {
+            has_nominals: kb.table.has_nominals(),
             radius: clauses.match_radius(),
             single_reads: single_reads(g.kb(), g.patterns(), &clauses),
             defer: std::cell::Cell::new(false),
@@ -727,13 +812,12 @@ impl<'a> Hyper<'a> {
             frame,
         );
         let mut step = ClashStep::new(index, node_ref(st, x), frame_refs(st, frame), witness);
-        if let Some(class) = self.clauses.schema_class(index, &self.g.kb().schema) {
-            #[cfg(test)]
-            let reference = self
-                .g
-                .kb()
-                .schema_reference
-                .then(|| super::bounds::Preparation::current_class(self.g.kb(), class));
+        let class = self.clauses.schema_class(index, &self.g.kb().schema);
+        #[cfg(test)]
+        let reference = class
+            .filter(|_| self.g.kb().schema_reference)
+            .map(|class| super::bounds::Preparation::current_class(self.g.kb(), class));
+        let bounds = if let Some(class) = class {
             #[cfg(test)]
             let evidence = if self.g.kb().schema_reference {
                 reference
@@ -754,9 +838,15 @@ impl<'a> Hyper<'a> {
                 .schema
                 .evidence(class)
                 .expect("schema clause has its original evidence");
-            if let super::support::Cursor::Active(latest) = st.support {
-                step.schema = trace.borrow_mut().schema_clash(evidence, latest, frame);
-            }
+            Some(evidence)
+        } else {
+            None
+        };
+        if let super::support::Cursor::Active(latest) = st.support
+            && let Some((schema, current)) = trace.borrow_mut().current_clash(bounds, latest, frame)
+        {
+            step.schema = schema;
+            step.current = Some(current);
         }
         trace.borrow_mut().clash(step);
     }
@@ -776,6 +866,39 @@ impl<'a> Hyper<'a> {
             right,
             joined,
         } = identified;
+        if let ApplySite::Closing {
+            original,
+            expected,
+            checked,
+            ..
+        } = site
+        {
+            if expected.atom() == Some(atom) {
+                let licence = if let Some((branch, ordinal)) = original.branch {
+                    MergeLicence::Branch {
+                        branch,
+                        ordinal,
+                        atom,
+                    }
+                } else {
+                    MergeLicence::Clause {
+                        clause: original.clause,
+                        frame: frame_refs(st, &original.frame),
+                        atom,
+                    }
+                };
+                checked.set(
+                    st.clash
+                        && expected.clashed()
+                        && cause == expected.cause()
+                        && &left == expected.left()
+                        && &right == expected.right()
+                        && &joined == expected.joined()
+                        && &licence == expected.licence(),
+                );
+            }
+            return;
+        }
         let Some(trace) = self.trace.as_ref() else {
             return;
         };
@@ -792,11 +915,16 @@ impl<'a> Hyper<'a> {
                 ordinal,
                 atom,
             },
-            ApplySite::Unrecorded => MergeLicence::Unrecorded,
+            ApplySite::Unrecorded | ApplySite::Observed { .. } => MergeLicence::Unrecorded,
+            ApplySite::Closing { .. } => unreachable!("closing replay was checked above"),
         };
-        trace.borrow_mut().merge(MergeStep::new(
-            cause, left, right, joined, st.clash, licence,
-        ));
+        let mut step = MergeStep::new(cause, left, right, joined, st.clash, licence);
+        if st.clash
+            && let super::support::Cursor::Active(Some(latest)) = st.support
+        {
+            step.current = Some(latest);
+        }
+        trace.borrow_mut().merge(step);
     }
 
     /// Write down a concrete-domain clash, if this run is recording.
@@ -839,13 +967,15 @@ impl<'a> Hyper<'a> {
             .iter()
             .map(|disjunct| observe_alternative(st, disjunct))
             .collect();
-        trace.borrow_mut().branch(BranchStep::new(
+        let mut step = BranchStep::new(
             site.index,
             node_ref(st, site.x),
             frame_refs(st, &site.frame),
             head,
             introduced,
-        ))
+        );
+        step.introduction_only = site.introduction_only;
+        trace.borrow_mut().branch(step)
     }
 
     /// File the outcome of the alternative `slot` names.
@@ -1924,15 +2054,16 @@ impl<'a> Hyper<'a> {
             return None;
         }
         let recording = self.trace.is_some();
+        if let Some(branch) = self.introduction_branch(st, index, x, clause) {
+            return Some(branch);
+        }
+        if self.g.work().exhausted() {
+            return None;
+        }
         let mut found: Option<Branching> = None;
         Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
-            let mut disjuncts = ground_head(&clause.head, frame);
+            let disjuncts = ground_head(&clause.head, frame);
             let head_alternatives = disjuncts.len();
-            // Motik–Shearer–Horrocks Table 5 `NI`-rule: at a NOMINAL at-most node pressed by a
-            // BLOCKABLE predecessor, add the alternatives that branch that predecessor into the
-            // reserved roots `u.⟨R,B,i⟩`. This is what bounds the corner the plain pairwise
-            // `≤`-merges cannot, and it decides beside them rather than replacing them.
-            self.append_ni_alternatives(st, clause, x, &mut disjuncts);
             // Grounding a `≤n` head expands one schematic atom into one alternative per PAIR
             // of counted successors, so the alternatives a single match produces are
             // quadratic in the count. Charged by what came out.
@@ -1946,6 +2077,7 @@ impl<'a> Hyper<'a> {
             found = Some(Branching {
                 alternatives: disjuncts,
                 site: recording.then(|| BranchSite {
+                    introduction_only: false,
                     index,
                     x,
                     frame: frame.to_vec(),
@@ -1957,11 +2089,11 @@ impl<'a> Hyper<'a> {
         found
     }
 
-    /// Append the Motik–Shearer–Horrocks Table 5 `NI`-rule alternatives for the `≤`-clause
+    /// Select the Motik–Shearer–Horrocks Table 5 `NI`-rule alternatives for the `≤`-clause
     /// `clause` at node `x`.
     ///
     /// The rule fires only in the corner: `x` is a NOMINAL (named or generated reserved root,
-    /// [`Graph::nominal_id`], never a mere anonymous root) whose at-most bound `≤n R.B` is pressed
+    /// [`Graph::nominal_id`], never a mere anonymous root) whose at-most bound is `≤n R.B`,
     /// by a BLOCKABLE predecessor `y` satisfying `B` (`x` a completion-successor of `y` —
     /// [`Graph::blockable_predecessor_neighbours`]). For each such `y`, an alternative merges `y`
     /// into one of the reserved roots `u.⟨R,B,i⟩` (`u = ` the nominal identity of `x`, `i ∈
@@ -1969,15 +2101,98 @@ impl<'a> Hyper<'a> {
     /// what the plain pairwise `≤`-merges cannot do without renaming a named element or looping.
     /// Non-corner `≤`-clauses gain nothing: `nominal_id` is `None` for anonymous nodes and the
     /// blockable-predecessor set is empty when no inverse edge makes `y` an `R`-neighbour of `x`.
-    fn append_ni_alternatives(
+    fn introduction_branch(
         &self,
         st: &State,
+        clause_index: usize,
+        x: usize,
+        clause: &DlClause,
+    ) -> Option<Branching> {
+        if !self.has_nominals {
+            return None;
+        }
+        let site = self.introduction(st, clause, x)?;
+        let at = clause
+            .body
+            .iter()
+            .position(|atom| matches!(atom, BodyAtom::Successors { .. }))?;
+        let guards = DlClause {
+            body: clause.body[..at].to_vec(),
+            head: Vec::new(),
+        };
+        let BodyAtom::Successors { count, .. } = clause.body[at] else {
+            unreachable!("selected counted source")
+        };
+        let mut found = None;
+        Self::for_each_match(&self.g, st, &guards, x, &mut |prefix| {
+            for y in self.g.blockable_predecessor_neighbours(st, x, site.role) {
+                if !self.g.has_concept(st, y, site.filler) {
+                    continue;
+                }
+                // A source nominal split already awaiting this predecessor identifies it
+                // with a named root directly. Resolve that real branch before allocating
+                // another reserved set that the same identification would immediately absorb.
+                // `identifying` excludes counted-equality clauses, so this cannot recurse
+                // into NI; the returned branch retains its own original source and binding.
+                if let Some(branch) = self.branch_at(st, y, true) {
+                    found = Some(branch);
+                    return true;
+                }
+                self.g
+                    .work()
+                    .charge(prefix.len() as u64 + u64::from(count) + u64::from(site.bound));
+                if self.g.work().exhausted() {
+                    return true;
+                }
+                let mut frame = prefix.to_vec();
+                let Some(width) = frame.len().checked_add(count as usize) else {
+                    st.clique_exhausted.set(true);
+                    return true;
+                };
+                frame.resize(width, y);
+                debug_assert_eq!(
+                    at + 1,
+                    clause.body.len(),
+                    "the native at-most count is its final guard"
+                );
+                let alternatives = (0..site.bound)
+                    .map(|index| {
+                        vec![Ground::EqualReserved(
+                            y,
+                            GeneratedRoot {
+                                origin: site.origin.clone(),
+                                role: site.role,
+                                filler: site.filler,
+                                index,
+                            },
+                        )]
+                    })
+                    .collect();
+                found = Some(Branching {
+                    alternatives,
+                    site: self.trace.is_some().then_some(BranchSite {
+                        introduction_only: true,
+                        index: clause_index,
+                        x,
+                        frame,
+                        head_alternatives: 0,
+                    }),
+                });
+                return true;
+            }
+            false
+        });
+        found
+    }
+
+    fn introduction<'s>(
+        &self,
+        st: &'s State,
         clause: &DlClause,
         x: usize,
-        disjuncts: &mut Vec<Vec<Ground<usize>>>,
-    ) {
+    ) -> Option<Introduction<'s>> {
         // The `≤`-clause names its counted `(role, filler, n+1)` in a `Successors` body atom.
-        let Some((role, filler, count)) = clause.body.iter().find_map(|atom| match *atom {
+        let (role, filler, count) = clause.body.iter().find_map(|atom| match *atom {
             BodyAtom::Successors {
                 role,
                 filler,
@@ -1985,33 +2200,55 @@ impl<'a> Hyper<'a> {
                 ..
             } => Some((role, filler, count)),
             _ => None,
-        }) else {
-            return;
-        };
+        })?;
         let n = count.saturating_sub(1);
         if n == 0 {
-            return;
+            return None;
         }
-        let Some(origin) = self.g.nominal_id(st, x) else {
-            return;
+        let origin = self.g.nominal_id(st, x)?;
+        Some(Introduction {
+            origin,
+            role,
+            filler,
+            bound: n,
+        })
+    }
+
+    fn check_introduction(
+        &self,
+        st: &State,
+        clause: &DlClause,
+        x: usize,
+        head: &[Ground<usize>],
+    ) -> bool {
+        let [Ground::EqualReserved(predecessor, key)] = head else {
+            return false;
         };
-        for y in self.g.blockable_predecessor_neighbours(st, x, role) {
-            // Only a `B`-neighbour presses `≤n R.B`.
-            if !self.g.has_concept(st, y, filler) {
-                continue;
-            }
-            for index in 0..n {
-                disjuncts.push(vec![Ground::EqualReserved(
-                    y,
-                    GeneratedRoot {
-                        origin: origin.clone(),
-                        role,
-                        filler,
-                        index,
-                    },
-                )]);
-            }
+        let Some(site) = self.introduction(st, clause, x) else {
+            return false;
+        };
+        if key.index >= site.bound {
+            return false;
         }
+        if key.origin != *site.origin || key.role != site.role || key.filler != site.filler {
+            return false;
+        }
+        match site.origin {
+            super::graph::NominalId::Named(individual) => {
+                self.g
+                    .observe_read(super::graph::changes::ReadFact::Denotes {
+                        node: find(st, x),
+                        individual: *individual,
+                    });
+            }
+            super::graph::NominalId::Generated(_) => self
+                .g
+                .observe_read(super::graph::changes::ReadFact::Node(find(st, x))),
+        }
+        self.g.has_concept(st, *predecessor, site.filler)
+            && self
+                .g
+                .select_blockable_predecessor(st, x, site.role, *predecessor)
     }
 
     /// Whether every atom of a grounded disjunct already holds.
@@ -2036,10 +2273,10 @@ impl<'a> Hyper<'a> {
 
     /// Assert every atom of a grounded disjunct. Returns `false` if the state clashed.
     ///
-    /// `site` says where the disjunct came from, so an identification can record the clause
-    /// instance that LICENSED it. It is read only by [`Hyper::record_merge`], and only on a
-    /// recording run: constructing one is an enum with a borrowed slice in it, which allocates
-    /// nothing, decides nothing and charges nothing.
+    /// Producer sites license recording of clause instances and identifications. An
+    /// `Observed` consumer site retains the checked application and head positions in
+    /// its requested native mutation journal. The enum borrows existing frames; the
+    /// graph operations below remain the single owner of the selected consequence.
     fn apply(&self, st: &mut State, disjunct: &[Ground<usize>], site: &ApplySite<'_>) -> bool {
         if let super::support::Cursor::Active(previous) = st.support
             && let Some(trace) = &self.trace
@@ -2052,7 +2289,9 @@ impl<'a> Hyper<'a> {
                     branch,
                     ordinal,
                 } => Some((*index, *frame, Some((*branch, *ordinal)))),
-                ApplySite::Unrecorded => None,
+                ApplySite::Unrecorded | ApplySite::Observed { .. } | ApplySite::Closing { .. } => {
+                    None
+                }
             };
             if let Some((index, frame, branch)) = application {
                 st.support = trace
@@ -2063,7 +2302,44 @@ impl<'a> Hyper<'a> {
                     });
             }
         }
+        let observing = if let ApplySite::Observed { application }
+        | ApplySite::Closing { application, .. } = site
+        {
+            self.g
+                .change_cause(super::graph::changes::Origin::Application, *application);
+            true
+        } else {
+            false
+        };
         for (at, atom) in disjunct.iter().enumerate() {
+            if observing {
+                self.g.change_atom(at);
+            }
+            if let ApplySite::Closing {
+                application,
+                expected,
+                ..
+            } = site
+                && expected.atom() == Some(at)
+            {
+                self.g
+                    .select_reads(Some(super::graph::changes::ReadOwner::Merge {
+                        application: *application,
+                        atom: at,
+                    }));
+            } else if let ApplySite::Observed { application }
+            | ApplySite::Closing { application, .. } = site
+                && matches!(
+                    atom,
+                    Ground::Equal(..) | Ground::EqualIndividual(..) | Ground::EqualReserved(..)
+                )
+            {
+                self.g
+                    .select_reads(Some(super::graph::changes::ReadOwner::Identification {
+                        application: *application,
+                        atom: at,
+                    }));
+            }
             match atom {
                 Ground::Concept(node, concept) => {
                     self.g.add_concept(st, *node, *concept);
@@ -2072,6 +2348,17 @@ impl<'a> Hyper<'a> {
                     self.g.add_self_loop(st, *node, *role);
                 }
                 Ground::AtLeast(node, n, role, filler) => {
+                    if let ApplySite::Observed { application }
+                    | ApplySite::Closing { application, .. } = site
+                    {
+                        self.g
+                            .select_reads(Some(super::graph::changes::ReadOwner::Counting {
+                                application: *application,
+                                atom: at,
+                            }));
+                        self.g
+                            .observe_read(super::graph::changes::ReadFact::Node(find(st, *node)));
+                    }
                     self.g.ensure_at_least(st, *node, *n, *role, *filler);
                 }
                 Ground::Equal(left, right) => {
@@ -2137,21 +2424,28 @@ impl<'a> Hyper<'a> {
                     );
                 }
             }
-            if st.clash {
+            if observing {
+                self.g.select_reads(None);
+            }
+            if st.clash || (observing && self.g.changes_refused()) {
                 return false;
             }
+        }
+        if observing {
+            self.g
+                .change_cause(super::graph::changes::Origin::Unattributed, 0);
         }
         !st.clash
     }
 
-    pub(crate) fn replay_support(
+    fn replay_support_inner(
         kb: &'a Kb,
         assumptions: &Assumptions<'_>,
-        applications: &[super::support::Application],
-        clause_index: usize,
-        frame: &[usize],
+        applications: &[&super::support::Application],
+        goal: ReplayGoal<'_>,
         branches: &[BranchStep],
-    ) -> Result<(Vec<NodeRef>, Vec<super::proof::ProofFact>), super::proof::DlProofError> {
+        journal: Option<super::graph::changes::Journal>,
+    ) -> Result<ReplaySupport, super::proof::DlProofError> {
         let poll = || {
             if kb
                 .stop
@@ -2182,17 +2476,51 @@ impl<'a> Hyper<'a> {
                 work: u64::MAX,
             },
         );
+        let observing = journal.is_some();
+        if let Some(journal) = journal {
+            driver.g.begin_changes(journal);
+        }
         let mut state = driver.g.init_state(assumptions);
-        for application in applications {
-            poll()?;
-            if application.clause >= driver.clauses.count()
-                || !Self::frame_is_supported(
+        let check = || {
+            if let Some(original) = driver.g.storage_refusal() {
+                return Err(super::proof::DlProofError::Storage(original));
+            }
+            if driver.g.changes_stopped() {
+                return Err(super::proof::DlProofError::Stopped);
+            }
+            poll()
+        };
+        if observing {
+            check()?;
+        }
+        let closing_checked = std::cell::Cell::new(false);
+        for (index, application) in applications.iter().enumerate() {
+            check()?;
+            if observing {
+                driver
+                    .g
+                    .select_reads(Some(super::graph::changes::ReadOwner::Application {
+                        index,
+                        clause: application.clause,
+                        branch: application.branch,
+                    }));
+            }
+            let introduction_only = application.branch.is_some_and(|(branch, _)| {
+                branches
+                    .get(branch)
+                    .is_some_and(BranchStep::introduction_only)
+            });
+            let supported = application.clause < driver.clauses.count()
+                && Self::frame_is_supported_as(
                     &driver,
                     &state,
                     application.clause,
                     &application.frame,
-                )
-            {
+                    introduction_only,
+                );
+            driver.g.select_reads(None);
+            check()?;
+            if !supported {
                 return Err(super::proof::malformed(
                     "current-support application has no established body",
                 ));
@@ -2247,6 +2575,30 @@ impl<'a> Hyper<'a> {
                         "current-support alternative differs from its licensed case",
                     ));
                 }
+                if ordinal >= step.alternatives().len() {
+                    if observing {
+                        driver.g.select_reads(Some(
+                            super::graph::changes::ReadOwner::Application {
+                                index,
+                                clause: application.clause,
+                                branch: application.branch,
+                            },
+                        ));
+                    }
+                    let introduced = driver.check_introduction(
+                        &state,
+                        clause,
+                        application.frame[0],
+                        &application.head,
+                    );
+                    driver.g.select_reads(None);
+                    check()?;
+                    if !introduced {
+                        return Err(super::proof::malformed(
+                            "nominal introduction lacks its native generative predecessor",
+                        ));
+                    }
+                }
             } else if matches!(
                 clause.head_form(),
                 HeadForm::Disjunctive | HeadForm::Inconsistency
@@ -2257,54 +2609,208 @@ impl<'a> Hyper<'a> {
                     "current-support consequence is not the single licensed head",
                 ));
             }
-            if !driver.apply(&mut state, &application.head, &ApplySite::Unrecorded)
-                || state.clique_exhausted.get()
-            {
+            let closing = match goal {
+                ReplayGoal::Merge(step) if index + 1 == applications.len() => Some(step),
+                _ => None,
+            };
+            let site = if let Some(expected) = closing {
+                ApplySite::Closing {
+                    application: index,
+                    original: application,
+                    expected,
+                    checked: &closing_checked,
+                }
+            } else if observing {
+                ApplySite::Observed { application: index }
+            } else {
+                ApplySite::Unrecorded
+            };
+            let open = driver.apply(&mut state, &application.head, &site);
+            check()?;
+            if closing.is_some() {
+                if open || !closing_checked.get() || state.clique_exhausted.get() {
+                    return Err(super::proof::malformed(
+                        "recorded merge has no reachable native inequality closure",
+                    ));
+                }
+                return Ok(ReplaySupport {
+                    frame: Vec::new(),
+                    facts: Vec::new(),
+                    mutations: driver.g.finish_changes(),
+                });
+            }
+            if !open || state.clique_exhausted.get() {
                 return Err(super::proof::malformed(
                     "current-support replay did not produce a complete open prefix",
                 ));
             }
         }
-        if clause_index >= driver.clauses.count()
-            || !Self::frame_is_supported(&driver, &state, clause_index, frame)
-        {
+        let ReplayGoal::Clash {
+            clause: clause_index,
+            frame,
+        } = goal
+        else {
+            return Err(super::proof::malformed(
+                "merge closure has no original final application",
+            ));
+        };
+        if observing {
+            driver
+                .g
+                .select_reads(Some(super::graph::changes::ReadOwner::Clash {
+                    clause: clause_index,
+                }));
+        }
+        let supported = clause_index < driver.clauses.count()
+            && Self::frame_is_supported(&driver, &state, clause_index, frame);
+        driver.g.select_reads(None);
+        check()?;
+        if !supported {
             return Err(super::proof::malformed(
                 "prepared clash has no source-supported current inhabitant",
             ));
         }
-        poll()?;
-        Ok((
-            frame_refs(&state, frame),
-            observe_body(
+        check()?;
+        Ok(ReplaySupport {
+            frame: frame_refs(&state, frame),
+            facts: observe_body(
                 kb,
                 &state,
                 driver.clauses.clause(clause_index, &driver.g.kb().schema),
                 frame,
             ),
-        ))
+            mutations: driver.g.finish_changes(),
+        })
     }
 
     fn frame_is_supported(driver: &Self, state: &State, index: usize, frame: &[usize]) -> bool {
+        Self::frame_is_supported_as(driver, state, index, frame, false)
+    }
+
+    fn frame_is_supported_as(
+        driver: &Self,
+        state: &State,
+        index: usize,
+        frame: &[usize],
+        introduction_only: bool,
+    ) -> bool {
         let Some(&root) = frame.first() else {
             return false;
         };
-        if frame.iter().any(|&node| node >= state.nodes.len())
+        if frame
+            .iter()
+            .any(|&node| node >= state.nodes.len() || find(state, node) != node)
             || (driver.clauses.is_tbox(index) && state.nodes[find(state, root)].concrete)
         {
             return false;
         }
-        let mut found = false;
-        Self::for_each_match(
-            &driver.g,
-            state,
-            driver.clauses.clause(index, &driver.g.kb().schema),
-            root,
-            &mut |current| {
-                found = current == frame;
-                found
-            },
-        );
-        found
+        if driver.g.selecting_reads() {
+            use super::graph::changes::ReadFact;
+            if let Some(source) = driver.clauses.constraint_source(index) {
+                driver.g.observe_read(ReadFact::RoleConstraint(source));
+            }
+            if let Some(program) = &driver.g.kb().role_program
+                && let Some(source) = driver.clauses.role_source(index, program)
+            {
+                driver.g.observe_read(ReadFact::RoleClause(source));
+            }
+            for &node in frame {
+                driver.g.observe_read(ReadFact::Node(node));
+                // The public frame's selected name is also a premise. An equality
+                // may introduce that name without changing an existing label.
+                if let NodeRef::Individual(individual) = node_ref(state, node) {
+                    driver
+                        .g
+                        .observe_read(ReadFact::Denotes { node, individual });
+                }
+            }
+            if driver.clauses.is_tbox(index) {
+                driver.g.observe_read(ReadFact::ObjectDomain(root));
+                match driver.clauses.tbox_source(index) {
+                    Some(source) => driver.g.observe_read(ReadFact::Tbox(source)),
+                    None => driver.g.observe_read(ReadFact::SchemaGuard(index)),
+                }
+            }
+        }
+        // The proof supplies one complete binding. Read that binding through the
+        // native graph predicates instead of enumerating unrelated join/subset
+        // alternatives. This also gives dependency recording a selected-body
+        // boundary, rather than the reads of unsuccessful candidate frames.
+        let clause = driver.clauses.clause(index, &driver.g.kb().schema);
+        let mut bound = 1;
+        for atom in &clause.body {
+            driver.g.work().charge(1);
+            let holds = match *atom {
+                BodyAtom::Concept { var, concept } => {
+                    (var as usize) < bound
+                        && driver.g.has_concept(state, frame[var as usize], concept)
+                }
+                BodyAtom::Denotes { var, individual } => {
+                    let holds = (var as usize) < bound
+                        && state.nodes[frame[var as usize]]
+                            .nominals
+                            .contains(&individual);
+                    if holds {
+                        driver
+                            .g
+                            .observe_read(super::graph::changes::ReadFact::Denotes {
+                                node: frame[var as usize],
+                                individual,
+                            });
+                    }
+                    holds
+                }
+                BodyAtom::Role { from, to, role } => {
+                    if (from as usize) >= bound || (to as usize) > bound {
+                        return false;
+                    }
+                    if to as usize == bound {
+                        bound += 1;
+                    }
+                    bound <= frame.len()
+                        && driver.g.is_neighbour(
+                            state,
+                            frame[from as usize],
+                            role,
+                            frame[to as usize],
+                        )
+                }
+                BodyAtom::Successors {
+                    role,
+                    filler,
+                    first,
+                    count,
+                } => {
+                    let Some(end) = bound.checked_add(count as usize) else {
+                        return false;
+                    };
+                    if first as usize != bound || end > frame.len() {
+                        return false;
+                    }
+                    let selected = &frame[bound..end];
+                    bound = end;
+                    let ordered = if introduction_only {
+                        selected.windows(2).all(|pair| pair[0] == pair[1])
+                    } else {
+                        selected.windows(2).all(|pair| pair[0] < pair[1])
+                    };
+                    let witnesses = if introduction_only {
+                        &selected[..1]
+                    } else {
+                        selected
+                    };
+                    ordered
+                        && witnesses.iter().all(|&node| {
+                            driver.g.has_concept(state, node, filler)
+                                && driver.g.is_neighbour(state, frame[0], role, node)
+                        })
+                }
+            };
+            if !holds || driver.g.work().exhausted() {
+                return false;
+            }
+        }
+        bound == frame.len()
     }
 
     /// Call `visit` on every binding frame that satisfies `clause`'s body with variable `0`
@@ -3028,7 +3534,7 @@ fn reach_back(
         scratch.walk.push(y);
     } else {
         g.work().charge(st.class_edges(y).len() as u64);
-        for_each_step(st, y, mirror, |z| scratch.walk.push(z));
+        for_each_step(st, y, mirror, |z, _| scratch.walk.push(z));
     }
     while let Some(z) = scratch.walk.pop() {
         if scratch.stamp[z] == scratch.epoch && scratch.via[z] & bit != 0 {
@@ -3039,7 +3545,7 @@ fn reach_back(
         }
         scratch.via[z] |= bit;
         g.work().charge(st.class_edges(z).len() as u64 + 1);
-        for_each_step(st, z, mirror, |w| scratch.walk.push(w));
+        for_each_step(st, z, mirror, |w, _| scratch.walk.push(w));
     }
 }
 
@@ -3131,7 +3637,7 @@ fn ground<N: Clone>(disjunct: &[HeadAtom], frame: &[N]) -> Vec<Ground<N>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hyper, MergeLicence, decide, decide_recording};
+    use super::{Hyper, MergeLicence, ReplayGoal, decide, decide_recording};
     use crate::owl_dl::Kb;
     use crate::owl_dl::clause::{HeadAtom, derive};
     use crate::owl_dl::concept::{Concept, Role};
@@ -3149,6 +3655,1161 @@ mod tests {
     const R: u32 = 20;
     /// An individual term id.
     const IND: u32 = 30;
+
+    #[test]
+    fn native_decision_refusal_keeps_the_executed_search_certificate() {
+        let mut kb = Kb::empty();
+        kb.push_gci(Concept::Named(A), Concept::Named(B));
+        let class = kb.table.intern(Concept::Named(A));
+        kb.abox_types.push((IND, class));
+        kb.individuals.insert(IND);
+        kb.finalize().unwrap();
+        for budget in [
+            Budget {
+                steps: 0,
+                work: u64::MAX,
+            },
+            Budget {
+                steps: u64::MAX,
+                work: 0,
+            },
+        ] {
+            let decision = decide(&kb, &Assumptions::of_kb(), budget);
+            assert!(decision.exhausted);
+            let Err(crate::EntailError::Decision(certificate)) =
+                super::decision_result(&kb, budget, decision)
+            else {
+                panic!("an exhausted actual search cannot publish a semantic result");
+            };
+            assert_eq!(certificate.steps(), decision.steps);
+            assert_eq!(certificate.work(), decision.work);
+            assert_eq!(certificate.budget(), budget.steps);
+            assert_eq!(certificate.work_budget(), budget.work);
+            assert_eq!(certificate.decisions(), 1);
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(certificate.as_ref()).code,
+                "owl-dl-certificate"
+            );
+        }
+    }
+
+    /// A transferred fact keeps its original version and the actual merge dependency.
+    #[test]
+    fn selected_reads_slice_original_label_and_selected_identity_after_merge() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Origin, ReadFact, ReadOwner};
+        let mut kb = Kb::empty();
+        let a = kb.table.intern(Concept::Named(A));
+        let b = kb.table.intern(Concept::Named(B));
+        kb.abox_types.extend([(IND, a), (IND + 1, b)]);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let left = state.root_of[&IND];
+        let right = state.root_of[&(IND + 1)];
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 0,
+            clause: 0,
+            branch: None,
+        }));
+        assert!(driver.g.has_concept(&state, right, b));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::Concept(right, a)],
+            &ApplySite::Observed { application: 0 }
+        ));
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 1,
+            clause: 1,
+            branch: None,
+        }));
+        assert!(driver.g.has_concept(&state, left, a));
+        assert!(driver.g.has_concept(&state, right, b));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::Equal(left, right)],
+            &ApplySite::Observed { application: 1 }
+        ));
+        // A label already present on the keeper does not depend on the merge.
+        // The selected name nevertheless does, so identity alone must retain it.
+        // Then select the transferred label, checking both immutable versions.
+        for (clause, concept) in [(2, a), (3, b)] {
+            driver.g.select_reads(Some(ReadOwner::Clash { clause }));
+            assert!(driver.g.has_concept(&state, left, concept));
+            driver.g.observe_read(ReadFact::Denotes {
+                node: left,
+                individual: IND + 1,
+            });
+            driver.g.select_reads(None);
+            let journal = driver.g.finish_changes().unwrap();
+            let slice = journal.normalized_slice(&kb).unwrap();
+            assert!(slice.owners.contains(&ReadOwner::Application {
+                index: 1,
+                clause: 1,
+                branch: None
+            }));
+            assert!(!slice.owners.contains(&ReadOwner::Application {
+                index: 0,
+                clause: 0,
+                branch: None
+            }));
+            assert!(
+                slice
+                    .effects
+                    .iter()
+                    .map(|(_, event)| &event.cause)
+                    .any(|cause| cause.origin == Origin::PreparedType && cause.index == 1)
+            );
+            assert!(
+                !slice
+                    .effects
+                    .iter()
+                    .map(|(_, event)| &event.cause)
+                    .any(|cause| cause.origin == Origin::Application && cause.index == 0)
+            );
+            driver.g.begin_changes(journal);
+        }
+    }
+
+    /// The role reader publishes the selected raw edge, not visited alternatives.
+    #[test]
+    fn selected_reads_slice_inverse_edges_and_aliases_without_visited_edges() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Origin, ReadFact, ReadOwner, RoleWitness};
+        let mut kb = Kb::empty();
+        kb.abox_types.extend([(IND, kb.top), (IND + 1, kb.top)]);
+        kb.abox_roles
+            .extend([(IND + 1, R, IND + 3), (IND + 1, R, IND + 2)]);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let left = state.root_of[&IND];
+        let right = state.root_of[&(IND + 1)];
+        let target = state.root_of[&(IND + 2)];
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 0,
+            clause: 0,
+            branch: None,
+        }));
+        driver.g.observe_read(ReadFact::Node(left));
+        driver.g.observe_read(ReadFact::Node(right));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::Equal(left, right)],
+            &ApplySite::Observed { application: 0 }
+        ));
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+        assert!(driver.g.is_neighbour(&state, target, Role::Inv(R), left));
+        driver.g.select_reads(None);
+        let journal = driver.g.finish_changes().unwrap();
+        assert_eq!(
+            journal
+                .reads()
+                .iter()
+                .filter(|read| matches!(read.fact, ReadFact::Role { .. }))
+                .count(),
+            1
+        );
+        assert!(journal.reads().iter().any(|read| matches!(
+            read.fact,
+            ReadFact::Role {
+                witness: RoleWitness::Edge { index: 1, .. },
+                ..
+            }
+        )));
+        let slice = journal.normalized_slice(&kb).unwrap();
+        assert!(
+            slice
+                .effects
+                .iter()
+                .map(|(_, event)| &event.cause)
+                .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 1)
+        );
+        assert!(
+            !slice
+                .effects
+                .iter()
+                .map(|(_, event)| &event.cause)
+                .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 0)
+        );
+        assert!(slice.owners.contains(&ReadOwner::Application {
+            index: 0,
+            clause: 0,
+            branch: None
+        }));
+    }
+
+    /// One real recursive compiler input, with a different accepted target first.
+    fn selected_language_fixture() -> Kb {
+        use crate::owl_dl::roles::{Chain, Hierarchy};
+        use purrdf_lex::allocation::{Memory, Resident};
+        let mut kb = Kb::empty();
+        let source = Hierarchy {
+            chains: vec![
+                Chain {
+                    head: Role::Named(R + 2),
+                    body: vec![Role::Named(R), Role::Named(R + 1)],
+                },
+                Chain {
+                    head: Role::Named(R + 2),
+                    body: vec![Role::Named(R + 2), Role::Named(R + 1)],
+                },
+            ],
+            ..Hierarchy::default()
+        };
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        kb.role_program = Some(source.compile(None, None, &mut memory).unwrap());
+        kb.abox_roles.extend([
+            (IND, R, IND + 4),
+            (IND + 4, R + 1, IND + 5),
+            (IND, R, IND + 1),
+            (IND + 1, R + 1, IND + 2),
+            (IND + 2, R + 1, IND + 3),
+        ]);
+        kb.finalize().unwrap();
+        kb
+    }
+
+    /// Compiled-language provenance is the accepted native path, not search history.
+    #[test]
+    fn selected_language_path_retains_native_transitions_and_excludes_other_targets() {
+        use crate::owl_dl::graph::changes::{Journal, Origin, PathKind, ReadOwner};
+        let kb = selected_language_fixture();
+        for inverse in [false, true] {
+            let role = if inverse {
+                Role::Inv(R + 2)
+            } else {
+                Role::Named(R + 2)
+            };
+            let run = |observing| {
+                let driver = Hyper::new(
+                    &kb,
+                    Budget {
+                        steps: u64::MAX,
+                        work: u64::MAX,
+                    },
+                );
+                if observing {
+                    driver.g.begin_changes(Journal::default());
+                }
+                let state = driver.g.init_state(&Assumptions::of_kb());
+                let ends = (state.root_of[&IND], state.root_of[&(IND + 3)]);
+                let (from, to) = if inverse { (ends.1, ends.0) } else { ends };
+                if observing {
+                    driver.g.select_reads(Some(ReadOwner::Clash { clause: 0 }));
+                }
+                let answer = driver.g.is_neighbour(&state, from, role, to);
+                driver.g.select_reads(None);
+                assert!(driver.g.storage_refusal().is_none());
+                (answer, driver.g.finish_changes(), from, to)
+            };
+            let plain = run(false);
+            let (answer, journal, from, to) = run(true);
+            assert!(answer);
+            assert_eq!(answer, plain.0);
+            assert!(plain.1.is_none());
+            let slice = journal.unwrap().normalized_slice(&kb).unwrap();
+            let machine = kb.role_program.as_ref().unwrap().machine(role).unwrap();
+            assert_eq!(slice.paths.first().unwrap().to, (to, machine.accepting));
+            assert_eq!(slice.paths.last().unwrap().from, (from, machine.initial));
+            assert!(
+                slice
+                    .paths
+                    .windows(2)
+                    .all(|pair| pair[0].from == pair[1].to)
+            );
+            let mut edge_count = 0;
+            for step in &slice.paths {
+                assert_eq!(step.role, role);
+                let transition = &machine.transitions[step.transition];
+                assert_eq!((transition.from, transition.to), (step.from.1, step.to.1));
+                match step.kind {
+                    PathKind::Edge { index, letter } => {
+                        edge_count += 1;
+                        assert!(index >= 2, "a visited different target is not selected");
+                        assert_eq!(transition.letter, Some(letter));
+                    }
+                    PathKind::Epsilon => {
+                        assert_eq!(transition.letter, None);
+                        assert_eq!(step.from.0, step.to.0);
+                    }
+                    PathKind::Universal(_) => panic!("fixture has no universal role"),
+                }
+            }
+            assert_eq!(edge_count, 3);
+            for index in 0..5 {
+                assert_eq!(
+                    slice
+                        .effects
+                        .iter()
+                        .map(|(_, event)| &event.cause)
+                        .any(|cause| cause.origin == Origin::PreparedRole && cause.index == index),
+                    index >= 2
+                );
+            }
+        }
+    }
+
+    /// An accepted native path cannot escape after metadata refusal or cancellation.
+    #[test]
+    fn selected_language_path_preserves_refusal_and_stop_during_publication() {
+        use crate::owl_dl::graph::changes::{Journal, ReadOwner, slice::Error};
+        use purrdf_lex::allocation::StorageError;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        #[derive(Debug, Default)]
+        struct Stop(AtomicBool);
+        impl purrdf_datalog::StopSignal for Stop {
+            fn stopped(&self) -> bool {
+                self.0.load(Ordering::Relaxed)
+            }
+        }
+        for storage_refusal in [true, false] {
+            let signal = Arc::new(Stop::default());
+            let mut kb = selected_language_fixture();
+            kb.stop = Some(signal.clone());
+            let driver = Hyper::new(
+                &kb,
+                Budget {
+                    steps: u64::MAX,
+                    work: u64::MAX,
+                },
+            );
+            driver.g.begin_changes(Journal::default());
+            let state = driver.g.init_state(&Assumptions::of_kb());
+            driver.g.select_reads(Some(ReadOwner::Clash { clause: 0 }));
+            let target = state.root_of[&(IND + 3)];
+            let mut accepted = false;
+            let answer = driver.g.any_neighbour(
+                &state,
+                state.root_of[&IND],
+                Role::Named(R + 2),
+                &mut |node| {
+                    if node != target {
+                        return false;
+                    }
+                    accepted = true;
+                    if storage_refusal {
+                        let mut journal = driver.g.finish_changes().unwrap();
+                        journal.refuse_next_publication(StorageError::AllocationFailed);
+                        driver.g.begin_changes(journal);
+                    } else {
+                        signal.0.store(true, Ordering::Relaxed);
+                    }
+                    true
+                },
+            );
+            assert!(
+                accepted,
+                "refusal is armed only after the native reader accepts"
+            );
+            assert!(!answer);
+            assert_eq!(
+                driver.g.storage_refusal(),
+                storage_refusal.then_some(StorageError::AllocationFailed)
+            );
+            assert_eq!(driver.g.changes_stopped(), !storage_refusal);
+            assert!(matches!(
+                driver.g.finish_changes().unwrap().normalized_slice(&kb),
+                Err(Error::MissingClash)
+            ));
+        }
+    }
+
+    /// A warm transitive read reuses the witness made by the native closure walk.
+    #[test]
+    fn selected_reads_slice_transitive_path_from_native_cache() {
+        use crate::owl_dl::graph::changes::{Journal, ReadFact, ReadOwner, RoleWitness};
+        let mut kb = Kb::empty();
+        kb.transitive.insert(R);
+        kb.abox_roles
+            .extend([(IND, R, IND + 1), (IND + 1, R, IND + 2)]);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let state = driver.g.init_state(&Assumptions::of_kb());
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 0 }));
+        assert!(driver.g.is_neighbour(
+            &state,
+            state.root_of[&IND],
+            Role::Named(R),
+            state.root_of[&(IND + 2)]
+        ));
+        driver.g.select_reads(None);
+        let cold = driver.g.work().spent();
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+        assert!(driver.g.is_neighbour(
+            &state,
+            state.root_of[&IND],
+            Role::Named(R),
+            state.root_of[&(IND + 2)]
+        ));
+        driver.g.select_reads(None);
+        assert!(driver.g.work().spent() - cold < cold);
+        let journal = driver.g.finish_changes().unwrap();
+        let paths: Vec<_> = journal
+            .reads()
+            .iter()
+            .filter_map(|read| match read.fact {
+                ReadFact::Role {
+                    witness: RoleWitness::Transitive { path, .. },
+                    ..
+                } => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(
+            paths[0], paths[1],
+            "warm lookup retains the same immutable witness"
+        );
+        let slice = journal.normalized_slice(&kb).unwrap();
+        assert_eq!(slice.transitive.len(), 1);
+        assert_eq!(
+            slice
+                .transitive_nodes
+                .iter()
+                .filter_map(|node| match node.path {
+                    crate::owl_dl::graph::changes::reach::Path::Step(step) => Some(step.edge),
+                    crate::owl_dl::graph::changes::reach::Path::Join { .. } => None,
+                })
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(
+            slice
+                .transitive
+                .iter()
+                .all(|step| step.via == Role::Named(R) && step.role == Role::Named(R))
+        );
+        assert_eq!(
+            (slice.transitive[0].from, slice.transitive[0].to),
+            (state.root_of[&IND], state.root_of[&(IND + 2)])
+        );
+        assert!(
+            matches!(
+                slice.inputs().collect::<Result<Vec<_>, _>>(),
+                Err(crate::owl_dl::graph::changes::slice::Error::MissingInput(_))
+            ),
+            "synthetic native facts are not invented source assertions"
+        );
+    }
+
+    /// An existential head retains its checked application and actual generated effects.
+    #[test]
+    fn selected_reads_retain_licensed_generated_effect() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Mutation, ReadFact, ReadOwner};
+        let mut kb = Kb::empty();
+        let filler = kb.table.intern(Concept::Named(A));
+        kb.abox_types.push((IND, kb.top));
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let root = state.root_of[&IND];
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 0,
+            clause: 0,
+            branch: None,
+        }));
+        driver.g.observe_read(ReadFact::Node(root));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::AtLeast(root, 1, Role::Named(R), filler)],
+            &ApplySite::Observed { application: 0 }
+        ));
+        let witness = driver.g.neighbors(&state, root, Role::Named(R))[0];
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+        assert!(driver.g.has_concept(&state, witness, filler));
+        driver.g.select_reads(None);
+        let journal = driver.g.finish_changes().unwrap();
+        let slice = journal.normalized_slice(&kb).unwrap();
+        assert!(slice.owners.contains(&ReadOwner::Application {
+            index: 0,
+            clause: 0,
+            branch: None
+        }));
+        for mutation in [
+            Mutation::Node {
+                node: witness,
+                named: None,
+                parent: Some(root),
+                incoming: Some(Role::Named(R)),
+                reserved: false,
+                concrete: false,
+            },
+            Mutation::Label {
+                node: witness,
+                concept: filler,
+            },
+        ] {
+            assert!(
+                slice
+                    .effects
+                    .iter()
+                    .any(|(_, effect)| effect.mutation == mutation)
+            );
+        }
+        assert!(
+            slice
+                .effects
+                .iter()
+                .any(|(_, effect)| matches!(effect.mutation,
+            Mutation::Node { node, .. } if node == root))
+        );
+    }
+
+    /// A merge transfers the original fact and alias cause, not just its latest head.
+    #[test]
+    fn native_mutations_keep_original_facts_across_merge_and_idempotent_writes() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
+        let mut kb = Kb::empty();
+        let a = kb.table.intern(Concept::Named(A));
+        let b = kb.table.intern(Concept::Named(B));
+        let c = kb.table.intern(Concept::Named(C));
+        kb.abox_types.extend([(IND, a), (IND + 1, b)]);
+        kb.different_from.push((IND + 1, IND + 2));
+        kb.finalize().unwrap();
+        let run = |observing| {
+            let driver = Hyper::new(
+                &kb,
+                Budget {
+                    steps: u64::MAX,
+                    work: u64::MAX,
+                },
+            );
+            if observing {
+                driver.g.begin_changes(Journal::default());
+            }
+            let mut state = driver.g.init_state(&Assumptions::of_kb());
+            let left = state.root_of[&IND];
+            let right = state.root_of[&(IND + 1)];
+            assert!(left < right);
+            assert!(driver.apply(
+                &mut state,
+                &[Ground::Concept(right, a), Ground::Concept(left, c)],
+                &ApplySite::Observed { application: 4 }
+            ));
+            assert!(driver.apply(
+                &mut state,
+                &[Ground::Equal(right, left)],
+                &ApplySite::Observed { application: 9 }
+            ));
+            assert!(driver.apply(
+                &mut state,
+                &[Ground::Concept(left, a)],
+                &ApplySite::Observed { application: 10 }
+            ));
+            assert!(driver.g.storage_refusal().is_none());
+            let work = driver.g.work().spent();
+            (state, work, driver.g.finish_changes())
+        };
+        let (plain, plain_work, absent) = run(false);
+        let (state, recorded_work, recorded) = run(true);
+        assert!(absent.is_none());
+        assert_eq!(state.nodes.len(), plain.nodes.len());
+        for node in 0..state.nodes.len() {
+            assert_eq!(state.nodes[node].label, plain.nodes[node].label);
+            assert_eq!(state.nodes[node].nominals, plain.nodes[node].nominals);
+            assert_eq!(state.nodes[node].neq, plain.nodes[node].neq);
+            assert_eq!(state.nodes[node].merged, plain.nodes[node].merged);
+        }
+        let journal = recorded.unwrap();
+        let events = journal.events();
+        assert_eq!(recorded_work - plain_work, events.len() as u64);
+        let left = state.root_of[&IND];
+        let right = state.root_of[&(IND + 1)];
+        let other = state.root_of[&(IND + 2)];
+        assert!(
+            events
+                .iter()
+                .any(|event| event.cause.origin == Origin::PreparedType
+                    && event.cause.index == 1
+                    && event.mutation
+                        == Mutation::Label {
+                            node: right,
+                            concept: b
+                        })
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.cause.origin == Origin::Application
+                    && event.cause.index == 4
+                    && event.cause.atom == 1
+                    && event.mutation
+                        == Mutation::Label {
+                            node: left,
+                            concept: c
+                        })
+        );
+        for expected in [
+            Mutation::Merge {
+                keep: left,
+                discard: right,
+            },
+            Mutation::LabelTransfer {
+                keep: left,
+                discard: right,
+                concept: b,
+            },
+            Mutation::NameTransfer {
+                keep: left,
+                discard: right,
+                individual: IND + 1,
+            },
+            Mutation::DistinctTransfer {
+                keep: left,
+                discard: right,
+                previous_other: other,
+                other,
+            },
+        ] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.cause.origin == Origin::Application
+                        && event.cause.index == 9
+                        && event.cause.atom == 0
+                        && event.mutation == expected),
+                "missing {expected:?}"
+            );
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.cause.origin == Origin::Application && event.cause.index == 10)
+        );
+        assert!(!events.iter().any(|event| event.mutation
+            == Mutation::LabelTransfer {
+                keep: left,
+                discard: right,
+                concept: a
+            }));
+    }
+
+    /// Existential minting records original edge orientation and forced inequalities.
+    #[test]
+    fn native_mutations_record_witnesses_inverse_edges_and_head_positions() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
+        let mut kb = Kb::empty();
+        let filler = kb.table.intern(Concept::Named(C));
+        kb.abox_types.push((IND, filler));
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let root = state.root_of[&IND];
+        assert!(driver.apply(
+            &mut state,
+            &[
+                Ground::AtLeast(root, 2, Role::Inv(R), filler),
+                Ground::SelfLoop(root, Role::Named(R + 1)),
+            ],
+            &ApplySite::Observed { application: 3 }
+        ));
+        let journal = driver.g.finish_changes().unwrap();
+        let events = journal.events();
+        let born: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event.mutation {
+                Mutation::Node {
+                    node,
+                    parent: Some(parent),
+                    ..
+                } if parent == root => {
+                    assert_eq!(event.cause.origin, Origin::Application);
+                    assert_eq!((event.cause.index, event.cause.atom), (3, 0));
+                    Some(node)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(born.len(), 2);
+        for node in &born {
+            assert!(events.iter().any(|event| matches!(event.mutation, Mutation::Edge { from, to, property, .. } if from == *node && to == root && property == R) && event.cause.index == 3 && event.cause.atom == 0));
+        }
+        assert!(events.iter().any(|event| event.mutation
+            == Mutation::Distinct {
+                left: born[0],
+                right: born[1]
+            }
+            && event.cause.index == 3
+            && event.cause.atom == 0));
+        assert!(events.iter().any(|event| matches!(event.mutation, Mutation::Edge { from, to, property, .. } if from == root && to == root && property == R + 1) && event.cause.index == 3 && event.cause.atom == 1));
+    }
+
+    /// Both native encodings withdraw object-only facts on a literal identification.
+    #[test]
+    fn native_mutations_record_literal_withdrawal_under_both_encodings() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
+        for internalize in [false, true] {
+            let mut kb = Kb::empty();
+            kb.internalize_only = internalize;
+            let a = kb.table.intern(Concept::Named(A));
+            let literal = kb.interner.intern(purrdf_core::TermValue::Literal {
+                lexical_form: "value".to_owned(),
+                datatype: purrdf_xsd::datatype::XSD_STRING.to_owned(),
+                language: None,
+                direction: None,
+            });
+            let value = crate::owl_dl::data::literal_value(kb.interner.value(literal)).unwrap();
+            kb.literal_class =
+                crate::owl_dl::data::literal_classes_until(&[(literal, value)], || {
+                    Ok::<(), core::convert::Infallible>(())
+                })
+                .unwrap()
+                .class_of;
+            let class = kb.literal_class[&literal];
+            kb.push_gci(Concept::Top, Concept::Named(A));
+            kb.finalize().unwrap();
+            let driver = Hyper::new(
+                &kb,
+                Budget {
+                    steps: u64::MAX,
+                    work: u64::MAX,
+                },
+            );
+            driver.g.begin_changes(Journal::default());
+            let mut state = driver.g.init_state(&Assumptions::of_kb());
+            assert!(driver.apply(
+                &mut state,
+                &[Ground::Concept(0, a)],
+                &ApplySite::Observed { application: 0 }
+            ));
+            let value = driver.g.root(&mut state, literal);
+            assert!(driver.apply(
+                &mut state,
+                &[Ground::Equal(0, value)],
+                &ApplySite::Observed { application: 1 }
+            ));
+            assert!(state.nodes[0].concrete);
+            assert!(!state.nodes[0].label.contains(&a));
+            let journal = driver.g.finish_changes().unwrap();
+            assert!(journal.events().iter().any(|event| event.mutation
+                == Mutation::DomainTransfer {
+                    keep: 0,
+                    discard: value
+                }));
+            assert!(journal.events().iter().any(|event| event.mutation
+                == Mutation::ValueClass {
+                    node: value,
+                    class,
+                    inherited_from: None
+                }
+                && event.cause.origin == Origin::TermDenotation));
+            assert!(journal.events().iter().any(|event| event.mutation
+                == Mutation::ValueClass {
+                    node: 0,
+                    class,
+                    inherited_from: Some(value)
+                }
+                && event.cause.origin == Origin::Application
+                && event.cause.index == 1));
+            assert!(journal.events().iter().any(|event| event.mutation
+                == Mutation::WithdrawLabel {
+                    node: 0,
+                    concept: a
+                }
+                && event.cause.origin == Origin::Application
+                && event.cause.index == 1));
+            if internalize {
+                assert!(journal.events().iter().any(|event| event.mutation
+                    == Mutation::Label {
+                        node: 0,
+                        concept: a
+                    }
+                    && event.cause.origin == Origin::Internalized));
+            }
+        }
+    }
+
+    /// An omitted write owner cannot silently become a domain or previous-step premise.
+    #[test]
+    #[should_panic(expected = "a native mutation requires a source or checked application owner")]
+    fn native_mutations_refuse_an_unowned_write() {
+        use crate::owl_dl::graph::changes::Journal;
+        let mut kb = Kb::empty();
+        let concept = kb.table.intern(Concept::Named(A));
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        driver.g.add_concept(&mut state, 0, concept);
+    }
+
+    /// Prepared rows, query premises and native domain seeds keep distinct owners.
+    #[test]
+    fn native_mutations_keep_prepared_query_and_domain_origins_separate() {
+        use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
+        let mut kb = Kb::empty();
+        kb.internalize_only = true;
+        let a = kb.table.intern(Concept::Named(A));
+        let b = kb.table.intern(Concept::Named(B));
+        let c = kb.table.intern(Concept::Named(C));
+        kb.push_gci(Concept::Named(A), Concept::Named(D));
+        kb.abox_types.push((IND, a));
+        kb.abox_roles.push((IND, R, IND + 1));
+        kb.same_as.push((IND, IND + 1));
+        kb.finalize().unwrap();
+        let assumptions = Assumptions {
+            include_abox: true,
+            types: &[(IND, b)],
+            roles: &[(IND, R + 1, IND + 2)],
+            fresh_types: &[c],
+        };
+        for observing in [false, true] {
+            let driver = Hyper::new(
+                &kb,
+                Budget {
+                    steps: u64::MAX,
+                    work: u64::MAX,
+                },
+            );
+            if observing {
+                driver.g.begin_changes(Journal::default());
+            }
+            let state = driver.g.init_state(&assumptions);
+            let root = state.root_of[&IND];
+            assert!(state.nodes[root].label.contains(&a));
+            assert!(state.nodes[root].label.contains(&b));
+            assert!(state.nodes[root].nominals.contains(&(IND + 1)));
+            let anonymous = (0..state.nodes.len())
+                .find(|&node| state.nodes[node].nominals.is_empty())
+                .unwrap();
+            assert!(state.nodes[anonymous].label.contains(&c));
+            let Some(journal) = driver.g.finish_changes() else {
+                assert!(!observing);
+                continue;
+            };
+            assert!(observing);
+            for (origin, mutation) in [
+                (
+                    Origin::PreparedType,
+                    Mutation::Label {
+                        node: root,
+                        concept: a,
+                    },
+                ),
+                (
+                    Origin::AssumedType,
+                    Mutation::Label {
+                        node: root,
+                        concept: b,
+                    },
+                ),
+                (
+                    Origin::AssumedAnonymousType,
+                    Mutation::Label {
+                        node: anonymous,
+                        concept: c,
+                    },
+                ),
+            ] {
+                assert!(
+                    journal
+                        .events()
+                        .iter()
+                        .any(|event| event.cause.origin == origin
+                            && event.cause.index == 0
+                            && event.mutation == mutation)
+                );
+            }
+            assert!(
+                journal
+                    .events()
+                    .iter()
+                    .any(|event| event.cause.origin == Origin::PreparedEquality
+                        && matches!(event.mutation, Mutation::Merge { .. }))
+            );
+            assert!(journal.events().iter().any(|event| event.cause.origin == Origin::PreparedRole && matches!(event.mutation, Mutation::Edge { property, .. } if property == R)));
+            assert!(journal.events().iter().any(|event| event.cause.origin == Origin::AssumedRole && matches!(event.mutation, Mutation::Edge { property, .. } if property == R + 1)));
+            assert!(journal.events().iter().any(|event| event.cause.origin == Origin::RefutationRoot && matches!(event.mutation, Mutation::Node { node, .. } if node == anonymous)));
+            assert!(journal.events().iter().any(|event| event.cause.origin == Origin::Internalized && matches!(event.mutation, Mutation::Label { node, .. } if node == anonymous)));
+        }
+    }
+
+    /// A caller stop during recording refuses publication of a partial journal.
+    #[test]
+    fn native_mutations_preserve_cancellation_during_publication() {
+        use crate::owl_dl::graph::changes::Journal;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(Debug)]
+        struct Stop(AtomicUsize);
+        impl purrdf_datalog::StopSignal for Stop {
+            fn stopped(&self) -> bool {
+                self.0.fetch_add(1, Ordering::Relaxed) >= 1
+            }
+        }
+        let mut kb = Kb::empty();
+        kb.asymmetric.insert(R);
+        kb.abox_roles.push((IND, R, IND));
+        kb.individuals.insert(IND);
+        kb.finalize().unwrap();
+        let clauses = derive(&kb);
+        let index = (0..clauses.count())
+            .find(|&index| clauses.clause(index, &kb.schema).body.len() == 2)
+            .unwrap();
+        let stop = Arc::new(Stop(AtomicUsize::new(0)));
+        kb.stop = Some(stop.clone());
+        assert!(matches!(
+            Hyper::replay_support_inner(
+                &kb,
+                &Assumptions::of_kb(),
+                &[],
+                ReplayGoal::Clash {
+                    clause: index,
+                    frame: &[0, 0]
+                },
+                &[],
+                Some(Journal::default()),
+            ),
+            Err(crate::owl_dl::proof::DlProofError::Stopped)
+        ));
+        assert!(purrdf_datalog::StopSignal::stopped(&*stop));
+    }
+
+    /// Recorded bindings use the same native predicates without exploring other subsets.
+    #[test]
+    fn fixed_frame_replay_matches_enumeration_and_skips_unselected_subsets() {
+        use crate::owl_dl::clause::BodyAtom;
+        let mut kb = Kb::empty();
+        let filler = kb.table.intern(Concept::Named(C));
+        let maximum = kb
+            .table
+            .intern(Concept::Max(5, Role::Named(R), Box::new(Concept::Named(C))));
+        kb.abox_types.push((IND, maximum));
+        kb.push_gci(Concept::Nominal(vec![IND]), Concept::Named(C));
+        kb.push_gci(
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+            Concept::Named(D),
+        );
+        kb.asymmetric.insert(R);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let root = state.root_of[&IND];
+        let successors: Vec<_> = (0..10)
+            .map(|_| {
+                driver
+                    .g
+                    .new_successor(&mut state, root, Role::Named(R), &[filler])
+            })
+            .collect();
+        driver.g.add_self_loop(&mut state, root, Role::Named(R));
+        let index = (0..driver.clauses.count())
+            .find(|&index| {
+                driver
+                    .clauses
+                    .clause(index, &kb.schema)
+                    .body
+                    .iter()
+                    .any(|atom| matches!(atom, BodyAtom::Successors { count: 6, .. }))
+            })
+            .unwrap();
+        let mut selected = vec![root];
+        selected.extend_from_slice(&successors[4..]);
+        let before = driver.g.work().spent();
+        assert!(Hyper::frame_is_supported(&driver, &state, index, &selected));
+        let bound_work = driver.g.work().spent() - before;
+        let before = driver.g.work().spent();
+        let mut visited = 0;
+        assert!(Hyper::for_each_match(
+            &driver.g,
+            &state,
+            driver.clauses.clause(index, &kb.schema),
+            root,
+            &mut |frame| {
+                visited += 1;
+                frame == selected
+            }
+        ));
+        let enumeration_work = driver.g.work().spent() - before;
+        assert_eq!(
+            visited, 210,
+            "all six-element subsets of ten are visited to reach the final binding"
+        );
+        assert!(
+            bound_work < enumeration_work,
+            "selected={bound_work}, enumerated={enumeration_work}"
+        );
+
+        // Independently enumerate every admitted frame for every native clause/root,
+        // then compare all corresponding fixed-frame checks, including role aliases.
+        let mut witnessed = [false; 4];
+        for index in 0..driver.clauses.count() {
+            let clause = driver.clauses.clause(index, &kb.schema);
+            for root in 0..state.nodes.len() {
+                Hyper::for_each_match(&driver.g, &state, clause, root, &mut |frame| {
+                    for atom in &clause.body {
+                        witnessed[match atom {
+                            BodyAtom::Concept { .. } => 0,
+                            BodyAtom::Denotes { .. } => 1,
+                            BodyAtom::Role { .. } => 2,
+                            BodyAtom::Successors { .. } => 3,
+                        }] = true;
+                    }
+                    assert!(Hyper::frame_is_supported(&driver, &state, index, frame));
+                    false
+                });
+            }
+        }
+        assert_eq!(witnessed, [true; 4]);
+        for malformed in [Vec::new(), vec![root], vec![usize::MAX]] {
+            assert!(!Hyper::frame_is_supported(
+                &driver, &state, index, &malformed
+            ));
+        }
+        let mut duplicate = selected.clone();
+        duplicate[2] = duplicate[1];
+        assert!(!Hyper::frame_is_supported(
+            &driver, &state, index, &duplicate
+        ));
+        let mut reversed = selected.clone();
+        reversed[1..].reverse();
+        assert!(!Hyper::frame_is_supported(
+            &driver, &state, index, &reversed
+        ));
+        let wrong_role = driver
+            .g
+            .new_successor(&mut state, root, Role::Named(R + 1), &[filler]);
+        let wrong_filler = driver
+            .g
+            .new_successor(&mut state, root, Role::Named(R), &[kb.top]);
+        for wrong in [wrong_role, wrong_filler] {
+            let mut frame = selected.clone();
+            *frame.last_mut().unwrap() = wrong;
+            assert!(!Hyper::frame_is_supported(&driver, &state, index, &frame));
+        }
+        let alias = driver
+            .g
+            .new_successor(&mut state, root, Role::Named(R), &[filler]);
+        driver.g.merge_nodes(&mut state, successors[0], alias);
+        let mut noncanonical = selected.clone();
+        *noncanonical.last_mut().unwrap() = alias;
+        assert!(!Hyper::frame_is_supported(
+            &driver,
+            &state,
+            index,
+            &noncanonical
+        ));
+        let mut extra = selected;
+        extra.push(root);
+        assert!(!Hyper::frame_is_supported(&driver, &state, index, &extra));
+    }
+
+    /// Cancellation while resolving a recorded body is not a malformed proof.
+    #[test]
+    fn fixed_frame_replay_preserves_a_stop_that_fires_during_native_reads() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(Debug)]
+        struct Stop(AtomicUsize);
+        impl purrdf_datalog::StopSignal for Stop {
+            fn stopped(&self) -> bool {
+                self.0.fetch_add(1, Ordering::Relaxed) >= 1
+            }
+        }
+        let mut kb = Kb::empty();
+        kb.asymmetric.insert(R);
+        kb.abox_roles.push((IND, R, IND));
+        kb.individuals.insert(IND);
+        kb.finalize().unwrap();
+        let clauses = derive(&kb);
+        let index = (0..clauses.count())
+            .find(|&index| clauses.clause(index, &kb.schema).body.len() == 2)
+            .unwrap();
+        kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));
+        assert!(matches!(
+            Hyper::replay_support_inner(
+                &kb,
+                &Assumptions::of_kb(),
+                &[],
+                ReplayGoal::Clash {
+                    clause: index,
+                    frame: &[0, 0]
+                },
+                &[],
+                None
+            ),
+            Err(crate::owl_dl::proof::DlProofError::Stopped)
+        ));
+        kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));
+        assert!(matches!(
+            Hyper::replay_support_inner(
+                &kb,
+                &Assumptions::of_kb(),
+                &[],
+                ReplayGoal::Clash {
+                    clause: index,
+                    frame: &[0, 0]
+                },
+                &[],
+                Some(crate::owl_dl::graph::changes::Journal::default())
+            ),
+            Err(crate::owl_dl::proof::DlProofError::Stopped)
+        ));
+    }
 
     /// A knowledge base that branches, mints and counts: a three-way disjunction, a two-way
     /// one, an existential the first reaches, and a cardinality bound over the witnesses.

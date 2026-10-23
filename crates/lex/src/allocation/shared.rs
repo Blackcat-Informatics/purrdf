@@ -57,6 +57,10 @@ impl fmt::Display for SharedAllocError {
 }
 impl std::error::Error for SharedAllocError {}
 
+impl purrdf_hash::error::StructuredError for SharedAllocError {
+    purrdf_hash::error_visit! { @record self {} => "shared-allocation-failed" {} }
+}
+
 /// A checked shared-owner reference count cannot accept another reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SharedCloneError;
@@ -67,6 +71,10 @@ impl fmt::Display for SharedCloneError {
     }
 }
 impl std::error::Error for SharedCloneError {}
+
+impl purrdf_hash::error::StructuredError for SharedCloneError {
+    purrdf_hash::error_visit! { @record self {} => "shared-reference-count-overflow" {} }
+}
 
 /// Immutable, sized shared ownership. Construction can report allocator refusal.
 pub struct Shared<T> {

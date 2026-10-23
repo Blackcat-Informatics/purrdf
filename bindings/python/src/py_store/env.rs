@@ -37,9 +37,9 @@ use pyo3::exceptions::PyValueError;
 /// parser learns which predicate IRIs are calls.
 pub(crate) fn extension_env(
     base: ParserOptions,
-    relations: Option<&PropertyFunctionRegistry>,
+    relations: Option<&PropertyFunctionRegistry<'static>>,
     aggregates: Option<&AggregateRegistry>,
-) -> PyResult<ExtensionEnv> {
+) -> PyResult<ExtensionEnv<'static>> {
     ExtensionEnv::new(
         base,
         relations

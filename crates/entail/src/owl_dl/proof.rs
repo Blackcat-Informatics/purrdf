@@ -46,7 +46,7 @@
 //!   the cited clause is a clause of the caller's ontology's own clause set, that its head is
 //!   EMPTY (so the instance derives `false`), that the recorded frame is wide enough for the
 //!   clause's variables, and that the recorded witness is exactly the grounding of that
-//!   clause's body under that frame. A prepared cardinality clash additionally replays its
+//!   clause's body under that frame. A current recorded clash additionally replays its
 //!   finite, licensed current-support prefix from the consumer's assertions and selected
 //!   refutation assumptions. That replay uses the native graph operations; it opens no
 //!   `Session` and never invokes saturation, branching search or the solver.
@@ -71,8 +71,7 @@
 //!   them it could reduce to an ASSERTED axiom of the caller's ABox
 //!   ([`ClashReplay::attested`]) and how many it could not
 //!   ([`ClashReplay::unattested`]); an unattested fact is a fact this stage takes on the
-//!   producer's word. Closing that gap needs a premise DAG per witness fact, which is
-//!   deliberately not faked here. Prepared cardinality clashes are the narrower exception:
+//!   producer's word. Current recordings instead retain a shared application arena:
 //!   their required current membership is checked from a finite application prefix, every
 //!   body's actual premises and every licensed head. Derived membership is counted `trusted`
 //!   against the native clausification/grounding homes, never as a bare asserted atom.
@@ -139,7 +138,8 @@ use purrdf_hash::frame::{frame_le, frame_le_into};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_core::RdfDataset;
+use purrdf_core::ownership::OwnedOrBorrowed;
+use purrdf_core::{RdfDataset, TermValue};
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
@@ -160,10 +160,16 @@ mod schema;
 
 #[cfg(test)]
 mod schema_tests;
+
+pub(crate) mod capture;
+pub mod source;
 use schema::{decode_schema_clash, encode_schema_clash};
 
 const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v3");
 const SCHEMA_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v4");
+const CURRENT_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v5");
+const MERGE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v6");
+const INTRODUCTION_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v7");
 
 /// Domain-separation tag for [`contract_digest`].
 const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
@@ -646,24 +652,11 @@ pub enum ProofFact {
 
 // ── The recorded steps ──────────────────────────────────────────────────────────
 
-/// A derivation of `false`: a clause with an EMPTY head, matched at a node.
-///
-/// In this hypertableau a clash is not a detector but a derivation — every clash condition the
-/// textbook spells out as a separate trigger (a complementary pair, a negated nominal naming
-/// the node's own individual, a negated self restriction, an asymmetric role's symmetric pair,
-/// a disjoint role pair) is a clause whose head is empty. So a clash step needs nothing beyond
-/// the clause, the frame the matcher bound, and the body instance that frame produced.
-///
-/// Fields are private and there is no public constructor: a [`ClashStep`] enters a
-/// [`DlProof`] either from the instrumented search or through [`DlProof::decode`], and both
-/// are checked by [`DlProof::replay_clash`]. There is no third way in.
-/// Source-bound restriction proof and actual current-support prefix for one clash.
+/// Source-bound restriction law for one prepared clash.
 /// Kept only when a prepared contradiction is used, never for a clear class entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaClashEvidence {
     pub(crate) bounds: super::bounds::SchemaBoundEvidence,
-    pub(crate) support: Vec<super::support::Application>,
-    pub(crate) frame: Vec<usize>,
 }
 
 impl SchemaClashEvidence {
@@ -672,19 +665,29 @@ impl SchemaClashEvidence {
     pub const fn bounds(&self) -> &super::bounds::SchemaBoundEvidence {
         &self.bounds
     }
-    /// Actual positive/branch applications independently replayed from current sources.
-    #[must_use]
-    pub fn support_steps(&self) -> usize {
-        self.support.len()
-    }
+}
+
+/// A clash's selected path through the proof's shared current-support arena.
+/// Recording this cursor is not a reachability claim; the consumer must replay it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentSupportEvidence {
+    pub(crate) latest: Option<usize>,
+    pub(crate) frame: Vec<usize>,
 }
 
 /// One observed empty-head clause, its binding frame and actual current premises.
-/// A prepared bound clash also retains the independently checked schema/support law.
+///
+/// A clash is a derivation of `false`. Its observed body is compared with the
+/// consumer's own grounding, and current support is replayed from the consumer's
+/// assertions and selected assumptions. Prepared bounds additionally retain a
+/// source derivation of their contradictory restriction law. Private fields enter
+/// only through recorded search or untrusted decoding; both require replay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClashStep {
     /// Prepared schema law plus source-supported current inhabitance.
     pub(crate) schema: Option<SchemaClashEvidence>,
+    /// Exact application prefix, shared across ordinary and prepared clashes.
+    pub(crate) current: Option<CurrentSupportEvidence>,
     /// The index of the clause whose empty head was derived, into the clause set the
     /// CHECKER derives from the caller's ontology.
     clause: usize,
@@ -710,6 +713,7 @@ impl ClashStep {
     ) -> Self {
         Self {
             schema: None,
+            current: None,
             clause,
             node,
             frame,
@@ -721,6 +725,12 @@ impl ClashStep {
     #[must_use]
     pub const fn schema_evidence(&self) -> Option<&SchemaClashEvidence> {
         self.schema.as_ref()
+    }
+
+    /// The selected current-support cursor, if this proof recorded reachability.
+    #[must_use]
+    pub const fn current_support(&self) -> Option<&CurrentSupportEvidence> {
+        self.current.as_ref()
     }
 
     /// The clause index the step cites.
@@ -835,9 +845,12 @@ pub enum MergeLicence {
 /// What a replay establishes and what it does not is spelled out on
 /// [`DlProof::replay_merge`]: the LICENCE is re-derived; that the identification also CLOSED
 /// the state ([`Self::clashed`]) is completion-graph state a proof term does not carry, and is
-/// reported unattested.
+/// reported unattested by that standalone license check. Whole-refutation replay additionally
+/// verifies an original recorded prefix and its native closing inequality when available.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeStep {
+    /// Original application ending in this identification; absent in legacy records.
+    pub(crate) current: Option<usize>,
     /// Which rule forced the identification.
     cause: MergeCause,
     /// The identity the LICENSING atom names for the absorbing side.
@@ -876,6 +889,7 @@ impl MergeStep {
         licence: MergeLicence,
     ) -> Self {
         Self {
+            current: None,
             cause,
             left,
             right,
@@ -889,6 +903,19 @@ impl MergeStep {
     #[must_use]
     pub const fn licence(&self) -> &MergeLicence {
         &self.licence
+    }
+
+    /// Whether the original native application prefix was recorded for this merge.
+    #[must_use]
+    pub const fn has_current_support(&self) -> bool {
+        self.current.is_some()
+    }
+
+    pub(crate) const fn atom(&self) -> Option<usize> {
+        match self.licence {
+            MergeLicence::Clause { atom, .. } | MergeLicence::Branch { atom, .. } => Some(atom),
+            MergeLicence::Unrecorded => None,
+        }
     }
 
     /// Which rule forced the identification.
@@ -1109,6 +1136,8 @@ impl BranchOutcome {
 /// checked by [`DlProof::replay_branch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchStep {
+    /// NI saturation over one repeated successor binding, before ordinary equality cases.
+    pub(crate) introduction_only: bool,
     /// The clause whose DISJUNCTIVE head generated the alternatives, into the clause set the
     /// CHECKER derives from the caller's ontology.
     clause: usize,
@@ -1135,6 +1164,13 @@ pub struct BranchStep {
 }
 
 impl BranchStep {
+    fn regenerated_head(&self, clause: &DlClause) -> Vec<Vec<Ground<NodeRef>>> {
+        if self.introduction_only {
+            Vec::new()
+        } else {
+            ground_head(&clause.head, &self.frame)
+        }
+    }
     /// Record a branch point with every outcome still [`BranchOutcome::Unexplored`].
     /// Crate-private: the only producer is the instrumented search.
     pub(crate) fn new(
@@ -1146,6 +1182,7 @@ impl BranchStep {
     ) -> Self {
         let outcomes = vec![BranchOutcome::Unexplored; alternatives.len() + introduced.len()];
         Self {
+            introduction_only: false,
             clause,
             node,
             frame,
@@ -1159,6 +1196,12 @@ impl BranchStep {
     #[must_use]
     pub const fn clause(&self) -> usize {
         self.clause
+    }
+
+    /// Whether this is an exhaustive reserved-root introduction rather than a head split.
+    #[must_use]
+    pub const fn introduction_only(&self) -> bool {
+        self.introduction_only
     }
 
     /// The node variable `0` was bound to.
@@ -1463,12 +1506,12 @@ impl Recorder {
         }
     }
 
-    pub(crate) fn schema_clash(
+    pub(crate) fn current_clash(
         &mut self,
-        bounds: &super::bounds::SchemaBoundEvidence,
+        bounds: Option<&super::bounds::SchemaBoundEvidence>,
         latest: Option<usize>,
         frame: &[usize],
-    ) -> Option<SchemaClashEvidence> {
+    ) -> Option<(Option<SchemaClashEvidence>, CurrentSupportEvidence)> {
         match self.support.extract(bounds, latest, frame) {
             Ok(evidence) => Some(evidence),
             Err(_) => {
@@ -1592,6 +1635,13 @@ impl Recorder {
     ) -> DlProof {
         DlProof {
             schema_recording_obstruction: self.support.obstruction(),
+            support: if self.clashes.iter().any(|step| step.current.is_some())
+                || self.merges.iter().any(|step| step.current.is_some())
+            {
+                self.support.into_links()
+            } else {
+                Vec::new()
+            },
             input,
             contract,
             trust_base: TrustBaseEntry::ALL.to_vec(),
@@ -1693,7 +1743,27 @@ impl ProofAnswer {
 /// independent checking neither validates nor disproves the claimed proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum DlProofError {
+pub enum DlProofError<E = std::convert::Infallible> {
+    /// A completion still has an eligible blockable neighbour of a nominal at-most root.
+    UnsaturatedIntroduction {
+        /// Original at-most clause.
+        clause: usize,
+        /// Nominal root requiring its reserved-set normalization.
+        node: Box<NodeRef>,
+        /// Blockable neighbour still awaiting introduction.
+        predecessor: Box<NodeRef>,
+    },
+    /// The selected causal operation lacks a required checked dependency.
+    CausalSupport {
+        /// Service run, when checking through a service-bound entry point.
+        run: Option<usize>,
+        /// Clash ordinal, when the refusal belongs to one leaf.
+        clash: Option<usize>,
+        /// Stable category, distinct from physical refusal and semantic verdicts.
+        kind: source::causal::CausalSupportKind,
+        /// Complete native refusal context, including original local keys.
+        detail: String,
+    },
     /// The consumer's own latched stop signal interrupted native proof checking.
     Stopped,
     /// A prepared clash's observational support could not be recorded completely.
@@ -1795,6 +1865,8 @@ pub enum DlProofError {
         /// The reverse mapper's own account of the failure.
         detail: String,
     },
+    /// The ontology's backing source refused a read with its original cause.
+    SourceRead(E),
     /// The proof states a TRUST BASE this checker does not implement.
     ///
     /// The set is versioned and adding to it is breaking, so a disagreement means the two sides
@@ -2000,12 +2072,226 @@ pub enum DlProofError {
     /// value rather than the panic [`purrdf_core::canonicalize`] would raise for the same
     /// input: a checking context is built from the CALLER's own dataset (a document parsed
     /// at a wasm/Python/C-ABI boundary), so it can never be assumed benign.
-    Canonicalization(purrdf_core::CanonError),
+    Canonicalization(purrdf_core::CanonError<E>),
 }
 
-impl std::fmt::Display for DlProofError {
+impl DlProofError {
+    /// Select a backing reader's type without changing an owned proof refusal.
+    #[must_use]
+    pub fn with_read_error<E>(self) -> DlProofError<E> {
+        match self {
+            Self::UnsaturatedIntroduction {
+                clause,
+                node,
+                predecessor,
+            } => DlProofError::UnsaturatedIntroduction {
+                clause,
+                node,
+                predecessor,
+            },
+            Self::CausalSupport {
+                run,
+                clash,
+                kind,
+                detail,
+            } => DlProofError::CausalSupport {
+                run,
+                clash,
+                kind,
+                detail,
+            },
+            Self::Stopped => DlProofError::Stopped,
+            Self::SchemaRecording { obstruction } => DlProofError::SchemaRecording { obstruction },
+            Self::SchemaPreparation { obstruction } => {
+                DlProofError::SchemaPreparation { obstruction }
+            }
+            Self::Storage(cause) => DlProofError::Storage(cause),
+            Self::Malformed { detail } => DlProofError::Malformed { detail },
+            Self::InputMismatch { expected, stated } => {
+                DlProofError::InputMismatch { expected, stated }
+            }
+            Self::ContractMismatch { expected, stated } => {
+                DlProofError::ContractMismatch { expected, stated }
+            }
+            Self::UnknownClause { clause, clauses } => {
+                DlProofError::UnknownClause { clause, clauses }
+            }
+            Self::NotARefutation { clause, form } => DlProofError::NotARefutation { clause, form },
+            Self::FrameTooShort {
+                clause,
+                variable,
+                frame,
+            } => DlProofError::FrameTooShort {
+                clause,
+                variable,
+                frame,
+            },
+            Self::WitnessLengthMismatch {
+                clause,
+                derived,
+                stated,
+            } => DlProofError::WitnessLengthMismatch {
+                clause,
+                derived,
+                stated,
+            },
+            Self::WitnessMismatch {
+                clause,
+                position,
+                derived,
+                stated,
+            } => DlProofError::WitnessMismatch {
+                clause,
+                position,
+                derived,
+                stated,
+            },
+            Self::NodeMismatch {
+                clause,
+                derived,
+                stated,
+            } => DlProofError::NodeMismatch {
+                clause,
+                derived,
+                stated,
+            },
+            Self::Ontology { detail } => DlProofError::Ontology { detail },
+            Self::SourceRead(never) => match never {},
+            Self::TrustBaseMismatch { expected, stated } => {
+                DlProofError::TrustBaseMismatch { expected, stated }
+            }
+            Self::NotADisjunction { clause, form } => {
+                DlProofError::NotADisjunction { clause, form }
+            }
+            Self::AlternativeCountMismatch {
+                branch,
+                clause,
+                derived,
+                stated,
+            } => DlProofError::AlternativeCountMismatch {
+                branch,
+                clause,
+                derived,
+                stated,
+            },
+            Self::AlternativeMismatch {
+                branch,
+                position,
+                derived,
+                stated,
+            } => DlProofError::AlternativeMismatch {
+                branch,
+                position,
+                derived,
+                stated,
+            },
+            Self::IllFormedIntroduction {
+                branch,
+                position,
+                detail,
+            } => DlProofError::IllFormedIntroduction {
+                branch,
+                position,
+                detail,
+            },
+            Self::OutcomeCountMismatch {
+                branch,
+                derived,
+                stated,
+            } => DlProofError::OutcomeCountMismatch {
+                branch,
+                derived,
+                stated,
+            },
+            Self::DanglingOutcome {
+                branch,
+                ordinal,
+                detail,
+            } => DlProofError::DanglingOutcome {
+                branch,
+                ordinal,
+                detail,
+            },
+            Self::BranchNotClosed { branch, ordinal } => {
+                DlProofError::BranchNotClosed { branch, ordinal }
+            }
+            Self::WrongAnswer { expected, stated } => {
+                DlProofError::WrongAnswer { expected, stated }
+            }
+            Self::Truncated => DlProofError::Truncated,
+            Self::NoCompletion => DlProofError::NoCompletion,
+            Self::MalformedCompletion { detail } => DlProofError::MalformedCompletion { detail },
+            Self::ClashInCompletion { clause, node } => {
+                DlProofError::ClashInCompletion { clause, node }
+            }
+            Self::ClauseNotSatisfied { clause, node } => {
+                DlProofError::ClauseNotSatisfied { clause, node }
+            }
+            Self::WrongQuestion { expected, stated } => {
+                DlProofError::WrongQuestion { expected, stated }
+            }
+            Self::AnswerNotCovered { detail } => DlProofError::AnswerNotCovered { detail },
+            Self::ReceiptMismatch { detail } => DlProofError::ReceiptMismatch { detail },
+            Self::UnlicensedMerge { merge, detail } => {
+                DlProofError::UnlicensedMerge { merge, detail }
+            }
+            Self::NotAnIdentification { merge, derived } => {
+                DlProofError::NotAnIdentification { merge, derived }
+            }
+            Self::MergeCauseMismatch {
+                merge,
+                derived,
+                stated,
+            } => DlProofError::MergeCauseMismatch {
+                merge,
+                derived,
+                stated,
+            },
+            Self::MergeNodeMismatch {
+                merge,
+                derived,
+                stated,
+            } => DlProofError::MergeNodeMismatch {
+                merge,
+                derived,
+                stated,
+            },
+            Self::BlockingSignatureMismatch {
+                blocked,
+                blocker,
+                detail,
+            } => DlProofError::BlockingSignatureMismatch {
+                blocked,
+                blocker,
+                detail,
+            },
+            Self::Canonicalization(cause) => {
+                DlProofError::Canonicalization(cause.with_read_error())
+            }
+        }
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for DlProofError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsaturatedIntroduction {
+                clause,
+                node,
+                predecessor,
+            } => write!(
+                f,
+                "completion leaves nominal introduction at clause {clause}, root {node:?}, predecessor {predecessor:?} unsaturated"
+            ),
+            Self::CausalSupport {
+                run,
+                clash,
+                kind,
+                detail,
+            } => write!(
+                f,
+                "causal support unavailable for run {run:?}, clash {clash:?}: {kind:?}: {detail}"
+            ),
             Self::SchemaPreparation { obstruction } => {
                 write!(f, "OWL-DL schema proof checking refused: {obstruction:?}")
             }
@@ -2072,6 +2358,10 @@ impl std::fmt::Display for DlProofError {
                  the clash node"
             ),
             Self::Ontology { detail } => write!(f, "the ontology could not be read: {detail}"),
+            Self::SourceRead(cause) => write!(
+                f,
+                "the ontology could not be read: entailment source read error: {cause}"
+            ),
             Self::TrustBaseMismatch { expected, stated } => write!(
                 f,
                 "the proof states the trust base [{stated}] but this checker classifies against \
@@ -2217,12 +2507,13 @@ impl std::fmt::Display for DlProofError {
     }
 }
 
-impl std::error::Error for DlProofError {
+impl<E: std::error::Error + 'static> std::error::Error for DlProofError<E> {
     /// [`Self::Canonicalization`] wraps a real cause ([`purrdf_core::CanonError`]); every
     /// other variant is a rejection this checker computed itself and has none to name.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Canonicalization(error) => Some(error),
+            Self::SourceRead(error) => Some(error),
             Self::Storage(error) => Some(error),
             _ => None,
         }
@@ -2255,13 +2546,20 @@ pub enum DerivedConclusion {
 ///   the recorded witness, and that the clash node is the frame's variable `0`. Every one of
 ///   those is about a CLAUSE, so every one rests on [`TrustBaseEntry::Clausification`] and
 ///   [`TrustBaseEntry::Grounding`];
-/// * `unattested` — witness atoms the checker could not reduce to an asserted axiom, because
-///   reducing them needs a premise DAG this stage does not build.
+/// * `unattested` — legacy witness atoms lacking source assertions or checked
+///   current support. Derived current premises are trusted against the named
+///   native clausification and grounding homes, rather than called assertions.
 ///
 /// A replay with `unattested > 0` says "this clause instance is a genuine derivation of
 /// `false` over these atoms", not "these atoms are reachable".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClashReplay {
+    /// The inhabitant selected by the checked clause binding.
+    node: NodeRef,
+    /// Source identity, resolved only after successful current-support replay.
+    source_node: Option<TermValue>,
+    /// Whether the recorded current application prefix was checked.
+    current_supported: bool,
     /// The conclusion the checker derived.
     conclusion: DerivedConclusion,
     /// The clause the checker looked up in the CALLER's clause set.
@@ -2270,7 +2568,64 @@ pub struct ClashReplay {
     checks: CheckReport,
 }
 
+/// Borrowed capability created only after this exact bound derivation is checked.
+/// The consumer owner and terminal guard stay attached; the producer cache is not evidence.
+#[derive(Clone, Copy)]
+pub(crate) struct CheckedSchema<'a> {
+    kb: &'a Kb,
+    clause: usize,
+    bounds: &'a super::bounds::SchemaBoundEvidence,
+}
+
+impl std::fmt::Debug for CheckedSchema<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CheckedSchema")
+            .field("source_terms", &self.kb.source_terms)
+            .field("clause", &self.clause)
+            .field("bounds", &self.bounds)
+            .finish()
+    }
+}
+
+impl CheckedSchema<'_> {
+    pub(crate) fn bounds(&self) -> &super::bounds::SchemaBoundEvidence {
+        self.bounds
+    }
+
+    pub(crate) fn matches(&self, kb: &Kb, clause: usize) -> bool {
+        std::ptr::eq(kb, self.kb) && self.clause == clause
+    }
+}
+
+type RecordedClash<'a> = (
+    ClashReplay,
+    Option<super::graph::changes::Journal>,
+    Option<CheckedSchema<'a>>,
+);
+
 impl ClashReplay {
+    /// The node bound by the checked empty-head clause.
+    #[must_use]
+    pub const fn node(&self) -> &NodeRef {
+        &self.node
+    }
+
+    /// Whether replay established the current premises from source and assumptions.
+    #[must_use]
+    pub const fn current_supported(&self) -> bool {
+        self.current_supported
+    }
+
+    /// Original named or scoped-blank identity from the consumer's checked context.
+    ///
+    /// Anonymous/generated nodes and legacy unsupported steps return `None`.
+    /// This identity does not authorize a local contradiction or consequences for
+    /// unrelated individuals; the derivation can depend on other source nodes.
+    #[must_use]
+    pub const fn source_node(&self) -> Option<&TermValue> {
+        self.source_node.as_ref()
+    }
+
     /// The conclusion the checker derived.
     #[must_use]
     pub const fn conclusion(&self) -> DerivedConclusion {
@@ -2379,8 +2734,8 @@ impl BranchReplay {
 ///
 /// * That the merge CLOSED the state. [`MergeStep::clashed`] says the two nodes were forced
 ///   distinct, and distinctness is completion-graph state a proof term does not carry. Counted
-///   [`CheckReport::unattested`], and it is why a [`BranchOutcome::Merge`] closure still leaves
-///   [`RefutationReplay::is_closed`] `false`.
+///   [`CheckReport::unattested`] by this standalone license check. Whole-refutation replay
+///   additionally checks the original native prefix and closing inequality when recorded.
 /// * That the licensing clause instance was REACHABLE — the same gap
 ///   [`DlProof::replay_clash`] reports, and for the same reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2421,6 +2776,8 @@ impl MergeReplay {
 /// `true` only when every alternative of every branch point reached a REPLAYED closure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefutationReplay {
+    /// Merge closures whose original reachable inequality was independently replayed.
+    checked_merges: usize,
     /// How many branch points the checker verified exhaustive.
     branches: usize,
     /// How many clash leaves it re-derived.
@@ -2453,9 +2810,9 @@ impl RefutationReplay {
     /// A licensed merge is not a discharged closure: [`DlProof::replay_merge`] establishes that
     /// the clause instance forced the identification, not that the two nodes were forced
     /// DISTINCT — which is what actually closed the state, and which is completion-graph state
-    /// a proof term does not carry. Counted separately from [`Self::unrecorded`] because
-    /// "licensed, closure unattested" and "nothing was written down" are different facts, and
-    /// both make [`Self::is_closed`] answer `false`.
+    /// the standalone license check does not establish. Whole-refutation replay additionally
+    /// checks recorded current prefixes; [`Self::checked_merges`] counts those closed leaves.
+    /// A legacy merge without current support remains unattested and prevents closure.
     #[must_use]
     pub const fn merges(&self) -> usize {
         self.merges
@@ -2493,15 +2850,20 @@ impl RefutationReplay {
     /// IN FULL.
     ///
     /// Exactly that, and deliberately not more. It does NOT say that every witness atom of
-    /// every leaf was reduced to an asserted axiom of the caller's ABox — reachability is not
-    /// established by this stage, and [`CheckReport::unattested`] is where that is reported.
-    /// What it does say is that every alternative closed on a re-derived clause instance: a
-    /// branch whose closure was [`BranchOutcome::Unrecorded`], a concrete-domain clash
-    /// ([`Self::data_clashes`]) or an identification ([`Self::merges`]) makes this `false`,
-    /// because none of those three is a derivation of `false` the checker reproduced.
+    /// every leaf was reduced to an asserted axiom of the caller's ABox. The explicit trust
+    /// boundary and any remaining unattested facts are in [`CheckReport`]. Each alternative
+    /// must close on a re-derived clause instance or a merge with its original reachable
+    /// inequality checked. Unrecorded leaves, concrete-domain records and legacy merges
+    /// without current support prevent closure.
     #[must_use]
     pub const fn is_closed(&self) -> bool {
-        self.unrecorded == 0 && self.merges == 0 && self.data_clashes == 0
+        self.unrecorded == 0 && self.merges == self.checked_merges && self.data_clashes == 0
+    }
+
+    /// Merge leaves whose original prefix and closing inequality were checked.
+    #[must_use]
+    pub const fn checked_merges(&self) -> usize {
+        self.checked_merges
     }
 }
 
@@ -2648,12 +3010,14 @@ impl CompletionReplay {
 /// This type exists to make one property structural rather than promised. It is built from a
 /// [`RdfDataset`] the CONSUMER supplies and from nothing else: it holds no state a producer
 /// shipped, so a proof cannot be verified against the very stores that produced it. It
-/// constructs no `Hyper` driver and opens no
-/// `Session` — the only thing it runs is the reverse mapper and
-/// the clausifier, which are compilations of the ontology rather than searches over it.
-pub struct DlProofContext {
+/// may own its independently prepared source or borrow it from a consumer reasoner.
+/// Neither form holds a producer's completion graph or search state. Source
+/// preparation includes the original key-membership decisions when keys are
+/// present; their checked journals are retained without a second search for provenance.
+/// Borrowing a prepared source only derives its native clauses.
+pub struct DlProofContext<'kb> {
     /// The knowledge base the consumer's own dataset reverse-maps to.
-    pub(crate) kb: Kb,
+    pub(crate) kb: OwnedOrBorrowed<'kb, Kb>,
     /// The DL-clause set the consumer's own knowledge base produces.
     clauses: ClauseSet,
     /// The producer-independent identity of the consumer's dataset.
@@ -2662,7 +3026,7 @@ pub struct DlProofContext {
     contract: [u8; 32],
 }
 
-impl std::fmt::Debug for DlProofContext {
+impl std::fmt::Debug for DlProofContext<'_> {
     /// The two digests and the clause count, never the knowledge base: a reverse-mapped OWL
     /// ontology has no bounded debug rendering, and a checking context is identified by what it
     /// binds rather than by what it holds.
@@ -2675,42 +3039,47 @@ impl std::fmt::Debug for DlProofContext {
     }
 }
 
-fn proof_source_error(error: EntailError) -> DlProofError {
+fn proof_source_error<E: std::fmt::Display>(error: EntailError<E>) -> DlProofError<E> {
     match error {
-        EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
+        EntailError::Storage(error)
+        | EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
             DlProofError::Storage(error)
         }
         EntailError::Stopped => DlProofError::Stopped,
+        EntailError::SourceRead(cause) => DlProofError::SourceRead(cause),
         error => DlProofError::Ontology {
             detail: error.to_string(),
         },
     }
 }
 
-impl DlProofContext {
-    /// Read `ontology` into a checking context.
+impl DlProofContext<'static> {
+    /// Read the caller's ontology view directly into a checking context.
     ///
     /// # Errors
     ///
-    /// [`DlProofError::Ontology`] if the dataset is not a well-formed OWL graph;
+    /// [`DlProofError::Ontology`] if the source is not a well-formed OWL graph;
+    /// [`DlProofError::SourceRead`] retains a source failure during preparation;
     /// [`DlProofError::Storage`] or [`DlProofError::Stopped`] if native source
     /// preparation is physically refused or cancelled;
     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
     /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
     /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same input.
-    pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
-        let mut kb = Kb::from_dataset(ontology).map_err(proof_source_error)?;
-        kb.finalize().map_err(proof_source_error)?;
-        let clauses = derive(&kb);
-        let contract = contract_digest(&clauses, &kb.schema);
-        let input = try_input_digest(ontology).map_err(DlProofError::Canonicalization)?;
-        Ok(Self {
-            kb,
-            clauses,
-            input,
-            contract,
-        })
+    pub fn of_ontology<D: purrdf_core::DatasetView>(
+        ontology: &D,
+    ) -> Result<Self, DlProofError<D::ReadError>> {
+        let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
+        let mut kb = Kb::from_dataset_recording(
+            ontology,
+            None,
+            super::bounds::SchemaPreparationBudget::default(),
+            Some(input),
+        )
+        .map_err(proof_source_error)?;
+        kb.finalize()
+            .map_err(|error| proof_source_error(error).with_read_error())?;
+        Ok(Self::of_prepared_kb(kb, input))
     }
 
     /// A checking context over a knowledge base directly — the companion to
@@ -2731,6 +3100,18 @@ impl DlProofContext {
     /// [`TrustBaseEntry::RefutationEncoding`]; `input` stays the identity of the caller's
     /// dataset, so a proof still cannot be verified against a store the producer chose.
     pub(crate) fn of_prepared_kb(kb: Kb, input: [u8; 32]) -> Self {
+        Self::prepared(OwnedOrBorrowed::Owned(kb), input)
+    }
+}
+
+impl<'kb> DlProofContext<'kb> {
+    /// Borrow the exact independently prepared consumer source without rebuilding it.
+    pub(crate) fn borrowing_prepared_kb(kb: &'kb Kb, input: [u8; 32]) -> Self {
+        Self::prepared(OwnedOrBorrowed::Borrowed(kb), input)
+    }
+
+    /// Clausification and identity binding are identical for both storage choices.
+    fn prepared(kb: OwnedOrBorrowed<'kb, Kb>, input: [u8; 32]) -> Self {
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses, &kb.schema);
         Self {
@@ -2807,6 +3188,8 @@ impl DlProofContext {
 pub struct DlProof {
     /// First refusal at the native current-support owner, when present.
     schema_recording_obstruction: Option<super::bounds::SchemaObstruction>,
+    /// Applications shared by all recorded clash prefixes and tableau branches.
+    support: Vec<super::support::Link>,
     /// BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology — the PRODUCER-INDEPENDENT
     /// input identity.
     input: [u8; 32],
@@ -2841,6 +3224,13 @@ pub struct DlProof {
 }
 
 impl DlProof {
+    /// Number of applications stored once across all clash prefixes and branches.
+    /// This is a recording measurement, not a successful replay verdict.
+    #[must_use]
+    pub const fn current_support_applications(&self) -> usize {
+        self.support.len()
+    }
+
     /// A current-support recording refusal does not change the native search
     /// answer; it prevents this partial trace from claiming complete proof.
     #[must_use]
@@ -2958,7 +3348,7 @@ impl DlProof {
     /// # Errors
     ///
     /// [`DlProofError::InputMismatch`] or [`DlProofError::ContractMismatch`].
-    pub fn bound_to(&self, ctx: &DlProofContext) -> Result<(), DlProofError> {
+    pub fn bound_to(&self, ctx: &DlProofContext<'_>) -> Result<(), DlProofError> {
         if ctx.input != self.input {
             return Err(DlProofError::InputMismatch {
                 expected: purrdf_hash::hex::encode(&ctx.input),
@@ -2994,9 +3384,9 @@ impl DlProof {
     /// 5. the checker checks the named clash node against the identity the frame binds
     ///    variable `0` to.
     ///
-    /// No `Hyper` driver is constructed, no
-    /// `Session` is opened, and no completion graph is
-    /// expanded. See the module documentation for what this does NOT establish.
+    /// Current support is replayed using licensed graph operations, without
+    /// saturation or search. Legacy steps without support retain their explicit
+    /// unattested premises. See the module documentation for the remaining limits.
     ///
     /// # Errors
     ///
@@ -3004,7 +3394,7 @@ impl DlProof {
     pub fn replay_clash(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<ClashReplay, DlProofError> {
         self.replay_clash_assuming(index, ctx, &Assumptions::of_kb())
     }
@@ -3012,14 +3402,44 @@ impl DlProof {
     fn replay_clash_assuming(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<ClashReplay, DlProofError> {
+        let (report, journal, _) = self.replay_clash_inner(index, ctx, assumptions, None)?;
+        debug_assert!(journal.is_none(), "ordinary replay requests no journal");
+        Ok(report)
+    }
+
+    #[cfg(test)]
+    fn replay_clash_recording<'a>(
+        &'a self,
+        index: usize,
+        ctx: &'a DlProofContext<'_>,
+        journal: super::graph::changes::Journal,
+    ) -> Result<RecordedClash<'a>, DlProofError> {
+        self.replay_clash_inner(index, ctx, &Assumptions::of_kb(), Some(journal))
+    }
+
+    fn replay_clash_inner<'a>(
+        &'a self,
+        index: usize,
+        ctx: &'a DlProofContext<'_>,
+        assumptions: &Assumptions<'_>,
+        mut journal: Option<super::graph::changes::Journal>,
+    ) -> Result<RecordedClash<'a>, DlProofError> {
         self.bound_to(ctx)?;
         let step = self
             .clashes
             .get(index)
             .ok_or_else(|| malformed(&format!("no clash step at index {index}")))?;
+        if journal.is_some() && step.current.is_none() {
+            return Err(DlProofError::CausalSupport {
+                run: None,
+                clash: Some(index),
+                kind: source::causal::CausalSupportKind::CurrentSupport,
+                detail: "causal recording requires checked current support".to_owned(),
+            });
+        }
         let clauses = ctx.clauses.count();
         if step.clause >= clauses {
             return Err(DlProofError::UnknownClause {
@@ -3056,7 +3476,8 @@ impl DlProof {
                 });
             }
         }
-        let supported = if let Some(class) = ctx.clauses.schema_class(step.clause, &ctx.kb.schema) {
+        let mut checked_schema = None;
+        if let Some(class) = ctx.clauses.schema_class(step.clause, &ctx.kb.schema) {
             let evidence = step
                 .schema
                 .as_ref()
@@ -3066,25 +3487,49 @@ impl DlProof {
                     "invalid prepared restriction/qualifier source derivation",
                 ));
             }
-            let (frame, facts) = super::hyper::replay_current_support(
+            if step.current.is_none() {
+                return Err(malformed("prepared clash lacks current support"));
+            }
+            checked_schema = Some(CheckedSchema {
+                kb: &ctx.kb,
+                clause: step.clause,
+                bounds: &evidence.bounds,
+            });
+        } else if step.schema.is_some() {
+            return Err(malformed("schema evidence attached to an unrelated clause"));
+        }
+        let support_steps = if let Some(evidence) = &step.current {
+            let applications =
+                super::support::prefix(&self.support, evidence.latest, ctx.kb.stop.as_deref())?;
+            // A direct clash replay must verify the source licence too; matching
+            // an application against a producer-supplied alternative is insufficient.
+            for application in &applications {
+                if let Some((branch, _)) = application.branch {
+                    self.replay_branch(branch, ctx)?;
+                }
+            }
+            let super::hyper::ReplaySupport {
+                frame,
+                facts,
+                mutations,
+            } = super::hyper::replay_current_support(
                 &ctx.kb,
                 assumptions,
-                &evidence.support,
+                &applications,
                 step.clause,
                 &evidence.frame,
                 &self.branches,
+                journal.take(),
             )?;
             if frame != step.frame || facts != step.witness {
                 return Err(malformed(
                     "current support does not establish the recorded inhabitant",
                 ));
             }
-            true
+            journal = mutations;
+            Some(applications.len())
         } else {
-            if step.schema.is_some() {
-                return Err(malformed("schema evidence attached to an unrelated clause"));
-            }
-            false
+            None
         };
         // Variable 0 is the trigger variable: a clause is always matched by binding it to one
         // node, so the node a clash is reported AT is a function of the frame rather than an
@@ -3107,20 +3552,22 @@ impl DlProof {
         // it does rest on the reverse mapping, which is what makes a concept id mean anything.
         checks.attest(attested);
         checks.cite(&[TrustBaseEntry::ReverseMapping]);
-        if supported {
-            let evidence = step.schema.as_ref().expect("checked prepared evidence");
+        if let Some(support_steps) = support_steps {
             checks.trust(
-                derived.len() - attested + evidence.support.len(),
+                derived.len() - attested + support_steps,
                 &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
             );
             // Each supplied source derivation is checked separately; no cached
             // result establishes these steps or the final arithmetic comparison.
-            checks.attest(
-                evidence.bounds.class_steps.len()
-                    + evidence.bounds.qualifier_derivation().len()
-                    + evidence.bounds.roles.len()
-                    + 1,
-            );
+            if let Some(evidence) = &checked_schema {
+                let bounds = evidence.bounds();
+                checks.attest(
+                    bounds.class_steps.len()
+                        + bounds.qualifier_derivation().len()
+                        + bounds.roles.len()
+                        + 1,
+                );
+            }
         } else {
             checks.leave(derived.len() - attested);
         }
@@ -3131,11 +3578,27 @@ impl DlProof {
             5,
             &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
         );
-        Ok(ClashReplay {
-            conclusion: DerivedConclusion::False,
-            clause: step.clause,
-            checks,
-        })
+        Ok((
+            ClashReplay {
+                node: step.node.clone(),
+                source_node: match step.node {
+                    NodeRef::Individual(id)
+                        if support_steps.is_some()
+                            && ctx.kb.individuals.contains(&id)
+                            && (id as usize) < ctx.kb.interner.len() =>
+                    {
+                        Some(ctx.kb.interner.value(id).clone())
+                    }
+                    _ => None,
+                },
+                current_supported: support_steps.is_some(),
+                conclusion: DerivedConclusion::False,
+                clause: step.clause,
+                checks,
+            },
+            journal,
+            checked_schema,
+        ))
     }
 
     /// RE-DERIVE the ALTERNATIVES of branch point `index` against the consumer's own ontology.
@@ -3174,7 +3637,7 @@ impl DlProof {
     pub fn replay_branch(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<BranchReplay, DlProofError> {
         self.bound_to(ctx)?;
         let step = self
@@ -3210,7 +3673,8 @@ impl DlProof {
         }
         // THE REGENERATION. The search's own grounding, over the CALLER's clause and the
         // recorded frame, with the proof's node identities as the carrier.
-        let derived: Vec<ProofAlternative> = ground_head(&clause.head, &step.frame)
+        let derived: Vec<ProofAlternative> = step
+            .regenerated_head(clause)
             .iter()
             .map(|disjunct| ProofAlternative {
                 atoms: disjunct.iter().map(ProofGround::of).collect(),
@@ -3301,7 +3765,7 @@ impl DlProof {
     pub fn replay_merge(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<MergeReplay, DlProofError> {
         self.bound_to(ctx)?;
         let step = self
@@ -3362,7 +3826,7 @@ impl DlProof {
         &self,
         index: usize,
         step: &MergeStep,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         checks: &mut CheckReport,
     ) -> Result<ProofGround, DlProofError> {
         let unlicensed = |detail: &str| DlProofError::UnlicensedMerge {
@@ -3414,10 +3878,8 @@ impl DlProof {
                 let replay = self.replay_branch(branch, ctx)?;
                 checks.absorb(&replay.checks);
                 let step = &self.branches[branch];
-                let derived = ground_head(
-                    &ctx.clauses.clause(step.clause, &ctx.kb.schema).head,
-                    &step.frame,
-                );
+                let derived =
+                    step.regenerated_head(ctx.clauses.clause(step.clause, &ctx.kb.schema));
                 let alternative = match derived.get(ordinal) {
                     Some(disjunct) => disjunct
                         .get(atom)
@@ -3470,13 +3932,13 @@ impl DlProof {
     ///
     /// [`DlProofError::WrongAnswer`] unless the proof is bound to [`ProofAnswer::Undecided`],
     /// and any rejection the three per-step replays make.
-    pub fn replay_partial(&self, ctx: &DlProofContext) -> Result<PartialReplay, DlProofError> {
+    pub fn replay_partial(&self, ctx: &DlProofContext<'_>) -> Result<PartialReplay, DlProofError> {
         self.replay_partial_assuming(ctx, &Assumptions::of_kb())
     }
 
     pub(crate) fn replay_partial_assuming(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<PartialReplay, DlProofError> {
         self.bound_to(ctx)?;
@@ -3558,15 +4020,34 @@ impl DlProof {
     /// [`Self::replay_branch`] or [`Self::replay_clash`] makes.
     pub fn replay_refutation(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<RefutationReplay, DlProofError> {
         self.replay_refutation_assuming(ctx, &Assumptions::of_kb())
     }
 
     pub(crate) fn replay_refutation_assuming(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
+    ) -> Result<RefutationReplay, DlProofError> {
+        self.replay_refutation_inner(ctx, assumptions, None)
+    }
+
+    pub(crate) fn replay_refutation_recording(
+        &self,
+        ctx: &DlProofContext<'_>,
+        assumptions: &Assumptions<'_>,
+    ) -> Result<(RefutationReplay, capture::Capture), DlProofError> {
+        let mut capture = capture::Capture::default();
+        let report = self.replay_refutation_inner(ctx, assumptions, Some(&mut capture))?;
+        Ok((report, capture))
+    }
+
+    fn replay_refutation_inner(
+        &self,
+        ctx: &DlProofContext<'_>,
+        assumptions: &Assumptions<'_>,
+        mut capture: Option<&mut capture::Capture>,
     ) -> Result<RefutationReplay, DlProofError> {
         self.bound_to(ctx)?;
         if self.answer != ProofAnswer::Inconsistent {
@@ -3577,6 +4058,7 @@ impl DlProof {
         }
         self.require_complete_recording()?;
         let mut report = RefutationReplay {
+            checked_merges: 0,
             branches: 0,
             clashes: 0,
             merges: 0,
@@ -3592,7 +4074,7 @@ impl DlProof {
             self.root,
             None,
             &mut seen,
-            &mut report,
+            (&mut report, &mut capture),
             &mut Vec::new(),
         )?;
         for (index, reached) in seen.iter().enumerate() {
@@ -3605,17 +4087,36 @@ impl DlProof {
         Ok(report)
     }
 
+    fn current_applications<'a>(
+        &'a self,
+        ctx: &DlProofContext<'_>,
+        latest: Option<usize>,
+        path: &[(usize, usize)],
+    ) -> Result<Vec<&'a super::support::Application>, DlProofError> {
+        let applications = super::support::prefix(&self.support, latest, ctx.kb.stop.as_deref())?;
+        if !applications
+            .iter()
+            .filter_map(|application| application.branch)
+            .eq(path.iter().copied())
+        {
+            return Err(malformed(
+                "current support comes from another branch alternative",
+            ));
+        }
+        Ok(applications)
+    }
+
     /// Verify one recorded CLOSURE and, when it is a branch point, everything below it.
     ///
     /// `at` names where the outcome was filed, for a diagnostic. Recursion is bounded by the
     /// `seen` marks: a branch point is entered at most once, and there are finitely many.
     fn walk_closure(
         &self,
-        (ctx, assumptions): (&DlProofContext, &Assumptions<'_>),
+        (ctx, assumptions): (&DlProofContext<'_>, &Assumptions<'_>),
         outcome: BranchOutcome,
         at: Option<(usize, usize)>,
         seen: &mut [bool],
-        report: &mut RefutationReplay,
+        (report, capture): (&mut RefutationReplay, &mut Option<&mut capture::Capture>),
         path: &mut Vec<(usize, usize)>,
     ) -> Result<(), DlProofError> {
         let (branch, ordinal) = at.unwrap_or((usize::MAX, usize::MAX));
@@ -3629,19 +4130,22 @@ impl DlProof {
                 if index >= self.clashes.len() {
                     return Err(dangling("no clash step at that index"));
                 }
-                if let Some(evidence) = &self.clashes[index].schema {
-                    let choices: Vec<_> = evidence
-                        .support
-                        .iter()
-                        .filter_map(|application| application.branch)
-                        .collect();
-                    if choices != *path {
-                        return Err(malformed(
-                            "current support comes from another branch alternative",
-                        ));
-                    }
+                if let Some(evidence) = &self.clashes[index].current {
+                    self.current_applications(ctx, evidence.latest, path)?;
                 }
-                let replay = self.replay_clash_assuming(index, ctx, assumptions)?;
+                let journal = capture
+                    .as_ref()
+                    .map(|_| super::graph::changes::Journal::default());
+                let (replay, journal, schema) =
+                    self.replay_clash_inner(index, ctx, assumptions, journal)?;
+                if let Some(capture) = capture.as_deref_mut() {
+                    capture.push(
+                        index,
+                        &journal.expect("requested checked replay owns its journal"),
+                        schema,
+                        &ctx.kb,
+                    )?;
+                }
                 report.clashes += 1;
                 report.checks.absorb(&replay.checks);
                 Ok(())
@@ -3666,11 +4170,37 @@ impl DlProof {
                 if !merge.clashed {
                     return Err(dangling("the named merge did not close the state"));
                 }
-                // The identification's LICENCE is re-derived against the caller's own clause
-                // set. What that does NOT establish is the distinctness that closed the state,
-                // which is why this is counted apart from a replayed clash leaf and why it
-                // still makes `is_closed` answer `false`.
-                let replay = self.replay_merge(index, ctx)?;
+                // The standalone license check stays separate from original-prefix replay.
+                // Legacy records remain unattested; current support must prove the actual
+                // native inequality and exact identifying operation on the selected proof path.
+                let mut replay = self.replay_merge(index, ctx)?;
+                if let Some(latest) = merge.current {
+                    let applications = self.current_applications(ctx, Some(latest), path)?;
+                    let journal = capture
+                        .as_ref()
+                        .map(|_| super::graph::changes::Journal::default());
+                    let checked = super::hyper::replay_merge_support(
+                        &ctx.kb,
+                        assumptions,
+                        &applications,
+                        merge,
+                        &self.branches,
+                        journal,
+                    )?;
+                    if let Some(capture) = capture.as_deref_mut() {
+                        capture.push_merge(
+                            index,
+                            &checked
+                                .mutations
+                                .expect("requested merge replay owns its journal"),
+                            &ctx.kb,
+                        )?;
+                    }
+                    // replay_merge left exactly this closing inequality unattested.
+                    replay.checks.unattested -= 1;
+                    replay.checks.attest(1);
+                    report.checked_merges += 1;
+                }
                 report.merges += 1;
                 report.checks.absorb(&replay.checks);
                 Ok(())
@@ -3710,7 +4240,7 @@ impl DlProof {
                         outcome,
                         Some((index, ordinal)),
                         seen,
-                        report,
+                        (&mut *report, &mut *capture),
                         path,
                     )?;
                     path.pop();
@@ -3736,7 +4266,7 @@ impl DlProof {
     /// a branch no test constrains.
     pub(crate) fn replay_completion_within(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         budget: u64,
     ) -> Result<CompletionReplay, DlProofError> {
         self.bound_to(ctx)?;
@@ -3768,12 +4298,22 @@ impl DlProof {
     /// [`DlProofError::ClauseNotSatisfied`] or [`DlProofError::BlockingSignatureMismatch`].
     pub fn replay_completion(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<CompletionReplay, DlProofError> {
         self.replay_completion_within(ctx, MAX_CHECK_WORK)
     }
 
     /// The canonical byte encoding of the proof.
+    ///
+    /// Current-support recordings use v5, storing each application once with an
+    /// earlier predecessor and each clash's cursor/frame separately. A recorded merge
+    /// closure uses v6, adding its original final-application cursor to that same arena.
+    /// NI-only reserved-root branches use v7, adding an explicit branch-kind flag;
+    /// their repeated predecessor binding does not assert a violated ordinary count.
+    /// Proofs without
+    /// current evidence or recording refusal keep the v3 layout. Decoding also
+    /// admits v4 prepared prefixes and normalizes them to the shared arena; their
+    /// re-encoding is v5. All stored applications obey the recording ceiling.
     ///
     /// Layout, all integers little-endian and every variable-length field length-prefixed, so
     /// no concatenation of two fields can be confused with a different split of the same bytes:
@@ -3784,21 +4324,27 @@ impl DlProof {
     /// 32 bytes contract
     /// u8  answer ordinal
     /// u8  truncated
-    /// v4 only: u8 recording obstruction kind, then that kind's exact counters
+    /// v5: u8 recording obstruction kind, then that kind's exact counters
     /// u64 trust_base_count, u64 TrustBaseEntry::ALL ordinal each
     /// u64 boundary_count, u64 Construct::ALL ordinal each
+    /// v5: u64 application_count, then per application:
+    ///     u8 has_predecessor, optional u64 predecessor index
+    ///     u64 clause, native-index frame, optional branch/ordinal, grounded head
     /// u64 clash_count, then per clash:
     ///     u64 clause index
     ///     node                                    -- the clash node
     ///     u64 frame_len, node each
     ///     u64 witness_len, fact each
-    ///     v4 only: u8 has_schema_evidence, then the source/current-support proof
+    ///     v5: u8 has_schema_evidence, then the source bound law
+    ///     v5: u8 has_current_support, then optional predecessor and native frame
     /// u64 merge_count, then per merge:
     ///     u8 cause ordinal, node left, node right, node joined, u8 clashed
     ///     licence                                 -- u8 kind and then that kind's fields
+    ///     v6: u8 has_current_support, then u64 original final application
     /// u64 data_clash_count, node each
     /// outcome                                     -- the root's
     /// u64 branch_count, then per branch:
+    ///     v7: u8 introduction_only
     ///     u64 clause index
     ///     node                                    -- the branch node
     ///     u64 frame_len, node each
@@ -3821,12 +4367,23 @@ impl DlProof {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        let schema = self.schema_recording_obstruction.is_some()
-            || self.clashes.iter().any(|step| step.schema.is_some());
+        let merge_support = self.merges.iter().any(|step| step.current.is_some());
+        let introduction = self.branches.iter().any(|step| step.introduction_only);
+        let schema = introduction
+            || merge_support
+            || self.schema_recording_obstruction.is_some()
+            || self
+                .clashes
+                .iter()
+                .any(|step| step.schema.is_some() || step.current.is_some());
         frame_le(
             &mut out,
-            if schema {
-                SCHEMA_PROOF_ENCODING_TAG.as_bytes()
+            if introduction {
+                INTRODUCTION_PROOF_ENCODING_TAG.as_bytes()
+            } else if merge_support {
+                MERGE_PROOF_ENCODING_TAG.as_bytes()
+            } else if schema {
+                CURRENT_PROOF_ENCODING_TAG.as_bytes()
             } else {
                 PROOF_ENCODING_TAG.as_bytes()
             },
@@ -3863,6 +4420,16 @@ impl DlProof {
                 .expect("every Construct is in Construct::ALL");
             out.extend_from_slice(&(ordinal as u64).to_le_bytes());
         }
+        if schema {
+            out.extend_from_slice(&(self.support.len() as u64).to_le_bytes());
+            for link in &self.support {
+                out.push(u8::from(link.previous.is_some()));
+                if let Some(previous) = link.previous {
+                    out.extend_from_slice(&(previous as u64).to_le_bytes());
+                }
+                schema::encode_application(&mut out, &link.application);
+            }
+        }
         out.extend_from_slice(&(self.clashes.len() as u64).to_le_bytes());
         for step in &self.clashes {
             out.extend_from_slice(&(step.clause as u64).to_le_bytes());
@@ -3880,6 +4447,14 @@ impl DlProof {
                 if let Some(evidence) = &step.schema {
                     encode_schema_clash(&mut out, evidence);
                 }
+                out.push(u8::from(step.current.is_some()));
+                if let Some(evidence) = &step.current {
+                    out.push(u8::from(evidence.latest.is_some()));
+                    if let Some(latest) = evidence.latest {
+                        out.extend_from_slice(&(latest as u64).to_le_bytes());
+                    }
+                    schema::encode_frame(&mut out, &evidence.frame);
+                }
             }
         }
         out.extend_from_slice(&(self.merges.len() as u64).to_le_bytes());
@@ -3894,6 +4469,12 @@ impl DlProof {
             encode_node(&mut out, &step.joined);
             out.push(u8::from(step.clashed));
             encode_licence(&mut out, &step.licence);
+            if merge_support || introduction {
+                out.push(u8::from(step.current.is_some()));
+                if let Some(latest) = step.current {
+                    out.extend_from_slice(&(latest as u64).to_le_bytes());
+                }
+            }
         }
         out.extend_from_slice(&(self.data_clashes.len() as u64).to_le_bytes());
         for node in &self.data_clashes {
@@ -3902,6 +4483,9 @@ impl DlProof {
         encode_outcome(&mut out, self.root);
         out.extend_from_slice(&(self.branches.len() as u64).to_le_bytes());
         for step in &self.branches {
+            if introduction {
+                out.push(u8::from(step.introduction_only));
+            }
             out.extend_from_slice(&(step.clause as u64).to_le_bytes());
             encode_node(&mut out, &step.node);
             out.extend_from_slice(&(step.frame.len() as u64).to_le_bytes());
@@ -3960,7 +4544,10 @@ impl DlProof {
     pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
         let mut reader = Reader::new(bytes);
         let tag = reader.frame()?;
-        let schema = tag == SCHEMA_PROOF_ENCODING_TAG.as_bytes();
+        let introduction = tag == INTRODUCTION_PROOF_ENCODING_TAG.as_bytes();
+        let merge_support = introduction || tag == MERGE_PROOF_ENCODING_TAG.as_bytes();
+        let current = merge_support || tag == CURRENT_PROOF_ENCODING_TAG.as_bytes();
+        let schema = current || tag == SCHEMA_PROOF_ENCODING_TAG.as_bytes();
         if !schema && tag != PROOF_ENCODING_TAG.as_bytes() {
             return Err(malformed(
                 "the proof encoding tag is absent or from another layout",
@@ -4009,6 +4596,27 @@ impl DlProof {
                 .ok_or_else(|| malformed("boundary ordinal outside Construct::ALL"))?;
             boundaries.push(*construct);
         }
+        let mut support = Vec::new();
+        if current {
+            let count = reader.length()?;
+            if count > MAX_RECORDED_STEPS {
+                return Err(malformed(
+                    "current-support arena exceeds the recording ceiling",
+                ));
+            }
+            for _ in 0..count {
+                let previous = reader.flag()?.then(|| reader.length()).transpose()?;
+                if previous.is_some_and(|index| index >= support.len()) {
+                    return Err(malformed(
+                        "current-support predecessor must precede its application",
+                    ));
+                }
+                support.push(super::support::Link {
+                    previous,
+                    application: schema::decode_application(&mut reader)?,
+                });
+            }
+        }
         let mut clashes = Vec::new();
         for _ in 0..reader.length()? {
             let clause = reader.length()?;
@@ -4026,8 +4634,43 @@ impl DlProof {
             } else {
                 None
             };
+            let current = if current {
+                if reader.flag()? {
+                    let latest = reader.flag()?.then(|| reader.length()).transpose()?;
+                    if latest.is_some_and(|index| index >= support.len()) {
+                        return Err(malformed("current-support cursor names no application"));
+                    }
+                    Some(CurrentSupportEvidence {
+                        latest,
+                        frame: schema::decode_frame(&mut reader)?,
+                    })
+                } else {
+                    None
+                }
+            } else if schema.is_some() {
+                // Normalize the v4 per-clash prefix into the single replay owner.
+                let frame = schema::decode_frame(&mut reader)?;
+                let mut latest = None;
+                for _ in 0..reader.length()? {
+                    if support.len() >= MAX_RECORDED_STEPS {
+                        return Err(malformed(
+                            "legacy current-support arena exceeds the recording ceiling",
+                        ));
+                    }
+                    let application = schema::decode_application(&mut reader)?;
+                    support.push(super::support::Link {
+                        previous: latest,
+                        application,
+                    });
+                    latest = Some(support.len() - 1);
+                }
+                Some(CurrentSupportEvidence { latest, frame })
+            } else {
+                None
+            };
             clashes.push(ClashStep {
                 schema,
+                current,
                 clause,
                 node,
                 frame,
@@ -4047,7 +4690,19 @@ impl DlProof {
             let joined = reader.node()?;
             let clashed = reader.flag()?;
             let licence = reader.licence()?;
+            let latest = if merge_support && reader.flag()? {
+                let latest = reader.length()?;
+                if latest >= support.len() {
+                    return Err(malformed(
+                        "merge current support names no original application",
+                    ));
+                }
+                Some(latest)
+            } else {
+                None
+            };
             merges.push(MergeStep {
+                current: latest,
                 cause,
                 left,
                 right,
@@ -4063,6 +4718,7 @@ impl DlProof {
         let root = reader.outcome()?;
         let mut branches = Vec::new();
         for _ in 0..reader.length()? {
+            let introduction_only = introduction && reader.flag()?;
             let clause = reader.length()?;
             let node = reader.node()?;
             let mut frame = Vec::new();
@@ -4082,6 +4738,7 @@ impl DlProof {
                 outcomes.push(reader.outcome()?);
             }
             branches.push(BranchStep {
+                introduction_only,
                 clause,
                 node,
                 frame,
@@ -4091,12 +4748,26 @@ impl DlProof {
             });
         }
         let completion = reader.flag()?.then(|| reader.completion()).transpose()?;
+        if introduction && !branches.iter().any(|step| step.introduction_only) {
+            return Err(malformed(
+                "the introduction layout requires an NI-only branch",
+            ));
+        }
+        if merge_support && !introduction && !merges.iter().any(|step| step.current.is_some()) {
+            return Err(malformed(
+                "the merge-support layout requires native merge evidence",
+            ));
+        }
         if schema
             && schema_recording_obstruction.is_none()
-            && !clashes.iter().any(|step| step.schema.is_some())
+            && !branches.iter().any(|step| step.introduction_only)
+            && !merges.iter().any(|step| step.current.is_some())
+            && !clashes
+                .iter()
+                .any(|step| step.schema.is_some() || step.current.is_some())
         {
             return Err(malformed(
-                "the schema proof layout requires prepared-clash evidence",
+                "the current-support layout requires native terminal evidence or a recording obstruction",
             ));
         }
         if !reader.is_exhausted() {
@@ -4104,6 +4775,7 @@ impl DlProof {
         }
         Ok(Self {
             schema_recording_obstruction,
+            support,
             input,
             contract,
             trust_base,
@@ -4132,14 +4804,22 @@ impl DlProof {
 /// # Errors
 ///
 /// [`EntailError::Parse`] if the dataset is not a well-formed OWL graph;
+/// [`EntailError::SourceRead`] if the view refuses a preparation read;
 /// [`EntailError::Canonicalization`] if computing its producer-independent identity is
 /// refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
 /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
 /// [`purrdf_core::canonicalize`] would raise for the same input.
-pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
-    let input = try_input_digest(ontology).map_err(EntailError::Canonicalization)?;
-    let mut kb = Kb::from_dataset(ontology)?;
-    kb.finalize()?;
+pub fn prove_consistency<D: purrdf_core::DatasetView>(
+    ontology: &D,
+) -> Result<(ProofAnswer, DlProof), EntailError<D::ReadError>> {
+    let input = try_input_digest(ontology, None).map_err(EntailError::Canonicalization)?;
+    let mut kb = Kb::from_dataset_recording(
+        ontology,
+        None,
+        super::bounds::SchemaPreparationBudget::default(),
+        Some(input),
+    )?;
+    kb.finalize().map_err(EntailError::with_read_error)?;
     let contract = contract_of(&kb);
     let (decision, recorder) =
         crate::owl_dl::hyper::decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
@@ -4357,6 +5037,13 @@ fn check_introduced(
     clause: &DlClause,
 ) -> Result<(), DlProofError> {
     if step.introduced.is_empty() {
+        if step.introduction_only {
+            return Err(DlProofError::IllFormedIntroduction {
+                branch,
+                position: 0,
+                detail: "NI-only branch has no exhaustive reserved choices".to_owned(),
+            });
+        }
         return Ok(());
     }
     let ill = |position: usize, detail: &str| DlProofError::IllFormedIntroduction {
@@ -4381,8 +5068,37 @@ fn check_introduced(
         ));
     };
     let bound = count.saturating_sub(1);
+    let target = if step.introduction_only {
+        let first = clause
+            .body
+            .iter()
+            .find_map(|atom| match atom {
+                BodyAtom::Successors { first, .. } => Some(*first as usize),
+                _ => None,
+            })
+            .expect("counted NI source");
+        if bound == 0 || step.introduced.len() != bound as usize || !step.alternatives.is_empty() {
+            return Err(ill(
+                0,
+                "NI-only branch must enumerate its complete nonempty reserved set",
+            ));
+        }
+        let target = step
+            .frame
+            .get(first)
+            .ok_or_else(|| ill(0, "NI-only branch has no predecessor binding"))?;
+        if !step.frame[first..].iter().all(|node| node == target) {
+            return Err(ill(
+                0,
+                "NI-only successor binding must repeat its selected predecessor",
+            ));
+        }
+        Some(target)
+    } else {
+        None
+    };
     for (position, alternative) in step.introduced.iter().enumerate() {
-        let [ProofGround::EqualReserved { root, .. }] = alternative.atoms.as_slice() else {
+        let [ProofGround::EqualReserved { node, root }] = alternative.atoms.as_slice() else {
             return Err(ill(
                 position,
                 "a nominal-introduction alternative is exactly one reserved-root identification",
@@ -4404,6 +5120,12 @@ fn check_introduced(
             return Err(ill(
                 position,
                 "the reserved root belongs to another at-most root than the branch node",
+            ));
+        }
+        if target.is_some_and(|target| node != target || root.index as usize != position) {
+            return Err(ill(
+                position,
+                "NI-only alternatives must cover the original predecessor and each reserved index in order",
             ));
         }
     }
@@ -4429,6 +5151,10 @@ enum FiniteRoleRefusal {
 purrdf_lex::variant_from!(FiniteRoleRefusal { Storage(purrdf_lex::allocation::StorageError) });
 
 struct CompletionView<'a> {
+    /// NI applies only to calculi containing nonempty nominal concepts.
+    has_nominals: bool,
+    /// Existing identity index retained for generative and blocking obligations.
+    position: BTreeMap<NodeRef, usize>,
     /// Universal object property resolved once from the original term table.
     top_role: Option<u32>,
     /// Least closure of original RBox inclusions on this finite proof graph.
@@ -4546,6 +5272,8 @@ impl<'a> CompletionView<'a> {
             None
         };
         Ok(Self {
+            has_nominals: kb.table.has_nominals(),
+            position,
             top_role,
             role_relation,
             kb,
@@ -4773,6 +5501,77 @@ impl<'a> CompletionView<'a> {
         out
     }
 
+    /// NI saturation is required before a blocked graph can be unravelled into a model.
+    /// Return false on the existing check budget, never discharge an unvisited obligation.
+    fn introduction_saturated(
+        &self,
+        clause: &DlClause,
+        index: usize,
+        x: usize,
+    ) -> Result<bool, DlProofError> {
+        if !self.has_nominals
+            || !self.nodes[x].root
+            || !matches!(
+                self.nodes[x].node,
+                NodeRef::Individual(_) | NodeRef::Reserved(_)
+            )
+        {
+            return Ok(true);
+        }
+        let Some((at, role, filler, count)) =
+            clause
+                .body
+                .iter()
+                .enumerate()
+                .find_map(|(at, atom)| match atom {
+                    BodyAtom::Successors {
+                        role,
+                        filler,
+                        count,
+                        ..
+                    } => Some((at, *role, *filler, *count)),
+                    _ => None,
+                })
+        else {
+            return Ok(true);
+        };
+        if count <= 1 {
+            return Ok(true);
+        }
+        let guards = DlClause {
+            body: clause.body[..at].to_vec(),
+            head: Vec::new(),
+        };
+        if self.body_matches(&guards, x).is_empty() {
+            return Ok(!self.spent());
+        }
+        for y in self.neighbors(x, role) {
+            self.charge(1);
+            if self.spent() {
+                return Ok(false);
+            }
+            let candidate = &self.nodes[y];
+            let parent = candidate
+                .parent
+                .as_ref()
+                .and_then(|parent| self.position.get(parent))
+                .copied();
+            if candidate.root
+                || parent == Some(x)
+                || parent.is_some_and(|parent| self.blocked[parent])
+                || !self.has_concept(y, filler)
+            {
+                continue;
+            }
+            return Err(DlProofError::UnsaturatedIntroduction {
+                clause: index,
+                node: Box::new(self.nodes[x].node.clone()),
+                predecessor: Box::new(candidate.node.clone()),
+            });
+        }
+        Ok(!self.spent())
+    }
+
     /// Match `clause.body[at..]`, extending `frame` — the checker's own left-deep join over the
     /// recorded graph.
     fn walk(
@@ -4887,7 +5686,7 @@ impl<'a> CompletionView<'a> {
         checks.attest(1 + self.blocked.iter().filter(|&&b| b).count());
         let mut checked = 0_usize;
         let mut deferred = 0_usize;
-        for index in 0..clauses.count() {
+        'clauses: for index in 0..clauses.count() {
             if self.spent() {
                 // A clause the budget did not reach is UNATTESTED, never assumed satisfied.
                 checks.leave(clauses.count() - index);
@@ -4903,6 +5702,10 @@ impl<'a> CompletionView<'a> {
                 // calculus never fired on that node.
                 if tbox && self.nodes[x].concrete {
                     continue;
+                }
+                if !self.introduction_saturated(clause, index, x)? {
+                    checks.leave(clauses.count() - index);
+                    break 'clauses;
                 }
                 for frame in self.body_matches(clause, x) {
                     if empty {
@@ -5178,17 +5981,35 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 /// bytes. The same shape [`Justification::digest`](crate::explain::Justification::digest)
 /// already uses.
 fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
-    *purrdf_hash::blake3::hash(purrdf_core::canonicalize(ontology).nquads.as_bytes()).as_bytes()
+    try_input_digest(ontology, None).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// The fallible sibling of [`input_digest`] — the untrusted-input entry point, exactly as
 /// [`purrdf_core::try_canonicalize`] is [`purrdf_core::canonicalize`]'s. See
 /// [`try_ontology_identity`].
-fn try_input_digest(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
-    Ok(
-        *purrdf_hash::blake3::hash(purrdf_core::try_canonicalize(ontology)?.nquads.as_bytes())
-            .as_bytes(),
-    )
+fn try_input_digest<D: purrdf_core::DatasetView>(
+    ontology: &D,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
+    let canonical = match stop {
+        Some(stop) => purrdf_core::try_canonicalize_view_with_stop(
+            ontology,
+            purrdf_core::CanonHash::Sha256,
+            stop,
+        )?,
+        None => purrdf_core::try_canonicalize_view(ontology, purrdf_core::CanonHash::Sha256)?,
+    };
+    let mut hash = purrdf_hash::blake3::Hasher::new();
+    for chunk in canonical.nquads.as_bytes().chunks(64 * 1024) {
+        if purrdf_core::governor::is_stopped(stop) {
+            return Err(purrdf_core::CanonError::Stopped);
+        }
+        hash.update(chunk);
+    }
+    if purrdf_core::governor::is_stopped(stop) {
+        return Err(purrdf_core::CanonError::Stopped);
+    }
+    Ok(*hash.finalize().as_bytes())
 }
 
 /// The PRODUCER-INDEPENDENT identity of an ontology, for a consumer to recompute.
@@ -5221,8 +6042,24 @@ pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
 /// [`purrdf_core::CanonError::ReservedVocabulary`] if any term of `ontology` is an IRI in
 /// PurRDF's RDFC-1.0 reserved namespace; [`purrdf_core::CanonError::BudgetExceeded`] if the
 /// n-degree search's call/permutation budget is exhausted first.
-pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
-    try_input_digest(ontology)
+/// [`purrdf_core::CanonError::Read`] if the view refuses a source read.
+pub fn try_ontology_identity<D: purrdf_core::DatasetView>(
+    ontology: &D,
+) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
+    try_input_digest(ontology, None)
+}
+
+/// Compute the same producer-independent ontology identity with cooperative
+/// cancellation during canonicalization and digest streaming.
+///
+/// # Errors
+/// The source/profile refusals of [`try_ontology_identity`], or
+/// [`purrdf_core::CanonError::Stopped`]. No partial digest is returned.
+pub fn try_ontology_identity_with_stop<D: purrdf_core::DatasetView>(
+    ontology: &D,
+    stop: &dyn purrdf_core::StopSignal,
+) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
+    try_input_digest(ontology, Some(stop))
 }
 
 /// The calculus/clausification contract: BLAKE3 over [`CALCULUS_VERSION`] and the canonical
@@ -5971,7 +6808,7 @@ mod tests {
 
     /// The proof of the disjoint-classes refutation, and a context over the SAME ontology built
     /// independently of it.
-    fn refutation() -> (Arc<RdfDataset>, DlProof, DlProofContext) {
+    fn refutation() -> (Arc<RdfDataset>, DlProof, DlProofContext<'static>) {
         let ontology = disjoint_classes();
         let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "C ⊓ D ⊑ ⊥ with a : C, D");
@@ -6045,7 +6882,7 @@ mod tests {
             .expect("a genuine clash replays");
         assert_eq!(replay.conclusion(), DerivedConclusion::False);
         assert!(
-            replay.attested() + replay.unattested() > 0,
+            !proof.clashes()[0].witness().is_empty(),
             "the clause body grounds to at least one atom: {replay:?}"
         );
     }
@@ -6075,14 +6912,10 @@ mod tests {
         assert_eq!(replay.conclusion(), DerivedConclusion::False);
     }
 
-    /// A clash whose witness includes a DERIVED concept membership reports it as unattested
-    /// rather than counting it as an axiom.
-    ///
-    /// This is the stage's honesty made observable: the replay establishes that the clause
-    /// instance derives `false`, and says out loud how much of the instance it could reduce to
-    /// the caller's own ABox.
+    /// Derived membership is checked through licensed applications, never counted
+    /// as an asserted axiom. A legacy step still reports its missing reachability.
     #[test]
-    fn a_derived_witness_atom_is_reported_unattested_rather_than_attested() {
+    fn a_derived_witness_atom_is_supported_without_becoming_an_assertion() {
         let ontology = derived_clash();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent);
@@ -6090,10 +6923,104 @@ mod tests {
         let replay = proof
             .replay_clash(0, &ctx)
             .expect("a genuine clash replays");
-        assert!(
-            replay.unattested() > 0,
-            "`a : D` is derived through `B ⊑ D`, so it is not an asserted axiom: {replay:?}"
+        assert!(replay.current_supported());
+        assert_eq!(replay.unattested(), 0);
+        assert!(replay.trusted() > 5);
+        assert_eq!(replay.source_node(), Some(&TermValue::Iri(EX_A.to_owned())));
+        let mut legacy = proof;
+        legacy
+            .clashes
+            .iter_mut()
+            .for_each(|step| step.current = None);
+        legacy.support.clear();
+        let legacy = DlProof::decode(&legacy.encode()).unwrap();
+        let replay = legacy.replay_clash(0, &ctx).unwrap();
+        assert!(replay.unattested() > 0);
+        assert!(!replay.current_supported());
+        assert!(replay.source_node().is_none());
+    }
+
+    #[test]
+    fn ordinary_current_support_rejects_missing_heads_frames_and_predecessors() {
+        let ontology = derived_clash();
+        let (_, proof) = prove_consistency(&ontology).unwrap();
+        let ctx = DlProofContext::of_ontology(&ontology).unwrap();
+        assert_ne!(proof.support, []);
+        for tamper in 0..5 {
+            let mut forged = proof.clone();
+            match tamper {
+                0 => forged.clashes[0].current.as_mut().unwrap().latest = None,
+                1 => forged.support[0].application.head.clear(),
+                2 => forged.support[0].application.frame[0] = usize::MAX,
+                3 => forged.support[0].previous = Some(0),
+                _ => forged.clashes[0].current.as_mut().unwrap().frame[0] = usize::MAX,
+            }
+            assert!(forged.replay_refutation(&ctx).is_err(), "tamper {tamper}");
+        }
+        let mut forged = proof;
+        forged.clashes[0].current.as_mut().unwrap().latest = Some(usize::MAX);
+        assert!(DlProof::decode(&forged.encode()).is_err());
+    }
+
+    #[test]
+    fn ordinary_support_refusal_discloses_truncation_without_changing_the_decision() {
+        use crate::Reasoner;
+        let ontology = derived_clash();
+        let plain = Reasoner::new(&ontology).unwrap().consistency();
+        let mut reasoner = Reasoner::with_proofs(&ontology).unwrap();
+        reasoner.set_schema_recording_budget(crate::reasoner::SchemaPreparationBudget {
+            bytes: Some(0),
+            work: None,
+        });
+        let result = reasoner.consistency();
+        assert_eq!(result.answer(), plain.answer());
+        assert_eq!(result.certificate(), plain.certificate());
+        let context = reasoner.proof_context().unwrap();
+        let proof = result
+            .proof()
+            .unwrap()
+            .runs()
+            .iter()
+            .find_map(|run| run.proof())
+            .unwrap();
+        assert!(proof.truncated());
+        assert!(proof.schema_recording_obstruction().is_some());
+        let decoded = DlProof::decode(&proof.encode()).unwrap();
+        assert_eq!(decoded, *proof);
+        assert!(matches!(
+            decoded.replay_refutation(&context),
+            Err(DlProofError::SchemaRecording { .. })
+        ));
+    }
+
+    #[test]
+    fn ordinary_branch_clashes_cannot_borrow_a_siblings_application_prefix() {
+        let (proof, ctx) = branching_refutation();
+        assert!(proof.clashes.len() >= 2);
+        assert_eq!(
+            proof.replay_refutation(&ctx).unwrap().checks().unattested(),
+            0
         );
+        let mut forged = proof.clone();
+        forged.clashes[0].current = proof.clashes[1].current.clone();
+        assert!(forged.replay_refutation(&ctx).is_err());
+        let prefixes: usize = proof
+            .clashes
+            .iter()
+            .map(|step| {
+                super::super::support::prefix(
+                    &proof.support,
+                    step.current.as_ref().unwrap().latest,
+                    None,
+                )
+                .unwrap()
+                .len()
+            })
+            .sum();
+        assert!(proof.support.len() <= prefixes);
+        let decoded = DlProof::decode(&proof.encode()).unwrap();
+        assert_eq!(decoded.support, proof.support);
+        assert_eq!(decoded.encode(), proof.encode());
     }
 
     /// A consistent ontology gets a proof bound to the CONSISTENT answer and carrying no clash
@@ -6130,10 +7057,21 @@ mod tests {
     #[test]
     fn the_proof_digest_and_contract_are_frozen() {
         let (_, proof, _) = refutation();
+        let mut legacy = proof.clone();
+        legacy
+            .clashes
+            .iter_mut()
+            .for_each(|step| step.current = None);
+        legacy.support.clear();
         assert_eq!(
-            proof.digest_hex(),
+            legacy.digest_hex(),
             "a0d268999d7768251ed3b0244cb8f7aee0af0a2d24d8470a2a6a19b5fede85dc",
-            "the proof digest moved"
+            "the legacy v3 proof digest moved"
+        );
+        assert_ne!(
+            proof.encode(),
+            legacy.encode(),
+            "v5 adds checked current support"
         );
         assert_eq!(
             purrdf_hash::hex::Lower(&proof.contract()).to_string(),
@@ -6353,7 +7291,7 @@ mod tests {
 
     /// The merge-bearing fixture's proof, and a context over the same ontology built
     /// independently of it.
-    fn nominal_merge() -> (DlProof, DlProofContext) {
+    fn nominal_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = merge_bearing_ontology();
         let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
         let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
@@ -6594,7 +7532,7 @@ mod tests {
     }
 
     /// That ontology's proof, and a context built independently over it.
-    fn at_most_merge() -> (DlProof, DlProofContext) {
+    fn at_most_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = functional_clash();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "b ≠ c under `≤1 p`");
@@ -6628,23 +7566,24 @@ mod tests {
         );
     }
 
-    /// A merge closure is counted APART from a replayed clash leaf, and does not make a
-    /// refutation read as closed.
-    ///
-    /// The whole reason [`RefutationReplay::merges`] exists: replaying a licence establishes
-    /// that the clause forced the identification, never that the two nodes were forced
-    /// DISTINCT — which is what actually closed the branch.
+    /// Current merge support checks the closing inequality; legacy licenses remain unattested.
     #[test]
-    fn a_merge_closure_is_licensed_but_does_not_close_the_refutation() {
-        let (proof, ctx) = at_most_merge();
+    fn a_merge_closure_requires_its_original_reachable_inequality() {
+        let (mut proof, ctx) = at_most_merge();
         let replay = proof
             .replay_refutation(&ctx)
             .expect("the tree walks: every alternative reached a recorded closure");
         assert!(replay.merges() >= 1, "{replay:?}");
-        assert!(
-            !replay.is_closed(),
-            "a licensed identification is not a re-derived derivation of false: {replay:?}"
-        );
+        assert!(replay.is_closed(), "{replay:?}");
+        assert_eq!(replay.checked_merges(), replay.merges());
+        assert_eq!(replay.checks().unattested(), 0);
+        for merge in &mut proof.merges {
+            merge.current = None;
+        }
+        let proof = DlProof::decode(&proof.encode()).unwrap();
+        let replay = proof.replay_refutation(&ctx).unwrap();
+        assert!(!replay.is_closed());
+        assert_eq!(replay.checked_merges(), 0);
         assert!(replay.checks().unattested() > 0);
     }
 
@@ -6807,7 +7746,7 @@ mod tests {
     }
 
     /// That ontology's proof, and a context built independently over it.
-    fn wide_at_most_merge() -> (DlProof, DlProofContext) {
+    fn wide_at_most_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = wide_at_most_clash();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(
@@ -7908,7 +8847,7 @@ mod tests {
 
     /// The branching refutation's proof, and a context built independently over the same
     /// ontology.
-    fn branching_refutation() -> (DlProof, DlProofContext) {
+    fn branching_refutation() -> (DlProof, DlProofContext<'static>) {
         let ontology = closing_disjunction();
         let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
         assert_eq!(
@@ -7954,7 +8893,7 @@ mod tests {
     }
 
     /// That ontology's consistency proof, and a context built independently over it.
-    fn subclass_completion() -> (DlProof, DlProofContext) {
+    fn subclass_completion() -> (DlProof, DlProofContext<'static>) {
         let ontology = subclass_consistent();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Consistent);
@@ -7980,7 +8919,7 @@ mod tests {
 
     /// That knowledge base's consistency proof, and a context built independently over a second
     /// copy of it.
-    fn blocking_chain_completion() -> (DlProof, DlProofContext) {
+    fn blocking_chain_completion() -> (DlProof, DlProofContext<'static>) {
         let (answer, proof) = prove_consistency_of_kb(&blocking_chain_kb());
         assert_eq!(answer, ProofAnswer::Consistent);
         (proof, DlProofContext::of_kb(blocking_chain_kb()))

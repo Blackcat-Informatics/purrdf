@@ -890,18 +890,13 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                 }
                 break;
             } else if metered {
-                let crossing = state.commit_ordered_items(&ledger);
-                // The ledger line for this BGP node. The fold charged every item strictly
-                // before the crossing plus the crossing item itself (the charge is applied
-                // and then compared), so the same prefix is what is reported — the ledger
-                // records what the schedule spent, never what it would have spent.
-                let charged = crossing.map_or(ledger.len(), |(index, _, _)| index + 1);
-                ctx.note_fuel(
-                    crate::governor::ChargePoint::BgpCandidateQuad,
-                    ledger[..charged.min(ledger.len())]
-                        .iter()
-                        .fold(0_u64, |sum, item| sum.saturating_add(item.fuel)),
-                );
+                let crossing = if ctx.charge_ledger().is_some() {
+                    state.commit_ordered_items_observed(&ledger, |units| {
+                        ctx.note_fuel(crate::governor::ChargePoint::BgpCandidateQuad, units);
+                    })
+                } else {
+                    state.commit_ordered_items(&ledger)
+                };
                 if let Some((_, committed, _)) = crossing {
                     rows.truncate(usize::try_from(committed).unwrap_or(usize::MAX));
                     if stage != last_stage {
@@ -3393,7 +3388,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     survey_pattern_plans_admitted(
@@ -3412,7 +3407,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     survey: &mut PlanSurvey,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
@@ -3925,7 +3920,7 @@ fn record_call_estimate(
     call: &PropertyFunctionCall,
     bound: &VarSchema,
     driving_rows: u64,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     let Some(relation) = relations.resolve(&call.iri) else {
@@ -6724,7 +6719,7 @@ mod survey_tests {
         active_dataset: &ActiveDataset<D::Id>,
         active_graph: GraphMatch<D::Id>,
         pattern: &GraphPattern,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         survey: &mut PlanSurvey,
     ) -> Result<(), EvalError> {
         if survey
@@ -7014,16 +7009,19 @@ mod survey_tests {
             ROWS_PER_INVOCATION
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(EmptyCursor))
         }
     }
 
-    fn relations() -> PropertyFunctionRegistry {
+    fn relations() -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(RELATION, Arc::new(Declared::new()));
         registry

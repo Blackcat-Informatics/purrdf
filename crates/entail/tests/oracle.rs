@@ -888,6 +888,19 @@ const CONNECTED_RULE_EVALUATION: &[&str] = &[
     "END CONNECTED RULE EVALUATION TRANSITION.",
 ];
 
+/// The physical join-work change; logical answers and retained resources do not move.
+const SELECTIVE_DELTA_JOINS: &[&str] = &[
+    "SELECTIVE DELTA JOIN TRANSITION.",
+    "Round deltas own indexed row ranges. Partial-round joins seed from delta, or",
+    "from a strictly smaller existing constant-key index followed immediately by",
+    "delta. Impossible constant patterns refuse before broad candidate expansion.",
+    "Cardinality advice never constructs a cold historical object permutation.",
+    "Advice is frozen before tasks; a sibling's lazy index cannot change round work.",
+    "Only measured join-steps change: every input, closure, witness, rule tally,",
+    "contract hash, stored-facts and term-arena-bytes field remains identical.",
+    "END SELECTIVE DELTA JOIN TRANSITION.",
+];
+
 /// What moved when the stored-fact and join-step limits became the caller's, with native
 /// defaults above the `wasm32` ones, and the semi-naive evaluator stopped enumerating a
 /// decomposition whose delta atom had gained no row.
@@ -5955,6 +5968,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, CAPACITY_LIMITS);
     out.push_str("#\n");
     write_comment_block(&mut out, CONNECTED_RULE_EVALUATION);
+    out.push_str("#\n");
+    write_comment_block(&mut out, SELECTIVE_DELTA_JOINS);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));

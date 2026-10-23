@@ -146,11 +146,14 @@ impl PropertyFunction for MockProducer {
         self.rows
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // The engine drops a row that disagrees with a bound position, so a
         // bound input is echoed back rather than overwritten.
         let bound: Vec<Option<TermValue>> =
@@ -262,12 +265,12 @@ fn producer_counting(
 
 /// One producer per stratum, each holding two rows and attesting what its entry
 /// of `attests` says.
-fn registry_attesting(attests: [Attests; 2]) -> PropertyFunctionRegistry {
+fn registry_attesting(attests: [Attests; 2]) -> PropertyFunctionRegistry<'static> {
     registry_holding([(2, attests[0]), (2, attests[1])])
 }
 
 /// One producer per stratum, each holding the rows its entry names.
-fn registry_holding(specs: [(usize, Attests); 2]) -> PropertyFunctionRegistry {
+fn registry_holding(specs: [(usize, Attests); 2]) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     for (index, (count, attests)) in specs.into_iter().enumerate() {
         let name = ["alpha", "beta"][index];
@@ -282,7 +285,7 @@ fn registry_holding(specs: [(usize, Attests); 2]) -> PropertyFunctionRegistry {
 
 /// A registry with ONE stratum, for the depth-probe arms: a producer holding
 /// `count` rows and declaring `rows` per invocation.
-fn one_stratum_registry(count: usize, rows: u64) -> PropertyFunctionRegistry {
+fn one_stratum_registry(count: usize, rows: u64) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/alpha"),
@@ -330,7 +333,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
 }
 
 /// One producer per stratum, so a compiled bundle carries two independent units.
-fn fixture_registry() -> PropertyFunctionRegistry {
+fn fixture_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/alpha"),
@@ -407,7 +410,10 @@ fn seed_request() -> RetrievalRequest {
 
 /// Plan and compile [`seed_request`] against `registry`: a genuine bundle, with
 /// the real plan identity and the live registry instance the executor checks.
-fn compiled(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> CompiledRetrieval {
+fn compiled(
+    registry: &PropertyFunctionRegistry<'static>,
+    stats: &MockStatistics,
+) -> CompiledRetrieval {
     let planned = plan(&seed_request(), registry, stats).expect("the fixture request plans");
     let env = AdmissionEnvironment {
         registry,
@@ -860,7 +866,7 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
 
 /// Plan, compile and execute `registry` against `stats` over an empty dataset.
 fn run(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     // `'static` because the execution borrows the shared empty fixture dataset, which
     // outlives every caller; an elided lifetime would have to pick one of the two
@@ -877,7 +883,7 @@ fn run(
 }
 
 /// The one-call path over `registry` and `stats`, under the fixture profile.
-fn searched(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> SearchResult {
+fn searched(registry: &PropertyFunctionRegistry<'static>, stats: &MockStatistics) -> SearchResult {
     let env = AdmissionEnvironment {
         registry,
         statistics: stats,
@@ -1358,7 +1364,9 @@ fn two_driving_rows() -> Arc<RdfDataset> {
 
 /// A two-stratum registry whose alpha producer holds ONE row, attests `attests`,
 /// and counts every invocation it serves.
-fn registry_counting_opens(attests: Attests) -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
+fn registry_counting_opens(
+    attests: Attests,
+) -> (PropertyFunctionRegistry<'static>, Arc<AtomicU64>) {
     let opens = Arc::new(AtomicU64::new(0));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
@@ -1750,7 +1758,7 @@ fn candidate_column(rows: &[Vec<Option<TermValue>>]) -> Vec<String> {
 /// that text inside a bounded sub-`SELECT` does not change what it means.
 fn whole_query(
     sparql: &str,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     held: &RdfDataset,
 ) -> Vec<String> {
     let engine = NativeSparqlEngine::new();
@@ -1777,7 +1785,7 @@ fn whole_query(
 /// The same text run the way a unit runs it: wrapped, bounded, through `execute`.
 fn wrapped_query(
     sparql: &str,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     held: &RdfDataset,
 ) -> (Vec<String>, ProducerStatus) {

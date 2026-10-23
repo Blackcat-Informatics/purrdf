@@ -25,7 +25,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+    TermFactory, TermValue,
 };
 use purrdf_sparql_eval::{
     ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
@@ -76,6 +77,356 @@ fn dataset_of(rows: &[(&str, &str)]) -> Arc<RdfDataset> {
     builder.freeze().expect("the fixture must validate")
 }
 
+fn walk_dataset(rows: &[purrdf_core::QuadValues]) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    for row in rows.iter().rev() {
+        let s = builder.intern_value(&row.s).unwrap();
+        let p = builder.intern_value(&row.p).unwrap();
+        let o = builder.intern_value(&row.o).unwrap();
+        let g = row.g.as_ref().map(|g| builder.intern_value(g).unwrap());
+        builder.push_quad(s, p, o, g).unwrap();
+    }
+    builder.freeze().unwrap()
+}
+
+fn walk_snapshot(dataset: Arc<RdfDataset>) -> purrdf_core::SegmentedStackSnapshot {
+    let mut stack = purrdf_core::SegmentedStack::default();
+    stack.set_head(Some(
+        purrdf_core::SegmentedResidentHead::new(
+            dataset,
+            purrdf_core::SegmentedLayerMetadata::default(),
+        )
+        .unwrap(),
+    ));
+    stack.snapshot().unwrap()
+}
+
+#[test]
+fn chronological_text_walk_matches_fresh_and_refuses_omitted_changes() {
+    for graph in [
+        GraphSelector::Any,
+        GraphSelector::Default,
+        GraphSelector::Named(TermValue::iri("urn:walk:graph")),
+        GraphSelector::Named(TermValue::iri("urn:walk:absent")),
+    ] {
+        chronological_walk(graph);
+    }
+}
+
+fn chronological_walk(graph: GraphSelector) {
+    let limits = purrdf_core::SegmentedReadLimits::new(256_000_000, 8, 2_000_000, 256_000_000, 32);
+    let mut rows: Vec<_> = (0..64)
+        .map(|index| purrdf_core::QuadValues {
+            s: TermValue::iri(format!("urn:walk:document:{index}")),
+            p: TermValue::iri(NOTE),
+            o: TermValue::simple_literal(format!("quick brown river {index}")),
+            g: None,
+        })
+        .collect();
+    let snapshot = walk_snapshot(walk_dataset(&rows));
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        graph,
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let mut index = TextIndex::from_dataset(&snapshot.query(limits).unwrap(), &config).unwrap();
+    let empty = walk_dataset(&[]);
+    let needle = purrdf_text::Analyzer::empty_lexicon()
+        .terms("quick brown river")
+        .unwrap();
+    for step in 0..150 {
+        let ordinal = step % rows.len();
+        let removed = walk_dataset(&rows[ordinal..=ordinal]);
+        rows[ordinal].o = if step % 7 == 0 {
+            TermValue::iri(format!("urn:object:{step}"))
+        } else {
+            TermValue::simple_literal(format!("river quick quick revision {step}"))
+        };
+        rows[ordinal].p = TermValue::iri(if step % 11 == 0 {
+            "urn:other:predicate"
+        } else {
+            NOTE
+        });
+        rows[ordinal].g = (step % 3 == 0).then(|| TermValue::iri("urn:walk:graph"));
+        let added = walk_dataset(&rows[ordinal..=ordinal]);
+        let next = walk_snapshot(walk_dataset(&rows));
+        let fresh = TextIndex::from_dataset(&next.query(limits).unwrap(), index.config()).unwrap();
+        if step % 13 == 0
+            && (index.source_fingerprint() != fresh.source_fingerprint()
+                || index.source_coverage() != fresh.source_coverage())
+        {
+            assert!(
+                index
+                    .clone()
+                    .with_delta(&next.query(limits).unwrap(), &*empty, &*empty)
+                    .is_err(),
+                "omitted change {step} was accepted"
+            );
+        }
+        index = index
+            .with_delta(&next.query(limits).unwrap(), &*added, &*removed)
+            .unwrap();
+        assert!(
+            index.documents().eq(fresh.documents()),
+            "documents at {step}"
+        );
+        assert!(
+            index.partitions().eq(fresh.partitions()),
+            "partition statistics at {step}"
+        );
+        assert!(index.terms().eq(fresh.terms()), "dictionary at {step}");
+        for document in 0..u32::try_from(index.document_count()).unwrap() {
+            assert_eq!(
+                index
+                    .token_occurrences(document)
+                    .map(Iterator::collect::<Vec<_>>),
+                fresh
+                    .token_occurrences(document)
+                    .map(Iterator::collect::<Vec<_>>),
+                "tokens at {step}"
+            );
+        }
+        for (partition, _) in fresh.partitions() {
+            for term in fresh.terms() {
+                assert!(
+                    index
+                        .postings(partition, term)
+                        .eq(fresh.postings(partition, term)),
+                    "postings at {step}"
+                );
+                assert_eq!(
+                    index.document_frequency(partition, term),
+                    fresh.document_frequency(partition, term),
+                    "frequency at {step}"
+                );
+            }
+        }
+        assert_eq!(
+            index.source_fingerprint(),
+            fresh.source_fingerprint(),
+            "source at {step}"
+        );
+        assert_eq!(index.fingerprint(), fresh.fingerprint(), "index at {step}");
+        assert_eq!(
+            index.source_coverage(),
+            fresh.source_coverage(),
+            "coverage at {step}"
+        );
+        assert_eq!(
+            purrdf_text::select(
+                &index,
+                &needle,
+                &purrdf_text::PartitionFilter::unconstrained(),
+                None,
+                None
+            )
+            .unwrap(),
+            purrdf_text::select(
+                &fresh,
+                &needle,
+                &purrdf_text::PartitionFilter::unconstrained(),
+                None,
+                None
+            )
+            .unwrap(),
+            "ranking at {step}"
+        );
+    }
+}
+
+struct UnobservedSource<'a> {
+    inner: &'a RdfDataset,
+    failure: u8,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl purrdf_core::DatasetView for UnobservedSource<'_> {
+    type Id = purrdf_core::TermId;
+    type ReadError = purrdf_core::SegmentedError;
+    type TermGuard<'a>
+        = <RdfDataset as purrdf_core::DatasetView>::TermGuard<'a>
+    where
+        Self: 'a;
+    type ProbePlan = <RdfDataset as purrdf_core::DatasetView>::ProbePlan;
+
+    fn read_error(&self) -> Option<Self::ReadError> {
+        self.failed
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .then_some(purrdf_core::SegmentedError::EvidenceExhausted)
+    }
+    fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds<Self::Id>> + '_ {
+        std::iter::from_fn(|| panic!("unavailable source evidence must not trigger a source scan"))
+    }
+    fn quads_for_pattern(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: purrdf_core::GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = purrdf_core::QuadIds<Self::Id>> + '_ {
+        purrdf_core::DatasetView::quads_for_pattern(self.inner, s, p, o, g)
+    }
+    fn source_version(
+        &self,
+    ) -> Result<Option<purrdf_core::source::SourceVersion>, Self::ReadError> {
+        assert_ne!(
+            self.failure, 4,
+            "invalid corpus shape must refuse before source observation"
+        );
+        Ok(None)
+    }
+    fn probe_plan(
+        &self,
+        s: bool,
+        p: bool,
+        o: bool,
+        g: purrdf_core::GraphMatch<Self::Id>,
+    ) -> Self::ProbePlan {
+        purrdf_core::DatasetView::probe_plan(self.inner, s, p, o, g)
+    }
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &Self::ProbePlan,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: purrdf_core::GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = purrdf_core::QuadIds<Self::Id>> + '_ {
+        purrdf_core::DatasetView::quads_for_pattern_with_plan(self.inner, plan, s, p, o, g)
+    }
+    fn annotation_quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds<Self::Id>> + '_ {
+        std::iter::from_fn(|| panic!("delta update must not enumerate all annotations"))
+    }
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        self.inner.annotations_of_with_graph(reifier)
+    }
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        purrdf_core::DatasetView::resolve(self.inner, id).map_err(|never| match never {})
+    }
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        purrdf_core::DatasetView::term_id_by_value(self.inner, value)
+            .map_err(|never| match never {})
+    }
+    fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+        purrdf_core::DatasetView::capabilities(self.inner)
+    }
+    fn term_count(&self) -> u64 {
+        purrdf_core::DatasetView::term_count(self.inner)
+    }
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        match self.failure {
+            1 => Err(purrdf_core::SegmentedError::EvidenceExhausted),
+            2 => {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            }
+            3 => purrdf_core::DatasetView::source_statement_count(self.inner)
+                .map_err(|never| match never {}),
+            _ => Ok(None),
+        }
+    }
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: purrdf_core::GraphMatch<Self::Id>,
+        stream: purrdf_core::StatisticsStream,
+    ) -> Result<Option<purrdf_core::source::SourceSummary>, Self::ReadError> {
+        purrdf_core::DatasetView::source_summary(self.inner, predicate, graph, stream)
+            .map_err(|never| match never {})
+    }
+}
+
+#[test]
+fn native_metadata_and_subject_probes_update_without_full_source_iterators() {
+    let original = dataset_of(&CORPUS);
+    let added = dataset_of(&[("d0", "quick river river")]);
+    let removed = dataset_of(&CORPUS[..1]);
+    let rows: Vec<_> = CORPUS[1..]
+        .iter()
+        .copied()
+        .chain([("d0", "quick river river")])
+        .collect();
+    let next = dataset_of(&rows);
+    let source = UnobservedSource {
+        inner: &next,
+        failure: 3,
+        failed: std::sync::atomic::AtomicBool::new(false),
+    };
+    let index = TextIndex::from_dataset(&*original, &config())
+        .unwrap()
+        .with_delta(&source, &*added, &*removed)
+        .unwrap();
+    let fresh = TextIndex::from_dataset(&*next, &config()).unwrap();
+    assert_eq!(index.fingerprint(), fresh.fingerprint());
+    assert_eq!(index.source_fingerprint(), fresh.source_fingerprint());
+    assert_eq!(index.source_coverage(), fresh.source_coverage());
+}
+
+#[test]
+fn invalid_corpus_shape_refuses_before_capturing_source_observation() {
+    let dataset = dataset_of(&CORPUS);
+    let source = UnobservedSource {
+        inner: &dataset,
+        failure: 4,
+        failed: std::sync::atomic::AtomicBool::new(false),
+    };
+    let config = TextIndexConfig::for_triples(
+        vec![TermValue::iri(NOTE)],
+        purrdf_text::Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    assert!(matches!(
+        TextIndex::<purrdf_text::GraphFree>::from_dataset(&source, &config),
+        Err(purrdf_text::TextError::Config(_))
+    ));
+    assert!(matches!(
+        TextIndex::<purrdf_text::GraphFree>::from_dataset_with_ranking(
+            &source,
+            &config,
+            purrdf_text::RankingProfile::single_field()
+        ),
+        Err(purrdf_text::TextError::Config(_))
+    ));
+}
+
+#[test]
+fn unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failures() {
+    let dataset = dataset_of(&CORPUS);
+    let empty = dataset_of(&[]);
+    let index = TextIndex::from_dataset(&*dataset, &config()).unwrap();
+    for failure in 0..3 {
+        let source = UnobservedSource {
+            inner: &dataset,
+            failure,
+            failed: std::sync::atomic::AtomicBool::new(false),
+        };
+        let result = index.clone().with_delta(&source, &*empty, &*empty);
+        match failure {
+            0 => assert!(matches!(
+                result,
+                Err(purrdf_text::TextDeltaError::SourceObservationUnavailable)
+            )),
+            _ => {
+                let Err(purrdf_text::TextDeltaError::Indexing(purrdf_text::TextError::SourceRead(
+                    detail,
+                ))) = result
+                else {
+                    panic!("the original source failure must take precedence");
+                };
+                assert_eq!(
+                    detail,
+                    purrdf_core::SegmentedError::EvidenceExhausted.to_string()
+                );
+            }
+        }
+    }
+}
+
 /// The configuration every fixture index is built under.
 ///
 /// It spells the same `TextIndexConfig::new` call as `purrdf-retrieval`'s
@@ -98,7 +449,7 @@ fn index_of(dataset: &RdfDataset) -> Arc<TextIndex> {
 
 /// A registry holding a ranked-retrieval relation over `index`, under the
 /// fixture IRI.
-fn registry_of(index: &Arc<TextIndex>) -> PropertyFunctionRegistry {
+fn registry_of(index: &Arc<TextIndex>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         SEARCH.to_owned(),
@@ -113,7 +464,7 @@ fn registry_of(index: &Arc<TextIndex>) -> PropertyFunctionRegistry {
 fn evaluate(
     engine: &NativeSparqlEngine,
     dataset: &RdfDataset,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'static>,
     query: &str,
 ) -> SparqlResult {
     engine
@@ -137,7 +488,7 @@ fn evaluate(
 fn srj(
     engine: &NativeSparqlEngine,
     dataset: &RdfDataset,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'static>,
     query: &str,
 ) -> String {
     let result = evaluate(engine, dataset, relations, query);
@@ -577,7 +928,7 @@ fn no_source_file_mentions_a_float_width() {
     // is scanned, rather than passing the count while never being read.
     assert_eq!(
         sources.len(),
-        29,
+        33,
         "expected to scan every module of the crate, scanned {sources:?}"
     );
     assert_eq!(

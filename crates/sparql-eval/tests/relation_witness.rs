@@ -94,11 +94,14 @@ impl PropertyFunction for AttestingRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let subject = args
             .subject()
             .first()
@@ -169,7 +172,7 @@ impl PfCursor for AttestingCursor {
 // ---------------------------------------------------------------------------
 
 /// A registry holding one relation under [`REL_IRI`].
-fn registry(mode_code: &str, declares: Declares) -> ExtensionEnv {
+fn registry(mode_code: &str, declares: Declares) -> ExtensionEnv<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL_IRI.to_owned(),
@@ -200,7 +203,11 @@ fn request(query: &str) -> SparqlRequest<'_> {
 
 /// Drive `query` through the governed entry `query_prepared_governed_view` under
 /// `QueryGovernors::UNBOUNDED` — the lane whose outcome carries a witness.
-fn governed(engine: &NativeSparqlEngine, env: &ExtensionEnv, query: &str) -> GovernedOutcome {
+fn governed(
+    engine: &NativeSparqlEngine,
+    env: &ExtensionEnv<'static>,
+    query: &str,
+) -> GovernedOutcome {
     let dataset = dataset();
     let prepared = engine
         .prepare_query_with_options(query, None, with_env(env))
@@ -219,7 +226,7 @@ fn governed(engine: &NativeSparqlEngine, env: &ExtensionEnv, query: &str) -> Gov
 /// Drive `query` through the UNGOVERNED entry, whose result type has no witness slot.
 fn ungoverned(
     engine: &NativeSparqlEngine,
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     query: &str,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     let dataset = dataset();
@@ -711,7 +718,7 @@ fn the_declarations_are_identical_across_runs_and_across_the_fork() {
     /// What one run declared, per relation, with the schedule-dependent count left out.
     fn declarations(
         engine: &NativeSparqlEngine,
-        env: &ExtensionEnv,
+        env: &ExtensionEnv<'static>,
     ) -> Vec<(String, BTreeSet<IndexGeneration>, BTreeSet<String>)> {
         governed(engine, env, UNION_CALL)
             .relations()
@@ -939,7 +946,7 @@ fn an_attestation_collected_on_a_row_loop_worker_reaches_the_receipt() {
     /// relation attested.
     fn attested_over_wide_rows(
         engine: &NativeSparqlEngine,
-        env: &ExtensionEnv,
+        env: &ExtensionEnv<'static>,
     ) -> RelationAttestations {
         let dataset = wide_dataset();
         let prepared = engine

@@ -99,11 +99,14 @@ impl PropertyFunction for Recorder {
         self.rows
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let bound: Vec<Option<TermValue>> =
             args.flattened().map(Option::<&TermValue>::cloned).collect();
         self.log
@@ -289,7 +292,9 @@ fn alternative(pattern: TermPattern, placements: Vec<TermPlacement>) -> Accepted
 
 /// Register `specs` (name -> declaration) and hand back the registry plus each
 /// producer's own invocation log.
-fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+fn registry_of(
+    specs: Vec<(&str, Spec)>,
+) -> (PropertyFunctionRegistry<'static>, BTreeMap<String, Log>) {
     let mut registry = PropertyFunctionRegistry::new();
     let mut logs = BTreeMap::new();
     for (name, spec) in specs {
@@ -417,7 +422,7 @@ fn request(terms: Vec<RequestTerm>) -> RetrievalRequest {
 /// Plan and compile `terms` against `registry`, returning each stratum's text
 /// keyed by the stratum's local name.
 fn compile_units(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     terms: Vec<RequestTerm>,
 ) -> BTreeMap<String, String> {
@@ -446,7 +451,7 @@ fn compile_units(
 
 /// Plan and compile `terms` against `registry`, returning the single unit's text.
 fn compile_one(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     terms: Vec<RequestTerm>,
 ) -> String {
@@ -456,7 +461,10 @@ fn compile_one(
 }
 
 /// Run `sparql` through the evaluator with no composition type in the path.
-fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Option<TermValue>>> {
+fn run_query(
+    sparql: &str,
+    registry: &PropertyFunctionRegistry<'static>,
+) -> Vec<Vec<Option<TermValue>>> {
     let dataset = RdfDatasetBuilder::new()
         .freeze()
         .expect("an empty default graph is structurally valid");
@@ -484,7 +492,7 @@ fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Optio
 }
 
 /// A single text producer: `TermKind::Literal`, needle rendered at position 1.
-fn text_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+fn text_registry() -> (PropertyFunctionRegistry<'static>, BTreeMap<String, Log>) {
     registry_of(vec![(
         "text",
         Spec::new(
@@ -498,7 +506,7 @@ fn text_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
 }
 
 /// A single catch-all producer, value rendered at position 1.
-fn any_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+fn any_registry() -> (PropertyFunctionRegistry<'static>, BTreeMap<String, Log>) {
     registry_of(vec![(
         "any",
         Spec::new(
@@ -1008,7 +1016,10 @@ fn a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs() {
 ///
 /// `rows` is the row count each declared mode reports, so the same two
 /// producers can be built promising nothing and promising one row.
-fn split_registry(rows: u64, mandatory: bool) -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+fn split_registry(
+    rows: u64,
+    mandatory: bool,
+) -> (PropertyFunctionRegistry<'static>, BTreeMap<String, Log>) {
     let under = |predicate: &str| TermPattern {
         kind: TermKind::Literal,
         datatype: None,
@@ -1151,7 +1162,7 @@ fn a_declared_zero_is_read_past_rather_than_obeyed_and_a_wrong_one_is_refused() 
             .rows(0, count),
         )])
     };
-    let run = |registry: &PropertyFunctionRegistry| {
+    let run = |registry: &PropertyFunctionRegistry<'static>| {
         let stats = statistics(&[]);
         let planned = plan(&request(terms()), registry, &stats).expect("a declared zero plans");
         assert_eq!(
@@ -1422,7 +1433,7 @@ fn a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_
     let spec = |rows: u64, count: usize| {
         registry_of(vec![("knn", knn_spec(Some(placement())).rows(rows, count))]).0
     };
-    let run = |registry: &PropertyFunctionRegistry, stats: &MockStatistics| {
+    let run = |registry: &PropertyFunctionRegistry<'static>, stats: &MockStatistics| {
         let planned = plan(&request(terms()), registry, stats).expect("the fixture request plans");
         let env = AdmissionEnvironment {
             registry,
@@ -1599,7 +1610,7 @@ fn with_the_branch_bound_lowered(text: &str, probe: u32, depth: u32) -> String {
 #[test]
 fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exhaustion() {
     let terms = || vec![lexical("quick brown fox", None)];
-    let compiled_for = |registry: &PropertyFunctionRegistry, stats: &MockStatistics| {
+    let compiled_for = |registry: &PropertyFunctionRegistry<'static>, stats: &MockStatistics| {
         let planned = plan(&request(terms()), registry, stats).expect("the fixture request plans");
         let env = AdmissionEnvironment {
             registry,
@@ -1608,13 +1619,14 @@ fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exha
         };
         compile(&planned, &env).expect("a fresh plan is admitted")
     };
-    let status =
-        |compiled: &CompiledRetrieval, registry: &PropertyFunctionRegistry, stratum: &Iri| {
-            block_on(execute(compiled, registry, common::empty_dataset()))
-                .expect("the unit runs")
-                .statuses[stratum]
-                .clone()
-        };
+    let status = |compiled: &CompiledRetrieval,
+                  registry: &PropertyFunctionRegistry<'static>,
+                  stratum: &Iri| {
+        block_on(execute(compiled, registry, common::empty_dataset()))
+            .expect("the unit runs")
+            .statuses[stratum]
+            .clone()
+    };
     let running = |compiled: &CompiledRetrieval, query: String| {
         CompiledRetrieval::new(
             vec![supplying(&compiled.units[0], query)],
@@ -1910,7 +1922,7 @@ fn embedding_datatype() -> String {
 /// A producer that reads a query embedding: it accepts a literal (which is what
 /// an embedding is written as) and names the datatype its own space reads one
 /// under.
-fn embedding_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+fn embedding_registry() -> (PropertyFunctionRegistry<'static>, BTreeMap<String, Log>) {
     registry_of(vec![(
         "embedding",
         Spec::new(
@@ -2403,7 +2415,10 @@ fn the_branch_limit_reaches_the_relation_as_the_observed_ceiling() {
 /// producer declares it can yield per invocation, which is what stands in here
 /// for a corpus: it is the number the planner's depth comes from when the request
 /// licenses no narrowing.
-fn two_stratum_registry(rows: u64, domains: Option<(&str, &str)>) -> PropertyFunctionRegistry {
+fn two_stratum_registry(
+    rows: u64,
+    domains: Option<(&str, &str)>,
+) -> PropertyFunctionRegistry<'static> {
     let corpus = usize::try_from(rows).expect("the fixture corpus fits in a usize");
     two_stratum_corpus(rows, corpus, domains)
 }
@@ -2416,7 +2431,7 @@ fn two_stratum_registry(rows: u64, domains: Option<(&str, &str)>) -> PropertyFun
 fn two_stratum_registry_declaring(
     rows: u64,
     domains: Option<(&str, &str)>,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     two_stratum_corpus(rows, 2, domains)
 }
 
@@ -2425,7 +2440,7 @@ fn two_stratum_corpus(
     rows: u64,
     corpus: usize,
     domains: Option<(&str, &str)>,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let accepted = || {
         vec![alternative(
             TermPattern::of_kind(TermKind::Literal),
@@ -2449,7 +2464,7 @@ fn two_stratum_corpus(
 /// recording a read nobody took; an unnarrowed `LIMIT` beside a narrowed depth is
 /// the corpus still being materialized.
 fn depths_and_limits(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     request: &RetrievalRequest,
 ) -> BTreeMap<String, (u32, u32)> {
@@ -2682,7 +2697,7 @@ fn a_bound_gives_an_unbounded_declaration_a_finite_depth_and_its_absence_reads_t
 /// because a declared block set is one of the two premises that let a request's own
 /// bound become the depth — without it the declaration stands and the bound narrows
 /// nothing at all.
-fn deep_registry(rows: u64, block: Option<&str>) -> PropertyFunctionRegistry {
+fn deep_registry(rows: u64, block: Option<&str>) -> PropertyFunctionRegistry<'static> {
     let accepted = vec![alternative(
         TermPattern::of_kind(TermKind::Literal),
         value_at(1),
@@ -2702,7 +2717,7 @@ fn deep_registry(rows: u64, block: Option<&str>) -> PropertyFunctionRegistry {
 /// and needs no declaration, while a second one makes `Unrestricted` a promise that
 /// is actually missing. This is the smallest registry where that difference shows,
 /// and its corpus stays at two rows per producer so the declaration can be any size.
-fn two_deep_registry(rows: u64) -> PropertyFunctionRegistry {
+fn two_deep_registry(rows: u64) -> PropertyFunctionRegistry<'static> {
     let accepted = || {
         vec![alternative(
             TermPattern::of_kind(TermKind::Literal),
@@ -2722,7 +2737,7 @@ fn two_deep_registry(rows: u64) -> PropertyFunctionRegistry {
 /// That is the other shape a request's bound cannot narrow — a stream whose rows
 /// are not its candidates holds fewer than `k` candidates in `k` rows, so no
 /// arrangement of declared blocks makes the prefix argument hold.
-fn repeating_deep_registry(rows: u64) -> PropertyFunctionRegistry {
+fn repeating_deep_registry(rows: u64) -> PropertyFunctionRegistry<'static> {
     let accepted = vec![alternative(
         TermPattern::of_kind(TermKind::Literal),
         value_at(1),

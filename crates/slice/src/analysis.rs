@@ -46,6 +46,12 @@ pub enum AnalysisError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for AnalysisError {
+    purrdf_hash::error_visit! {
+        SelfAttestationViolation { found } => "slice-analysis-self-attestation" { "found" => Iri(found) },
+    }
+}
+
 impl std::fmt::Display for AnalysisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

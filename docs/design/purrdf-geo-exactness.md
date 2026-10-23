@@ -224,6 +224,41 @@ refusals are also fatal. `geof:transform` executes a caller-registered source to
 target chain. Missing or ambiguous chains refuse rather than search a database
 or guess a transformation.
 
+### Inspecting the original refusal
+
+`GeoError` implements `purrdf_hash::error::StructuredError`. Its visitor emits
+stable variant codes and typed fields, including nested exact numeric values,
+reference declarations, parser positions and original native causes. Consumers
+can record these fields without formatting `Display` or `Debug`, parsing a
+message, or maintaining a mirror of the non-exhaustive error enum. The legacy
+text-carrying `Config` and `Literal` variants still report their text as text;
+those fields do not claim to reconstruct the producer's original operands.
+
+Failures produced under native admission can carry a retained owner. Use
+`GeoError::original()` when inspecting the underlying variant directly. Shared
+retained operands and native causes survive the input's destruction, and their
+clones share ownership rather than copying coefficient buffers. The evaluator
+preserves that original cause while applying its existing expression-error or
+query-fatal classification. `GeoError::native_source` accepts a caller's typed
+native error; `GeoError::source_read` instead accepts an explicit caller message.
+Presentation through `detail()` or `Display` is a separate operation and may
+allocate. Structured inspection does not turn caller messages into typed causes.
+
+An empty relation-family registration has its own `NoRelationFamilies` code and
+remains a configuration failure; it registers no functions. Preparation phases
+retain cumulative work through `PreparationBudget::retain_context_phase`. A
+context that predates the budget's baseline returns the original phase, work
+counters, retained output and observed peak in a typed refusal, leaving the
+budget unchanged. The radius and original-validation callers use this same
+receipt check before retaining a phase.
+
+Scalar unit, integer and string refusals preserve the complete original RDF
+argument under the same admitted owner. An integer-index lexical refusal also
+retains the native parser error and its kind, distinguishing overflow from an
+invalid digit without parsing presentation text. Planar distance to an empty
+set retains the ordered geometry kinds and empty-support flags and remains an
+expression error.
+
 ---
 
 ## 5. The shared JSON reader retains every coordinate lexeme

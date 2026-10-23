@@ -23,6 +23,25 @@
 
 use std::ops::Index;
 
+/// A caller-owned, latching stop request shared by preparation and execution.
+///
+/// Implementations must be cheap, independent of the data being processed, and
+/// permanently return `true` after the first stop request. A signal changes no
+/// complete answer or identity: an interrupted operation reports a typed stop
+/// instead of claiming completion. The host owns any clock or cancellation bit;
+/// this interface reads neither. `Send + Sync` permits sharing one signal across
+/// the stages of an operation, including on WebAssembly without host syscalls.
+pub trait StopSignal: Send + Sync + core::fmt::Debug {
+    /// Whether the caller has requested cancellation. The request must latch.
+    fn stopped(&self) -> bool;
+}
+
+/// Poll a caller signal; an explicitly ungoverned operation has no stop request.
+#[inline]
+pub fn is_stopped(stop: Option<&dyn StopSignal>) -> bool {
+    stop.is_some_and(StopSignal::stopped)
+}
+
 /// Why an operation stopped before it could complete on its own terms.
 ///
 /// Cancellation and a deadline are the same primitive — a host-supplied stop signal —
@@ -42,6 +61,13 @@ pub enum StopCause {
     /// poll-count signal can be reproducible, while a wall deadline cannot because elapsed
     /// time is a property of the machine.
     Deadline,
+}
+
+impl purrdf_hash::error::StructuredError for StopCause {
+    purrdf_hash::error_visit! {
+        Cancelled => "stop-cancelled" {},
+        Deadline => "stop-deadline" {},
+    }
 }
 
 impl StopCause {
@@ -107,6 +133,19 @@ pub enum ResourceDimension {
     Pages,
     /// Provider-reported byte charges of admitted pages.
     Bytes,
+}
+
+impl purrdf_hash::error::StructuredError for ResourceDimension {
+    purrdf_hash::error_visit! {
+        Fuel => "governor-fuel" {},
+        AnswerRows => "governor-answer-rows" {},
+        IntermediateCells => "governor-intermediate-cells" {},
+        ScratchBytes => "governor-scratch-bytes" {},
+        RemoteRequests => "governor-remote-requests" {},
+        UdfDepth => "governor-udf-depth" {},
+        Pages => "governor-pages" {},
+        Bytes => "governor-bytes" {},
+    }
 }
 
 impl ResourceDimension {
@@ -302,6 +341,20 @@ pub enum TrippedGovernor {
         /// The planner's estimate that exceeded it. **Not** a measurement.
         estimate: u64,
     },
+}
+
+impl purrdf_hash::error::StructuredError for TrippedGovernor {
+    purrdf_hash::error_visit! {
+        Budget { dimension, limit, consumed } => "governor-budget" {
+            "dimension" => Record(dimension), "limit" => Unsigned(u128::from(*limit)),
+            "consumed" => Unsigned(u128::from(*consumed)),
+        },
+        Stopped { cause } => "governor-stopped" { "cause" => Record(cause) },
+        Refused { dimension, limit, estimate } => "governor-refused" {
+            "dimension" => Record(dimension), "limit" => Unsigned(u128::from(*limit)),
+            "estimate" => Unsigned(u128::from(*estimate)),
+        },
+    }
 }
 
 impl TrippedGovernor {

@@ -95,7 +95,7 @@ fn corpus() -> (Arc<RdfDataset>, Arc<TextIndex>) {
 }
 
 /// Both relations over one index, under the two fixture IRIs.
-fn registry(index: &Arc<TextIndex>) -> PropertyFunctionRegistry {
+fn registry(index: &Arc<TextIndex>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         OCCURS.to_owned(),

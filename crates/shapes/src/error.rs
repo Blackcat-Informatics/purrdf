@@ -72,6 +72,10 @@ pub enum ShapesError {
     /// A `sh:SPARQLTarget`'s `sh:ask` and its `sh:select` answer two ways for one node a
     /// candidate check asked about. See [`SparqlTargetDisagreement`].
     SparqlTargetDisagreement(SparqlTargetDisagreement),
+    /// The processor itself failed or was stopped, as opposed to a node expression or
+    /// query failing to evaluate: a governor trip, a stop signal, a recursion bound, a
+    /// query-engine failure that must propagate. See [`ProcessorFailure`].
+    Processor(ProcessorFailure),
     /// Anything else: a document that does not parse, an unsupported or malformed SHACL
     /// construct, a failure during evaluation. The engine's own diagnostic.
     Invalid(String),
@@ -99,6 +103,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -116,6 +121,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -133,6 +139,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -150,6 +157,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -167,6 +175,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
             | Self::Storage(_)
+            | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -184,10 +193,240 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
     }
 }
+
+/// Who a failure belongs to, for a caller that must decide whether the failure is the
+/// answer to ONE evaluation or the end of the whole run. See [`ShapesError::failure_class`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FailureClass {
+    /// A node expression, function body or query evaluated to a failure: an arity or
+    /// list-argument cardinality mismatch, a type error, a non-boolean where a boolean is
+    /// required, a body that produced the wrong number of nodes. SHACL 1.2 SPARQL
+    /// Extensions, "Evaluation of Custom SPARQL Functions": "if the evaluation produces an
+    /// evaluation failure, the result of the SPARQL function call is an error".
+    Evaluation,
+    /// The processor failed or was stopped: storage refusal, governor trip, stop signal,
+    /// recursion bound, a query-engine failure that must propagate. No verdict, and no
+    /// SPARQL error value, can be computed from such a run, so it ends the validation.
+    Processor,
+    /// A typed refusal of the shapes graph itself (imports, SHACL-JS, ill-formed
+    /// declaration, pre-binding restriction, unsupported target, target disagreement).
+    /// Not an evaluation outcome of any one expression, so it too ends the validation.
+    Refusal,
+}
+
+impl ShapesError {
+    /// Whether this is an evaluation failure, a processor failure or a refusal of the
+    /// shapes graph. The match is exhaustive, so a new variant must choose a class.
+    ///
+    /// [`Self::Invalid`] holds the evaluation failures, and what else a `String` error
+    /// converts into: arity, list-argument cardinality, an unresolvable shape argument, a
+    /// wrong node count, a malformed value, and query text a SHACL body supplied that the
+    /// engine refuses with a non-propagating diagnostic code. It must NOT hold a failure
+    /// of the processor: storage refusal, governor trip, stop signal, recursion bound,
+    /// internal defect and propagating query-engine failure are [`Self::Storage`] or
+    /// [`Self::Processor`].
+    #[must_use]
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            Self::Invalid(_) => FailureClass::Evaluation,
+            Self::Storage(_) | Self::Processor(_) | Self::Preparation(_) => FailureClass::Processor,
+            Self::Imports(_)
+            | Self::ShaclJs(_)
+            | Self::IllFormed(_)
+            | Self::Prebinding(_)
+            | Self::UnsupportedTarget(_)
+            | Self::SparqlTargetDisagreement(_)
+            | Self::Recursion(_) => FailureClass::Refusal,
+        }
+    }
+
+    /// An internal defect: an invariant of the processor was violated (a lowering that
+    /// does not match its expression, a function whose body was never installed). Not an
+    /// outcome of evaluating any input, so it is a [`ProcessorFailure::Internal`].
+    pub(crate) fn internal(what: impl Into<String>) -> Self {
+        Self::Processor(ProcessorFailure::Internal { what: what.into() })
+    }
+
+    /// The processor failure, when this is one.
+    #[must_use]
+    pub const fn as_processor(&self) -> Option<&ProcessorFailure> {
+        match self {
+            Self::Processor(failure) => Some(failure),
+            Self::Imports(_)
+            | Self::Preparation(_)
+            | Self::Recursion(_)
+            | Self::ShaclJs(_)
+            | Self::IllFormed(_)
+            | Self::Prebinding(_)
+            | Self::UnsupportedTarget(_)
+            | Self::SparqlTargetDisagreement(_)
+            | Self::Storage(_)
+            | Self::Invalid(_) => None,
+        }
+    }
+}
+
+/// A failure of the processor rather than of an evaluation.
+///
+/// Each variant is a way the run cannot continue whatever the expression under
+/// evaluation means, so none of them may be folded into a SPARQL error value or an
+/// unbound variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessorFailure {
+    /// Evaluating a node expression would enter the physical stack margin.
+    ExpressionStackMargin,
+    /// Calling an original custom function would enter the physical stack margin.
+    CallStackMargin {
+        /// Original function IRI.
+        iri: String,
+    },
+    /// A shape re-entry would enter the physical stack margin.
+    ReentryStackMargin {
+        /// Original shape identity in RDF term spelling.
+        shape: String,
+    },
+    /// Validating an original shape would enter the physical stack margin.
+    ValidationStackMargin {
+        /// Original native shape identity.
+        shape: Box<crate::term::Term>,
+    },
+    /// A SPARQL query exhausted an execution governor (fuel, rows, cells, scratch, UDF
+    /// depth, remote requests) or was refused at admission.
+    Governor(purrdf_core::governor::TrippedGovernor),
+    /// The host's stop signal fired between two evaluations.
+    Stopped(purrdf_core::governor::StopCause),
+    /// A relation the query invoked declared its index was not whole.
+    IncompleteRelation {
+        /// Each relation IRI with the reason it gave.
+        relations: Vec<String>,
+    },
+    /// A custom function's re-entry depth bound was reached.
+    CallDepth {
+        /// The function IRI whose call crossed the bound.
+        iri: String,
+        /// The bound.
+        limit: u32,
+    },
+    /// A node-expression tree nested past the structural bound.
+    ExpressionDepth {
+        /// The depth that was refused.
+        depth: u32,
+        /// The bound.
+        limit: u32,
+    },
+    /// Nested filter/exists validation crossed the processor's recursion bound.
+    ValidationDepth {
+        /// The shape at the refused re-entry.
+        shape: String,
+        /// The depth that was refused.
+        depth: u32,
+        /// The bound.
+        limit: u32,
+    },
+    /// A `(shape, focus)` pair re-entered itself.
+    ReentryCycle {
+        /// The shape, as the engine renders its id.
+        shape: String,
+        /// The focus node, as the engine renders a term.
+        focus: String,
+    },
+    /// An invariant of the processor itself was violated: a validation-plan lowering that
+    /// does not describe the expression beside it, or a custom function whose body was never
+    /// installed. A defect in the engine, never in the data or the shapes graph, so it is
+    /// never an evaluation failure.
+    Internal {
+        /// The engine's diagnostic.
+        what: String,
+    },
+    /// The dated query law refused a query. The refusal is also recorded on the request's
+    /// law runtime, which the dated entry re-reports as the typed cause; the call that met it
+    /// has no SPARQL-error reading, because the query was never admitted to run.
+    Admission {
+        /// The rendered refusal.
+        message: String,
+    },
+    /// The query engine failed with a diagnostic whose stable code requires
+    /// propagation (execution, storage, resource and invariant failures; see
+    /// `EvalError::diagnostic_requires_propagation`).
+    Query {
+        /// The diagnostic's stable code.
+        code: String,
+        /// The rendered diagnostic.
+        message: String,
+    },
+}
+
+impl fmt::Display for ProcessorFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExpressionStackMargin => {
+                f.write_str("node expression evaluation exhausted its stack margin")
+            }
+            Self::CallStackMargin { iri } => write!(
+                f,
+                "custom node-expression function <{iri}> exhausted its stack margin"
+            ),
+            Self::ReentryStackMargin { shape } => write!(
+                f,
+                "SHACL node-expression re-entry exhausted its stack margin at shape {shape}"
+            ),
+            Self::ValidationStackMargin { shape } => write!(
+                f,
+                "SHACL validation exhausted its stack margin at shape {shape}"
+            ),
+            Self::Governor(tripped) => write!(
+                f,
+                "validation budget exhausted: {tripped}; a conformance verdict cannot be \
+                 computed from a truncated solution bag"
+            ),
+            Self::Stopped(cause) => write!(
+                f,
+                "validation stopped between evaluations ({cause:?}); a conformance verdict \
+                 cannot be computed from a validation that did not finish"
+            ),
+            Self::IncompleteRelation { relations } => write!(
+                f,
+                "a relation this query invoked declares its index was not whole ({}); a \
+                 conformance verdict cannot be computed over an index that was not whole",
+                relations.join("; ")
+            ),
+            Self::CallDepth { iri, limit } => write!(
+                f,
+                "custom node-expression function <{iri}> re-entry depth exceeded ({limit}): \
+                 the call chain is recursive and has been refused rather than allowed to \
+                 exhaust the native stack"
+            ),
+            Self::ExpressionDepth { depth, limit } => write!(
+                f,
+                "node expression nesting depth exceeded ({depth} > {limit}): the expression \
+                 tree is nested past the structural limit"
+            ),
+            Self::ValidationDepth {
+                shape,
+                depth,
+                limit,
+            } => write!(
+                f,
+                "SHACL validation recursion depth exceeded ({depth} > {limit}) at shape \
+                 {shape}: a cyclic sh:filterShape / sh:exists reference"
+            ),
+            Self::ReentryCycle { shape, focus } => write!(
+                f,
+                "recursive node expression detected: shape {shape} re-entered for focus {focus}"
+            ),
+            Self::Internal { what } => f.write_str(what),
+            Self::Admission { message } => f.write_str(message),
+            Self::Query { message, .. } => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ProcessorFailure {}
 
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -201,6 +440,7 @@ impl fmt::Display for ShapesError {
             Self::Prebinding(violation) => violation.fmt(f),
             Self::UnsupportedTarget(refusal) => refusal.fmt(f),
             Self::SparqlTargetDisagreement(refusal) => refusal.fmt(f),
+            Self::Processor(failure) => failure.fmt(f),
             Self::Invalid(message) => f.write_str(message),
         }
     }
@@ -218,6 +458,7 @@ impl std::error::Error for ShapesError {
             Self::Prebinding(violation) => Some(violation),
             Self::UnsupportedTarget(refusal) => Some(refusal),
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
+            Self::Processor(failure) => Some(failure),
             Self::Invalid(_) => None,
         }
     }
@@ -289,7 +530,10 @@ impl fmt::Display for RecursionRefusal {
 
 impl std::error::Error for RecursionRefusal {}
 
-purrdf_lex::variant_from!(ShapesError { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(ShapesError {
+    Storage(purrdf_lex::allocation::StorageError),
+    Processor(ProcessorFailure),
+});
 
 impl From<ShapesError> for purrdf_datalog::guard::CallbackError {
     fn from(error: ShapesError) -> Self {

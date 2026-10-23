@@ -140,14 +140,14 @@ impl PyQuadStore {
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
     ///
     /// Engine configuration (unset = engine defaults, see
-    /// [`build_engine`](super::query::build_engine)): `extension_namespaces`
+    /// [`build_engine`]): `extension_namespaces`
     /// enables the closed extension-function set under the caller's namespaces
     /// (OFF by default); `property_fn_namespaces` does the same for property-function
     /// PREFIX recognition; `standpoint_predicates` is the `(according_to,
     /// sharpens)` predicate table `heldIn` requires.
     ///
     /// `relations` / `relations_from_graph` / `path_relations` register host relations
-    /// for THIS call (see [`collect_relations`](super::query::collect_relations)):
+    /// for THIS call (see [`collect_relations`]):
     /// `{iri: (subject_arity, object_arity, rows)}` supplies the table as Python
     /// data, `{iri: (head, subject_arity, object_arity)}` reads it out of this
     /// store's own default graph as an `rdf:List` of `rdf:List`s, and
@@ -288,7 +288,7 @@ impl PyQuadStore {
     /// `ValueError`, including a cap of zero.
     ///
     /// A tripped governor is an **outcome, not an exception** — see
-    /// [`materialize_outcome`](super::query::materialize_outcome). The one stop cause
+    /// [`materialize_outcome`]. The one stop cause
     /// that does raise is a `KeyboardInterrupt`: this call polls the interpreter's
     /// pending-signal flag while the GIL is released, so Ctrl-C stops the query instead
     /// of being noticed only once it has finished.
@@ -444,9 +444,10 @@ impl PyQuadStore {
     /// hold, raises `ValueError` naming it — never a closure of a smaller premise — and so
     /// does an entry the closure never reaches. Omitted, both are empty.
     ///
-    /// `max_stored_facts` and `max_join_steps` are the closure's evaluation limits, exactly as
-    /// `purrdf.entail.materialize` takes them, for the `rdf`, `rdfs`, `owl-rl` and `d`
-    /// regimes; `None` keeps the default. A closure past one raises `ValueError` naming the
+    /// `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` are the closure's
+    /// evaluation limits, exactly as `purrdf.entail.materialize` takes them, for the `rdf`,
+    /// `rdfs`, `owl-rl` and `d` regimes; `None` keeps the default (16777216 bytes for the
+    /// term arena). A closure past one raises `ValueError` naming the
     /// limit, the numbers and this method's keyword; the governors price the evaluation over
     /// the closure and never become a limit on it.
     #[pyo3(signature = (
@@ -458,6 +459,7 @@ impl PyQuadStore {
         premise_iris=None,
         max_stored_facts=None,
         max_join_steps=None,
+        max_term_arena_bytes=None,
         substitutions=None,
         extension_namespaces=None,
         property_fn_namespaces=None,
@@ -491,6 +493,7 @@ impl PyQuadStore {
         premise_iris: Option<Vec<String>>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
+        max_term_arena_bytes: Option<u64>,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
         property_fn_namespaces: Option<Vec<String>>,
@@ -525,6 +528,7 @@ impl PyQuadStore {
             let limits = purrdf_validate::MaterializeLimits {
                 max_stored_facts,
                 max_join_steps,
+                max_term_arena_bytes,
                 host: purrdf_validate::RegimeHost::Python,
             };
             let args = GovernorArgs {

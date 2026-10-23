@@ -170,13 +170,26 @@ simply not narrated here:
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
 - `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
-  inline small-value path beside the bounded `i128` arithmetic it will replace,
+  inline small-value path beside the public `XsdValue` operators, which now
+  use the same exact tower. These rows do not compare with historical bounded
+  arithmetic; that comparison requires a separate baseline checkout. It covers
   its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
-  crossover, and a decimal product past eighteen fractional digits beside one
-  that stays at eighteen (about 55 ns against 16 ns a product). Each routine
+  crossover, and decimal products at eighteen and twenty fractional digits,
+  both with inline coefficients. Each routine
   runs its body once under `--test`, so `perf stat -e instructions:u` of
-  `--test --exact <id>`, less the same run selecting nothing, is a
-  load-independent instruction count.
+  `--test --exact <id>`, less the same run selecting nothing, gives a
+  setup-subtracted estimate that still includes differences in harness work.
+  Use acknowledged in-workload counter windows for acceptance comparisons.
+
+The small decimal parse/render rows include canonical text's reservation of its
+complete prepared length. The public allocation control
+`canonical_decimal_reserves_one_exact_output_destination` in
+`crates/xsd/tests/exact_governance.rs` checks one exact-sized output allocation,
+including zero, normalized fractions, the minimum signed coefficient and long
+fractional padding, on native and WebAssembly targets.
+The binary64 conversion row includes the inline coefficient/scale and range
+gates; ratio conversion has a separate cold frame. Both routes retain
+the original correctly rounded kernels and exact bit-pattern oracles.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -312,12 +325,23 @@ puts requested bytes and peak memory below main in all tested numeric fuel and
 scratch lanes at 1, 4 and 32 workers. It trades block setup against shorter-lived
 worker allocations; both quantities are reported.
 
-Plain grouped numeric queries request an additional 199,960 bytes per query
-in the numeric fixture, with unchanged allocation-call and retained-byte counts.
-Their typed fallible output allocation cannot reuse the differently typed
-minted-row vector. Retaining the larger input vector would increase returned
-result capacity instead. This round preserves fallible admission and releases
-oversized input buffers; cross-stage buffer reduction is a separate optimization.
+Grouped output now retains the original ordered worker buffers until fallible
+typed admission consumes them. It avoids a full concatenated minted-row buffer;
+checked sizing, first-error selection and ordered governor replay still use
+their existing homes. Oversized input buffers are released rather than retained
+in the result.
+
+Against the flat-minted-buffer baseline, the 5,000-group numeric fixture requests
+399,904, 399,592 and 396,904 fewer bytes per ungoverned query at 1, 4 and 32 workers.
+Every numeric governor lane reduces requested bytes with identical retained
+bytes and unchanged or lower median allocation-call counts. Original worker
+capacity overlaps parent admission, so peak memory is an explicit tradeoff:
+numeric median peak changes range from -329,780 to +259,096 bytes, with a largest
+relative increase of 1.69%. Numeric instruction changes range from approximately
+-0.016% to +0.082%. The public BIND controls preserve all four allocation
+quantities; their instruction changes range from approximately -0.084% to
++0.365%. All quantities come from instruction and allocation measurements with
+ten samples per lane, complete typed answers and governor receipts.
 
 The hash-workload frontend projects the current testkit into each selected
 production source graph. Its manifest generator binds the testkit hash dependency
@@ -379,7 +403,7 @@ here.
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/sparql-eval/benches/regex_eval.rs` | Constant REGEX/REPLACE and per-row unique patterns over matched 1,000- and 10,000-row fixtures under compatibility and both dated native laws; compatibility literal-prefilter costs on long inputs. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
-| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and current `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); original schoolbook/Karatsuba rows whose width parameters count nine-digit groups, plus appended 160,000/320,000/640,000-digit transform-range products and standalone cached-power renders (`xsd_exact_karatsuba`); 1,024 exact products with inline coefficients whose scales sum to eighteen and to twenty (`scale18` and `scale20`) (`xsd_exact_fine_products`). |
 
 ### PURREMB companion format
 

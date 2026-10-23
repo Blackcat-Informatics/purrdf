@@ -608,6 +608,8 @@ trait GrowthAdmission: std::fmt::Debug + Send + Sync {
 
 trait AllocationOwner: std::fmt::Debug + Send + Sync {
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError>;
+    /// Transfer an existing child grant; this admits no new payload bytes.
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError>;
 }
 
 /// Immutable report records retain the actual arrays and each record's native
@@ -1230,6 +1232,14 @@ pub struct AdmittedVecIntoIter<T> {
     values: std::vec::IntoIter<T>,
     _allocation: Option<WorkspaceAllocation>,
 }
+impl<T> AdmittedVecIntoIter<T> {
+    /// Borrow the unconsumed elements without advancing the iterator or its grant.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        self.values.as_slice()
+    }
+}
+
 impl<T> Iterator for AdmittedVecIntoIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
@@ -1239,6 +1249,7 @@ impl<T> Iterator for AdmittedVecIntoIter<T> {
         self.values.size_hint()
     }
 }
+impl<T> ExactSizeIterator for AdmittedVecIntoIter<T> {}
 impl<T> IntoIterator for AdmittedVec<T> {
     type Item = T;
     type IntoIter = AdmittedVecIntoIter<T>;
@@ -1255,6 +1266,9 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner
 {
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
         self[0].resize(bytes)
+    }
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self[0].transfer_to_publication(bytes)
     }
 }
 
@@ -1466,6 +1480,17 @@ impl WorkspaceTerm {
     pub(crate) fn into_parts(self) -> (purrdf_core::TermValue, WorkspaceAllocation) {
         (self.value, self.allocation)
     }
+    /// Move the actual payload grant into the original query publication owner.
+    /// The enclosing value stays admitted through every fallible step; only its
+    /// now-unused per-value control is released when this carrier is destroyed.
+    pub(crate) fn retain_for_publication(
+        mut self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<purrdf_core::TermValue, EvalError> {
+        let bytes = self.layout(workspace)?.bytes;
+        self.allocation.transfer_to_publication(bytes)?;
+        Ok(self.value)
+    }
     /// Move a resident term out while refusing to detach any native admission.
     ///
     /// # Errors
@@ -1551,6 +1576,11 @@ impl WorkspaceTerm {
 }
 
 impl WorkspaceAllocation {
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self.owner
+            .as_mut()
+            .map_or(Ok(()), |owner| owner.transfer_to_publication(bytes))
+    }
     /// Whether a live operational account owns this allocation grant.
     #[must_use]
     pub const fn is_bounded(&self) -> bool {
@@ -2010,6 +2040,7 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> GrowthAdmission for G
         let workspace = QueryWorkspace {
             account: Some(self.account.clone()),
             capability: WorkspaceCapability::default(),
+            direct_failure: None,
         };
         let charge = workspace.charge(bytes)?;
         // The concrete box layout was admitted along with the payload above.
@@ -2037,6 +2068,7 @@ struct Account<E> {
 pub(crate) struct QueryWorkspace<E> {
     account: Option<Shared<Mutex<Account<E>>>>,
     capability: WorkspaceCapability,
+    direct_failure: Option<SharedWorkspace<Mutex<Option<E>>>>,
 }
 
 impl<E> Clone for QueryWorkspace<E> {
@@ -2044,6 +2076,7 @@ impl<E> Clone for QueryWorkspace<E> {
         Self {
             account: self.account.clone(),
             capability: self.capability.clone(),
+            direct_failure: self.direct_failure.clone(),
         }
     }
 }
@@ -2070,6 +2103,7 @@ impl<E> QueryWorkspace<E> {
         Self {
             account: None,
             capability: WorkspaceCapability { owner: None },
+            direct_failure: None,
         }
     }
 
@@ -2078,6 +2112,7 @@ impl<E> QueryWorkspace<E> {
         Self {
             account: None,
             capability: capability.clone(),
+            direct_failure: None,
         }
     }
 
@@ -2115,6 +2150,7 @@ impl<E> QueryWorkspace<E> {
         Ok(Self {
             account: Some(account),
             capability: WorkspaceCapability { owner: Some(owner) },
+            direct_failure: None,
         })
     }
 
@@ -2138,6 +2174,18 @@ pub(crate) fn shared_layout<T>() -> Result<u64, EvalError> {
 }
 
 impl<E: Clone> QueryWorkspace<E> {
+    /// Retain direct errors even for a fallible source with no live-memory budget.
+    /// Bounded sources already retain the same first cause in their original account.
+    pub(crate) fn capture_direct_errors(mut self) -> Result<Self, EvalError> {
+        if self.account.is_none() && self.direct_failure.is_none() {
+            self.direct_failure = Some(SharedWorkspace::new_admitted(
+                Mutex::new(None),
+                &self.capability,
+            )?);
+        }
+        Ok(self)
+    }
+
     pub(crate) fn source_error(&self, error: E) -> EvalError
     where
         E: std::fmt::Display,
@@ -2149,6 +2197,12 @@ impl<E: Clone> QueryWorkspace<E> {
                 account.failed = true;
             }
             EvalError::WorkspaceStopped
+        } else if let Some(failure) = &self.direct_failure {
+            let mut failure = lock(failure);
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+            EvalError::WorkspaceStopped
         } else {
             EvalError::source_read(error)
         }
@@ -2158,6 +2212,11 @@ impl<E: Clone> QueryWorkspace<E> {
         self.account
             .as_ref()
             .and_then(|account| lock(account).failure.take())
+            .or_else(|| {
+                self.direct_failure
+                    .as_ref()
+                    .and_then(|failure| lock(failure).take())
+            })
     }
 
     #[cfg(test)]
@@ -2251,6 +2310,35 @@ impl<E: Clone> std::fmt::Debug for WorkspaceCharge<E> {
 }
 
 impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner for WorkspaceCharge<E> {
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        let remaining = self
+            .bytes
+            .checked_sub(bytes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if let Some(account) = &self.workspace.account {
+            let mut account = lock(account);
+            if account.failed {
+                return Err(EvalError::WorkspaceStopped);
+            }
+            let base = account
+                .base
+                .checked_add(bytes)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let children = account
+                .children
+                .checked_sub(bytes)
+                .expect("a publication retains only its originally admitted payload");
+            // The total reservation is unchanged: transfer, never recharge.
+            // Drop still refunds this charge's remaining concrete owner layout.
+            account.base = base;
+            account.children = children;
+        } else if let Some(native) = &mut self.native {
+            native.transfer_to_publication(bytes)?;
+        }
+        self.bytes = remaining;
+        Ok(())
+    }
+
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
         let bytes = bytes
             .checked_add(
@@ -2444,6 +2532,33 @@ pub(crate) mod owned_row_regressions {
     }
     impl std::error::Error for Refusal {}
 
+    #[test]
+    fn resident_composed_read_retains_first_direct_cause_across_clones() {
+        #[derive(Debug, Clone)]
+        struct NoRender(u64);
+        impl core::fmt::Display for NoRender {
+            fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                panic!("retaining a direct read refusal must not render it")
+            }
+        }
+        impl std::error::Error for NoRender {}
+        let workspace = QueryWorkspace::<NoRender>::resident()
+            .capture_direct_errors()
+            .unwrap();
+        let retained = workspace.clone().capture_direct_errors().unwrap();
+        assert!(matches!(
+            workspace.source_error(NoRender(71)),
+            EvalError::WorkspaceStopped
+        ));
+        assert!(matches!(
+            retained.source_error(NoRender(72)),
+            EvalError::WorkspaceStopped
+        ));
+        drop(workspace);
+        assert_eq!(retained.take_failure().unwrap().0, 71);
+        assert!(retained.take_failure().is_none());
+    }
+
     #[derive(Debug)]
     struct Reservation {
         ledger: Arc<Ledger>,
@@ -2597,6 +2712,26 @@ pub(crate) mod owned_row_regressions {
         drop(cursor);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_term_publication_moves_admission_without_a_second_payload_charge() {
+        let (workspace, ledger, base) = account(2048);
+        let capability = workspace.capability();
+        let value = purrdf_core::TermValue::Iri(format!("http://example.org/{}", "x".repeat(1024)));
+        let owned = capability.clone_term(&value).expect("one admitted payload");
+        let bytes = owned.layout(&capability).unwrap().bytes;
+        let published = owned
+            .retain_for_publication(&capability)
+            .expect("transfer fits without admitting a second copy");
+        assert_eq!(published, value);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base + bytes);
+        drop(published);
+        workspace.set_base(0).unwrap();
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
         drop(workspace);
         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
@@ -3024,6 +3159,33 @@ pub(crate) mod owned_row_regressions {
             7
         );
         drop(witness);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn borrowed_value_equality_keeps_the_original_allocation_refusal() {
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace, ledger, _) = account(base);
+        let value = purrdf_core::TermValue::typed_literal(
+            "1".repeat(4096),
+            purrdf_xsd::datatype::XSD_INTEGER,
+        );
+        let refusal = crate::equal_values(
+            &value,
+            &value,
+            crate::LanguageStringEquality::Core,
+            &workspace.capability(),
+        );
+        assert!(matches!(refusal, Err(EvalError::WorkspaceStopped)));
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original provider refusal")
+                .identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
         drop(workspace);
         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
@@ -3559,6 +3721,124 @@ pub(crate) mod owned_row_regressions {
         fn term_count(&self) -> u64 {
             purrdf_core::DatasetView::term_count(self.inner)
         }
+    }
+
+    impl purrdf_core::FallibleDatasetView for GroundFaultView<'_> {
+        type Error = Refusal;
+        type Evidence = ();
+
+        fn operation_status(&self) -> purrdf_core::ViewOperationStatus<Refusal, ()> {
+            // This fixture reports point-read failures directly, without latching.
+            purrdf_core::ViewOperationStatus::Ready { evidence: () }
+        }
+    }
+
+    #[test]
+    fn unbounded_fallible_evidence_keeps_non_latching_source_errors() {
+        struct Closed;
+        impl crate::EvidenceSource<TermId> for Closed {
+            fn claim(
+                &self,
+                _: &purrdf_core::QuadIds,
+            ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
+                Ok(None)
+            }
+            fn scope(&self, _: purrdf_core::GraphMatch) -> Result<crate::EvidenceScope, EvalError> {
+                Ok(crate::EvidenceScope {
+                    completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+                    closure_declared: true,
+                    missing_reason: None,
+                })
+            }
+            fn reason(
+                &self,
+                _: purrdf_core::evidence::ReasonId,
+            ) -> Result<Option<purrdf_core::evidence::ReasonDescription<'_>>, EvalError>
+            {
+                Ok(None)
+            }
+        }
+        fn refused<R>(result: crate::FallibleScopedResult<R, Refusal, ()>) {
+            match result {
+                Err(crate::FallibleSparqlError::Operational {
+                    error,
+                    evidence: (),
+                }) => assert_eq!(error.identity, 41),
+                Err(error) => panic!("the original read error became a query refusal: {error:?}"),
+                Ok(_) => panic!("a non-latching read error cannot publish success"),
+            }
+        }
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("original value"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let clones = Arc::new(AtomicUsize::new(0));
+        let view = GroundFaultView {
+            inner: &dataset,
+            failed_id: object,
+            clones: clones.clone(),
+        };
+        assert!(purrdf_core::DatasetView::storage_live_budget(&view).is_none());
+        let engine = crate::NativeSparqlEngine::new();
+        let query = "SELECT (STR(?o) AS ?value) WHERE { ?s <http://example.org/p> ?o }";
+        let request = crate::InternedRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let answer = purrdf_core::evidence::AnswerRequest {
+            tier: purrdf_core::evidence::AnswerTier::Summary,
+            question: None,
+            standpoint: purrdf_core::evidence::StandpointKey::Unscoped,
+            input_completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+            closure_declared: true,
+        };
+        refused(engine.query_interned_evidence_fallible_view(
+            &view,
+            request,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            |_| 7,
+        ));
+        refused(engine.query_evidence_status_fallible_view(
+            &view,
+            request,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            answer,
+            |_, _| 7,
+        ));
+        refused(engine.query_evidence_answer_fallible_view(
+            &view,
+            request,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            answer,
+            |_, _, _| 7,
+        ));
+        let mut execution = engine
+            .prepare_execution(query, None, &[], crate::QueryOptions::EMPTY)
+            .unwrap();
+        refused(engine.execute_witnessed_evidence_fallible(
+            &mut execution,
+            &view,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            |_| 7,
+        ));
+        assert_eq!(
+            clones.load(Ordering::Relaxed),
+            0,
+            "the original point-read cause moves without cloning"
+        );
+        assert!(matches!(
+            purrdf_core::FallibleDatasetView::operation_status(&view),
+            purrdf_core::ViewOperationStatus::Ready { .. }
+        ));
     }
 
     #[test]
@@ -4865,7 +5145,7 @@ pub(crate) mod owned_row_regressions {
     }
 
     #[test]
-    fn native_term_copy_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
+    fn native_term_materialization_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
         let subject = builder.intern_iri("http://example.org/s").unwrap();
         let predicate = builder.intern_iri("http://example.org/p").unwrap();
@@ -4884,7 +5164,7 @@ pub(crate) mod owned_row_regressions {
             let capability = workspace.capability();
             let scratch = crate::scratch::ScratchInterner::default();
             let error = scratch
-                .try_owned_value_of(
+                .try_value_of_admitted(
                     dataset.as_ref(),
                     crate::scratch::SolutionTerm::Existing(root),
                     &capability,
@@ -4909,8 +5189,94 @@ pub(crate) mod owned_row_regressions {
         }
     }
 
+    /// Inject an allocator refusal after an originally admitted partial cell.
+    /// The ordinary lookup succeeds, so using the old unadmitted copy path
+    /// would incorrectly publish a value instead of the native refusal.
     #[test]
-    fn native_existing_copy_preserves_typed_datatype_read_failure_without_a_view_maximum() {
+    fn materialization_preserves_allocator_refusal_and_refunds_partial_cell() {
+        struct AllocationFault;
+        impl purrdf_core::DatasetView for AllocationFault {
+            type Id = TermId;
+            type ReadError = std::convert::Infallible;
+            type TermGuard<'a> = purrdf_core::TermRef<'a>;
+            type ProbePlan = ();
+            fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+                std::iter::empty()
+            }
+            fn resolve(&self, _: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+                Ok(purrdf_core::TermRef::Iri("http://example.org/original"))
+            }
+            fn term_id_by_value(
+                &self,
+                _: &purrdf_core::TermValue,
+            ) -> Result<Option<TermId>, Self::ReadError> {
+                Ok(None)
+            }
+            fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+                purrdf_core::RdfStoreCapabilities::default()
+            }
+            fn term_count(&self) -> u64 {
+                1
+            }
+            fn max_owned_term_bytes(&self) -> Option<u64> {
+                Some(1024)
+            }
+            fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+            fn quads_for_pattern_with_plan(
+                &self,
+                (): &(),
+                _: Option<TermId>,
+                _: Option<TermId>,
+                _: Option<TermId>,
+                _: purrdf_core::GraphMatch,
+            ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+                std::iter::empty()
+            }
+            fn term_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, E>(
+                &self,
+                _: TermId,
+                memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+                _: impl Fn(purrdf_core::TermLookupError<Self::ReadError>) -> E,
+                storage_error: impl Fn(
+                    purrdf_lex::allocation::StorageError,
+                    &mut purrdf_lex::allocation::Memory<'_, S>,
+                ) -> E,
+            ) -> Result<purrdf_core::TermValue, E> {
+                let partial = memory
+                    .string("http://example.org/original")
+                    .map_err(|error| storage_error(error, memory))?;
+                let error = storage_error(
+                    purrdf_lex::allocation::StorageError::AllocationFailed,
+                    memory,
+                );
+                memory
+                    .release_string(partial)
+                    .map_err(|error| storage_error(error, memory))?;
+                Err(error)
+            }
+        }
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let root = builder.intern_iri("http://example.org/original").unwrap();
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let error = crate::scratch::ScratchInterner::default()
+            .try_value_of_admitted(
+                &AllocationFault,
+                crate::scratch::SolutionTerm::Existing(root),
+                &capability,
+                |error| match error {},
+            )
+            .expect_err("an allocation failure cannot publish a cell");
+        assert!(matches!(error, EvalError::AllocationFailed { .. }));
+        assert!(workspace.take_failure().is_none());
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn materialization_keeps_original_datatype_read_failure_without_a_view_maximum() {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
         let subject = builder.intern_iri("http://example.org/s").unwrap();
         let predicate = builder.intern_iri("http://example.org/p").unwrap();
@@ -4933,7 +5299,7 @@ pub(crate) mod owned_row_regressions {
         assert!(purrdf_core::DatasetView::max_owned_term_bytes(&view).is_none());
         let scratch = crate::scratch::ScratchInterner::default();
         let error = scratch
-            .try_owned_value_of(
+            .try_value_of_admitted(
                 &view,
                 crate::scratch::SolutionTerm::Existing(root),
                 &capability,

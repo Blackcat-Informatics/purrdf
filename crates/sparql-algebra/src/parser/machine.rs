@@ -38,8 +38,8 @@ use crate::tree::Child;
 use super::{
     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
     VarScope, aggregate_function, builtin_function, collect_vars, empty_modifier_clause,
-    expect_arity, find_scope_conflict, repeated_bound_clause, split_trailing_filters, stray_dot,
-    visible_variables_with_memory,
+    expect_arity_range, find_scope_conflict, form_arity, repeated_bound_clause,
+    split_trailing_filters, stray_dot, visible_variables_with_memory,
 };
 
 #[cfg(debug_assertions)]
@@ -1057,26 +1057,6 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
         ))
     }
 
-    /// Human-readable spelling of a SEP-0009 signature, for
-    /// [`ParseError::CdtArity`].
-    fn describe_cdt_arity(&mut self, arity: crate::algebra::CdtArity) -> Result<String> {
-        use crate::algebra::CdtArity;
-        Ok(match arity {
-            CdtArity::Fixed(1) => self.memory.string("exactly 1 argument")?,
-            CdtArity::Fixed(n) => self.memory.format(&format_args!("exactly {n} arguments"))?,
-            CdtArity::Range { min, max } => self
-                .memory
-                .format(&format_args!("{min} to {max} arguments"))?,
-            CdtArity::AtLeast(0) => self.memory.string("any number of arguments")?,
-            CdtArity::AtLeast(min) => self
-                .memory
-                .format(&format_args!("at least {min} arguments"))?,
-            CdtArity::Pairs => self
-                .memory
-                .string("an even number of arguments (key/value pairs)")?,
-        })
-    }
-
     /// An IRI in expression position: a function call when `(` follows, the IRI
     /// otherwise.
     fn iri_or_function(&mut self) -> Result<Step> {
@@ -1161,7 +1141,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 if !fn_kind.arity().admits(args.len()) {
                     return Err(ParseError::CdtArity {
                         iri,
-                        expected: self.describe_cdt_arity(fn_kind.arity())?,
+                        expected: fn_kind.arity(),
                         found: args.len(),
                         at,
                     });
@@ -1170,7 +1150,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             }
             ArgsKind::Call(func) => Expression::FunctionCall(func, args.into()),
             ArgsKind::If => {
-                expect_arity(&args, 3, "IF", self.span(), self.memory)?;
+                expect_arity_range(
+                    "IF",
+                    form_arity("IF").expect("a form"),
+                    &args,
+                    self.span(),
+                    self.memory,
+                )?;
                 let mut it = args.into_iter();
                 Expression::If(
                     Child::try_new(it.next().expect("three arguments"), self.memory)?,
@@ -1180,7 +1166,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             }
             ArgsKind::Coalesce => Expression::Coalesce(args.into()),
             ArgsKind::SameTerm => {
-                expect_arity(&args, 2, "sameTerm", self.span(), self.memory)?;
+                expect_arity_range(
+                    "sameTerm",
+                    form_arity("SAMETERM").expect("a form"),
+                    &args,
+                    self.span(),
+                    self.memory,
+                )?;
                 let mut it = args.into_iter();
                 Expression::SameTerm(
                     Child::try_new(it.next().expect("two arguments"), self.memory)?,
@@ -1188,12 +1180,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 )
             }
             ArgsKind::Builtin(func) => {
-                // The generic built-in dispatch does not arity-check; ADJUST(value,
-                // timezone) is fixed at 2 (SEP-0002's sole documented signature — see the
-                // `Function::Adjust` rustdoc).
-                if func == Function::Adjust {
-                    expect_arity(&args, 2, "ADJUST", self.span(), self.memory)?;
-                }
+                super::expect_builtin_arity(&func, &args, self.span(), self.memory)?;
                 Expression::FunctionCall(func, args.into())
             }
         };
@@ -1482,7 +1469,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             fold.order_by,
             fold.distinct,
         )
-        .map_err(|error| super::native_syntax(&error, self.span(), self.memory))?;
+        .map_err(|cause| ParseError::Aggregate {
+            cause,
+            at: self.span(),
+        })?;
         self.finish_aggregate(agg)
     }
 

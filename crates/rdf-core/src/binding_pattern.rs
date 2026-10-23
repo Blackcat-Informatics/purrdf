@@ -60,6 +60,14 @@ pub struct BindingPattern {
     bound: u64,
 }
 
+impl purrdf_hash::error::StructuredError for BindingPattern {
+    purrdf_hash::error_visit! {
+        @record self { arity, bound } => "binding-pattern" {
+            "arity" => Unsigned(u128::from(self.arity)), "bound" => Unsigned(u128::from(self.bound))
+        }
+    }
+}
+
 impl BindingPattern {
     /// The maximum arity a `u64` bound-bitset can represent.
     pub const MAX_ARITY: usize = 64;

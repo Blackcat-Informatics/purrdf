@@ -5,6 +5,46 @@
 
 use core::fmt;
 
+/// The reserved-namespace rule an XML declaration or element violates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum XmlNamespaceError {
+    /// A declaration tries to bind the reserved `xmlns` prefix.
+    XmlnsPrefixDeclaration,
+    /// The `xml` prefix is bound to a different namespace.
+    XmlPrefixBinding,
+    /// The XML namespace is bound as a default or to a prefix other than `xml`.
+    XmlNamespaceBinding,
+    /// A declaration tries to bind the reserved xmlns namespace.
+    XmlnsNamespaceDeclaration,
+    /// An element name uses the reserved `xmlns` prefix.
+    XmlnsElementPrefix,
+}
+
+impl purrdf_hash::error::StructuredError for XmlNamespaceError {
+    purrdf_hash::error_visit! {
+        XmlnsPrefixDeclaration => "xml-xmlns-prefix-declaration" {},
+        XmlPrefixBinding => "xml-prefix-namespace-mismatch" {},
+        XmlNamespaceBinding => "xml-namespace-prefix-mismatch" {},
+        XmlnsNamespaceDeclaration => "xml-xmlns-namespace-declaration" {},
+        XmlnsElementPrefix => "xml-xmlns-element-prefix" {},
+    }
+}
+
+impl fmt::Display for XmlNamespaceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::XmlnsPrefixDeclaration => "the `xmlns` prefix cannot be declared",
+            Self::XmlPrefixBinding => "the `xml` prefix may be bound only to the XML namespace",
+            Self::XmlNamespaceBinding => "only `xml` may be bound to the XML namespace",
+            Self::XmlnsNamespaceDeclaration => "the xmlns namespace cannot be declared",
+            Self::XmlnsElementPrefix => "an element cannot have the `xmlns` prefix",
+        })
+    }
+}
+
+impl std::error::Error for XmlNamespaceError {}
+
 /// Why a document was refused. Every variant is a well-formedness or
 /// namespace-well-formedness violation of the document, or a limit the caller
 /// set; none is recoverable by reading on.
@@ -85,7 +125,7 @@ pub enum XmlErrorKind {
     UndeclaredPrefix(String),
     /// A declaration or use of the reserved `xml`/`xmlns` prefixes or their
     /// namespace names that Namespaces in XML 1.0 §3 forbids.
-    ReservedNamespace(String),
+    ReservedNamespace(XmlNamespaceError),
     /// `xmlns:p=""`: Namespaces in XML 1.0 cannot undeclare a prefix.
     EmptyNamespacePrefix(String),
     /// A `<` inside an attribute value.
@@ -118,6 +158,47 @@ pub enum XmlErrorKind {
     NoRootElement,
     /// Character data or a second element outside the root element.
     ContentOutsideRoot,
+}
+
+impl purrdf_hash::error::StructuredError for XmlErrorKind {
+    purrdf_hash::error_visit! {
+        Doctype => "xml-doctype-refused" {},
+        ExternalEntity => "xml-external-entity" {},
+        ParameterEntity => "xml-parameter-entity" {},
+        UndeclaredParameterEntity(name) => "xml-undeclared-parameter-entity" { "name" => Text(name) },
+        UnparsedEntity(name) => "xml-unparsed-entity" { "name" => Text(name) },
+        UnexpandedEntity(name) => "xml-unexpanded-entity" { "name" => Text(name) },
+        PredefinedEntity(name) => "xml-predefined-entity" { "name" => Text(name) },
+        DepthLimit { limit } => "xml-depth-limit" { "limit" => Unsigned(*limit as u128) },
+        EntityExpansionLimit { limit } => "xml-entity-expansion-limit" { "limit" => ByteCount(*limit as u128) },
+        RecursiveEntity(name) => "xml-recursive-entity" { "name" => Text(name) },
+        UndeclaredEntity(name) => "xml-undeclared-entity" { "name" => Text(name) },
+        UnbalancedEntity(name) => "xml-unbalanced-entity" { "name" => Text(name) },
+        InvalidCharRef => "xml-invalid-character-reference" {},
+        IllegalChar(character) => "xml-illegal-character" { "character" => Character(*character) },
+        UnexpectedEof => "xml-unexpected-eof" {},
+        Expected(expected) => "xml-expected" { "expected" => Text(expected) },
+        InvalidName => "xml-invalid-name" {},
+        MismatchedEndTag { expected, found } => "xml-mismatched-end-tag" {
+            "expected" => Text(expected), "found" => Text(found),
+        },
+        DuplicateAttribute(name) => "xml-duplicate-attribute" { "name" => Text(name) },
+        UndeclaredPrefix(prefix) => "xml-undeclared-prefix" { "prefix" => Text(prefix) },
+        ReservedNamespace(cause) => "xml-reserved-namespace" { "cause" => Cause(cause) },
+        EmptyNamespacePrefix(prefix) => "xml-empty-namespace-prefix" { "prefix" => Text(prefix) },
+        LessThanInAttributeValue => "xml-less-than-in-attribute" {},
+        CdataEndInText => "xml-cdata-end-in-text" {},
+        InvalidComment => "xml-invalid-comment" {},
+        ReservedPiTarget => "xml-reserved-pi-target" {},
+        MisplacedXmlDeclaration => "xml-misplaced-declaration" {},
+        InvalidXmlDeclaration => "xml-invalid-declaration" {},
+        UnsupportedVersion(version) => "xml-unsupported-version" { "version" => Text(version) },
+        UnsupportedEncoding(encoding) => "xml-unsupported-encoding" { "encoding" => Text(encoding) },
+        Encoding(reason) => "xml-encoding" { "reason" => Text(reason) },
+        MisplacedDoctype => "xml-misplaced-doctype" {},
+        NoRootElement => "xml-no-root-element" {},
+        ContentOutsideRoot => "xml-content-outside-root" {},
+    }
 }
 
 impl fmt::Display for XmlErrorKind {
@@ -266,3 +347,12 @@ impl fmt::Display for XmlError {
 }
 
 impl std::error::Error for XmlError {}
+
+impl purrdf_hash::error::StructuredError for XmlError {
+    purrdf_hash::error_visit! {
+        @record self { kind, offset } => "xml-document" {
+            "kind" => Cause(&self.kind),
+            "offset" => ByteCount(self.offset as u128),
+        }
+    }
+}

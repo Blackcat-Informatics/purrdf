@@ -713,7 +713,10 @@ fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
             (lexical(&streamed_row[2]), lexical(&streamed_row[5])),
             "the in-place score and matched count are the ranked reading's, exactly"
         );
-        let document = index.documents_with_subject(&d3)[0];
+        let document = index
+            .documents_with_subject(&d3)
+            .next()
+            .expect("the indexed subject has a document");
         let scored = candidates
             .iter()
             .find(|row| row.document == document)

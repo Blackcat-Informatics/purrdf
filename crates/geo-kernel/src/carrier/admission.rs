@@ -322,12 +322,26 @@ impl<'a, 'storage, 'account> ParseAdmission<'a, 'storage, 'account> {
         &mut self,
         value: &Rat,
     ) -> Result<crate::context::Retained<Rat>, GeoError> {
-        let control = crate::context::Retained::<Rat>::allocation_layout().size();
+        self.retained_diagnostic(
+            value.detached_required_bytes().map_err(GeoError::Storage)?,
+            |progress| GeoError::diagnostic_number(value, progress),
+        )
+    }
+
+    /// Quote a native diagnostic's actual immutable control and payload through
+    /// this parser's original policy/observer before the common factory runs.
+    fn retained_diagnostic<T>(
+        &mut self,
+        payload: usize,
+        make: impl FnOnce(
+            &mut crate::context::WorkProgress<'_>,
+        ) -> Result<crate::context::Retained<T>, GeoError>,
+    ) -> Result<crate::context::Retained<T>, GeoError> {
+        let control = crate::context::Retained::<T>::allocation_layout().size();
         let owner = match self.observer.as_ref() {
             Some(observer) => observer.retained_owner_layout(),
             None => crate::context::WorkProgress::integer(None).retained_owner_layout(),
         };
-        let payload = value.detached_required_bytes().map_err(GeoError::Storage)?;
         let bytes = control
             .checked_add(owner.size())
             .and_then(|bytes| bytes.checked_add(payload))
@@ -341,7 +355,7 @@ impl<'a, 'storage, 'account> ParseAdmission<'a, 'storage, 'account> {
             Some(observer) => Some(*observer),
             None => None,
         });
-        let result = GeoError::diagnostic_number(value, &mut progress);
+        let result = make(&mut progress);
         if result.is_err() {
             self.workspace = previous;
         }
@@ -423,12 +437,32 @@ impl<'a, 'storage, 'account> ParseAdmission<'a, 'storage, 'account> {
                 self.prepare_destinations(if limbs > 3 { 3 } else { 0 }, limbs)?;
                 let scale = value
                     .finite_decimal_scale_in(self.integer_scratch.as_ref().expect("scale arena"))
-                    .map_err(GeoError::NumericalScratch)?
-                    .ok_or_else(|| {
-                        GeoError::domain(
-                            "custom profile parameter has no exact decimal representation",
-                        )
-                    })?;
+                    .map_err(GeoError::NumericalScratch)?;
+                let Some(scale) = scale else {
+                    let previous = self.workspace;
+                    let captured = (|| {
+                        let value = self.diagnostic_number(value)?;
+                        self.retained_diagnostic(0, |progress| {
+                            crate::context::Retained::produce(
+                                progress,
+                                |_| {
+                                    Ok(crate::GeometryDomainError::NonDecimalParameter {
+                                        value,
+                                        rounding,
+                                    })
+                                },
+                                |_, _| Ok(()),
+                            )
+                        })
+                    })();
+                    return Err(match captured {
+                        Ok(cause) => GeoError::GeometryDomain(cause),
+                        Err(error) => {
+                            self.workspace = previous;
+                            error
+                        }
+                    });
+                };
                 u32::try_from(scale)
                     .map_err(|_| GeoError::ArithmeticOverflow("exact decimal scale"))?
             }
@@ -755,4 +789,65 @@ pub(crate) fn whitespace_only(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_xsd::ieee::ratio::Rounding;
+
+    #[test]
+    fn nonterminating_profile_value_retains_exact_operand_and_selected_rounding() {
+        let value = Rat::new(crate::Int::one().shl(4096), crate::Int::from_i64(3)).unwrap();
+        for rounding in [Rounding::NearestEven, Rounding::Down, Rounding::Up] {
+            let mut admission = ParseAdmission::new(0, ExecutionPolicy::geometry(), None).unwrap();
+            let error = admission.decimal_text(&value, None, rounding).unwrap_err();
+            drop(admission);
+            assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+                if matches!(&**cause, crate::GeometryDomainError::NonDecimalParameter { value: original, rounding: actual }
+                    if **original == value && *actual == rounding)));
+            assert_eq!(
+                error.detail(),
+                "custom profile parameter has no exact decimal representation"
+            );
+            let capture =
+                purrdf_testkit::error_capture::Capture::read(error.original()).child("cause");
+            assert_eq!(capture.child("value").code, "geometric-rational");
+            assert_eq!(
+                capture.child("rounding").code,
+                match rounding {
+                    Rounding::NearestEven => "rounding-nearest-even",
+                    Rounding::Down => "rounding-down",
+                    Rounding::Up => "rounding-up",
+                }
+            );
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let last = error.clone();
+            assert_eq!(window.close().allocations, 0);
+            drop(error);
+            assert!(last.is_expression_error());
+        }
+    }
+
+    #[test]
+    fn nondecimal_diagnostic_respects_original_parser_reservation_before_allocation() {
+        let value = Rat::new(crate::Int::one(), crate::Int::from_i64(3)).unwrap();
+        let mut admission = ParseAdmission::new(0, ExecutionPolicy::geometry(), None).unwrap();
+        admission.prepare_destinations(0, 1).unwrap();
+        let baseline = admission.workspace;
+        admission.policy = ExecutionPolicy::new(crate::ExecutionLimits {
+            max_workspace_bytes: baseline,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = admission
+            .decimal_text(&value, None, Rounding::NearestEven)
+            .unwrap_err();
+        assert!(
+            matches!(error.original(), GeoError::MemoryExhausted { limit } if *limit == baseline)
+        );
+        assert_eq!(admission.workspace, baseline);
+        assert_eq!(window.close().allocations, 0);
+    }
 }

@@ -216,7 +216,7 @@ pub(crate) fn admit<'a>(
         }
     } else if prebound.is_empty() {
         Rules::ServiceOnly
-    } else if profile == ShaclProfile::WD_20260918
+    } else if profile.is_shacl12()
         || matches!(purpose, QueryPurpose::Function | QueryPurpose::TargetType)
     {
         Rules::AppendixA
@@ -295,10 +295,10 @@ impl Violation {
             ViolationKind::Service => SERVICE_REFUSAL.to_owned(),
             ViolationKind::Values => {
                 "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
-             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
-             refuses every VALUES, which is stricter than the Working Draft's \
-             mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
-             requires the stricter reading)"
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; the \
+             compatibility law refuses every VALUES because the 2017 Recommendation's \
+             pre-binding rules ban VALUES outright in a query with pre-bound variables, \
+             which is stricter than the Working Draft's mentions-a-pre-bound-variable rule)"
                     .to_owned()
             }
             ViolationKind::PreboundValues => format!(
@@ -468,6 +468,12 @@ fn check_pattern_node<'a>(
         }
         GraphPattern::Service { .. } => return Err(Violation::new(ViolationKind::Service)),
         GraphPattern::Values { .. } if rules == Rules::ServiceOnly => {}
+        // SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries MUST not contain a
+        // VALUES clause that mentions any potentially pre-bound variable". A clause
+        // "mentions" a variable when that variable is in its variable list, at any
+        // depth (a sub-SELECT or EXISTS body included; the draft lifted only the
+        // sub-SELECT projection restriction). A clause over names nothing pre-binds
+        // binds no pre-bound variable and is admitted.
         GraphPattern::Values { variables, .. } if rules == Rules::AppendixA => {
             if let Some(variable) = variables
                 .iter()
@@ -664,7 +670,11 @@ mod tests {
             inner: Child::new(GraphPattern::empty_bgp()),
             expr: Expression::Exists(Child::new(application.clone())),
         };
-        for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+        for profile in [
+            ShaclProfile::REC_20170720,
+            ShaclProfile::WD_20260918,
+            ShaclProfile::ED_20261016,
+        ] {
             for pattern in [&application, &nested] {
                 let mut query = parse("ASK {}");
                 let Query::Ask { pattern: root, .. } = &mut query else {

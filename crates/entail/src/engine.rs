@@ -94,10 +94,14 @@ use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermValue}
 use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
+use purrdf_datalog::dictionary::TermDictionary;
 use purrdf_datalog::guard::NoGuards;
-use purrdf_datalog::seminaive::{Derivation, EvalError, EvalOptions, evaluate_guarded};
+use purrdf_datalog::seminaive::{
+    Derivation, DerivationMode, EvalError, EvalOptions, Executable, Maintained, ResumeProgress,
+    SessionContext, evaluate_guarded,
+};
 use purrdf_datalog::stop::StopSignal;
-use purrdf_datalog::store::RelationStore;
+use purrdf_datalog::store::{ReclaimingInterner, RelationStore, TermExpired};
 
 use crate::axioms::axioms_for;
 use crate::calculus::{ChaseRule, calculus_contract_hash, clash_rule, program_with_attribution};
@@ -109,6 +113,8 @@ use crate::report::{RunStats, TerminationCertificate};
 use crate::surrogates::SurrogateIndex;
 use crate::vocab::XSD_NONNEGATIVEINTEGER;
 use crate::{EntailError, Regime};
+use purrdf_hash::{Domain, blake3::Hasher, frame::frame_le_into, hex::Digest32};
+use purrdf_lex::allocation::Resident;
 use purrdf_lex::term_syntax::{write_iri, write_literal};
 
 /// Every LITERAL constant the declared calculus names, as `(lexical form, datatype IRI)`.
@@ -132,7 +138,9 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
 }
 
 /// A faithful copy of `ds` (the identity closure for `Simple`).
-pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailError> {
+pub(crate) fn copy_of<D: DatasetView>(
+    ds: &D,
+) -> Result<Arc<RdfDataset>, EntailError<D::ReadError>> {
     let mut b = RdfDatasetBuilder::new();
     copy_into(&mut b, ds)?;
     b.freeze().map_err(EntailError::from)
@@ -164,7 +172,7 @@ pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailE
 pub(crate) fn copy_into<D: DatasetView>(
     b: &mut RdfDatasetBuilder,
     ds: &D,
-) -> Result<(), EntailError> {
+) -> Result<(), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         for quad in ds.quads() {
             let s = intern_into(b, &ds.term_value(quad.s)?)?;
@@ -172,7 +180,9 @@ pub(crate) fn copy_into<D: DatasetView>(
             let o = intern_into(b, &ds.term_value(quad.o)?)?;
             let g = quad
                 .g
-                .map(|g| intern_into(b, &ds.term_value(g)?))
+                .map(|g| -> Result<_, EntailError<D::ReadError>> {
+                    Ok(intern_into(b, &ds.term_value(g)?)?)
+                })
                 .transpose()?;
             b.push_quad(s, p, o, g)?;
         }
@@ -183,7 +193,9 @@ pub(crate) fn copy_into<D: DatasetView>(
             let triple = intern_into(b, &ds.term_value(quad.o)?)?;
             let graph = quad
                 .g
-                .map(|g| intern_into(b, &ds.term_value(g)?))
+                .map(|g| -> Result<_, EntailError<D::ReadError>> {
+                    Ok(intern_into(b, &ds.term_value(g)?)?)
+                })
                 .transpose()?;
             b.push_reifier_in_graph(reifier, triple, graph)?;
         }
@@ -194,7 +206,9 @@ pub(crate) fn copy_into<D: DatasetView>(
             let object = intern_into(b, &ds.term_value(quad.o)?)?;
             let graph = quad
                 .g
-                .map(|g| intern_into(b, &ds.term_value(g)?))
+                .map(|g| -> Result<_, EntailError<D::ReadError>> {
+                    Ok(intern_into(b, &ds.term_value(g)?)?)
+                })
                 .transpose()?;
             b.push_annotation_in_graph(reifier, predicate, object, graph)?;
         }
@@ -305,7 +319,7 @@ pub(crate) fn close<D: DatasetView>(
     regime: Regime,
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
+) -> Result<(Arc<RdfDataset>, RunStats), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         let (program, attribution) = program_with_attribution(regime);
 
@@ -355,7 +369,7 @@ pub(crate) fn close<D: DatasetView>(
         for conclusion in &default_run.conclusions {
             default_conclusions.insert(conclusion.key());
             stats.commit(conclusion.rule);
-            emit(&mut b, conclusion, None)?;
+            emit(&mut b, conclusion, None).map_err(EntailError::with_read_error)?;
         }
         for graph in named.values() {
             // A dataset is closed graph by graph, so the loop over the named graphs is a
@@ -379,7 +393,7 @@ pub(crate) fn close<D: DatasetView>(
                     continue;
                 }
                 stats.commit(conclusion.rule);
-                emit(&mut b, conclusion, Some(g))?;
+                emit(&mut b, conclusion, Some(g)).map_err(EntailError::with_read_error)?;
             }
         }
         let dataset = b.freeze().map_err(EntailError::from)?;
@@ -394,11 +408,24 @@ pub(crate) fn close<D: DatasetView>(
 /// ended the run, which is a fact about the caller rather than about the program or the
 /// data, so it keeps its own variant all the way out. Every other refusal is what
 /// [`EntailError::Evaluate`] has always meant.
-pub(crate) fn evaluate_error(error: EvalError) -> EntailError {
+pub(crate) fn evaluate_error<E>(error: EvalError) -> EntailError<E> {
     match error {
         EvalError::Stopped { .. } => EntailError::Stopped,
         other => EntailError::Evaluate(other),
     }
+}
+
+fn maintenance_evaluate_error<E>(error: EvalError<TermExpired>) -> EntailError<E> {
+    match error.try_map_source(Err::<Infallible, _>) {
+        Ok(error) => evaluate_error(error),
+        Err(error) => EntailError::from(purrdf_datalog::seminaive::MaintenanceError::Failed(
+            EvalError::Source(error),
+        )),
+    }
+}
+
+fn maintenance_source_error<E>(error: TermExpired) -> EntailError<E> {
+    maintenance_evaluate_error(EvalError::Source(error))
 }
 
 /// The restricted chase's refusal, wrapped in this crate's vocabulary. See
@@ -422,7 +449,7 @@ fn refuse<D: DatasetView>(
     regime: Regime,
     stats: &RunStats,
     witness: InconsistencyWitness,
-) -> EntailError {
+) -> EntailError<D::ReadError> {
     match ReasoningReport::of_inconsistent_run(ds, regime, stats, witness.clone()) {
         Ok(report) => EntailError::Inconsistent(Box::new(InconsistentRun::new(witness, report))),
         Err(error) => error,
@@ -543,7 +570,7 @@ fn close_graph<D: DatasetView>(
     input: GraphRunInput<'_>,
     graph: Option<&TermValue>,
     plans: &mut PlanCache,
-) -> Result<GraphRun, EntailError> {
+) -> Result<GraphRun, EntailError<D::ReadError>> {
     let GraphRunInput {
         regime,
         program,
@@ -561,7 +588,8 @@ fn close_graph<D: DatasetView>(
         .iter()
         .any(|clause| clause.head_form() == HeadForm::Existential)
     {
-        return chase_graph(program, attribution, edb, &terms, options, stop);
+        return chase_graph(program, attribution, edb, &terms, options, stop)
+            .map_err(EntailError::with_read_error);
     }
 
     // The plan is a pure function of the clause program, and `close` hands every graph of
@@ -577,7 +605,7 @@ fn close_graph<D: DatasetView>(
         &executable,
         edb,
         &NoGuards,
-        options,
+        &options.with_derivation_mode(DerivationMode::Record),
         stop.map(|stop| &**stop as &dyn StopSignal),
     )
     .map_err(evaluate_error)?;
@@ -611,7 +639,10 @@ fn close_graph<D: DatasetView>(
         clash: None,
         termination: None,
     };
-    for derivation in evaluation.derivations() {
+    for derivation in evaluation
+        .derivations()
+        .expect("entailment requested derivation recording")
+    {
         let fact = derivation.fact();
         // An INTERNAL conclusion is bookkeeping, not an answer. `prp-spo2` and `prp-key`
         // accumulate their list traversals in relations whose predicate is an
@@ -660,7 +691,7 @@ pub(crate) fn seed<D: DatasetView>(
     regime: Regime,
     program: &[DlClause],
     graph: Option<&TermValue>,
-) -> Result<(RelationStore, Terms), EntailError> {
+) -> Result<(RelationStore, Terms), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         let mut terms = Terms::default();
         terms.record_program(program);
@@ -724,10 +755,13 @@ pub(crate) fn seed<D: DatasetView>(
         // relations the `LIST[…]` rules join against. A malformed or cyclic collection stops
         // the run here rather than producing a closure over the well-formed prefix of it.
         if walks_collections(regime) {
-            for fact in lists
-                .materialize()
-                .map_err(|error| EntailError::MalformedList(error.to_string()))?
-            {
+            for fact in lists.materialize().map_err(|error| {
+                EntailError::Collection(Box::new(crate::CollectionError {
+                    phase: crate::CollectionPhase::OwlRl,
+                    head: terms.value(&error.head).clone(),
+                    original: error.original.map(|surface| terms.value(&surface).clone()),
+                }))
+            })? {
                 let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }
@@ -923,6 +957,7 @@ fn first_clash(
     let owl = matches!(regime, Regime::OwlRl);
     evaluation
         .derivations()
+        .expect("entailment requested derivation recording")
         .iter()
         .find(|derivation| derivation.fact().predicate == CLASH_RELATION)
         .map(|derivation| witness_of(derivation, attribution, terms, owl, graph))
@@ -963,76 +998,31 @@ fn witness_of(
     InconsistencyWitness::new(rule, premises, graph.cloned())
 }
 
-// ── Refutation: the same calculus, re-run over the premise plus an assertion ──────────
+// ── Refutation: one native model across signed assertion scenarios ───────────────
 
-/// The calculus, COMPILED ONCE, ready to be run over a premise plus any number of added
-/// assertions.
-///
-/// # Why this is not just another [`close`] call
-///
-/// A refutation asks a different question from a closure. `close` wants the conclusions and
-/// refuses the moment a `false`-headed rule matches; a refutation wants exactly that match —
-/// the clash IS the answer — and it asks for it many times over, once per negated
-/// conclusion statement and again once per candidate axiom while a minimal entailing subset
-/// is shrunk out. Routing that through `close` would mean handing every one of those runs a
-/// fresh `RdfDatasetBuilder`, a fresh materialization pass and a fresh plan compilation for
-/// a plan that is a pure function of the clauses.
-///
-/// So the two costs a repeated run would otherwise pay per iteration are paid ONCE here:
-///
-/// * **the plan.** [`PlanCache`] is content-addressed on the calculus's own contract hash,
-///   so the ~200-clause `OWL-RL` program is compiled the first time [`Self::refute`] runs
-///   and read back on every later call, whatever premise subset it is running over. The
-///   cache is owned by this value and threaded by `&mut`, never global — the same
-///   discipline [`close`] uses, and for the same reason: a longer-lived cache would make a
-///   run's cost depend on which runs came before it.
-/// * **the seed.** [`Self::seed`] interns the premise's terms, walks its RDF collections
-///   into the internal `LIST[…]` relations and decides its literals' value spaces once; the
-///   resulting [`RelationStore`] is then CLONED per run and the negation goes in as an
-///   insert delta on the already-arranged store. Every pairwise refutation of one
-///   `owl:AllDifferent` collection shares one seed and differs by one row.
-///
-/// What is NOT shared is the FIXPOINT, and the honest reason is worth writing down rather
-/// than eliding. `purrdf-datalog`'s store is generic over an abelian
-/// [`Weight`](purrdf_datalog::store::Weight) monoid and its consolidation merge compiles for
-/// the signed `i64` instantiation — so Z-set retraction, and hence incremental maintenance,
-/// is a COMPILED FACT of the representation. What the crate does not yet have is an
-/// evaluator entry point that consumes one: [`evaluate`] takes a whole store and seeds its
-/// round-1 delta from the whole of it, so each run here recomputes the closure of
-/// `premise ∪ Δ` from the arranged seed. The sharing above is real and measurable; calling
-/// it "incremental evaluation" would claim a maintenance path that does not exist yet, and a
-/// refutation lane that quietly did so would be the wrong place to find that out.
+/// One immutable compiled calculus shared by independently owned premise models.
+/// Every scenario retracts the preceding additions and inserts its own through
+/// native signed maintenance. Neither the seed store nor its witness table is
+/// rebuilt for a scenario.
 pub(crate) struct Refuter {
-    /// The lane whose calculus runs. `OWL-RL` in every caller today; carried rather than
-    /// assumed so the attribution and the witness's rule spelling stay the lane's own.
     regime: Regime,
-    /// The calculus's contract hash, which is the plan cache's key.
-    contract: String,
-    /// The clause program, lowered exactly as [`close_graph`] lowers it.
-    program: Vec<DlClause>,
-    /// Clause index → the rule that clause states, for the witness's attribution.
+    program: Executable,
     attribution: Vec<ChaseRule>,
-    /// The compiled plan, kept across every run of this refuter.
-    plans: PlanCache,
-    /// The evaluation limits every run of this refuter is held to — the caller's, so a
-    /// re-chase a conclusion-directed service runs is bounded by the same stored-fact and
-    /// join-step limits as the closure it answers over, and a refusal names the knob that
-    /// actually raises it.
     options: EvalOptions,
 }
 
-/// A premise seeded ONCE, re-closed against any number of added assertions.
-///
-/// The dictionary is mutable because an added assertion may mention a term the premise does
-/// not — the class of an `owl:complementOf`, say — and [`Terms::value`] has to stay total
-/// over everything the store can hold. Recording is monotone and idempotent: a surface only
-/// ever gains its value, so a term left over from one run cannot be reached by a later run
-/// whose store never held it.
-pub(crate) struct Seeded {
-    /// The arranged store the premise's own facts and pre-passes produced.
-    edb: RelationStore,
-    /// The surface → value dictionary that reads an answer back.
+/// One original premise, dictionary and native maintained least model.
+/// The pre-pass whitelist binds every scenario: only sameAs and named-class
+/// type assertions, without literals or collection predicates, may be added.
+pub(crate) struct Seeded<'r> {
+    model: Maintained<'r, Digest32, Resident, ReclaimingInterner>,
     terms: Terms,
+    regime: Regime,
+    attribution: &'r [ChaseRule],
+    options: EvalOptions,
+    additions: Vec<[purrdf_datalog::id::TermId; 4]>,
+    premise: Digest32,
+    transient_terms: BTreeSet<String>,
 }
 
 /// What one refutation run found: the clash, and everything the run derived.
@@ -1054,7 +1044,7 @@ pub(crate) struct Clash {
 ///
 /// The difference from [`Clash`] is which question the caller is asking. A refutation asks
 /// "did this clash?" and needs the derivation only when the answer is yes, so
-/// [`Refuter::refute`] returns early when nothing clashed and never pays to read the
+/// [`Seeded::refute`] returns early when nothing clashed and never pays to read the
 /// derivations back. [`crate::entails::freeze`] asks "what does this entail?", which needs
 /// the derivations in BOTH outcomes — the head it is looking for when the run is consistent,
 /// and the body instances of the clash when it is not, because an inconsistent frozen
@@ -1068,174 +1058,275 @@ pub(crate) struct Closed {
     pub(crate) derived: Vec<[TermValue; 3]>,
 }
 
+const REFUTATION_SOURCE: Domain = Domain::new(b"purrdf-entail-refutation-source-v1");
+const REFUTATION_SCENARIO: Domain = Domain::new(b"purrdf-entail-refutation-scenario-v1");
+const REFUTATION_GUARDS: Domain = Domain::new(b"purrdf-entail-refutation-no-guards-v1");
+const REFUTATION_EVIDENCE: Domain =
+    Domain::new(b"purrdf-entail-refutation-native-canonical-proof-v1");
+
 impl Refuter {
-    /// A refuter for `regime`'s calculus.
-    ///
-    /// Capacity one, because a refuter presents exactly one program for its whole life: the
-    /// calculus is a function of the regime, and the regime is fixed at construction.
-    pub(crate) fn new(regime: Regime) -> Self {
+    /// Compile the original declared calculus once, preserving a real refusal.
+    pub(crate) fn new(regime: Regime) -> Result<Self, EntailError> {
         let (program, attribution) = program_with_attribution(regime);
-        Self {
+        Ok(Self {
             regime,
-            contract: calculus_contract_hash(regime).to_hex(),
-            program,
+            program: purrdf_datalog::seminaive::compile(program).map_err(evaluate_error)?,
             attribution,
-            plans: PlanCache::new(1),
             options: EvalOptions::default(),
-        }
+        })
     }
 
-    /// This refuter, holding every run to `options`' evaluation limits.
     pub(crate) const fn under(mut self, options: EvalOptions) -> Self {
         self.options = options;
         self
     }
 
-    /// Seed `ds`'s default graph once.
-    ///
-    /// # Errors
-    ///
-    /// [`EntailError::MalformedList`] if an RDF collection an OWL 2 axiom points at is not a
-    /// well-formed collection — the same refusal [`seed`] owes any caller.
-    pub(crate) fn seed<D: DatasetView>(&self, ds: &D) -> Result<Seeded, EntailError> {
-        let (edb, terms) = seed(ds, self.regime, &self.program, None)?;
-        Ok(Seeded { edb, terms })
+    /// Seed and close one premise once, retaining original native owners.
+    pub(crate) fn seed<D: DatasetView>(
+        &self,
+        ds: &D,
+    ) -> Result<Seeded<'_>, EntailError<D::ReadError>> {
+        let (edb, terms) = seed(ds, self.regime, self.program.rules(), None)?;
+        let mut source = Hasher::new();
+        source.update(REFUTATION_SOURCE.as_bytes());
+        frame_le_into(&mut source, calculus_contract_hash(self.regime).digest());
+        for fact in edb.facts_sorted() {
+            for surface in [&fact.subject, &fact.predicate, &fact.object, &fact.graph] {
+                frame_le_into(&mut source, surface.as_bytes());
+            }
+        }
+        let premise = Digest32::new(*source.finalize().as_bytes());
+        let mut guard = Hasher::new();
+        guard.update(REFUTATION_GUARDS.as_bytes());
+        let mut evidence = Hasher::new();
+        evidence.update(REFUTATION_EVIDENCE.as_bytes());
+        let mut model = Maintained::new_reclaiming(
+            &self.program,
+            edb.into_reclaiming().map_err(EntailError::from)?,
+            &NoGuards,
+            SessionContext {
+                snapshot: premise,
+                guards: Digest32::new(*guard.finalize().as_bytes()),
+                evidence: Digest32::new(*evidence.finalize().as_bytes()),
+            },
+            self.options,
+        )
+        .map_err(maintenance_evaluate_error)?;
+        if let ResumeProgress::Paused(error) = model
+            .resume(self.options, None)
+            .map_err(EntailError::from)?
+        {
+            return Err(maintenance_evaluate_error(error));
+        }
+        Ok(Seeded {
+            model,
+            terms,
+            regime: self.regime,
+            attribution: &self.attribution,
+            options: self.options,
+            additions: Vec::new(),
+            premise,
+            transient_terms: BTreeSet::new(),
+        })
     }
+}
 
-    /// Run the calculus over `seeded`'s premise PLUS `added`, and report the first clash.
-    ///
-    /// `Ok(None)` is "no `false`-headed rule matched": under a calculus that is complete for
-    /// the input's syntax that is a proof of CONSISTENCY, which is what a caller reads it as
-    /// — see [`crate::entails::refutation`] for the precondition that entitles it to.
-    ///
-    /// # The pre-passes are not re-run, and that is CHECKED rather than assumed
-    ///
-    /// [`seed`] computes three things no clause can express — the RDF collections an OWL
-    /// axiom points at, the XSD value-space judgements, and (in the surrogate lanes) the
-    /// term-kind observations — and this method reuses all three from the seed instead of
-    /// recomputing them over `premise ∪ added`. That is only sound if `added` cannot change
-    /// any of them, so the caller mints assertions from a WHITELIST of exactly two shapes
-    /// (`owl:sameAs` between two terms, and `rdf:type` to a named class) and
-    /// `an_added_assertion_never_disturbs_a_pre_pass` is what holds it to that: neither
-    /// predicate is `rdf:first`, `rdf:rest` or one of the seven list-valued OWL predicates
-    /// [`crate::lists::LIST_VALUED`] names, and neither shape carries a literal.
-    ///
-    /// # Errors
-    ///
-    /// [`EntailError::Evaluate`] if the plan will not compile or the evaluation passes
-    /// `purrdf-datalog`'s default stored-fact or join-step limit or its term-arena ceiling.
+impl Seeded<'_> {
+    /// Refute one whitelisted scenario through the same native maintained model.
     pub(crate) fn refute(
         &mut self,
-        seeded: &mut Seeded,
         added: &[[TermValue; 3]],
     ) -> Result<Option<Clash>, EntailError> {
-        let evaluation = self.evaluate_with(seeded, added)?;
-        let Some(witness) = first_clash(
-            &evaluation,
-            &self.attribution,
-            &seeded.terms,
-            self.regime,
-            None,
-        ) else {
-            // NOTHING CLASHED, so there is nothing to explain and the derivations are not
-            // read back at all. The shrinking search rejects most candidate subsets, so this
-            // is the common path and it must stay the cheap one.
+        self.evaluate_with(added)?;
+        let Some(witness) = self.first_clash()? else {
             return Ok(None);
         };
         Ok(Some(Clash {
             witness,
-            derived: derived_triples(&evaluation, &seeded.terms),
+            derived: self.derived()?,
         }))
     }
 
-    /// Run the calculus over `seeded`'s premise PLUS `added` and report EVERYTHING it drew,
-    /// clash or no clash.
-    ///
-    /// The same evaluation [`Self::refute`] performs, read out differently — see [`Closed`]
-    /// for which caller needs which reading, and [`Self::refute`] for the pre-pass whitelist
-    /// that makes reusing one seed across many `added` sets sound. That whitelist binds this
-    /// method identically: `added` must carry no `rdf:first`, `rdf:rest` or list-valued
-    /// predicate and no literal.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::refute`]: [`EntailError::Evaluate`] if the plan will not compile or the
-    /// evaluation passes `purrdf-datalog`'s default stored-fact or join-step limit or its
-    /// term-arena ceiling.
-    pub(crate) fn close(
-        &mut self,
-        seeded: &mut Seeded,
-        added: &[[TermValue; 3]],
-    ) -> Result<Closed, EntailError> {
-        let evaluation = self.evaluate_with(seeded, added)?;
-        let clash = first_clash(
-            &evaluation,
-            &self.attribution,
-            &seeded.terms,
-            self.regime,
-            None,
-        );
+    /// Read the complete scenario closure, including a vacuous implication's clash.
+    pub(crate) fn close(&mut self, added: &[[TermValue; 3]]) -> Result<Closed, EntailError> {
+        self.evaluate_with(added)?;
         Ok(Closed {
-            clash,
-            derived: derived_triples(&evaluation, &seeded.terms),
+            clash: self.first_clash()?,
+            derived: self.derived()?,
         })
     }
 
-    /// Evaluate the program over `seeded`'s arranged store plus `added` as an insert delta.
-    fn evaluate_with(
-        &mut self,
-        seeded: &mut Seeded,
-        added: &[[TermValue; 3]],
-    ) -> Result<purrdf_datalog::seminaive::Evaluation, EntailError> {
-        // The insert DELTA: the seed's arrangement is cloned, and the assertion is the only
-        // row that was not already in it.
-        let mut edb = seeded.edb.clone();
+    fn evaluate_with(&mut self, added: &[[TermValue; 3]]) -> Result<(), EntailError> {
+        use purrdf_datalog::dictionary::DictionaryTerm;
+        use purrdf_datalog::maintenance::ChangeBatch;
+        let mut additions = Vec::new();
+        additions.try_reserve_exact(added.len()).map_err(|_| {
+            EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+        })?;
+        let mut surfaces = Vec::new();
+        surfaces.try_reserve_exact(added.len()).map_err(|_| {
+            EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+        })?;
         for [subject, predicate, object] in added {
-            let subject = seeded.terms.record(subject);
-            let predicate = seeded.terms.record(predicate);
-            let object = seeded.terms.record(object);
-            let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+            let mut row = core::array::from_fn(|_| String::new());
+            for (slot, value) in row.iter_mut().zip([subject, predicate, object]) {
+                let (surface, fresh) = self.terms.record_entry(value);
+                if fresh {
+                    self.transient_terms.insert(surface.clone());
+                }
+                *slot = surface;
+            }
+            RelationStore::DEFAULT_GRAPH.clone_into(&mut row[3]);
+            additions.push(
+                self.model
+                    .admit_terms(
+                        row.each_ref()
+                            .map(|term| DictionaryTerm::Surface(term.as_str())),
+                    )
+                    .map_err(EntailError::from)?,
+            );
+            surfaces.push(row);
         }
+        // Runtime identity order consolidates lookup keys only. Persistent identity
+        // below uses the actual canonical lexical assertion content.
+        additions.sort_unstable();
+        additions.dedup();
+        surfaces.sort_unstable();
+        surfaces.dedup();
+        let mut scenario = Hasher::new();
+        scenario.update(REFUTATION_SCENARIO.as_bytes());
+        frame_le_into(&mut scenario, self.premise.as_bytes());
+        for row in surfaces {
+            for surface in row {
+                frame_le_into(&mut scenario, surface.as_bytes());
+            }
+        }
+        let batch = ChangeBatch::new(
+            Digest32::new(*scenario.finalize().as_bytes()),
+            self.additions
+                .iter()
+                .copied()
+                .map(|row| (row, -1))
+                .chain(additions.iter().copied().map(|row| (row, 1))),
+            Resident,
+        )
+        .map_err(|cause| {
+            EntailError::from(purrdf_datalog::seminaive::MaintenanceError::Change(cause))
+        })?;
+        self.model.apply(batch).map_err(EntailError::from)?;
+        let options = self.options.with_max_join_steps(
+            self.model
+                .budget()
+                .join_steps()
+                .saturating_add(self.options.max_join_steps()),
+        );
+        if let ResumeProgress::Paused(error) = self
+            .model
+            .resume(options, None)
+            .map_err(EntailError::from)?
+        {
+            return Err(maintenance_evaluate_error(error));
+        }
+        self.additions = additions;
+        let dictionary = self.model.facts().map_err(EntailError::from)?.interner();
+        let mut expired = Vec::new();
+        expired
+            .try_reserve(self.transient_terms.len())
+            .map_err(|_| {
+                EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+            })?;
+        for surface in &self.transient_terms {
+            if dictionary
+                .lookup_term(surface)
+                .map_err(maintenance_source_error)?
+                .is_none()
+            {
+                expired.push(surface.clone());
+            }
+        }
+        for surface in expired {
+            self.transient_terms.remove(&surface);
+            self.terms.by_surface.remove(&surface);
+        }
+        Ok(())
+    }
 
-        let program = self.program.clone();
-        let executable = self
-            .plans
-            .get_or_compile(&self.contract, program)
-            .into_plan()
-            .map_err(EntailError::Evaluate)?;
-        // The incremental re-evaluation seam names no stop signal: it re-runs one delta over
-        // an already-seeded store for an explanation, not the caller's closure.
-        evaluate_guarded(&executable, edb, &NoGuards, &self.options, None).map_err(evaluate_error)
+    fn first_clash(&self) -> Result<Option<InconsistencyWitness>, EntailError> {
+        let model = self.model.facts().map_err(EntailError::from)?;
+        let Some(predicate) = model
+            .interner()
+            .lookup_term(CLASH_RELATION)
+            .map_err(maintenance_source_error)?
+        else {
+            return Ok(None);
+        };
+        let mut first = None;
+        for (_, row) in model.rows_for_predicate(predicate) {
+            if let Some(witness) = self.model.witness(row).map_err(EntailError::from)? {
+                let derivation = witness.derivation().map_err(maintenance_source_error)?;
+                if first.as_ref().is_none_or(|previous| derivation < *previous) {
+                    first = Some(derivation);
+                }
+            }
+        }
+        Ok(first.as_ref().map(|proof| {
+            witness_of(
+                proof,
+                self.attribution,
+                &self.terms,
+                self.regime == Regime::OwlRl,
+                None,
+            )
+        }))
+    }
+
+    fn derived(&self) -> Result<Vec<[TermValue; 3]>, EntailError> {
+        // Order the requested native conclusions; no lexical witness table or
+        // premise copies are needed to return RDF output.
+        let model = self.model.facts().map_err(EntailError::from)?;
+        let dictionary = model.interner();
+        let witnesses = self.model.witnesses().map_err(EntailError::from)?;
+        let mut facts = Vec::new();
+        facts.try_reserve(witnesses.len()).map_err(|_| {
+            EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+        })?;
+        for witness in witnesses {
+            let row = witness.terms();
+            let predicate = dictionary
+                .resolve_term(row[1])
+                .map_err(maintenance_source_error)?;
+            if !is_internal(predicate) {
+                facts.push([
+                    dictionary
+                        .resolve_term(row[0])
+                        .map_err(maintenance_source_error)?,
+                    predicate,
+                    dictionary
+                        .resolve_term(row[2])
+                        .map_err(maintenance_source_error)?,
+                ]);
+            }
+        }
+        facts.sort_unstable();
+        Ok(facts
+            .iter()
+            .filter_map(|fact| derived_triple([fact[0], fact[1], fact[2]], &self.terms))
+            .collect())
     }
 }
 
-/// Everything `evaluation` DERIVED, as RDF 1.2 triples.
-///
-/// Read back through the same two filters [`close_graph`] applies: an internal relation is
-/// bookkeeping rather than a triple, and a conclusion the RDF 1.2 IR cannot hold is
-/// abandoned rather than fabricated around.
-fn derived_triples(
-    evaluation: &purrdf_datalog::seminaive::Evaluation,
-    terms: &Terms,
-) -> Vec<[TermValue; 3]> {
-    let mut derived = Vec::new();
-    for derivation in evaluation.derivations() {
-        let fact = derivation.fact();
-        if is_internal(&fact.predicate) {
-            continue;
-        }
-        let subject = terms.value(&fact.subject);
-        let predicate = terms.value(&fact.predicate);
-        if !admits_subject(subject) || !admits_predicate(predicate) {
-            continue;
-        }
-        derived.push([
-            subject.clone(),
-            predicate.clone(),
-            terms.value(&fact.object).clone(),
-        ]);
+/// Read one RDF-representable conclusion through the original term-value owner.
+fn derived_triple(fact: [&str; 3], terms: &Terms) -> Option<[TermValue; 3]> {
+    let subject = terms.value(fact[0]);
+    let predicate = terms.value(fact[1]);
+    if !admits_subject(subject) || !admits_predicate(predicate) {
+        return None;
     }
-    derived
+    Some([
+        subject.clone(),
+        predicate.clone(),
+        terms.value(fact[2]).clone(),
+    ])
 }
 
 /// Whether `value` may occupy a triple SUBJECT position in RDF 1.2 — an IRI or a blank
@@ -1272,11 +1363,16 @@ pub(crate) struct Terms {
 impl Terms {
     /// Record `value` and return its surface.
     pub(crate) fn record(&mut self, value: &TermValue) -> String {
+        self.record_entry(value).0
+    }
+
+    fn record_entry(&mut self, value: &TermValue) -> (String, bool) {
         let surface = surface_of(value);
-        if !self.by_surface.contains_key(&surface) {
+        let fresh = !self.by_surface.contains_key(&surface);
+        if fresh {
             self.by_surface.insert(surface.clone(), value.clone());
         }
-        surface
+        (surface, fresh)
     }
 
     /// Record every constant term of `program`.
@@ -1490,6 +1586,34 @@ mod tests {
             b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("the fixture freezes")
+    }
+
+    #[test]
+    fn refutation_scenarios_release_fresh_native_and_rdf_term_owners() {
+        use purrdf_datalog::dictionary::TermDictionary;
+        let premise = dataset_of(&[(EX_X, RDF_TYPE, EX_C)]);
+        let refuter = super::Refuter::new(Regime::OwlRl).unwrap();
+        let mut seeded = refuter.seed(premise.as_ref()).unwrap();
+        let baseline = seeded.terms.by_surface.len();
+        let native = seeded.model.facts().unwrap().interner().term_count();
+        let rows = seeded.model.facts().unwrap().row_count();
+        for index in 0..64 {
+            let fresh = TermValue::iri(format!("http://example.org/fresh/{index}"));
+            let surface = surface_of(&fresh);
+            let closed = seeded
+                .close(&[[fresh, TermValue::iri(RDF_TYPE), TermValue::iri(EX_C)]])
+                .unwrap();
+            assert!(closed.clash.is_none());
+            assert!(seeded.terms.by_surface.contains_key(&surface));
+            assert!(seeded.close(&[]).unwrap().clash.is_none());
+            assert!(seeded.close(&[]).unwrap().clash.is_none());
+            assert_eq!(seeded.terms.by_surface.len(), baseline);
+            assert_eq!(seeded.transient_terms, BTreeSet::new());
+            let facts = seeded.model.facts().unwrap();
+            assert_eq!(facts.interner().term_count(), native);
+            assert_eq!(facts.row_count(), rows);
+            assert_eq!(facts.interner().lookup_term(&surface).unwrap(), None);
+        }
     }
 
     /// A dataset that reaches every internal relation this crate has: an intersection and

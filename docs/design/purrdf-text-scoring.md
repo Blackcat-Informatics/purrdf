@@ -3,6 +3,8 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: CC-BY-4.0
 -->
 
+
+English | [简体中文](purrdf-text-scoring.zh-Hans.md)
 # PurRDF text scoring and ranking
 
 `purrdf-text` builds an in-memory inverted index over the literals of a frozen
@@ -22,8 +24,8 @@ Every score is computed in base-10 fixed point: a signed integer scaled by a
 fixed number of fractional digits, truncating at every specified operation.
 Ranking intermediates promote from checked i128 to the workspace's exact
 Integer/BigInt when needed, preserving the same law without a chosen input
-ceiling. A final value is never wrapped or saturated. No floating-point value enters the crate at all — the crate
-root denies `clippy::float_arithmetic`, so none can.
+ceiling. A final value is never wrapped or saturated. Scoring and ranking use no floating-point arithmetic; the crate
+root denies `clippy::float_arithmetic`.
 
 This is not a stylistic preference for integers. BM25 needs a natural logarithm,
 and a libm `ln` is permitted to differ by a unit in the last place between
@@ -53,17 +55,18 @@ number of query terms nor field length, corpus size, weight or field count is
 refused to reserve space for a host tie key. See [the complete ranking
 law](../../crates/text/RANKING.md) for the physical representations and proof.
 
-## 2. The BM25 constants are constants
+## 2. `k1` is fixed; the ranking profile owns field normalization
 
-`K1` (1.2) and `B` (0.75) are crate constants. There is no parameter struct, no
-builder, and no knob.
+`K1` (1.2) is fixed. `B` (0.75) remains the default for the explicit
+single-field profile; an immutable `RankingProfile` binds each named field's
+weight and length normalization, predicate routing and score law to its
+fingerprint. Two different profiles have different ranking identities.
 
-PurRDF is a carrier, and optionality that changes semantics per consumer is
-forbidden. A tuning parameter here would be exactly that: two callers pointing
-the same query at the same index would get different scores and — worse, because
-it is the thing consumers actually order on — a different `?rank`, with neither
-answer identifiable as the wrong one. Ranked retrieval's entire output *is* an
-order, so a knob that changes the order changes the answer.
+PurRDF is a carrier, so a ranking choice must be part of the index's declared
+identity rather than an implicit per-query knob. Two callers querying the same
+index use its same immutable profile. Changing field weights, normalization or
+predicate routing constructs a differently identified ranking index; those
+choices can change scores and `?rank`, which is the answer's order.
 
 This is a different rule from the one governing the indexed predicate IRIs.
 Those are caller-supplied because PurRDF mints no vocabulary: an IRI this
@@ -73,13 +76,15 @@ the retrieval literature is not a vocabulary, ends up in no graph, and names
 nothing. The two rules point in opposite directions here, and it is worth being
 explicit about which one applies.
 
-The values are the canonical Okapi ones from the published literature. Choosing
-the literature's numbers rather than inventing better ones is the point: they
-are the values a reader can check this implementation against.
+The fixed `k1` and the single-field default `b` are the usual Okapi values.
+Other field normalizations are explicit, validated profile inputs and are
+included in the profile fingerprint; none is silently chosen for another field.
 
 ## 3. Statistics and `?rank` are per partition
 
-A **partition** is a `(graph, language)` pair. Every BM25 input that describes a
+For the default `GraphLanguage` corpus, a **partition** is a `(graph, language)`
+pair. `GraphFree` omits the graph coordinate and partitions by language alone.
+Every BM25 input that describes a
 *corpus* rather than a document — the document count `N`, the average document
 length `avgdl`, a term's document frequency `df` — is computed within one
 partition and never pooled across partitions.
@@ -96,8 +101,9 @@ rank spanning partitions would sort together numbers computed against different
 corpora — an arrangement rather than a ranking. `?rank` is therefore the 1-based
 position of a document **within its own partition**, and every comparison the
 ranker makes stays inside one partition. A query that wants a single ranked list
-binds `?lang` (and the graph where relevant), or runs against a single-partition
-index, which is the common case for a corpus in one language.
+binds `?lang` and restricts the graph for `GraphLanguage`, or binds only `?lang`
+for `GraphFree`. A single-partition index also gives one ranked list, which is
+the common case for a corpus in one language.
 
 Restricting to partitions *before* ranking is sound precisely because ranks are
 per-partition: dropping whole partitions cannot change the rank of any surviving
@@ -106,8 +112,9 @@ row, because no surviving row was ever compared against a dropped one.
 That soundness is also what makes the restriction a **performance** mechanism
 and not merely a filter. A bound language names its partitions directly; a bound
 document names its subject's partitions through
-`TextIndex::partitions_holding_subject`, because `(graph, subject, language)` is
-a document's key and a subject therefore occupies at most one document per
+`TextIndex::partitions_holding_subject`, because a document's key is
+`(graph, subject, language)` for `GraphLanguage` or `(subject, language)` for
+`GraphFree`. A subject therefore occupies at most one document per
 partition. Both are applied before ranking. Without them, an evaluator driving
 the relation once per left row — which is what a bound document position means —
 ranks the whole index per row and then discards all but that row's share of it.
@@ -120,12 +127,15 @@ English partition and a `1` from the French one are both ordinary integers, and
 nothing downstream — not the row, not the `xsd:integer` cell, not a comparison
 between them — records that they were computed against different corpora. A
 SPARQL answer over a three-language index therefore contains **three** rows of
-rank 1, and `LIMIT 10` over it is the first ten of that interleaving rather than
-the ten best documents. Binding the language is what makes it one list.
+rank 1, and `LIMIT 10` over it is the first ten of the partition-major output rather than
+the ten best documents. `GraphLanguage` requires graph and language restrictions;
+`GraphFree` requires only a language restriction. Those restrictions, or a
+single-partition index, make it one list.
 
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
-assigned only after every document has been sorted by `(graph, subject,
-language)`, so ascending id *is* ascending canonical term order — the tie-break
+assigned only after every document has been sorted by its complete key:
+`(graph, subject, language)` for `GraphLanguage`, or `(subject, language)` for
+`GraphFree`. Ascending id *is* ascending canonical term order — the tie-break
 is meaningful rather than arbitrary, and it is reproducible across independently
 built indexes rather than merely stable within one. Ids are distinct, so this is
 a strict total order and no two rows can tie. That is what lets a bounded heap
@@ -206,7 +216,7 @@ showed it, or because the value was rendered at fewer digits than separate them.
 
 `ORDER BY DESC(?score)` is consequently **not** a total order over the rows, and
 it can disagree with `ORDER BY ?rank`. `ORDER BY ?rank` states the order the
-ranker computed rather than recomputing one from a rounded number; it is total,
+ranker computed rather than recomputing one from a rounded number; within one partition it is total,
 and it is the only one that survives rounding.
 
 ## 6. The analysis pipeline
@@ -238,13 +248,13 @@ source alignment, input interpretation, domain and refusal contracts.
 
 ## 7. One Unicode version, generated in the crate
 
-The analyzer depends on four Unicode tables: the case fold, the normalization
-tables, the word-break properties and the alphanumeric predicate of the word
-filter. All four are generated by this crate from the vendored Unicode
-Character Database in `crates/iri/unicode/`, so they are at the same version,
-17.0.0, and none of them follows the toolchain the crate is built with. All
-four versions are still reported individually, so a future regeneration that
-moved one of them would be visible rather than summarized away.
+The analyzer depends on case-fold, normalization, word-boundary and
+alphanumeric tables. The workspace's `purrdf-lex` Unicode pipeline supplies
+the normalization version and generated tables; the text crate's generated
+case-fold and boundary data use the same vendored Unicode Character Database
+in `crates/iri/unicode/`. The pinned workspace version is 17.0.0, independent
+of the build toolchain. The analyzer records the relevant versions separately,
+so a future regeneration that moved one would be visible.
 
 Answers are deterministic because the tables are committed source: a given
 checkout analyzes a given literal to a fixed token vector on every target and
@@ -273,7 +283,8 @@ Two mechanisms make that loud instead of silent:
 ## 8. Determinism, and exactly how far it goes
 
 Document ids are assigned only after every document has been sorted by
-`(graph, subject, language)`, so an id is a function of content rather than of
+its complete key: `(graph, subject, language)` for `GraphLanguage`, or
+`(subject, language)` for `GraphFree`. An id is a function of content rather than of
 the order the dataset happened to intern its terms in. The term dictionary is
 sorted by analyzed term text, postings by document id, positions ascending. Two
 independently built indexes over the same content agree byte for byte, including
@@ -296,14 +307,66 @@ executable form rather than only in prose.
 
 Two digests are kept, and they answer different questions. The **index
 fingerprint** covers everything that can change an answer: the configuration, all
-four Unicode table versions, the document table, the dictionary, every posting
-with its positions, and every partition's statistics. The **source fingerprint**
-covers the `(graph, subject, predicate, literal)` rows that were walked. The
+four Unicode table versions, the analyzer and ranking laws, enabled projections,
+and the exact source identity. These inputs determine the document table,
+dictionary, postings, positions and partition statistics. The index hashes these
+inputs directly, so computing its identity does not walk the derived corpus tables. The **source fingerprint**
+covers the walked `(graph, subject, predicate, literal)` rows for `GraphLanguage`,
+or `(subject, predicate, literal)` rows for `GraphFree`. The
 second exists because pairing an index with the wrong dataset is otherwise a
 silent wrong answer rather than a failure — the relation emits well-formed
 document terms, those terms join by basic graph pattern against a dataset that
 never contained them, zero rows come out, and no layer has anything to report.
 Recomputing the source digest over the dataset in hand detects exactly that.
+
+The source identity uses the version 2 multiset law. Each row is hashed under
+`purrdf/source-row/v1` or `purrdf/triples/source-row/v1` using the core's
+self-delimiting canonical term bytes. Native sealed source metadata uses this
+same row law without reconstructing owned terms. The existing text term-sequence
+encoding and its published fingerprint remain unchanged. The 32-byte row hashes are interpreted as little-endian integers
+and summed modulo 2^256. The source fingerprint hashes its profile's `source/v2`
+domain, the exact row population as a 16-byte little-endian integer, and the
+32-byte little-endian sum. Thus order does not matter and identical rows in
+different physical layers contribute with their full multiplicity. Removing a
+known row subtracts its hash and decrements the population. This is a multiset
+fingerprint, not a signature or an authorization proof; validation still needs
+an independently observed source summary and actual added-row membership.
+The graph-aware index domain is version 6 and the graph-free index domain is
+version 3. Both bind the complete deterministic construction inputs rather than
+re-hashing the derived tables. The source identity includes original spellings
+and row multiplicity; equal corpus statistics alone cannot give equal identities.
+
+Document token buffers retain shared immutable spellings independently of the
+dictionary's sorted public ordinals. Reading a document's token occurrences
+looks up the current canonical ordinals through an iterator.
+Adding a word before an existing word therefore does not rewrite the retained
+document's tokens. Retired spellings release when their last snapshot or buffer
+owner releases; no historical ordinal map remains.
+
+Document, dictionary, posting, token, partition, field-length, subject-order,
+occurrence-order and Han-evidence tables share one immutable AVL sequence with
+at most 32 handles per leaf. Cloning shares their roots and buffers. An edit
+copies bounded leaves and affected paths, preserving previous snapshots.
+Postings refer to immutable documents; public document ranks are resolved against
+the current order. Partition and field statistics subtract replaced documents
+and add their replacements. Rank projection happens only for requested results;
+publishing an index does not materialize the retained streams or posting ranks.
+
+Surface sources, words, spans, document memberships, occurrences, scalar grams
+and phonetic codes use that same persistent table. Sources retain immutable
+document references and original aligned text. Source-local chunks share up to
+32 occurrence payloads; term records copy shallow references when a path changes.
+Grams and codes address shared spellings rather than dictionary ordinals.
+Borrowed public term views project only requested document IDs through the
+current document-order root. Removing a source subtracts its memberships and
+occurrences; a term's gram/code postings change only when the term appears or
+disappears. No corpus-wide source or term renumbering occurs during publication.
+
+Standalone surface generation uses `purrdf-text/surface-generation/v2` over the
+analyzer identity, optional coordinate binding, and exact source multiset. Source
+items use `purrdf-text/surface-source/v1`; public text construction's identities
+bind the caller's document ID and original text. Native surface construction uses
+the original RDF row identities and binds the enclosing index fingerprint.
 
 ## 9. Phrase and proximity compose in SPARQL
 

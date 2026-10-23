@@ -46,6 +46,43 @@ fn baseline() -> (VectorMatrix, Vec<u8>) {
     (matrix, image)
 }
 
+#[test]
+fn native_payload_fields_survive_image_and_matrix_destruction() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let (matrix, image) = baseline();
+    let mut reserved = image.clone();
+    put_u32(&mut reserved, 84, u32::MAX);
+    let error = HnswIndex::<Exact>::decode(matrix.clone(), &reserved).unwrap_err();
+    let retained = error.clone();
+    drop(error);
+    drop(reserved);
+    let fields = Capture::read(&retained);
+    let cause = fields.child("reason");
+    assert_eq!(cause.code, "hnsw-payload-reserved-node");
+    assert!(matches!(cause.field("row"), ErrorValue::Unsigned(0)));
+    assert!(
+        matches!(cause.field("value"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+    );
+
+    let (adjacency, _) = first_dense_neighbour_list(&image);
+    let mut nonfinite = image;
+    let bits = 0x7ff8_0000_0000_0042;
+    put_u64(&mut nonfinite, adjacency + 8, bits);
+    let error = HnswIndex::<Exact>::decode(matrix, &nonfinite).unwrap_err();
+    drop(nonfinite);
+    let fields = Capture::read(&error);
+    let cause = fields.child("reason");
+    assert_eq!(cause.code, "hnsw-payload-non-finite");
+    assert!(matches!(cause.field("distance"), ErrorValue::Float64Bits(value) if value == bits));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_hnsw::error::PayloadRefusal>()
+    );
+}
+
 /// Assert that `bytes` decode against `matrix` to a typed error and do not panic.
 fn assert_rejected(matrix: VectorMatrix, bytes: &[u8]) -> HnswError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

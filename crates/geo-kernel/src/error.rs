@@ -12,6 +12,71 @@
 //! relation or an unbound value. Offline transformations use explicit compiled
 //! models and never infer a datum operation from matching ellipsoid parameters.
 
+mod argument_input;
+mod cause;
+pub use argument_input::{ArgumentInputError, ArgumentInputReason};
+pub use cause::{GeoFailureCause, RetainedGeoCause};
+mod unsupported;
+pub use unsupported::UnsupportedRefusal;
+mod index_config;
+pub use index_config::{IndexBindingError, IndexConfigError, IndexSerializationError};
+mod matrix;
+pub use matrix::MatrixInputError;
+mod pattern;
+pub use pattern::PatternInputError;
+mod binding;
+pub use binding::GeoIndexAdmissionReason;
+pub use binding::ImageTargetReason;
+pub use binding::ReferenceMismatchReason;
+pub use binding::{
+    BindingConfigError, ImageEndpointReason, ReferenceRegistrationReason, UnitFactorReason,
+};
+mod ellipsoid;
+pub use ellipsoid::{EllipsoidInputError, EllipsoidRequirement};
+mod vocabulary;
+pub use vocabulary::{VocabularyError, VocabularyNamespace};
+mod geometry_domain;
+pub use geometry_domain::GeodesicEdgeConsumer;
+pub use geometry_domain::PreparedEdgeRequirement;
+pub use geometry_domain::WrittenTangentReason;
+pub use geometry_domain::{
+    DistanceSupportStage, EdgeQuotientOperation, GeometryDomainError, MembershipInput,
+};
+pub use geometry_domain::{SourceContactCoordinates, SourceContactReason};
+mod metric_unit;
+pub use metric_unit::{MetricUnitError, MetricUnitReason};
+mod metric_input;
+pub use metric_input::{DistanceEnclosureReason, MetricInputError};
+pub use metric_input::{TravelOperation, UnitParameterOperation, UnitParameterRequirement};
+mod source_preparation;
+pub use source_preparation::{
+    PreparationBaselineReason, PreparationReceiptConsumer, SourcePreparationError,
+};
+mod context_config;
+pub use context_config::{ContextConfigError, OutputReceiptReason, PreparationPhase};
+mod transverse;
+pub use transverse::{TransverseInputError, TransverseInputReason};
+mod affine;
+pub use affine::{AffineInputError, HelmertInputReason, OperationValidationContext};
+mod projection;
+pub use projection::{GcjInputReason, MercatorRequirement, ProjectionInputError};
+mod polynomial;
+pub use polynomial::PolynomialInputError;
+mod model;
+pub use model::{GridConfigurationReason, GridDomainSide, ModelInputError};
+mod carrier_input;
+pub use carrier_input::{CarrierInputError, CarrierInputReason};
+mod crs;
+pub use crs::CrsError;
+mod wkt;
+pub use wkt::{WktError, WktOrdinateContext, WktReason};
+mod json_syntax;
+pub use json_syntax::JsonSyntaxError;
+mod geojson_shape;
+pub use geojson_shape::GeoJsonShapeError;
+mod geojson_write;
+pub use geojson_write::GeoJsonWriteError;
+
 /// Why a geometry, metric, coordinate operation or spatial index refused.
 ///
 /// [`Self::is_expression_error`] defines the argument failures admitted by the
@@ -23,17 +88,87 @@ pub enum GeoError {
     /// No rendered copy or detached message replaces that cause.
     Retained(RetainedGeoError),
     /// The input source refused a term or iterator read. No partial index is published.
-    SourceRead(String),
+    SourceRead(GeoFailureCause),
     /// The call supplies the wrong number of arguments for the function named.
-    Arity(String),
+    Arity(GeoFailureCause),
+    /// Original numeric lexical failure, with its original XSD payload.
+    NumericLiteral(RetainedGeoCause),
+    /// Original scalar argument term, native requirement and parser failure.
+    ArgumentInput(crate::context::Retained<ArgumentInputError>),
     /// The caller's wiring is unusable as written (an empty IRI, a vocabulary
     /// missing a term a registered function needs).
     Config(String),
+    /// The caller selected no relation families, so no registration can be made.
+    NoRelationFamilies,
+    /// Original projection-construction refusal and input operands.
+    IndexConfiguration(crate::context::Retained<IndexConfigError>),
+    /// Original nonliteral serialization object and configured property.
+    IndexSerialization(Box<IndexSerializationError>),
+    /// Original index/view binding comparison and lookup invariant.
+    IndexBinding(crate::context::Retained<IndexBindingError>),
+    /// Original prepared-source receipt or context baseline mismatch.
+    SourcePreparation(crate::context::Retained<SourcePreparationError>),
+    /// Original worker scratch, backend or owned-storage configuration refusal.
+    ContextConfiguration(crate::context::Retained<ContextConfigError>),
+    /// Original transverse-projection declaration and source-point refusal.
+    TransverseInput(crate::context::Retained<TransverseInputError>),
+    /// Original declaration/source failure at the public differential entry.
+    DifferentialInput(GeoFailureCause),
+    /// Original affine declaration, observation metadata or adjusted-scale refusal.
+    AffineInput(crate::context::Retained<AffineInputError>),
+    /// Original GCJ applicability or explicit Mercator input refusal.
+    ProjectionInput(crate::context::Retained<ProjectionInputError>),
+    /// Original polynomial normalization, degree or duplicate-term refusal.
+    PolynomialInput(Box<PolynomialInputError>),
+    /// Original regular-grid or inverse source-rectangle refusal.
+    ModelInput(crate::context::Retained<ModelInputError>),
+    /// Original typed validation cause with its existing math-entry context.
+    OperationValidation {
+        /// Original source/metadata validation context.
+        context: OperationValidationContext,
+        /// Original native validation refusal and its allocation owner.
+        cause: RetainedGeoCause,
+    },
+    /// Original diagnostic intersection-matrix grammar refusal.
+    MatrixConfiguration(crate::context::Retained<MatrixInputError>),
+    /// Original carrier-resolution conflict and declarations.
+    BindingConfiguration(Box<BindingConfigError>),
+    /// Original vocabulary declaration or row-local unit mismatch.
+    Vocabulary(crate::context::Retained<VocabularyError>),
+    /// Original geometry-domain operands and reference pairs.
+    GeometryDomain(crate::context::Retained<GeometryDomainError>),
+    /// Original exact metric-unit operands and conversion declaration.
+    MetricUnit(crate::context::Retained<MetricUnitError>),
+    /// Original distance-certificate operands and failed requirement.
+    MetricInput(crate::context::Retained<MetricInputError>),
+    /// Original RDF input refused by carrier admission or source ownership.
+    CarrierInput(Box<CarrierInputError>),
+    /// Original invalid coordinate-reference configuration.
+    CrsConfiguration(Box<CrsError>),
+    /// The same original refusal in an explicit geometry-literal prefix.
+    CrsLiteral {
+        /// Byte offset of the original opening angle bracket in the literal.
+        prefix_start: usize,
+        /// Original identifier and native validator cause.
+        cause: Box<CrsError>,
+    },
     /// A geometry literal is not well-formed for its datatype.
     Literal(String),
+    /// Original model-shape refusal, with its original carrier context.
+    GeometryShape(crate::GeometryShapeError),
+    /// Original WKT grammar refusal and coordinate context.
+    WktSyntax(Box<WktError>),
+    /// Original JSON grammar/escape failure beneath a geometry carrier.
+    JsonSyntax(Box<JsonSyntaxError>),
+    /// Original GeoJSON member, type or coordinate-shape refusal.
+    GeoJsonShape(Box<GeoJsonShapeError>),
+    /// Original geometry operands refused by GeoJSON output.
+    GeoJsonWrite(Box<GeoJsonWriteError>),
+    /// Original runtime DE-9IM pattern grammar refusal.
+    PatternSyntax(PatternInputError),
     /// A spec-defined operation this crate does not implement. Always loud,
     /// never a default answer.
-    Unsupported(String),
+    Unsupported(UnsupportedRefusal),
     /// Well-formed arguments on which the operation is undefined (mixed
     /// coordinate reference systems, a measure of an empty geometry).
     Domain(std::borrow::Cow<'static, str>),
@@ -56,6 +191,11 @@ pub enum GeoError {
         /// The original binary64 bits.
         bits: u64,
     },
+    /// Numeric threshold promotion received a value outside the numeric tower.
+    NonNumericThreshold {
+        /// Original parsed XSD datatype.
+        datatype: purrdf_xsd::XsdDatatype,
+    },
     /// A carrier names a reference the caller has not registered.
     UnregisteredCrs(String),
     /// Comparing reference systems requires an explicit operation chain.
@@ -75,11 +215,22 @@ pub enum GeoError {
         roots: u64,
     },
     /// The declared ellipsoid parameters are invalid.
-    InvalidEllipsoid(&'static str),
+    InvalidEllipsoid(crate::context::Retained<EllipsoidInputError>),
     /// The execution policy cannot admit a complete operation.
-    InvalidExecutionPolicy(&'static str),
+    InvalidExecutionPolicy(crate::ExecutionLimits),
+    /// Original invalid mixed-cover limits, before any output allocation.
+    InvalidCoverPolicy(crate::cells::MixedCoverLimits),
+    /// Original invalid point-index limits, before any input allocation.
+    InvalidPointIndexPolicy(crate::cells::PointIndexLimits),
     /// A bounded producer cannot transfer its original live allocation owner.
     InvalidNativeStorage(&'static str),
+    /// A native geodesic entry received borrowed progress instead of its owner.
+    MissingNativeObserver {
+        /// Original native entry operation.
+        operation: crate::geodesic::NativeEntryOperation,
+    },
+    /// A completed inverse solution has no required captured metadata.
+    MissingInverseMetadata,
     /// The certified enclosure could not resolve the required rounding.
     PrecisionExhausted {
         /// The admitted maximum precision in bits.
@@ -100,6 +251,8 @@ pub enum GeoError {
     NumericalScratch(purrdf_xsd::integer::LimbScratchError),
     /// A reusable Taylor pool is already checked out by another branded scope.
     NumericalTaylorScratch(purrdf_xsd::math::TaylorScratchError),
+    /// Original numerical cause without a lossy outer-category substitution.
+    NativeMath(purrdf_xsd::math::MathError),
     /// A native destination or original physical admission refused before birth.
     Storage(purrdf_lex::allocation::StorageError),
     /// A complete result exceeds the admitted output count.
@@ -178,9 +331,102 @@ pub enum GeoError {
     PointIndexReferenceMismatch,
 }
 
+impl purrdf_hash::error::StructuredError for GeoError {
+    purrdf_hash::error_visit! {
+        Retained(cause) => "geo-retained" { "cause" => Cause(cause) },
+        SourceRead(cause) => "geo-source-read" { "cause" => Cause(cause) },
+        Arity(cause) => "geo-arity" { "cause" => Cause(cause) },
+        NumericLiteral(cause) => "geo-numeric-literal" { "cause" => Cause(cause) },
+        ArgumentInput(cause) => "geo-argument-input-error" { "cause" => Cause(&**cause) },
+        Config(reason) => "geo-config" { "reason" => Text(reason) },
+        NoRelationFamilies => "geo-no-relation-families" {},
+        IndexConfiguration(cause) => "geo-index-configuration" { "cause" => Cause(&**cause) },
+        IndexSerialization(cause) => "geo-index-serialization" { "cause" => Cause(&**cause) },
+        IndexBinding(cause) => "geo-index-binding" { "cause" => Cause(&**cause) },
+        SourcePreparation(cause) => "geo-source-preparation" { "cause" => Cause(&**cause) },
+        ContextConfiguration(cause) => "geo-context-configuration" { "cause" => Cause(&**cause) },
+        TransverseInput(cause) => "geo-transverse-input" { "cause" => Cause(&**cause) },
+        DifferentialInput(cause) => "geo-differential-input" { "cause" => Cause(cause) },
+        AffineInput(cause) => "geo-affine-input" { "cause" => Cause(&**cause) },
+        ProjectionInput(cause) => "geo-projection-input" { "cause" => Cause(&**cause) },
+        PolynomialInput(cause) => "geo-polynomial-input" { "cause" => Cause(&**cause) },
+        ModelInput(cause) => "geo-model-input" { "cause" => Cause(&**cause) },
+        OperationValidation { context, cause } => "geo-operation-validation" { "context" => Record(context), "cause" => Cause(cause) },
+        MatrixConfiguration(cause) => "geo-matrix-configuration" { "cause" => Cause(&**cause) },
+        BindingConfiguration(cause) => "geo-binding-configuration" { "cause" => Cause(&**cause) },
+        Vocabulary(cause) => "geo-vocabulary" { "cause" => Cause(&**cause) },
+        GeometryDomain(cause) => "geo-geometry-domain" { "cause" => Cause(&**cause) },
+        MetricUnit(cause) => "geo-metric-unit" { "cause" => Cause(&**cause) },
+        MetricInput(cause) => "geo-metric-input" { "cause" => Cause(&**cause) },
+        CarrierInput(cause) => "geo-carrier-input" { "cause" => Cause(&**cause) },
+        CrsConfiguration(cause) => "geo-crs-configuration" { "cause" => Cause(&**cause) },
+        CrsLiteral { prefix_start, cause } => "geo-crs-literal" {
+            "prefix_start" => Unsigned(*prefix_start as u128), "cause" => Cause(&**cause)
+        },
+        Literal(reason) => "geo-literal" { "reason" => Text(reason) },
+        GeometryShape(cause) => "geo-geometry-shape" { "cause" => Cause(cause) },
+        WktSyntax(cause) => "geo-wkt-syntax" { "cause" => Cause(&**cause) },
+        JsonSyntax(cause) => "geo-json-reader" { "cause" => Cause(&**cause) },
+        GeoJsonShape(cause) => "geo-geojson-shape" { "cause" => Cause(&**cause) },
+        GeoJsonWrite(cause) => "geo-geojson-write" { "cause" => Cause(&**cause) },
+        PatternSyntax(cause) => "geo-pattern-syntax" { "cause" => Cause(cause) },
+        Unsupported(cause) => "geo-unsupported" { "cause" => Cause(cause) },
+        Domain(reason) => "geo-domain" { "reason" => Text(reason.as_ref()) },
+        CoordinateOutOfRange { axis, value } => "geo-coordinate-out-of-range" { "axis" => Code(axis), "value" => Record(value) },
+        NonFiniteCoordinate { axis, bits } => "geo-non-finite-coordinate" { "axis" => Code(axis), "bits" => Float64Bits(*bits) },
+        NonFiniteThreshold { bits } => "geo-non-finite-threshold" { "bits" => Float64Bits(*bits) },
+        NonNumericThreshold { datatype } => "geo-nonnumeric-threshold" { "datatype" => Iri(datatype.iri()) },
+        UnregisteredCrs(iri) => "geo-unregistered-crs" { "iri" => Iri(iri) },
+        MissingOperation { source, target } => "geo-missing-operation" { "source" => Iri(source), "target" => Iri(target) },
+        MissingHeight => "geo-missing-height" {},
+        AmbiguousGeodesic => "geo-ambiguous-geodesic" {},
+        AmbiguousTransform { roots } => "geo-ambiguous-transform" { "roots" => Unsigned(u128::from(*roots)) },
+        InvalidEllipsoid(cause) => "geo-invalid-ellipsoid" { "cause" => Cause(&**cause) },
+        InvalidExecutionPolicy(limits) => "geo-invalid-execution-policy" { "limits" => Record(limits) },
+        InvalidCoverPolicy(limits) => "geo-invalid-cover-policy" { "limits" => Record(limits) },
+        InvalidPointIndexPolicy(limits) => "geo-invalid-point-index-policy" { "limits" => Record(limits) },
+        InvalidNativeStorage(reason) => "geo-invalid-native-storage" { "reason" => Text(reason) },
+        MissingNativeObserver { operation } => "geo-missing-native-observer" { "operation" => Record(operation) },
+        MissingInverseMetadata => "geo-missing-inverse-metadata" {},
+        PrecisionExhausted { bits } => "geo-precision-exhausted" { "bits" => Unsigned(u128::from(*bits)) },
+        WorkExhausted { limit } => "geo-work-exhausted" { "limit" => Unsigned(u128::from(*limit)) },
+        MemoryExhausted { limit } => "geo-memory-exhausted" { "limit" => ByteCount(u128::from(*limit)) },
+        NumericalScratch(cause) => "geo-numerical-scratch" { "cause" => Cause(cause) },
+        NumericalTaylorScratch(cause) => "geo-numerical-taylor-scratch" { "cause" => Cause(cause) },
+        NativeMath(cause) => "geo-native-math" { "cause" => Cause(cause) },
+        Storage(cause) => "geo-storage" { "cause" => Cause(cause) },
+        OutputExhausted { limit } => "geo-output-exhausted" { "limit" => Unsigned(u128::from(*limit)) },
+        Cancelled => "geo-cancelled" {},
+        ConvergenceExhausted { iterations } => "geo-convergence-exhausted" { "iterations" => Unsigned(u128::from(*iterations)) },
+        FloatEnvironment(cause) => "geo-float-environment" { "cause" => Cause(cause) },
+        ArithmeticOverflow(reason) => "geo-arithmetic-overflow" { "reason" => Text(reason) },
+        NonPositiveEdgeLength(value) => "geo-non-positive-edge-length" { "value" => Record(value) },
+        UnattainableEdgeLength { target, minimum } => "geo-unattainable-edge-length" { "target" => Record(target), "minimum" => Record(minimum) },
+        InvalidResolution(level) => "geo-invalid-resolution" { "level" => Unsigned(u128::from(*level)) },
+        InvalidCellId(id) => "geo-invalid-cell-id" { "id" => Unsigned(u128::from(*id)) },
+        GridProfileMismatch => "geo-grid-profile-mismatch" {},
+        InvalidStoredLevel { cell, stored } => "geo-invalid-stored-level" { "cell" => Unsigned(u128::from(*cell)), "stored" => Unsigned(u128::from(*stored)) },
+        InvalidAncestorLevel { cell, ancestor } => "geo-invalid-ancestor-level" { "cell" => Unsigned(u128::from(*cell)), "ancestor" => Unsigned(u128::from(*ancestor)) },
+        RootHasNoParent => "geo-root-has-no-parent" {},
+        LeafHasNoChildren => "geo-leaf-has-no-children" {},
+        InvalidOutputLength { expected, actual } => "geo-invalid-output-length" { "expected" => Unsigned(*expected as u128), "actual" => Unsigned(*actual as u128) },
+        NegativePhysicalRadius(value) => "geo-negative-physical-radius" { "value" => Record(value) },
+        InvalidCoverLevels { min, max } => "geo-invalid-cover-levels" { "min" => Unsigned(u128::from(*min)), "max" => Unsigned(u128::from(*max)) },
+        CoverCellsExhausted { limit } => "geo-cover-cells-exhausted" { "limit" => Unsigned(u128::from(*limit)) },
+        DuplicatePointKey(key) => "geo-duplicate-point-key" { "key" => Unsigned(u128::from(*key)) },
+        PointIndexReferenceMismatch => "geo-point-index-reference-mismatch" {},
+    }
+}
+
 /// A failure payload retaining the account under which its fields were born.
 #[derive(Clone, Debug)]
 pub struct RetainedGeoError(pub(crate) purrdf_lex::allocation::SharedOwned<GeoError>);
+
+impl purrdf_hash::error::StructuredError for RetainedGeoError {
+    purrdf_hash::error_visit! {
+        @tuple self (_owner) => "geo-retained-error" { "cause" => Cause(self.original()) }
+    }
+}
 
 impl RetainedGeoError {
     /// Borrow the original typed cause without detaching its allocation owner.
@@ -191,6 +437,51 @@ impl RetainedGeoError {
 }
 
 impl GeoError {
+    /// Publish an already caller-owned resident diagnostic without copying it.
+    /// Bounded producers use their original retained-allocation factory.
+    pub(crate) fn resident_failure<T: purrdf_hash::error::NativeError + 'static>(
+        cause: T,
+        make: fn(crate::context::Retained<T>) -> Self,
+    ) -> Self {
+        match crate::context::Retained::try_new(cause) {
+            Ok(cause) => make(cause),
+            Err(error) => error,
+        }
+    }
+
+    /// Publish an already constructed inline native cause under its original
+    /// physical account. Any owned heap fields must already have their owner;
+    /// this factory does not admit prior resident copies for a bounded caller.
+    pub(crate) fn retained_failure<T: purrdf_hash::error::NativeError + 'static>(
+        cause: T,
+        make: fn(crate::context::Retained<T>) -> Self,
+        observer: Option<&mut dyn crate::MetricWorkObserver>,
+    ) -> Self {
+        let mut progress = crate::context::WorkProgress::new(observer);
+        Self::retained_failure_with_progress(cause, make, &mut progress)
+    }
+
+    /// The same native publication within an already active progress owner.
+    pub(crate) fn retained_failure_with_progress<T: purrdf_hash::error::NativeError + 'static>(
+        cause: T,
+        make: fn(crate::context::Retained<T>) -> Self,
+        progress: &mut crate::context::WorkProgress<'_>,
+    ) -> Self {
+        match crate::context::Retained::produce(progress, |_| Ok(cause), |_, _| Ok(())) {
+            Ok(cause) => make(cause),
+            Err(error) => error,
+        }
+    }
+
+    /// Retain original member/extent operands without rendering a message.
+    #[must_use]
+    pub fn geometry_domain_metered(
+        cause: GeometryDomainError,
+        observer: Option<&mut dyn crate::MetricWorkObserver>,
+    ) -> Self {
+        Self::retained_failure(cause, Self::GeometryDomain, observer)
+    }
+
     /// Copy an exact diagnostic operand inside its original physical factory.
     /// The immutable control and detached coefficient buffers are admitted
     /// before birth; clones retain that same original error payload owner.
@@ -203,6 +494,59 @@ impl GeoError {
             |memory| value.detached_with_memory(memory).map_err(Self::Storage),
             |value, original| value.publish_detached(original).map_err(Self::Storage),
         )
+    }
+
+    /// Capture scalar declarations, optional source data and an exact computed
+    /// operand through their original detached numerical publication home.
+    pub(crate) fn diagnostic_inputs<T: crate::context::retained::NativeDetached>(
+        declaration: &T,
+        point: Option<&crate::operation::OperationPoint>,
+        comparison: Option<&crate::Rat>,
+        progress: &mut crate::context::WorkProgress<'_>,
+        make: impl FnOnce(
+            T,
+            Option<crate::operation::OperationPoint>,
+            Option<crate::context::Retained<crate::Rat>>,
+            &mut crate::context::WorkProgress<'_>,
+        ) -> Self,
+    ) -> Self {
+        let captured = (|| {
+            let declaration =
+                crate::context::retained::produce_persistent_numeric_from(declaration, progress)?
+                    .into_value();
+            let point = point
+                .map(|value| {
+                    crate::context::retained::produce_persistent_numeric_from(value, progress)
+                        .map(crate::context::PersistentNumeric::into_value)
+                })
+                .transpose()?;
+            let comparison = comparison
+                .map(|value| Self::diagnostic_number(value, progress))
+                .transpose()?;
+            Ok((declaration, point, comparison))
+        })();
+        match captured {
+            Ok((declaration, point, comparison)) => make(declaration, point, comparison, progress),
+            Err(error) => error,
+        }
+    }
+
+    /// Carry a native domain refusal through an existing numerical boundary;
+    /// resource failures keep their original operational category and owner.
+    pub(crate) fn math_validation_failure(
+        error: Self,
+        context: OperationValidationContext,
+        progress: &mut crate::context::WorkProgress<'_>,
+    ) -> purrdf_xsd::math::MathError {
+        let error = if error.is_expression_error() {
+            match RetainedGeoCause::capture(error, progress) {
+                Ok(cause) => Self::OperationValidation { context, cause },
+                Err(error) => error,
+            }
+        } else {
+            error
+        };
+        progress.math_failure(error)
     }
 }
 impl PartialEq for RetainedGeoError {
@@ -219,10 +563,6 @@ impl core::hash::Hash for RetainedGeoError {
 
 purrdf_lex::constructors! {
     impl GeoError {
-        /// Construct a fatal operational source refusal.
-        pub fn source_read(what) -> Self::SourceRead;
-        /// A [`GeoError::Arity`] with `what` as its detail.
-        pub fn arity(what) -> Self::Arity;
 
         /// A [`GeoError::Config`] with `what` as its detail.
         pub fn config(what) -> Self::Config;
@@ -230,8 +570,6 @@ purrdf_lex::constructors! {
         /// A [`GeoError::Literal`] with `what` as its detail.
         pub fn literal(what) -> Self::Literal;
 
-        /// A [`GeoError::Unsupported`] with `what` as its detail.
-        pub fn unsupported(what) -> Self::Unsupported;
 
         /// A [`GeoError::Domain`] with `what` as its detail.
         pub fn domain(what) -> Self::Domain;
@@ -239,6 +577,65 @@ purrdf_lex::constructors! {
 }
 
 impl GeoError {
+    /// Construct a source failure from genuine caller message data.
+    /// Native dataset reads use [`Self::native_source`] instead.
+    pub fn source_read(message: impl Into<String>) -> Self {
+        Self::SourceRead(GeoFailureCause::Message(message.into()))
+    }
+
+    /// Construct an arity refusal from genuine caller message data.
+    /// Native function checks retain their original arity through
+    /// [`Self::from_native_cause_metered`].
+    pub fn arity(message: impl Into<String>) -> Self {
+        Self::Arity(GeoFailureCause::Message(message.into()))
+    }
+
+    /// An unsupported operation described by genuine caller message data.
+    /// Native producers retain their specific [`UnsupportedRefusal`] instead.
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self::Unsupported(UnsupportedRefusal::Message(message.into()))
+    }
+
+    /// Preserve an original native cause through the existing physical owner.
+    /// The constructor selects the established geographic failure category.
+    /// No cause is rendered during capture or inspection.
+    #[must_use]
+    pub fn from_native_cause_metered(
+        make: fn(GeoFailureCause) -> Self,
+        cause: impl purrdf_hash::error::NativeError + 'static,
+        observer: Option<&mut dyn crate::MetricWorkObserver>,
+    ) -> Self {
+        Self::from_native_cause_with_progress(
+            make,
+            cause,
+            &mut crate::context::WorkProgress::integer(observer),
+        )
+    }
+
+    fn from_native_cause_with_progress(
+        make: fn(GeoFailureCause) -> Self,
+        cause: impl purrdf_hash::error::NativeError + 'static,
+        progress: &mut crate::context::WorkProgress<'_>,
+    ) -> Self {
+        match RetainedGeoCause::capture(cause, progress) {
+            Ok(cause) => make(GeoFailureCause::Native(cause)),
+            Err(error) => error,
+        }
+    }
+
+    /// Retain an original resident source cause without rendering it.
+    #[must_use]
+    pub fn native_source(cause: impl purrdf_hash::error::NativeError + 'static) -> Self {
+        Self::native_source_with_progress(cause, &mut crate::context::WorkProgress::integer(None))
+    }
+
+    pub(crate) fn native_source_with_progress(
+        cause: impl purrdf_hash::error::NativeError + 'static,
+        progress: &mut crate::context::WorkProgress<'_>,
+    ) -> Self {
+        Self::from_native_cause_with_progress(Self::SourceRead, cause, progress)
+    }
+
     /// Borrow the authoritative typed cause, preserving its original owner.
     #[must_use]
     pub fn original(&self) -> &Self {
@@ -251,12 +648,23 @@ impl GeoError {
 
     pub(crate) fn native_text_bytes(&self) -> Result<usize, purrdf_lex::allocation::StorageError> {
         match self {
-            Self::SourceRead(text)
-            | Self::Arity(text)
-            | Self::Config(text)
-            | Self::Literal(text)
-            | Self::Unsupported(text)
-            | Self::UnregisteredCrs(text) => Ok(text.capacity()),
+            Self::SourceRead(cause) | Self::Arity(cause) | Self::DifferentialInput(cause) => {
+                Ok(cause.native_text_bytes())
+            }
+            Self::Unsupported(cause) => Ok(cause.native_text_bytes()),
+            Self::PatternSyntax(cause) => Ok(cause.native_text_bytes()),
+            Self::BindingConfiguration(cause) => cause.native_owned_bytes(),
+            Self::PolynomialInput(cause) => cause.native_owned_bytes(),
+            Self::CarrierInput(cause) => Ok(cause.owned_bytes()),
+            Self::IndexSerialization(cause) => Ok(cause.owned_bytes()),
+            Self::CrsConfiguration(cause) | Self::CrsLiteral { cause, .. } => cause.owned_bytes(),
+            Self::WktSyntax(cause) => cause.owned_bytes(),
+            Self::JsonSyntax(_) => Ok(size_of::<JsonSyntaxError>()),
+            Self::GeoJsonShape(cause) => cause.owned_bytes(),
+            Self::GeoJsonWrite(cause) => cause.owned_bytes(),
+            Self::Config(text) | Self::Literal(text) | Self::UnregisteredCrs(text) => {
+                Ok(text.capacity())
+            }
             Self::Domain(std::borrow::Cow::Owned(text)) => Ok(text.capacity()),
             Self::MissingOperation { source, target } => source
                 .capacity()
@@ -299,10 +707,28 @@ impl GeoError {
     ///   has no area" and hide it.
     #[must_use]
     pub fn is_expression_error(&self) -> bool {
+        if self.is_domain_error() {
+            return true;
+        }
+        if let Self::Vocabulary(cause) = self.original() {
+            return cause.is_expression_error();
+        }
+        if let Self::CarrierInput(cause) = self.original() {
+            return !cause.is_configuration();
+        }
         matches!(
             self.original(),
-            Self::Domain(_)
+            Self::CrsLiteral { .. }
+                | Self::WktSyntax(_)
+                | Self::JsonSyntax(_)
+                | Self::GeometryShape(_)
+                | Self::GeoJsonShape(_)
+                | Self::IndexSerialization(_)
                 | Self::Literal(_)
+                | Self::NumericLiteral(_)
+                | Self::ArgumentInput(_)
+                | Self::NativeMath(purrdf_xsd::math::MathError::AmbiguousRoots { .. })
+                | Self::PatternSyntax(_)
                 | Self::CoordinateOutOfRange { .. }
                 | Self::NonFiniteCoordinate { .. }
                 | Self::NonFiniteThreshold { .. }
@@ -313,25 +739,135 @@ impl GeoError {
         )
     }
 
-    /// The detail message, without this error's own prefix.
+    /// Whether the caller must repair a missing or invalid declaration.
+    /// Configuration failures are fatal even when a row first reveals them.
     #[must_use]
-    pub fn detail(&self) -> &str {
-        match self {
-            Self::Retained(original) => original.original().detail(),
-            Self::Arity(msg)
-            | Self::SourceRead(msg)
-            | Self::Config(msg)
-            | Self::Literal(msg)
-            | Self::Unsupported(msg) => msg,
+    pub fn is_configuration_error(&self) -> bool {
+        match self.original() {
+            Self::Vocabulary(cause) => !cause.is_expression_error(),
+            Self::CarrierInput(cause) => cause.is_configuration(),
+            Self::TransverseInput(cause) => !cause.is_domain_error(),
+            Self::AffineInput(cause) => !cause.is_domain_error(),
+            Self::ProjectionInput(cause) => !cause.is_domain_error(),
+            Self::ModelInput(cause) => !cause.is_domain_error(),
+            Self::Config(_)
+            | Self::NoRelationFamilies
+            | Self::CrsConfiguration(_)
+            | Self::IndexConfiguration(_)
+            | Self::IndexBinding(_)
+            | Self::SourcePreparation(_)
+            | Self::ContextConfiguration(_)
+            | Self::PolynomialInput(_)
+            | Self::MetricUnit(_)
+            | Self::MatrixConfiguration(_)
+            | Self::BindingConfiguration(_)
+            | Self::UnregisteredCrs(_)
+            | Self::MissingOperation { .. }
+            | Self::InvalidEllipsoid(_)
+            | Self::InvalidExecutionPolicy(_)
+            | Self::InvalidCoverPolicy(_)
+            | Self::InvalidPointIndexPolicy(_)
+            | Self::MissingNativeObserver { .. }
+            | Self::InvalidNativeStorage(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether the original operands fall outside an operation's value domain.
+    /// Carrier syntax, configuration and operational refusals remain distinct.
+    #[must_use]
+    pub fn is_domain_error(&self) -> bool {
+        match self.original() {
+            Self::Domain(_)
+            | Self::GeometryDomain(_)
+            | Self::GeoJsonWrite(_)
+            | Self::MetricInput(_)
+            | Self::MissingInverseMetadata
+            | Self::DifferentialInput(_)
+            | Self::OperationValidation { .. }
+            | Self::NonNumericThreshold { .. }
+            | Self::NativeMath(purrdf_xsd::math::MathError::Domain(_)) => true,
+            Self::Vocabulary(cause) => cause.is_expression_error(),
+            Self::TransverseInput(cause) => cause.is_domain_error(),
+            Self::AffineInput(cause) => cause.is_domain_error(),
+            Self::ProjectionInput(cause) => cause.is_domain_error(),
+            Self::ModelInput(cause) => cause.is_domain_error(),
+            _ => false,
+        }
+    }
+
+    /// The detail message, without this error's own prefix.
+    /// Native causes return a separate owned human presentation. Inspection
+    /// never calls this accessor; bounded output uses [`Self::message_with_memory`].
+    #[must_use]
+    pub fn detail(&self) -> std::borrow::Cow<'_, str> {
+        let text: &str = match self {
+            Self::Retained(original) => return original.original().detail(),
+            Self::SourceRead(cause) | Self::Arity(cause) => return cause.detail(),
+            Self::NumericLiteral(cause) => return std::borrow::Cow::Owned(cause.to_string()),
+            Self::NativeMath(purrdf_xsd::math::MathError::Domain(reason)) => reason,
+            Self::NativeMath(cause) => return std::borrow::Cow::Owned(cause.to_string()),
+            Self::Unsupported(cause) => {
+                return match cause {
+                    UnsupportedRefusal::Message(message) => std::borrow::Cow::Borrowed(message),
+                    other => std::borrow::Cow::Owned(other.to_string()),
+                };
+            }
+            Self::IndexConfiguration(cause) => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::MatrixConfiguration(cause) => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::PatternSyntax(cause) => return std::borrow::Cow::Owned(cause.to_string()),
+            Self::BindingConfiguration(cause) => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::Vocabulary(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::GeometryDomain(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::MetricUnit(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::MetricInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::CarrierInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::CrsConfiguration(cause) | Self::CrsLiteral { cause, .. } => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::WktSyntax(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::JsonSyntax(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::GeometryShape(cause) => return std::borrow::Cow::Owned(cause.to_string()),
+            Self::GeoJsonShape(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::GeoJsonWrite(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::IndexSerialization(cause) => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::IndexBinding(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::SourcePreparation(cause) => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::ContextConfiguration(cause) => {
+                return std::borrow::Cow::Owned((**cause).to_string());
+            }
+            Self::TransverseInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::AffineInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::ProjectionInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::PolynomialInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::ModelInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::OperationValidation { context, .. } => context.detail(),
+            Self::Config(msg) | Self::Literal(msg) => msg,
+            Self::ArgumentInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::NoRelationFamilies => {
+                "no relation families supplied to register; registering nothing and returning success would surface much later as a query whose geo: relation was parsed as an ordinary triple pattern and matched nothing"
+            }
             Self::Domain(msg) => msg,
             Self::UnregisteredCrs(msg) => msg,
-            Self::InvalidEllipsoid(msg)
-            | Self::InvalidExecutionPolicy(msg)
-            | Self::InvalidNativeStorage(msg)
-            | Self::ArithmeticOverflow(msg) => msg,
+            Self::InvalidExecutionPolicy(_) => "admission limits must be positive",
+            Self::InvalidCoverPolicy(_) => "cover admission limits must be positive",
+            Self::InvalidPointIndexPolicy(_) => "point-index limits must be positive",
+            Self::InvalidEllipsoid(cause) => cause.requirement.message(),
+            Self::InvalidNativeStorage(msg) | Self::ArithmeticOverflow(msg) => msg,
             Self::CoordinateOutOfRange { .. } => "original angular coordinate outside its range",
             Self::NonFiniteCoordinate { .. } => "non-finite angular coordinate",
             Self::NonFiniteThreshold { .. } => "non-finite distance threshold",
+            Self::NonNumericThreshold { .. } => "a distance threshold must be numeric",
             Self::MissingOperation { .. } => "an explicit coordinate operation is required",
             Self::MissingHeight => "an actual height is required",
             Self::AmbiguousGeodesic => "endpoints do not select a unique geodesic arc",
@@ -341,6 +877,9 @@ impl GeoError {
             Self::MemoryExhausted { .. } => "admitted workspace exhausted",
             Self::NumericalScratch(_) => "admitted integer scratch refused a destination",
             Self::NumericalTaylorScratch(_) => "admitted Taylor scratch is already in use",
+            Self::MissingNativeObserver { .. } => "native entry requires its owned observer",
+            Self::MissingInverseMetadata => "inverse metadata capture missing",
+            Self::DifferentialInput(_) => "invalid declared projection or source point",
             Self::Storage(_) => "native geometry storage refused",
             Self::OutputExhausted { .. } => "complete output exceeds its admission",
             Self::Cancelled => "operation cancelled before completion",
@@ -361,7 +900,8 @@ impl GeoError {
             Self::CoverCellsExhausted { .. } => "complete canonical cover exceeds cell admission",
             Self::DuplicatePointKey(_) => "point index caller keys must be unique",
             Self::PointIndexReferenceMismatch => "point index reference differs from native grid",
-        }
+        };
+        std::borrow::Cow::Borrowed(text)
     }
 }
 
@@ -375,10 +915,95 @@ impl GeoError {
             Self::Retained(original) => original.original().fmt_with(f, number),
             Self::SourceRead(msg) => write!(f, "geometry source read error: {msg}"),
             Self::Arity(msg) => write!(f, "wrong argument count: {msg}"),
+            Self::NumericLiteral(cause) => write!(f, "malformed geometry literal: {cause}"),
+            Self::ArgumentInput(cause) => write!(f, "malformed geometry literal: {}", **cause),
             Self::Config(msg) => write!(f, "invalid geo configuration: {msg}"),
+            Self::NoRelationFamilies => write!(f, "invalid geo configuration: {}", self.detail()),
+            Self::CrsConfiguration(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::CrsLiteral { cause, .. } => write!(f, "malformed geometry literal: {}", **cause),
+            Self::IndexConfiguration(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::MatrixConfiguration(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::BindingConfiguration(cause) => {
+                write!(f, "invalid geo configuration: {}", **cause)
+            }
+            Self::Vocabulary(cause) => {
+                let prefix = if cause.is_expression_error() {
+                    "geometry domain error"
+                } else {
+                    "invalid geo configuration"
+                };
+                write!(f, "{prefix}: {}", **cause)
+            }
             Self::Literal(msg) => write!(f, "malformed geometry literal: {msg}"),
+            Self::GeometryShape(cause) => write!(f, "malformed geometry literal: {cause}"),
+            Self::GeoJsonShape(cause) => write!(f, "malformed geometry literal: {}", **cause),
+            Self::GeoJsonWrite(cause) => write!(f, "geometry domain error: {}", **cause),
+            Self::IndexSerialization(cause) => write!(f, "malformed geometry literal: {}", **cause),
+            Self::IndexBinding(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::SourcePreparation(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::ContextConfiguration(cause) => {
+                write!(f, "invalid geo configuration: {}", **cause)
+            }
+            Self::TransverseInput(cause) => write!(
+                f,
+                "{}: {}",
+                if cause.is_domain_error() {
+                    "geometry domain error"
+                } else {
+                    "invalid geo configuration"
+                },
+                **cause
+            ),
+            Self::AffineInput(cause) => write!(
+                f,
+                "{}: {}",
+                if cause.is_domain_error() {
+                    "geometry domain error"
+                } else {
+                    "invalid geo configuration"
+                },
+                **cause
+            ),
+            Self::ProjectionInput(cause) => write!(
+                f,
+                "{}: {}",
+                if cause.is_domain_error() {
+                    "geometry domain error"
+                } else {
+                    "invalid geo configuration"
+                },
+                **cause
+            ),
+            Self::PolynomialInput(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::ModelInput(cause) => write!(
+                f,
+                "{}: {}",
+                if cause.is_domain_error() {
+                    "geometry domain error"
+                } else {
+                    "invalid geo configuration"
+                },
+                **cause
+            ),
+            Self::OperationValidation { context, .. } => {
+                write!(f, "geometry domain error: {}", context.detail())
+            }
+            Self::MetricUnit(cause) => write!(f, "invalid geo configuration: {}", **cause),
+            Self::MetricInput(cause) => write!(f, "geometry domain error: {}", **cause),
+            Self::WktSyntax(cause) => write!(f, "malformed geometry literal: {}", **cause),
+            Self::JsonSyntax(cause) => write!(f, "malformed geometry literal: {}", **cause),
+            Self::PatternSyntax(cause) => write!(f, "malformed geometry literal: {cause}"),
             Self::Unsupported(msg) => write!(f, "unsupported GeoSPARQL operation: {msg}"),
             Self::Domain(msg) => write!(f, "geometry domain error: {msg}"),
+            Self::GeometryDomain(cause) => write!(f, "geometry domain error: {}", **cause),
+            Self::CarrierInput(cause) => {
+                let prefix = if cause.is_configuration() {
+                    "invalid geo configuration"
+                } else {
+                    "malformed geometry literal"
+                };
+                write!(f, "{prefix}: {}", **cause)
+            }
             Self::CoordinateOutOfRange { axis, value } => {
                 write!(
                     f,
@@ -392,6 +1017,9 @@ impl GeoError {
             }
             Self::NonFiniteThreshold { bits } => {
                 write!(f, "non-finite distance threshold: binary64 {bits:#018x}")
+            }
+            Self::NonNumericThreshold { .. } => {
+                f.write_str("geometry domain error: a distance threshold must be numeric")
             }
             Self::UnregisteredCrs(iri) => write!(f, "unregistered coordinate reference: <{iri}>"),
             Self::MissingOperation { source, target } => {
@@ -413,6 +1041,19 @@ impl GeoError {
             }
             Self::NumericalScratch(error) => write!(f, "geometry numerical scratch: {error}"),
             Self::NumericalTaylorScratch(error) => write!(f, "geometry Taylor scratch: {error}"),
+            Self::MissingNativeObserver { .. } => {
+                f.write_str("invalid geo configuration: native entry requires its owned observer")
+            }
+            Self::MissingInverseMetadata => {
+                f.write_str("geometry domain error: inverse metadata capture missing")
+            }
+            Self::DifferentialInput(_) => {
+                f.write_str("numerical domain: invalid declared projection or source point")
+            }
+            Self::NativeMath(purrdf_xsd::math::MathError::Domain(reason)) => {
+                write!(f, "geometry domain error: {reason}")
+            }
+            Self::NativeMath(error) => write!(f, "geometry numerical error: {error}"),
             Self::Storage(error) => write!(f, "GeoSPARQL native storage: {error}"),
             Self::OutputExhausted { limit } => {
                 write!(f, "complete geometry output exceeds {limit} elements")
@@ -470,13 +1111,15 @@ impl GeoError {
             | Self::AmbiguousGeodesic
             | Self::InvalidEllipsoid(_)
             | Self::InvalidExecutionPolicy(_)
+            | Self::InvalidCoverPolicy(_)
+            | Self::InvalidPointIndexPolicy(_)
             | Self::InvalidNativeStorage(_)
             | Self::Cancelled
             | Self::ArithmeticOverflow(_)
             | Self::GridProfileMismatch
             | Self::RootHasNoParent
-            | Self::LeafHasNoChildren => f.write_str(self.detail()),
-            Self::PointIndexReferenceMismatch => f.write_str(self.detail()),
+            | Self::LeafHasNoChildren => f.write_str(&self.detail()),
+            Self::PointIndexReferenceMismatch => f.write_str(&self.detail()),
         }
     }
 }
@@ -582,7 +1225,46 @@ impl GeoError {
     }
 }
 
-impl std::error::Error for GeoError {}
+purrdf_lex::error_source!(GeoError => {
+    Self::Retained(cause) => cause.original(),
+    Self::SourceRead(cause) => cause,
+    Self::Arity(cause) => cause,
+    Self::NumericLiteral(cause) => cause,
+    Self::ArgumentInput(cause) => &**cause,
+    Self::Unsupported(cause) => cause,
+    Self::IndexConfiguration(cause) => &**cause,
+    Self::MatrixConfiguration(cause) => &**cause,
+    Self::PatternSyntax(cause) => cause,
+    Self::BindingConfiguration(cause) => &**cause,
+    Self::InvalidEllipsoid(cause) => &**cause,
+    Self::Vocabulary(cause) => &**cause,
+    Self::GeometryDomain(cause) => &**cause,
+    Self::MetricUnit(cause) => &**cause,
+    Self::MetricInput(cause) => &**cause,
+    Self::CarrierInput(cause) => &**cause,
+    Self::CrsConfiguration(cause) | Self::CrsLiteral { cause, .. } => &**cause,
+    Self::WktSyntax(cause) => &**cause,
+    Self::JsonSyntax(cause) => &**cause,
+    Self::GeometryShape(cause) => cause,
+    Self::GeoJsonShape(cause) => &**cause,
+    Self::GeoJsonWrite(cause) => &**cause,
+    Self::IndexSerialization(cause) => &**cause,
+    Self::IndexBinding(cause) => &**cause,
+    Self::SourcePreparation(cause) => &**cause,
+    Self::ContextConfiguration(cause) => &**cause,
+    Self::TransverseInput(cause) => &**cause,
+    Self::DifferentialInput(cause) => cause,
+    Self::AffineInput(cause) => &**cause,
+    Self::ProjectionInput(cause) => &**cause,
+    Self::PolynomialInput(cause) => &**cause,
+    Self::ModelInput(cause) => &**cause,
+    Self::OperationValidation { context: _, cause } => cause,
+    Self::Storage(cause) => cause,
+    Self::NumericalScratch(cause) => cause,
+    Self::NumericalTaylorScratch(cause) => cause,
+    Self::NativeMath(cause) => cause,
+    Self::FloatEnvironment(cause) => cause
+});
 
 purrdf_lex::variant_from!(GeoError {
     Storage(purrdf_lex::allocation::StorageError),

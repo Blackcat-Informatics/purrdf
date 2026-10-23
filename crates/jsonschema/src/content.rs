@@ -15,6 +15,86 @@
 
 use purrdf_lex::json::{Limits, Object, Reader, Value};
 
+/// The original base64 grammar refusal, before content presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base64Refusal {
+    /// The non-linebreak symbol count is not a multiple of four.
+    Length {
+        /// Original symbol count.
+        symbols: usize,
+    },
+    /// Padding appears in a nonfinal group or exceeds two symbols.
+    Padding {
+        /// Zero-based group index.
+        group: usize,
+        /// Padding count.
+        padding: usize,
+        /// Whether this was the final group.
+        last: bool,
+    },
+    /// A symbol is absent from the base64 alphabet.
+    Symbol {
+        /// Offset among non-linebreak symbols.
+        offset: usize,
+        /// Original rejected byte.
+        byte: u8,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for Base64Refusal {
+    purrdf_hash::error_visit! {
+        Length { symbols } => "schema-base64-length" { "symbols" => Unsigned(*symbols as u128) },
+        Padding { group, padding, last } => "schema-base64-padding" { "group" => Unsigned(*group as u128), "padding" => Unsigned(*padding as u128), "last" => Boolean(*last) },
+        Symbol { offset, byte } => "schema-base64-symbol" { "offset" => Unsigned(*offset as u128), "byte" => Unsigned(u128::from(*byte)) },
+    }
+}
+
+impl std::fmt::Display for Base64Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the string is not valid base64")
+    }
+}
+impl std::error::Error for Base64Refusal {}
+
+/// A draft-07 content assertion's original native decoding refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentRefusal {
+    /// Original source text and base64 grammar cause.
+    Base64 {
+        /// Original encoded text.
+        text: String,
+        /// Original decoding cause.
+        cause: Base64Refusal,
+    },
+    /// Original decoded content and JSON grammar cause.
+    Json {
+        /// Original content bytes, decoded if base64 was declared.
+        bytes: Vec<u8>,
+        /// Original grammar refusal and offset.
+        cause: purrdf_lex::json::Error,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for ContentRefusal {
+    purrdf_hash::error_visit! {
+        Base64 { text, cause } => "schema-content-base64" { "text" => Text(text), "cause" => Cause(cause) },
+        Json { bytes, cause } => "schema-content-json" { "bytes" => Bytes(bytes), "cause" => Cause(cause) },
+    }
+}
+
+impl std::fmt::Display for ContentRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Base64 { cause, .. } => cause.fmt(f),
+            Self::Json { .. } => f.write_str("the content is not a JSON document"),
+        }
+    }
+}
+purrdf_lex::error_source!(ContentRefusal => {
+    Self::Base64 { cause, .. } => cause,
+    Self::Json { cause, .. } => cause
+});
+
 /// A content check a schema object asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Content {
@@ -50,27 +130,30 @@ impl Content {
     }
 
     /// Why `text` fails the check, if it does.
-    pub(crate) fn check(self, text: &str) -> Result<(), String> {
+    pub(crate) fn check(self, text: &str) -> Result<(), ContentRefusal> {
         let decoded;
         let bytes = if self.base64 {
-            decoded = decode_base64(text).ok_or("the string is not valid base64")?;
+            decoded = decode_base64(text).map_err(|cause| ContentRefusal::Base64 {
+                text: text.to_owned(),
+                cause,
+            })?;
             decoded.as_slice()
         } else {
             text.as_bytes()
         };
-        if self.json && !is_json_text(bytes) {
-            return Err("the content is not a JSON document".to_owned());
+        if self.json {
+            let check = || {
+                let mut reader = Reader::from_slice(bytes, Limits::with_depth(usize::MAX))?;
+                reader.skip_value()?;
+                reader.finish()
+            };
+            check().map_err(|cause| ContentRefusal::Json {
+                bytes: bytes.to_vec(),
+                cause,
+            })?;
         }
         Ok(())
     }
-}
-
-/// Whether `bytes` are one UTF-8 JSON text. The check is syntax only, and the
-/// reader's container stack lives on the heap, so no nesting depth is refused
-/// that the grammar admits.
-fn is_json_text(bytes: &[u8]) -> bool {
-    Reader::from_slice(bytes, Limits::with_depth(usize::MAX))
-        .is_ok_and(|mut reader| reader.skip_value().is_ok() && reader.finish().is_ok())
 }
 
 /// `application/json`, in any case, with or without parameters (RFC 2045
@@ -83,13 +166,15 @@ fn is_json_media_type(media_type: &str) -> bool {
 /// Decode base64: the RFC 4648 §4 alphabet in groups of four, `=` padding
 /// only at the end, line breaks (RFC 2045 §6.8 limits encoded lines) ignored.
 /// Any other character is refused.
-fn decode_base64(text: &str) -> Option<Vec<u8>> {
+fn decode_base64(text: &str) -> Result<Vec<u8>, Base64Refusal> {
     let symbols: Vec<u8> = text
         .bytes()
         .filter(|&byte| byte != b'\r' && byte != b'\n')
         .collect();
     if !symbols.len().is_multiple_of(4) {
-        return None;
+        return Err(Base64Refusal::Length {
+            symbols: symbols.len(),
+        });
     }
     let mut out = Vec::with_capacity(symbols.len() / 4 * 3);
     let groups = symbols.len() / 4;
@@ -97,17 +182,25 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
         let last = index + 1 == groups;
         let padding = group.iter().rev().take_while(|&&byte| byte == b'=').count();
         if padding > 2 || (padding > 0 && !last) {
-            return None;
+            return Err(Base64Refusal::Padding {
+                group: index,
+                padding,
+                last,
+            });
         }
         let mut word: u32 = 0;
-        for &symbol in &group[..4 - padding] {
-            word = (word << 6) | u32::from(sextet(symbol)?);
+        for (position, &symbol) in group[..4 - padding].iter().enumerate() {
+            let value = sextet(symbol).ok_or(Base64Refusal::Symbol {
+                offset: index * 4 + position,
+                byte: symbol,
+            })?;
+            word = (word << 6) | u32::from(value);
         }
         word <<= 6 * padding;
         let [_, high, middle, low] = word.to_be_bytes();
         out.extend_from_slice(&[high, middle, low][..3 - padding]);
     }
-    Some(out)
+    Ok(out)
 }
 
 const fn sextet(symbol: u8) -> Option<u8> {
@@ -127,18 +220,82 @@ mod tests {
 
     #[test]
     fn base64_refuses_foreign_symbols_and_accepts_its_neighbours() {
-        assert_eq!(decode_base64("Zm9v").as_deref(), Some(b"foo".as_slice()));
-        assert_eq!(decode_base64("Zm8=").as_deref(), Some(b"fo".as_slice()));
-        assert_eq!(decode_base64("Zg==").as_deref(), Some(b"f".as_slice()));
+        assert_eq!(decode_base64("Zm9v").as_deref(), Ok(b"foo".as_slice()));
+        assert_eq!(decode_base64("Zm8=").as_deref(), Ok(b"fo".as_slice()));
+        assert_eq!(decode_base64("Zg==").as_deref(), Ok(b"f".as_slice()));
         assert_eq!(
             decode_base64("Zm9v\r\nYmFy").as_deref(),
-            Some(b"foobar".as_slice())
+            Ok(b"foobar".as_slice())
         );
-        assert_eq!(decode_base64(""), Some(Vec::new()));
-        assert_eq!(decode_base64("Zm9%"), None);
-        assert_eq!(decode_base64("Zm9"), None);
-        assert_eq!(decode_base64("Zg==Zg=="), None);
-        assert_eq!(decode_base64("Z==="), None);
+        assert_eq!(decode_base64(""), Ok(Vec::new()));
+        assert_eq!(
+            decode_base64("Zm9%"),
+            Err(Base64Refusal::Symbol {
+                offset: 3,
+                byte: b'%'
+            })
+        );
+        assert_eq!(
+            decode_base64("Zm9"),
+            Err(Base64Refusal::Length { symbols: 3 })
+        );
+        assert_eq!(
+            decode_base64("Zg==Zg=="),
+            Err(Base64Refusal::Padding {
+                group: 0,
+                padding: 2,
+                last: false
+            })
+        );
+        assert_eq!(
+            decode_base64("Z==="),
+            Err(Base64Refusal::Padding {
+                group: 0,
+                padding: 3,
+                last: true
+            })
+        );
+    }
+
+    #[test]
+    fn content_retains_original_native_decoder_causes_after_input_death() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let text = String::from("Zm9%");
+        let error = Content {
+            base64: true,
+            json: true,
+        }
+        .check(&text)
+        .unwrap_err();
+        drop(text);
+        let capture = Capture::read(&error);
+        assert!(matches!(capture.field("text"), ErrorValue::Text("Zm9%")));
+        let cause = capture.child("cause");
+        assert_eq!(cause.code, "schema-base64-symbol");
+        assert!(matches!(cause.field("offset"), ErrorValue::Unsigned(3)));
+        assert!(matches!(cause.field("byte"), ErrorValue::Unsigned(37)));
+
+        let text = String::from("[1,]");
+        let error = Content {
+            base64: false,
+            json: true,
+        }
+        .check(&text)
+        .unwrap_err();
+        drop(text);
+        let expected = Reader::from_slice(b"[1,]", Limits::with_depth(usize::MAX))
+            .unwrap()
+            .skip_value()
+            .unwrap_err();
+        let capture = Capture::read(&error);
+        assert!(matches!(capture.field("bytes"), ErrorValue::Bytes(b"[1,]")));
+        let cause = capture.child("cause");
+        assert_eq!(cause.code, Capture::read(&expected).code);
+        assert!(
+            matches!(cause.field("offset"), ErrorValue::ByteCount(value) if value == expected.offset() as u128)
+        );
     }
 
     #[test]

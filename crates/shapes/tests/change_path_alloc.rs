@@ -422,11 +422,18 @@ const BIND_ALLOC_CONST: u64 = 59;
 ///
 /// Product admission restores its own fixed shapes graph through `restore_pack`,
 /// which freezes the native RDF tables and their predicate/domain metadata.
-/// Sealing that metadata adds fifteen allocations for this product: the measured
-/// restore is 292 for both instance sizes. This is work on the carried product,
-/// not a scan or copy of the instance dataset. The equality across sizes and the
-/// live restored-validator checks below remain part of the contract.
-const ADMIT_ALLOC_CONST: u64 = 292;
+/// Predicate/domain metadata adds fifteen allocations for this product. Its
+/// independent source metadata adds one more: a source-record buffer reserved
+/// once for the fixed carried graph's sixteen asserted rows. There are no
+/// annotations, so normalized keys reuse that same directory. A directory below
+/// 32 rows needs no checkpoint, and scalar term hashing needs no pending buffer.
+/// This replaces eleven source allocations from two growing record vectors,
+/// traversal scratch and two resized checkpoint vectors. The measured restore
+/// is therefore 293 for both instance sizes. This is work
+/// on the carried product, not a scan or copy of the instance dataset. The
+/// equality across sizes and the live restored-validator checks below remain
+/// part of the contract.
+const ADMIT_ALLOC_CONST: u64 = 293;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

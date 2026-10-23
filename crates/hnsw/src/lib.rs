@@ -358,7 +358,7 @@ impl IndexArithmetic for Reassociated {
 /// The kernel `metric` names, or the refusal of a metric no kernel evaluates.
 fn kernel_of(metric: &DistanceMetric) -> Result<Kernel> {
     Kernel::of(metric).ok_or_else(|| HnswError::UnsupportedMetric {
-        metric: format!("{metric:?}"),
+        metric: metric.clone(),
     })
 }
 
@@ -482,11 +482,10 @@ impl<A: IndexArithmetic> HnswIndex<A> {
         check_build::<A>(image.arithmetic.shape)?;
         if image.graph.node_count() != matrix.rows() {
             return Err(HnswError::InvalidPayload {
-                reason: format!(
-                    "the payload holds {} node(s) but the matrix holds {} row(s)",
-                    image.graph.node_count(),
-                    matrix.rows()
-                ),
+                reason: error::PayloadRefusal::MatrixRows {
+                    nodes: image.graph.node_count(),
+                    rows: matrix.rows(),
+                },
             });
         }
         image
@@ -763,12 +762,10 @@ impl<A: Arithmetic> HnswIndex<A> {
         let arithmetic = self.resolve_here()?;
         if query.len() != self.matrix.dims() {
             return Err(HnswError::ParameterValidation {
-                description: format!(
-                    "the query has {} component(s) but this index ranks {}-dimensional \
-                     vectors",
-                    query.len(),
-                    self.matrix.dims()
-                ),
+                cause: error::MatrixRefusal::QueryWidth {
+                    actual: query.len(),
+                    expected: self.matrix.dims(),
+                },
             });
         }
         Ok(Query::from_vector(
@@ -2135,5 +2132,16 @@ mod tests {
         )
         .expect_err("no kernel");
         assert!(matches!(error, HnswError::UnsupportedMetric { .. }));
+        let fields = purrdf_testkit::error_capture::Capture::read(&error);
+        let metric = fields.child("metric");
+        assert_eq!(metric.code, "embedding-metric-extension");
+        assert!(matches!(
+            metric.field("identifier"),
+            purrdf_hash::error::ErrorValue::Text("https://example.org/metric")
+        ));
+        assert!(matches!(
+            metric.field("parameters"),
+            purrdf_hash::error::ErrorValue::Bytes([1, 2, 3])
+        ));
     }
 }

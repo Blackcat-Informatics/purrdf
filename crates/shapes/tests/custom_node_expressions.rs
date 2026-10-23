@@ -7,8 +7,8 @@
 //! Three W3C sections, driven through the production surfaces only —
 //! `engine::parse_shapes` for the shapes graph, `engine::validate_graphs` for
 //! validation, `rules::entail_dataset` for rule entailment, and
-//! `NativeSparqlEngine` for query text. Nothing here hand-builds a
-//! `NodeExpr`.
+//! `NativeSparqlEngine` for query text. Direct-entry controls also construct
+//! original public function bodies to measure resources and processor refusals.
 //!
 //! * **SHACL 1.2 Node Expressions §6.1** — `sh:NamedParameterExpressionFunction`,
 //!   `sh:keyParameter`, and the `[ shnex:arg <iri> ]` argument reference.
@@ -28,16 +28,24 @@ mod turtle;
 #[path = "support/terms.rs"]
 mod terms;
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use std::sync::Arc;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
 use terms::ex_ns as ex_term;
 
 use purrdf_rdf::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{parse_shapes, validate_with};
-use purrdf_shapes::expression::{RecursionGuard, eval_node_expr};
+use purrdf_shapes::expression::{
+    CustomFunction, RecursionGuard, eval_custom_function_call, eval_node_expr,
+};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::rules::entail_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+use purrdf_shapes::{FailureClass, ProcessorFailure};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 const PREFIXES: &str = r"
@@ -361,7 +369,7 @@ fn named_parameter_function_evaluates_its_body_under_the_argument_scope() {
     ";
     assert_eq!(
         outputs(INCOME_DATA, shapes, "alice"),
-        vec!["\"15\"^^<http://www.w3.org/2001/XMLSchema#decimal>".to_owned()],
+        vec!["\"15.0\"^^<http://www.w3.org/2001/XMLSchema#decimal>".to_owned()],
         "(10 + 20) / 2 — the MULTI-valued named argument is evaluated where each \
          shnex:arg reads it"
     );
@@ -462,6 +470,467 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
     assert!(
         bound[0].contains("30"),
         "the function summed the focus graph: {bound:?}"
+    );
+}
+
+/// The first column of every row `query` returns over `data_ttl` with the functions
+/// `shapes_ttl` declares registered, `None` for an unbound value.
+fn sparql_column(data_ttl: &str, shapes_ttl: &str, query: &str) -> Vec<Option<String>> {
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
+    let data = data_of(data_ttl);
+    let result = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &data,
+            SparqlRequest {
+                query: &format!("PREFIX ex: <http://example.org/ns#>\n{query}"),
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::new()
+                .with_functions(
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                        .expect("the fixture's bodies parse and admit"),
+                )
+                .with_focus_graph(Some(&data)),
+        )
+        .expect("the query evaluates: a function error is a SPARQL error, not a failed query");
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("expected solutions");
+    };
+    rows.iter()
+        .map(|row| {
+            row.first()
+                .and_then(Option::as_ref)
+                .map(|v| format!("{v:?}"))
+        })
+        .collect()
+}
+
+/// SHACL 1.2 SPARQL Extensions §7.3 (editor's draft `shacl-ed-2026-10-16`): "an argument
+/// that evaluates to a blank node leads to an evaluation failure and thus an error" — the call is unbound, where the same
+/// function over an IRI argument returns it. An OPTIONAL parameter turns that error into
+/// an argument "unbound in the scope", and the arguments after it keep their indexes.
+#[test]
+fn a_blank_node_argument_is_an_error_unless_its_parameter_is_optional() {
+    const FNS: &str = r"
+        ex:identity a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:arg 0 ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ex:total a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:sum [ shnex:concat (
+              [ shnex:arg 0 ] [ shnex:arg 1 ] [ shnex:arg 2 ] ) ] ] ;
+          sh:parameter [ sh:path shnex:arg0 ] ;
+          sh:parameter [ sh:path shnex:arg1 ; sh:optional true ] ;
+          sh:parameter [ sh:path shnex:arg2 ; sh:optional true ] .
+        ";
+    let data = "ex:alice ex:node [ ex:label \"blank\" ] ; ex:iri ex:b .";
+    let column = |call: &str| {
+        sparql_column(
+            data,
+            FNS,
+            &format!(
+                "SELECT ?v WHERE {{ ex:alice ex:node ?blank ; ex:iri ?iri . BIND ({call} AS ?v) }}"
+            ),
+        )
+    };
+    assert_eq!(
+        column("ex:identity(?blank)"),
+        vec![None],
+        "a blank node argument to a required parameter is an error"
+    );
+    assert_eq!(
+        column("ex:identity(?iri)").len(),
+        1,
+        "the neighbouring IRI argument is accepted"
+    );
+    assert!(column("ex:identity(?iri)")[0].is_some());
+    assert!(
+        column("ex:total(1, ?blank, 5)")[0]
+            .as_ref()
+            .is_some_and(|v| v.contains('6')),
+        "an optional blank node argument is unbound and the next argument keeps index 2: {:?}",
+        column("ex:total(1, ?blank, 5)")
+    );
+}
+
+/// A blank node as an argument is an error under the editor's draft only. Its text adds
+/// "Note that blank nodes cannot be passed as arguments: they are not constant node
+/// expressions, so an argument that evaluates to a blank node leads to an evaluation
+/// failure and thus an error"; the working draft's §7.3 states only that an argument
+/// whose evaluation is an error makes the call an error, so under it the blank node is
+/// an ordinary argument and the call returns it.
+///
+/// Both laws run the same SPARQL-based constraint (the W3C `blankNodeArgument-001`
+/// shape) over the same data, which holds a blank node and, beside it, an IRI. The IRI
+/// call is the neighbour: it returns its argument under both laws.
+#[test]
+fn a_blank_node_argument_is_an_error_under_the_editors_draft_and_an_argument_under_the_working_draft()
+ {
+    use purrdf_shapes::ShaclProfile;
+    use purrdf_shapes::ShapesImports;
+    use purrdf_shapes::engine::{ValidationOptions, validate_graphs_with_options};
+
+    let shapes = format!(
+        r#"{PREFIXES}
+        ex:identity a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:arg 0 ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:alice ; sh:sparql [
+          sh:select """
+            SELECT $this ?value WHERE {{
+              $this ex:node ?blank ; ex:iri ?iri .
+              BIND (ex:identity(?blank) AS ?fromBlank)
+              BIND (ex:identity(?iri) AS ?fromIri)
+              BIND (CONCAT(str(bound(?fromBlank)), " ", str(?fromIri)) AS ?value)
+            }}""" ] .
+        "#
+    );
+    let data = "<http://example.org/ns#alice> <http://example.org/ns#node> _:b .\n\
+                <http://example.org/ns#alice> <http://example.org/ns#iri> <http://example.org/ns#b> .\n";
+    let value_under = |law: ShaclProfile| {
+        let report = validate_graphs_with_options(
+            data,
+            &shapes,
+            None,
+            &ValidationOptions::default().with_profile(law),
+            &ShapesImports::new(),
+        )
+        .unwrap_or_else(|error| panic!("{law}: {error}"));
+        let [result] = report.results.as_slice() else {
+            panic!("{law}: one result expected, got {}", report.results.len());
+        };
+        result.value.as_ref().map(ToString::to_string)
+    };
+    assert_eq!(
+        value_under(ShaclProfile::ED_20261016).as_deref(),
+        Some("\"false http://example.org/ns#b\""),
+        "the editor's draft makes the blank node argument an error, the IRI call returns it"
+    );
+    assert_eq!(
+        value_under(ShaclProfile::WD_20260918).as_deref(),
+        Some("\"true http://example.org/ns#b\""),
+        "the working draft passes the blank node, and the IRI call is unchanged"
+    );
+    assert_eq!(
+        value_under(ShaclProfile::LEGACY),
+        value_under(ShaclProfile::ED_20261016),
+        "the compatibility law reads the editor's draft"
+    );
+}
+
+/// §7.3: "If the list of output nodes `rs` has exactly one member, then return that
+/// node. Otherwise, or if the evaluation produces an evaluation failure, the result of
+/// the SPARQL function call is an error." A body producing two nodes, or none, is a SPARQL
+/// error — an unbound `BIND` — and does not fail the query around it; the neighbouring
+/// body producing exactly one node returns it.
+#[test]
+fn a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error() {
+    const FN: &str = r"
+        ex:instanceOf a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:instancesOf [ shnex:arg 0 ] ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ";
+    let data = "ex:one a ex:One . ex:first a ex:Two . ex:second a ex:Two .";
+    let column = |class: &str| {
+        sparql_column(
+            data,
+            FN,
+            &format!("SELECT ?v WHERE {{ BIND (ex:instanceOf({class}) AS ?v) }}"),
+        )
+    };
+    assert_eq!(column("ex:Two"), vec![None], "two nodes: an error");
+    assert_eq!(column("ex:None"), vec![None], "no node: an error");
+    let one = column("ex:One");
+    assert!(
+        one[0].as_ref().is_some_and(|v| v.contains("one")),
+        "exactly one node is returned: {one:?}"
+    );
+}
+
+/// An evaluation failure INSIDE a function body is the call's SPARQL error, not a
+/// failure of the validation around it. §7.3: "Otherwise, or if the evaluation produces
+/// an evaluation failure, the result of the SPARQL function call is an error."
+///
+/// The body `sparql:abs(<select>)` over a select that returns two nodes is a
+/// list-argument cardinality failure ("argument 0 produced 2 nodes"). Called from
+/// `BIND`, the variable stays unbound, so `str(bound(?r))` is `"false"`, and the
+/// validation produces a report rather than an error.
+#[test]
+fn a_cardinality_failure_in_a_body_is_a_sparql_error_in_a_report() {
+    const FN: &str = r#"
+        ex:twoNodes a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ sparql:abs ( [ sh:select "SELECT ?v WHERE { ?x <http://example.org/ns#n> ?v }" ] ) ] .
+        ex:S a sh:NodeShape ;
+          sh:targetNode ex:alice ;
+          sh:sparql [
+            sh:message "unbound" ;
+            sh:select """
+              SELECT $this ?value WHERE {
+                BIND (<http://example.org/ns#twoNodes>() AS ?r)
+                BIND (str(bound(?r)) AS ?value)
+              }
+            """ ;
+          ] .
+        "#;
+    let data = "ex:a ex:n 1 . ex:b ex:n 2 . ex:alice ex:n 3 .";
+    let report =
+        validate(data, FN).expect("an evaluation failure in the body does not fail validation");
+    let values: Vec<String> = report
+        .results
+        .iter()
+        .filter_map(|r| r.value.as_ref().map(ToString::to_string))
+        .collect();
+    assert_eq!(
+        values,
+        vec!["\"false\"".to_owned()],
+        "the call is unbound: {:?}",
+        report.results
+    );
+    // Neighbour: the same function over ONE node returns its value, so the unbound
+    // result above is the body's failure, not the harness.
+    let one = sparql_column(
+        "ex:a ex:n -1 .",
+        r#"ex:oneNode a sh:ListParameterExpressionFunction ;
+             sh:bodyExpression [ sparql:abs ( [ sh:select "SELECT ?v WHERE { ?x <http://example.org/ns#n> ?v }" ] ) ] ."#,
+        "SELECT ?v WHERE { BIND (ex:oneNode() AS ?v) }",
+    );
+    assert!(one[0].as_ref().is_some_and(|v| v.contains('1')), "{one:?}");
+}
+
+/// A second kind of evaluation failure: a shape argument that names no shape of the
+/// shapes graph. Unbound for the call; the neighbouring call naming a real shape returns
+/// its verdict. The declared built-in `shnex:conformsToShape` called directly from SPARQL
+/// follows the same rule.
+#[test]
+fn an_unresolvable_shape_in_a_body_is_a_sparql_error() {
+    let shapes = format!(
+        "ex:conforms a sh:ListParameterExpressionFunction ;
+           sh:bodyExpression [ shnex:conformsToShape ( [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] ;
+           sh:parameter [ sh:path shnex:arg0 ], [ sh:path shnex:arg1 ] .
+         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         {NAMED_SHAPE}"
+    );
+    let column = |call: &str| {
+        sparql_column(
+            "ex:a ex:name \"a\" .",
+            &shapes,
+            &format!("SELECT ?v WHERE {{ BIND ({call} AS ?v) }}"),
+        )
+    };
+    assert_eq!(
+        column("ex:conforms(ex:a, ex:Missing)"),
+        vec![None],
+        "custom body"
+    );
+    assert_eq!(
+        column("<http://www.w3.org/ns/shacl-node-expr#conformsToShape>(ex:a, ex:Missing)"),
+        vec![None],
+        "built-in"
+    );
+    for call in [
+        "ex:conforms(ex:a, ex:Named)",
+        "<http://www.w3.org/ns/shacl-node-expr#conformsToShape>(ex:a, ex:Named)",
+    ] {
+        let ok = column(call);
+        assert!(
+            ok[0].as_ref().is_some_and(|v| v.contains("true")),
+            "{call}: {ok:?}"
+        );
+    }
+}
+
+/// Neighbour of the evaluation-failure test above: a failure of the PROCESSOR inside a body that is reached through
+/// SPARQL query text is not the call's SPARQL error; validation fails, and the typed cause
+/// is a `ShapesError::Processor`, not a message.
+///
+/// `ex:pingpong` calls itself through `BIND` in its own `sh:select` body, so each level is
+/// a SPARQL call; the evaluator's own function-depth bound (32) trips first and arrives as the
+/// propagated query-engine failure (`ProcessorFailure::Query`), which every enclosing level
+/// must pass on. Were that failure read as an evaluation failure, every level would turn it into an unbound value
+/// and the validation would complete with a report. Unlike a governor trip, nothing is
+/// latched on a shared state, so this test observes the classification alone.
+#[test]
+fn a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed_cause() {
+    let shapes = r#"
+        ex:pingpong a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ sh:select """
+            SELECT ?result WHERE { BIND (ex:pingpong($this) AS ?result) }
+          """ ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ex:S a sh:NodeShape ;
+          sh:targetNode ex:alice ;
+          sh:expression [ ex:pingpong ( sh:this ) ] .
+    "#;
+    let parsed = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
+    let error = validate_with(&store_of(INCOME_DATA), &parsed)
+        .expect_err("a processor failure inside the body must fail the validation");
+    assert_eq!(error.failure_class(), FailureClass::Processor, "{error}");
+    let Some(ProcessorFailure::Query { code, message }) = error.as_processor() else {
+        panic!("expected the query engine's propagated failure, got {error:?}");
+    };
+    assert_eq!(
+        code,
+        purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
+    );
+    assert!(
+        message.contains("recursion exceeded the depth bound of 32"),
+        "{message}"
+    );
+
+    // Neighbour: the same shape of call that terminates is answered, so the failure above
+    // is the depth bound and not the harness.
+    let ok = sparql_column(
+        INCOME_DATA,
+        INCOME_TOTAL_FN,
+        "SELECT ?v WHERE { BIND (ex:incomeTotal(ex:alice) AS ?v) }",
+    );
+    assert!(ok[0].as_ref().is_some_and(|v| v.contains("30")), "{ok:?}");
+}
+
+/// The direct form of the same fact: the body-level entry point returns the typed
+/// `CallDepth` cause when the guard has no depth left, and an internal defect (a function
+/// whose body was never installed) is `ProcessorFailure::Internal`. Both are of class
+/// `Processor`, so neither can be mapped to a SPARQL error.
+#[test]
+fn body_level_processor_failures_are_typed() {
+    use purrdf_shapes::expression::{ArgKey, CustomFnKind, NodeExpr};
+    let function = |body: Option<NodeExpr>| {
+        let installed = std::sync::OnceLock::new();
+        if let Some(body) = body {
+            installed.set(body).expect("a fresh lock is empty");
+        }
+        Arc::new(CustomFunction {
+            iri: purrdf_shapes::term::NamedNode::new_unchecked("http://example.org/ns#direct"),
+            kind: CustomFnKind::ListParameter,
+            params: vec![ArgKey::Index(0)],
+            required: 1,
+            body: installed,
+        })
+    };
+    let store = store_of(INCOME_DATA);
+    let args = [Some(ex_term("alice"))];
+
+    let with_body = function(Some(NodeExpr::Constant(ex_term("answer"))));
+    let mut exhausted = RecursionGuard::with_depth(purrdf_shapes::expression::MAX_RECURSION_DEPTH);
+    let error = eval_custom_function_call(&store, &with_body, &args, &mut exhausted)
+        .expect_err("no re-entry depth is left");
+    assert!(
+        matches!(
+            error.as_processor(),
+            Some(ProcessorFailure::CallDepth { limit: 64, .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.failure_class(), FailureClass::Processor);
+    // Neighbour: with depth to spare the same function answers.
+    let answer =
+        eval_custom_function_call(&store, &with_body, &args, &mut RecursionGuard::default())
+            .expect("the function evaluates");
+    assert_eq!(answer, Some(ex_term("answer")));
+
+    let reserve = purrdf_stack::reserve(purrdf_stack::remaining());
+    let margin =
+        eval_custom_function_call(&store, &with_body, &args, &mut RecursionGuard::default());
+    drop(reserve);
+    let margin = margin.expect_err("standalone lowering refuses the physical stack margin");
+    assert_eq!(margin.failure_class(), FailureClass::Processor);
+    assert!(margin.to_string().contains("stack margin"));
+
+    let uninstalled = function(None);
+    let error =
+        eval_custom_function_call(&store, &uninstalled, &args, &mut RecursionGuard::default())
+            .expect_err("a function without a body is an internal defect");
+    assert!(
+        matches!(
+            error.as_processor(),
+            Some(ProcessorFailure::Internal { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.failure_class(), FailureClass::Processor);
+}
+
+/// Measure the actual public synthetic-call entry without timing or a query wrapper.
+#[test]
+fn direct_custom_function_calls_bound_argument_allocation_growth() {
+    use purrdf_shapes::expression::{ArgKey, CustomFnKind, NodeExpr};
+
+    let store = store_of(INCOME_DATA);
+    let expected = Some(ex_term("answer"));
+    let mut retained = None;
+    for (count, allocations, requested) in [(1_usize, 15, 1_617), (8, 22, 3_262), (32, 48, 11_398)]
+    {
+        let function = Arc::new(CustomFunction {
+            iri: purrdf_shapes::term::NamedNode::new_unchecked("http://example.org/ns#allocation"),
+            kind: CustomFnKind::ListParameter,
+            params: (0..count)
+                .map(|index| ArgKey::Index(u64::try_from(index).unwrap()))
+                .collect(),
+            required: count,
+            body: std::sync::OnceLock::from(NodeExpr::Constant(ex_term("answer"))),
+        });
+        let args = vec![Some(ex_term("alice")); count];
+        assert_eq!(
+            eval_custom_function_call(&store, &function, &args, &mut RecursionGuard::default())
+                .unwrap(),
+            expected
+        );
+        let window = CurrentThreadWindow::open();
+        let answer =
+            eval_custom_function_call(&store, &function, &args, &mut RecursionGuard::default());
+        let measured = window.close();
+        assert_eq!(answer.unwrap(), expected);
+        assert!(
+            measured.allocations <= allocations,
+            "arguments={count}: {measured:?}"
+        );
+        assert!(
+            measured.requested_bytes <= requested,
+            "arguments={count}: {measured:?}"
+        );
+        if let Some(previous) = retained {
+            assert_eq!(
+                measured.retained_bytes, previous,
+                "argument buffers must not be retained by the scalar answer"
+            );
+        }
+        retained = Some(measured.retained_bytes);
+        eprintln!(
+            "arguments={count}: allocations={}, requested={}, retained={}, peak={}",
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes,
+        );
+    }
+}
+
+/// A declared built-in list function follows the same §7.3 rule as a custom one (the code
+/// path is shared): one output node is the value and no output node is the call's SPARQL
+/// error. (A built-in cannot produce MORE than one node: every `sparql:` form is a scalar
+/// and `shnex:conformsToShape` yields one boolean, so that arm of the rule is not
+/// constructible from a built-in; the custom-body case is tested above.)
+#[test]
+fn a_declared_builtin_follows_the_same_value_and_error_rule() {
+    let shapes = "sparql:abs a sh:ListParameterExpressionFunction .";
+    let column = |call: &str| {
+        sparql_column(
+            "ex:a ex:n 1 .",
+            shapes,
+            &format!(
+                "SELECT ?v WHERE {{ BIND (<http://www.w3.org/ns/sparql#abs>({call}) AS ?v) }}"
+            ),
+        )
+    };
+    let value = column("-3");
+    assert!(
+        value[0].as_ref().is_some_and(|v| v.contains('3')),
+        "{value:?}"
+    );
+    assert_eq!(
+        column("\"not a number\""),
+        vec![None],
+        "an error of the call"
     );
 }
 
@@ -854,4 +1323,73 @@ fn a_declared_sparql_builtin_is_callable_from_sparql_expr() {
     "#;
     let report = validate(INCOME_DATA, shapes).expect("validation runs");
     assert!(report.conforms, "{:?}", report.results);
+}
+
+/// A call that cannot be an evaluation failure is not turned into one: SHACL 1.2 SPARQL
+/// Extensions §7.3 makes the result of a call an error "if the evaluation produces an
+/// evaluation failure", and an evaluation failure is a property of the argument values
+/// (a type error, a missing node). A call with the wrong NUMBER of arguments fails the
+/// same way for every value, so it is a defect of the query as written, known when the
+/// query is built, and fails the query, for a built-in operator and for a custom
+/// function alike; a value error of the same function is the call's SPARQL error,
+/// unbound. Each refusal is set beside the call that is valid and the value error.
+#[test]
+fn a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbound() {
+    let attempt = |shapes: &str, call: &str| {
+        let shapes = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
+        let data = data_of("ex:a ex:n 1 .");
+        let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+            .expect("the fixture's bodies parse and admit");
+        NativeSparqlEngine::new()
+            .query_with_options_view(
+                &data,
+                SparqlRequest {
+                    query: &format!(
+                        "PREFIX ex: <http://example.org/ns#>\n\
+                         SELECT ?v WHERE {{ BIND ({call} AS ?v) }}"
+                    ),
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::new()
+                    .with_functions(&functions)
+                    .with_focus_graph(Some(&data)),
+            )
+            .map(|result| match result {
+                SparqlResult::Solutions { rows, .. } => rows[0][0].is_some(),
+                _ => panic!("expected solutions"),
+            })
+            .map_err(|error| error.to_string())
+    };
+    let add = "<http://www.w3.org/ns/sparql#add>";
+    let declared = "sparql:add a sh:ListParameterExpressionFunction .";
+    // Built-in: valid, value error, wrong arity (both directions).
+    assert_eq!(attempt(declared, &format!("{add}(1, 2)")), Ok(true));
+    assert_eq!(attempt(declared, &format!("{add}(1, \"x\")")), Ok(false));
+    for call in [format!("{add}(1)"), format!("{add}(1, 2, 3)")] {
+        let error = attempt(declared, &call).expect_err("the wrong arity fails the query");
+        assert!(
+            error.contains("takes exactly 2 arguments"),
+            "{call}: {error}"
+        );
+    }
+    // A keyword built-in: the same split.
+    let abs = "<http://www.w3.org/ns/sparql#abs>";
+    let declared_abs = "sparql:abs a sh:ListParameterExpressionFunction .";
+    assert_eq!(attempt(declared_abs, &format!("{abs}(-1)")), Ok(true));
+    for call in [format!("{abs}()"), format!("{abs}(1, 2)")] {
+        assert!(
+            attempt(declared_abs, &call).is_err(),
+            "{call} fails the query"
+        );
+    }
+    // Custom function: valid, value error, wrong arity.
+    assert_eq!(attempt(INCOME_TOTAL_FN, "ex:incomeTotal(ex:a)"), Ok(true));
+    assert_eq!(
+        attempt(INCOME_TOTAL_FN, "ex:incomeTotal(?unbound)"),
+        Ok(false)
+    );
+    let error = attempt(INCOME_TOTAL_FN, "ex:incomeTotal(ex:a, ex:b)")
+        .expect_err("the wrong arity fails the query");
+    assert!(error.contains("expects exactly 1 argument"), "{error}");
 }

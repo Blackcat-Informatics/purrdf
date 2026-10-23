@@ -367,6 +367,15 @@ fn a_write_failure_carries_its_classification() {
         "a genuine write failure must NOT be classified as a downstream hangup; \
          got {broken:?}"
     );
+    let retained = broken.clone();
+    drop(broken);
+    let fields = purrdf_testkit::error_capture::Capture::read(&retained);
+    assert_eq!(fields.code, "sparql-results-write");
+    let drain = fields.child("cause");
+    assert_eq!(drain.code, "drain");
+    let native = drain.child("cause");
+    assert_eq!(native.code, "drain-io");
+    assert!(std::error::Error::source(&retained).is_some());
 }
 
 /// A writer that accepts nothing and fails with the kind it was built from.

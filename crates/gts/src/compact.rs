@@ -21,6 +21,9 @@
 //! agent string is a constant, and the timestamp is a parameter — never
 //! ambient time.
 
+mod error;
+pub use error::{Base64UrlError, CompactRefusedError, TimestampError};
+
 use std::borrow::Cow;
 
 use purrdf_lex::cbor::Value;
@@ -184,10 +187,10 @@ impl DictPlan {
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for (name, strategy) in &self.dicts {
             if name.is_empty() {
-                return refuse("an in-band dictionary name must be non-empty".to_string());
+                return Err(CompactRefusedError::EmptyDictionaryName);
             }
             if !seen.insert(name.as_str()) {
-                return refuse(format!("duplicate in-band dictionary name {name:?}"));
+                return Err(CompactRefusedError::DuplicateDictionary { name: name.clone() });
             }
             // Refuse-don't-trust on the ONE input the compactor does not
             // produce itself: caller-supplied bytes are used verbatim, so they
@@ -201,11 +204,11 @@ impl DictPlan {
             // `id == 0` branch here would be unreachable, and an unreachable
             // guard advertises an invariant it does not enforce.
             if let DictStrategy::Pinned(bytes) = strategy {
-                dict::dictionary_id(bytes).map_err(|err| {
-                    CompactRefusedError(format!(
-                        "the pinned dictionary {name:?} is not a parseable finalized zstd \
-                         dictionary: {err}"
-                    ))
+                dict::dictionary_id(bytes).map_err(|cause| {
+                    CompactRefusedError::PinnedDictionary {
+                        name: name.clone(),
+                        cause,
+                    }
                 })?;
             }
         }
@@ -218,51 +221,33 @@ impl DictPlan {
                 continue;
             };
             if !seen.contains(name) {
-                return refuse(format!(
-                    "the plan selects dictionary {name:?}, which it does not pin"
-                ));
+                return Err(CompactRefusedError::UnknownDictionary {
+                    name: name.to_owned(),
+                });
             }
             if !zstd_family {
-                return refuse(format!(
-                    "the plan selects dictionary {name:?} but its transform chain \
-                     {:?} carries no zstd-family codec to prime",
-                    self.transform
-                ));
+                return Err(CompactRefusedError::DictionaryTransform {
+                    name: name.to_owned(),
+                    transform: self.transform.clone(),
+                });
             }
         }
         if !self.dicts.is_empty() && !zstd_family {
-            return refuse(format!(
-                "the plan pins {} dictionar(y/ies) but its transform chain {:?} carries no \
-                 zstd-family codec, so nothing could ever use them",
-                self.dicts.len(),
-                self.transform
-            ));
+            return Err(CompactRefusedError::UnusedDictionaries {
+                count: self.dicts.len(),
+                transform: self.transform.clone(),
+            });
         }
-        if self.zstd_level.is_some() && !zstd_family {
-            return refuse(format!(
-                "the plan declares a zstd level but its transform chain {:?} carries no \
-                 zstd-family codec to encode at it",
-                self.transform
-            ));
+        if let Some(level) = self.zstd_level
+            && !zstd_family
+        {
+            return Err(CompactRefusedError::LevelTransform {
+                level,
+                transform: self.transform.clone(),
+            });
         }
         Ok(())
     }
-}
-
-/// The input is not safely compactable (§10.1/§14.1 refuse-don't-trust).
-#[derive(Debug)]
-pub struct CompactRefusedError(pub String);
-
-impl std::fmt::Display for CompactRefusedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for CompactRefusedError {}
-
-fn refuse<T>(msg: String) -> Result<T, CompactRefusedError> {
-    Err(CompactRefusedError(msg))
 }
 
 fn target_text<'a>(target: &'a Value, key: &str) -> Option<&'a str> {
@@ -278,20 +263,20 @@ fn target_text<'a>(target: &'a Value, key: &str) -> Option<&'a str> {
 fn refusal_gate(data: &[u8], seal_original: bool) -> Result<(Graph, String), CompactRefusedError> {
     let fs = read_file_segments(data);
     if let Some(fatal) = &fs.fatal {
-        return refuse(format!(
-            "input is not a clean GTS file: {}: {}",
-            fatal.code, fatal.detail
-        ));
+        return Err(CompactRefusedError::InputDiagnostic(fatal.clone()));
     }
     if let Some(torn) = fs.torn {
-        return refuse(format!("input has a torn append at byte {torn}"));
+        return Err(CompactRefusedError::Torn {
+            offset: torn.offset,
+            cause: torn.cause,
+        });
     }
     for (idx, seg) in fs.segments.iter().enumerate() {
         if let Some(first) = seg.diagnostics.first() {
-            return refuse(format!(
-                "segment {idx} does not verify cleanly: {}: {}",
-                first.code, first.detail
-            ));
+            return Err(CompactRefusedError::SegmentDiagnostic {
+                segment: idx,
+                cause: first.clone(),
+            });
         }
     }
     let mut profiles: Vec<&str> = fs
@@ -302,34 +287,21 @@ fn refusal_gate(data: &[u8], seal_original: bool) -> Result<(Graph, String), Com
     profiles.sort_unstable();
     profiles.dedup();
     if profiles.len() > 1 {
-        // Python renders sorted(profiles) as a list repr — keep the text.
-        let listed = profiles
-            .iter()
-            .map(|p| format!("'{p}'"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return refuse(format!(
-            "mixed segment profiles [{listed}] are not compactable (v1)"
-        ));
+        return Err(CompactRefusedError::MixedProfiles {
+            profiles: profiles.into_iter().map(str::to_owned).collect(),
+        });
     }
     let profile = profiles.first().copied().unwrap_or("generic").to_string();
     if profile == "evidence" && !seal_original {
-        return refuse(
-            "an 'evidence' artifact's signed chain IS the artifact; refusing \
-             to re-order it without --seal-original (§10.1)"
-                .to_string(),
-        );
+        return Err(CompactRefusedError::EvidenceProfile);
     }
     let g = read(data, true, None);
     for sup in &g.suppressions {
         for target in &sup.targets {
             if target_text(target, "kind") == Some("frame") {
-                return refuse(
-                    "input carries a frame-addressed suppression; the rewrite \
-                     assigns new frame ids, so the target would silently \
-                     dangle (§10.1)"
-                        .to_string(),
-                );
+                return Err(CompactRefusedError::FrameSuppression {
+                    target: target.clone(),
+                });
             }
         }
     }
@@ -375,17 +347,13 @@ impl GraphBuilder {
     }
 }
 
-fn blob_decode_refused(digest: &str, err: impl std::fmt::Debug) -> CompactRefusedError {
-    CompactRefusedError(format!("cannot decode blob {digest}: {err:?}"))
-}
-
 /// Look up a blob's decoded length in the insertion-ordered table.
 fn blob_decoded_len(g: &Graph, digest: &str) -> Result<Option<usize>, CompactRefusedError> {
     purrdf_lex::assoc::get(&g.blobs, digest)
         .map(|entry| {
             entry
                 .decoded_len()
-                .map_err(|err| blob_decode_refused(digest, err))
+                .map_err(|err| CompactRefusedError::blob_decode(digest, err))
         })
         .transpose()
 }
@@ -399,7 +367,7 @@ fn blob_bytes<'a>(
         .map(|entry| {
             entry
                 .decoded_bytes()
-                .map_err(|err| blob_decode_refused(digest, err))
+                .map_err(|err| CompactRefusedError::blob_decode(digest, err))
         })
         .transpose()
 }
@@ -444,26 +412,23 @@ pub fn base64url_unpadded(data: &[u8]) -> String {
 /// HARD-ERRORS on a padding character (`=`) or any byte outside the unpadded
 /// alphabet (`A-Za-z0-9-_`) — a malformed literal must fail loudly rather than
 /// silently decode to truncated or garbage bytes (refuse-don't-trust).
-pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
-    fn sextet(byte: u8) -> Result<u32, String> {
+pub fn base64url_decode(s: &str) -> Result<Vec<u8>, Base64UrlError> {
+    fn sextet(byte: u8) -> Result<u32, Base64UrlError> {
         match byte {
             b'A'..=b'Z' => Ok(u32::from(byte - b'A')),
             b'a'..=b'z' => Ok(u32::from(byte - b'a') + 26),
             b'0'..=b'9' => Ok(u32::from(byte - b'0') + 52),
             b'-' => Ok(62),
             b'_' => Ok(63),
-            b'=' => Err("unexpected padding character '=' in unpadded base64url".to_string()),
-            other => Err(format!(
-                "byte {other:#04x} is outside the base64url (RFC 4648 §5) alphabet"
-            )),
+            b'=' => Err(Base64UrlError::Padding),
+            other => Err(Base64UrlError::Alphabet { byte: other }),
         }
     }
     let bytes = s.as_bytes();
     if bytes.len() % 4 == 1 {
-        return Err(format!(
-            "base64url input length {} leaves a single trailing character (invalid)",
-            bytes.len()
-        ));
+        return Err(Base64UrlError::Length {
+            actual: bytes.len(),
+        });
     }
     let mut out = Vec::with_capacity((bytes.len() / 4 + 1) * 3);
     let (chunks, remainder) = bytes.as_chunks::<4>();
@@ -538,9 +503,12 @@ const PROVENANCE_SHAPES: &[(&str, &[&str])] = &[
 
 /// The normative rewrite time is an XSD dateTime with an explicit UTC zone.
 /// Parse in its existing datatype home without normalizing caller bytes.
-fn is_utc_timestamp(timestamp: &str) -> bool {
-    purrdf_xsd::temporal::parse_datetime(timestamp)
-        .is_ok_and(|value| value.timezone_minutes() == Some(0))
+fn check_utc_timestamp(timestamp: &str) -> Result<(), TimestampError> {
+    let value = purrdf_xsd::temporal::parse_datetime(timestamp).map_err(TimestampError::Parse)?;
+    match value.timezone_minutes() {
+        Some(0) => Ok(()),
+        minutes => Err(TimestampError::Zone { minutes }),
+    }
 }
 
 impl ProvenanceSubjects {
@@ -590,7 +558,10 @@ impl ProvenanceSubjects {
                     && object
                         .datatype
                         .is_some_and(|id| iri_is(g, id, XSD_DATETIME))
-                    && object.value.as_deref().is_some_and(is_utc_timestamp)
+                    && object
+                        .value
+                        .as_deref()
+                        .is_some_and(|timestamp| check_utc_timestamp(timestamp).is_ok())
             }
             4 => {
                 string
@@ -674,10 +645,10 @@ fn literal_fields<'a>(
                 .get(o)
                 .filter(|term| term.kind == TermKind::Literal)
                 .and_then(|term| term.value.as_deref())
-                .ok_or_else(|| {
-                    CompactRefusedError(format!(
-                        "provenance node {node} needs a literal {predicate}"
-                    ))
+                .ok_or_else(|| CompactRefusedError::Literal {
+                    node,
+                    predicate: predicate.to_owned(),
+                    object: o,
                 })
         })
         .collect()
@@ -701,15 +672,16 @@ pub fn compaction_signature_roots(
     for record in compaction_root_records(g)? {
         if record.source_heads == expected_heads {
             if current.is_some() {
-                return Err(CompactRefusedError(
-                    "ambiguous compaction provenance for source heads".into(),
-                ));
+                return Err(CompactRefusedError::AmbiguousProvenance {
+                    source_heads: expected_heads,
+                });
             }
             current = Some(record.roots);
         }
     }
-    current
-        .ok_or_else(|| CompactRefusedError("missing compaction provenance for source heads".into()))
+    current.ok_or(CompactRefusedError::MissingProvenance {
+        source_heads: expected_heads,
+    })
 }
 
 struct CompactionRootRecord {
@@ -723,30 +695,30 @@ fn compaction_root_records(g: &Graph) -> Result<Vec<CompactionRootRecord>, Compa
     for node in provenance.class_subjects(stream::COMPACTION) {
         let roots = literal_fields(g, node, stream::DETACHED_SIGNATURE_ROOT)?;
         if roots.len() > 1 {
-            return Err(CompactRefusedError(format!(
-                "compaction node {node} has repeated detached signature roots"
-            )));
+            return Err(CompactRefusedError::RepeatedRoots {
+                node,
+                count: roots.len(),
+            });
         }
         for root in &roots {
-            mmr::parse_hex_32(root).map_err(|error| {
-                CompactRefusedError(format!("compaction node {node} detached root: {error}"))
-            })?;
+            mmr::parse_hex_32(root)
+                .map_err(|cause| CompactRefusedError::DetachedRoot { node, cause })?;
         }
         let heads = literal_fields(g, node, stream::SOURCE_HEAD)?;
         if heads.is_empty() {
-            return Err(CompactRefusedError(format!(
-                "compaction node {node} needs source heads"
-            )));
+            return Err(CompactRefusedError::MissingSourceHeads { node });
         }
         let mut parsed_heads = heads
             .into_iter()
             .map(|head| {
                 let hex = head.strip_prefix("blake3:").ok_or_else(|| {
-                    CompactRefusedError(format!("compaction node {node} invalid source head"))
+                    CompactRefusedError::SourceHeadPrefix {
+                        node,
+                        actual: head.to_owned(),
+                    }
                 })?;
-                mmr::parse_hex_32(hex).map_err(|error| {
-                    CompactRefusedError(format!("compaction node {node} source head: {error}"))
-                })
+                mmr::parse_hex_32(hex)
+                    .map_err(|cause| CompactRefusedError::SourceHead { node, cause })
             })
             .collect::<Result<Vec<_>, _>>()?;
         parsed_heads.sort_unstable();
@@ -782,26 +754,25 @@ fn carried_detached_pairs(g: &Graph) -> Result<Vec<DetachedSignaturePair>, Compa
     let mut out = Vec::new();
     for node in nodes {
         let field = |predicate: &str| -> Result<&str, CompactRefusedError> {
-            let values = literal_fields(g, node, predicate).map_err(|error| {
-                CompactRefusedError(format!("detached signature node {node}: {error}"))
+            let values = literal_fields(g, node, predicate).map_err(|cause| {
+                CompactRefusedError::DetachedLiteral {
+                    node,
+                    cause: Box::new(cause),
+                }
             })?;
             match values.as_slice() {
                 [value] => Ok(*value),
-                _ => Err(CompactRefusedError(format!(
-                    "detached signature node {node} needs exactly one literal {predicate}"
-                ))),
+                _ => Err(CompactRefusedError::DetachedLiteralCount {
+                    node,
+                    predicate: predicate.to_owned(),
+                    count: values.len(),
+                }),
             }
         };
-        let frame_id = mmr::parse_hex_32(field(stream::SOURCE_FRAME)?).map_err(|error| {
-            CompactRefusedError(format!(
-                "detached signature node {node} source frame: {error}"
-            ))
-        })?;
-        let cose = base64url_decode(field(stream::COSE)?).map_err(|error| {
-            CompactRefusedError(format!(
-                "detached signature node {node} COSE encoding: {error}"
-            ))
-        })?;
+        let frame_id = mmr::parse_hex_32(field(stream::SOURCE_FRAME)?)
+            .map_err(|cause| CompactRefusedError::DetachedSourceFrame { node, cause })?;
+        let cose = base64url_decode(field(stream::COSE)?)
+            .map_err(|cause| CompactRefusedError::DetachedEncoding { node, cause })?;
         out.push((frame_id, cose));
     }
     Ok(out)
@@ -828,12 +799,11 @@ pub fn detached_signature_pairs(
 ) -> Result<Vec<DetachedSignaturePair>, CompactRefusedError> {
     for signature in &g.signatures {
         let Some(cose) = &signature.cose else {
-            return Err(CompactRefusedError(
-                "frame signature must carry a COSE byte string".into(),
-            ));
+            return Err(CompactRefusedError::FrameMissingCose {
+                frame_id: signature.frame_id.clone(),
+            });
         };
-        crate::cose::parse_sign1(cose)
-            .map_err(|error| CompactRefusedError(format!("frame signature COSE: {error}")))?;
+        crate::cose::parse_sign1(cose).map_err(CompactRefusedError::FrameCose)?;
     }
     let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = g
         .signatures
@@ -848,12 +818,11 @@ pub fn detached_signature_pairs(
     pairs.extend(carried_detached_pairs(g)?);
     for (frame_id, cose) in &pairs {
         if frame_id.len() != 32 {
-            return Err(CompactRefusedError(
-                "detached signature source frame must be 32 bytes".into(),
-            ));
+            return Err(CompactRefusedError::DetachedFrameLength {
+                actual: frame_id.len(),
+            });
         }
-        crate::cose::parse_sign1(cose)
-            .map_err(|error| CompactRefusedError(format!("detached signature COSE: {error}")))?;
+        crate::cose::parse_sign1(cose).map_err(CompactRefusedError::DetachedCose)?;
     }
     pairs.sort_unstable();
     pairs.dedup();
@@ -1150,11 +1119,9 @@ fn build_pack_dicts(
             }
         }
         if corpus.is_empty() {
-            return refuse(
-                "the plan pins in-band dictionaries but the input has no content blobs to \
-                 build them from (§8.5 dct)"
-                    .to_string(),
-            );
+            return Err(CompactRefusedError::EmptyCorpus {
+                dictionaries: plan.dicts.len(),
+            });
         }
     }
     let refs: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
@@ -1171,8 +1138,9 @@ fn build_pack_dicts(
             // parseable finalized dictionary by `DictPlan::validate`.
             DictStrategy::Pinned(bytes) => Ok(bytes.clone()),
         }
-        .map_err(|err| {
-            CompactRefusedError(format!("cannot build the pack dictionary {name:?}: {err}"))
+        .map_err(|cause| CompactRefusedError::BuildDictionary {
+            name: name.clone(),
+            cause,
         })?;
         out.push((name.clone(), bytes));
     }
@@ -1315,11 +1283,10 @@ pub fn compact_streamable<S: PackagingSigner>(
         content_digest,
         packaging_signer,
     } = params;
-    if !is_utc_timestamp(timestamp) {
-        return Err(CompactRefusedError(
-            "rewrite timestamp must be a valid XSD dateTime with an explicit UTC timezone".into(),
-        ));
-    }
+    check_utc_timestamp(timestamp).map_err(|cause| CompactRefusedError::Timestamp {
+        actual: timestamp.to_owned(),
+        cause,
+    })?;
     plan.validate()?;
     let (mut g, profile) = refusal_gate(data, seal_original)?;
     // Malformed historical commitments must not become a successfully
@@ -1338,7 +1305,7 @@ pub fn compact_streamable<S: PackagingSigner>(
             entry
                 .decode()
                 .map(|bytes| (bytes.len(), d.clone()))
-                .map_err(|err| blob_decode_refused(d, err))
+                .map_err(|err| CompactRefusedError::blob_decode(d.as_str(), err))
         })
         .collect::<Result<_, _>>()?;
     keyed.sort_unstable();
@@ -1377,7 +1344,7 @@ pub fn compact_streamable<S: PackagingSigner>(
             ..WriterOptions::default()
         },
     )
-    .map_err(|err| CompactRefusedError(format!("cannot configure the pack writer: {err}")))?;
+    .map_err(CompactRefusedError::ConfigureWriter)?;
 
     // Every authored frame rides the plan's transform chain — the streaming
     // index and content graph included. Leaving those frames untransformed
@@ -1399,8 +1366,9 @@ pub fn compact_streamable<S: PackagingSigner>(
                 },
             )
             .map(|_| ())
-            .map_err(|err| {
-                CompactRefusedError(format!("cannot author the {frame_type} frame: {err}"))
+            .map_err(|cause| CompactRefusedError::AuthorFrame {
+                frame_type: frame_type.to_owned(),
+                cause,
             })
     };
 
@@ -1480,9 +1448,7 @@ pub fn compact_streamable<S: PackagingSigner>(
                 &plan.transform,
                 content_dict,
             )
-            .map_err(|err| {
-                CompactRefusedError(format!("cannot author the content blob frame: {err}"))
-            })?;
+            .map_err(CompactRefusedError::AuthorBlob)?;
         }
     }
     // The MANDATORY packaging head signature: sign ONLY the re-issued
@@ -1493,7 +1459,7 @@ pub fn compact_streamable<S: PackagingSigner>(
     // runs: an unsigned pack is unrepresentable through this API.
     packaging_signer
         .finish(w)
-        .map_err(|error| CompactRefusedError(format!("cannot sign the packaging index: {error}")))
+        .map_err(CompactRefusedError::SignPackaging)
 }
 
 #[cfg(test)]

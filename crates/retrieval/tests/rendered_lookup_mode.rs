@@ -69,7 +69,7 @@ const EXTRA_FREE: &str = "bbff";
 fn registry(
     point: &str,
     exclusion: ExclusionBasis,
-) -> (PropertyFunctionRegistry, Arc<Mutex<Vec<String>>>) {
+) -> (PropertyFunctionRegistry<'static>, Arc<Mutex<Vec<String>>>) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let shared = DomainTag::parse(&ex("domain/shared")).expect("fixture domain tags are IRIs");
     let mut registry = PropertyFunctionRegistry::new();

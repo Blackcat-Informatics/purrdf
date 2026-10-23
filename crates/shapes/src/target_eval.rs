@@ -109,7 +109,7 @@ pub(crate) fn where_targets(
     let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
     binding.set_conformance_disallows(disallows);
-    let plan = lowered.plan(shape, 0, &binding, lowered.classes(), lowered.no_targets())?;
+    let plan = lowered.untargeted_plan(shape, 0, &binding)?;
     data.prepare_class_membership();
     let narrowed = narrowing(data, shape, disallows, 0);
     let candidates: &[TermId] = match &narrowed {
@@ -151,7 +151,8 @@ pub(crate) fn node_expression_targets(
 /// A constraint narrows only when a node that violates it CANNOT conform to
 /// `shape`. That holds when the constraint is live and its violation counts
 /// against conformance: the shape (and, for a property shape, the property shape)
-/// is not deactivated, its severity is in the run's conformance-disallow set, and
+/// is not deactivated (by `sh:deactivated true`, or by a node expression that decides
+/// it per focus node), its severity is in the run's conformance-disallow set, and
 /// it carries no per-constraint reifier annotation, which could re-grade the
 /// violation to a severity that does not count. Under those conditions:
 ///
@@ -178,6 +179,7 @@ fn narrowing(
 ) -> Option<Vec<TermId>> {
     if depth > MAX_NARROWING_DEPTH
         || shape.deactivated
+        || !shape.deactivated_when.is_empty()
         || !disallows.contains(&shape.severity)
         || !shape.constraint_annotations.is_empty()
     {
@@ -232,6 +234,7 @@ fn property_narrowing(
     // `sh:minCount` at a focus node that is no subject of the predicate at all, so
     // the predicate's subjects no longer bound the conforming nodes.
     if property.deactivated
+        || !property.deactivated_when.is_empty()
         || !disallows.contains(&property.severity)
         || !property.constraint_annotations.is_empty()
         || property.values.is_some()

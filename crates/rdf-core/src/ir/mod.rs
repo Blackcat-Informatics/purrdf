@@ -8,6 +8,15 @@
 //! path ([`validate`]), and the frozen, infallible, zero-allocation [`dataset`]
 //! iteration surface.
 
+// Growable and frozen owners use different containers for the same three RDF
+// streams. Keep their allocation-free row-count expression in one home.
+macro_rules! statement_row_count {
+    ($owner:ident) => {
+        $owner.quads.len() + $owner.reifiers.len() + $owner.annotations.len()
+    };
+}
+pub(super) use statement_row_count;
+
 // The IR-boundary absoluteness invariant: the one gate every term table's IRI arm
 // runs on its MISS path, so a relative IRI reference is unrepresentable in the IR
 // from any ingress rather than being re-checked once per codec seam.
@@ -31,7 +40,8 @@ pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
 mod frozen_terms;
-mod statistics;
+mod source_directory;
+pub(crate) mod statistics;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl.
 pub mod mutable;
 pub mod view_accounting;
@@ -79,8 +89,8 @@ pub use canon::{
     canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
     check_admissible_flat_view, check_admissible_view, graph_digest_view, try_blank_count_view,
     try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_digest_view, try_graph_digest_view,
+    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_view_with_stop,
+    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
@@ -96,16 +106,16 @@ pub use mutable::{
     RecordValues,
 };
 pub use pack::{
-    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
-    pack_digest, restore_pack, verify_pack,
+    DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
+    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
 };
 pub use paged::{
     CanonicalPagedError, CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind,
     PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
     PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
     PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack, PagedStackError,
-    PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, StackPageOrigin, StackSource,
-    SubsetPageProvider, canonical_paged_seal,
+    PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, PagedStackSnapshotError,
+    StackPageOrigin, StackSource, SubsetPageProvider, canonical_paged_seal,
 };
 pub use pipeline_bundle::{
     BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,

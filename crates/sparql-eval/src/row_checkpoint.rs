@@ -754,12 +754,12 @@ fn commit_items<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
     point: Option<ChargePoint>,
     committing: Committing,
-    rows: Vec<R>,
+    rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
     withheld: Option<u64>,
     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
 ) -> Result<(Vec<S>, Option<ItemTrip>), EvalError> {
-    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
     let mut rows = rows.into_iter();
+    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
     let Some(state) = ctx.governor_state().cloned() else {
         for row in rows {
             out.push(admit_row(ctx, row)?);
@@ -768,13 +768,23 @@ fn commit_items<D: DatasetView + Sync, R, S>(
     };
     let fuel = state.is_engaged_in(ResourceDimension::Fuel);
     let scratch = state.is_engaged_in(ResourceDimension::ScratchBytes);
-    let charge_fuel = |units: u64| {
-        fuel && state
-            .commit_reported_items(&[ItemCharge {
-                fuel: units,
-                committed: 0,
-            }])
-            .is_some()
+    let charge_fuel = |ctx: &EvalCtx<'_, D>, point: Option<ChargePoint>, units: u64| {
+        if ctx.charge_ledger().is_some() {
+            state
+                .charge_fuel_observed(units, true, |charged| {
+                    if let Some(point) = point {
+                        ctx.note_fuel(point, charged);
+                    }
+                })
+                .is_err()
+        } else {
+            fuel && state
+                .commit_reported_items(&[ItemCharge {
+                    fuel: units,
+                    committed: 0,
+                }])
+                .is_some()
+        }
     };
     if scratch {
         ctx.scratch.reserve_ghosts(
@@ -791,15 +801,8 @@ fn commit_items<D: DatasetView + Sync, R, S>(
         let mut values = chunk.values.into_iter();
         let mut interned = chunk.base;
         for item in chunk.items {
-            if item.admission > 0 {
-                if charge_fuel(item.admission) {
-                    return Ok((out, Some(ItemTrip::Admission)));
-                }
-                if let Some(point) = point
-                    && fuel
-                {
-                    ctx.note_fuel(point, item.admission);
-                }
+            if item.admission > 0 && charge_fuel(ctx, point, item.admission) {
+                return Ok((out, Some(ItemTrip::Admission)));
             }
             let end = item.charges_end.clamp(charged, charges.len());
             let span = &charges[charged..end];
@@ -837,7 +840,8 @@ fn commit_items<D: DatasetView + Sync, R, S>(
             let fits = |dimension: ResourceDimension, more: u64| {
                 state.consumed_in(dimension).saturating_add(more) <= state.limit_for(dimension)
             };
-            let whole = state.tripped().is_none()
+            let whole = ctx.charge_ledger().is_none()
+                && state.tripped().is_none()
                 && (!fuel || fits(ResourceDimension::Fuel, work))
                 && (!scratch
                     || fits(
@@ -849,18 +853,6 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                             .saturating_add(transient),
                     ));
             if whole {
-                if fuel {
-                    for charge in span {
-                        if let Deferred::Fuel {
-                            point: Some(point),
-                            units,
-                            ..
-                        } = *charge
-                        {
-                            ctx.note_fuel(point, units);
-                        }
-                    }
-                }
                 // The arena's charge is brought up to date where the item's last growth
                 // charge brought it, as in the in-order loop; what the item minted after
                 // that is counted into the arena but left for the next charge to claim.
@@ -871,7 +863,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                 if let Some(upto) = grown {
                     count_worker_mints_to(ctx, &mut values, &mut interned, upto);
                 }
-                let refused = (work > 0 && charge_fuel(work))
+                let refused = (work > 0 && charge_fuel(ctx, None, work))
                     || (scratch
                         && (state
                             .charge_if_engaged(ResourceDimension::ScratchBytes, explicit)
@@ -893,7 +885,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                 for charge in span {
                     let refused = match *charge {
                         Deferred::Fuel { point, units, mark } => {
-                            let refused = charge_fuel(units);
+                            let refused = charge_fuel(ctx, point, units);
                             if refused && let Some(mark) = mark {
                                 count_worker_mints_to(
                                     ctx,
@@ -901,11 +893,6 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                                     &mut interned,
                                     mark.count(),
                                 );
-                            } else if !refused
-                                && fuel
-                                && let Some(point) = point
-                            {
-                                ctx.note_fuel(point, units);
                             }
                             refused
                         }
@@ -952,7 +939,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
         }
     }
     if let (Some(units), false) = (withheld, committing.stopped) {
-        let _ = charge_fuel(units);
+        let _ = charge_fuel(ctx, point, units);
     }
     Ok((out, None))
 }
@@ -985,10 +972,11 @@ fn count_worker_mints_to<D: DatasetView + Sync>(
 #[inline(always)]
 fn admit_rows<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
-    rows: Vec<R>,
+    rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
     out: Vec<S>,
     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
 ) -> Result<Vec<S>, EvalError> {
+    let rows = rows.into_iter();
     let mut out = crate::parallel::reserve_concatenated_rows(out, [rows.len()])?;
     for row in rows {
         out.push(admit_row(ctx, row)?);
@@ -1440,7 +1428,7 @@ impl ItemLedger {
     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
+        rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
         _chunks: impl IntoIterator<Item = Self>,
         out: Vec<S>,
         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
@@ -1462,7 +1450,7 @@ impl ItemLedger {
     pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
+        rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
         chunks: impl IntoIterator<Item = Self>,
         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
     ) -> Result<(Vec<S>, Option<usize>), EvalError> {

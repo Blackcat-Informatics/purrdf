@@ -35,9 +35,9 @@ emitting output.
 
 ## Rust
 
-```rust,ignore
+```rust
 use purrdf::{
-    JsonLdSerializeOptions, parse_dataset,
+    JsonLdSerializeOptions, SerializeGraph, parse_dataset, serialize_dataset,
     serialize_dataset_to_jsonld_with_options,
 };
 
@@ -51,6 +51,12 @@ let options = JsonLdSerializeOptions::prefixes([
     ("schema", "https://schema.org/"),
 ])?;
 let jsonld = serialize_dataset_to_jsonld_with_options(&dataset, &options)?;
+assert!(jsonld.contains("\"schema:name\""));
+let reopened = parse_dataset(jsonld.as_bytes(), "application/ld+json", None)?;
+assert_eq!(
+    serialize_dataset(&reopened, "application/n-quads", SerializeGraph::Dataset)?,
+    serialize_dataset(&dataset, "application/n-quads", SerializeGraph::Dataset)?,
+);
 # Ok::<(), purrdf::RdfDiagnostic>(())
 ```
 

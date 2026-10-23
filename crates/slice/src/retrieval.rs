@@ -70,24 +70,25 @@ use crate::error::SliceError;
 /// or does not yield a parseable absolute IRI.
 pub fn retrieval_base_iri(path: &Path) -> Result<BaseIri, SliceError> {
     let absolute = std::fs::canonicalize(path).map_err(|error| {
-        SliceError::InvalidPath(format!(
-            "{}: cannot derive the document's file:// retrieval IRI ({error})",
-            path.display()
-        ))
+        SliceError::InvalidPath(crate::error::PathRefusal::Canonicalize {
+            path: path.to_path_buf(),
+            cause: error.into(),
+        })
     })?;
     let text = absolute.to_str().ok_or_else(|| {
-        SliceError::InvalidPath(format!(
-            "{}: the path is not valid UTF-8, so it has no file:// IRI",
-            path.display()
-        ))
+        SliceError::InvalidPath(crate::error::PathRefusal::NonUtf8 {
+            path: path.to_path_buf(),
+            absolute: absolute.clone(),
+        })
     })?;
 
     let iri = file_iri_for_absolute_path(text);
     BaseIri::parse(&iri).map_err(|error| {
-        SliceError::InvalidPath(format!(
-            "{}: the path has no usable file:// IRI ({error})",
-            path.display()
-        ))
+        SliceError::InvalidPath(crate::error::PathRefusal::Iri {
+            path: path.to_path_buf(),
+            iri: iri.clone(),
+            cause: error,
+        })
     })
 }
 
@@ -315,6 +316,7 @@ mod tests {
         let missing = dir.path().join("nope.ttl");
         match retrieval_base_iri(&missing) {
             Err(SliceError::InvalidPath(message)) => {
+                let message = message.to_string();
                 assert!(
                     message.contains("nope.ttl"),
                     "the error must name the path, got: {message}"

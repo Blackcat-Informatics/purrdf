@@ -107,6 +107,12 @@ pub const PLAN_ID_BYTES: usize = 32;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlanId(Digest32);
 
+impl purrdf_hash::error::StructuredError for PlanId {
+    purrdf_hash::error_visit! {
+        @tuple self (digest) => "retrieval-plan-id" { "digest" => Bytes(digest.as_bytes()) }
+    }
+}
+
 impl PlanId {
     /// Digest canonical plan `bytes` under the plan domain.
     #[must_use]

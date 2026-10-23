@@ -764,6 +764,22 @@
       "source": "https://github.com/RDFLib/pySHACL/tree/5b46638cadde2e32efaed0ee53fc2545d5c0a179"
     },
     {
+      "id": "shacl-reports",
+      "license": "W3C-20150513",
+      "notices": [
+        "third-party/shacl-reports/0-W3C-software-document-2015.html",
+        "third-party/shacl-reports/1-LICENSE.md"
+      ],
+      "paths": [
+        "vectors/shacl-reports/alltests.ttl"
+      ],
+      "provenance": [
+        "vectors/shacl-reports/README.md"
+      ],
+      "scope": "source-only conformance data; original notices remain authoritative",
+      "source": "https://github.com/w3c/data-shapes/tree/4cd469867a1cc6d2fff80e8a40723b26c695d67a"
+    },
+    {
       "id": "shacl12",
       "license": "W3C-20150513",
       "notices": [
@@ -1208,7 +1224,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "0d21692273e67c4929d7b582317716bf687f27977db9c8256c5bd4d3c3ddfc5d",
+    "NOTICE.txt": "ab3d9a7ee682ded2ba7da437268a1b4b0a81fdb9c21870d62c0c5a753834daa9",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1362,6 +1378,8 @@
     "third-party/rdflib-tests/0-LICENSE": "53a705e51bfd199e8c97d0442376cb4bbd4ffcf13ba4f2c4c2794211400e4012",
     "third-party/shacl-af/0-LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "third-party/shacl-af/1-README.md": "aefec7f960b49a18e7ffb2667d31cdae3d40e07acd0743a72c0849c1a7e4b7b6",
+    "third-party/shacl-reports/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+    "third-party/shacl-reports/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
     "third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
     "third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
     "third-party/shacl12/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",

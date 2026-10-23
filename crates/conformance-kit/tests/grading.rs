@@ -5,7 +5,7 @@
 
 use purrdf_conformance_kit::{bag, graph, manifest, outcome, report, result_set};
 use purrdf_core::{BlankScope, GraphMatch, RdfDatasetBuilder, TermValue};
-use purrdf_iri::vocab::{mf, rdf, rs, sh};
+use purrdf_iri::vocab::{earl, mf, rdf, rs, sh};
 
 fn empty_and_unbound_rows_are_observable() {
     assert!(bag::compare_solutions(&[], &[vec![]], &[], &[], false).is_err());
@@ -578,38 +578,362 @@ fn earl_verdicts_require_valid_expectations_and_actual_observations() {
     let json = good.to_json();
     assert_eq!(outcome::Record::from_json(&json).unwrap(), good);
     let mut records = vec![good];
-    let earl = outcome::to_earl(
-        &records,
-        "http://example.org/assertor",
-        "http://example.org/engine",
-    )
-    .unwrap();
-    assert_eq!(earl.quad_count(), 8);
+    let to_earl = |records: &[outcome::Record]| {
+        outcome::to_earl(
+            &outcome::Report::new(
+                example_subject(),
+                example_assertor(),
+                records.iter().cloned().map(Into::into).collect(),
+            )
+            .unwrap(),
+        )
+    };
+    let earl = to_earl(&records).unwrap();
+    // The assertion and its result (8), the subject (4) and the assertor (2).
+    assert_eq!(earl.quad_count(), 14);
     records[0].observed.kind = outcome::OutcomeKind::Crash;
-    assert!(
-        outcome::to_earl(
-            &records,
-            "http://example.org/assertor",
-            "http://example.org/engine"
-        )
-        .is_err()
-    );
+    assert!(to_earl(&records).is_err());
     records[0].passed = false;
-    outcome::to_earl(
-        &records,
-        "http://example.org/assertor",
-        "http://example.org/engine",
+    to_earl(&records).unwrap();
+    records[0].expected.kind = outcome::OutcomeKind::Crash;
+    assert!(to_earl(&records).is_err());
+}
+
+const EX_SUBJECT: &str = "http://example.org/engine";
+const EX_ASSERTOR: &str = "http://example.org/assertor";
+const EX_NAME: &str = "http://example.org/ns#name";
+const EX_MAKER: &str = "http://example.org/ns#maker";
+
+fn example_subject() -> outcome::SubjectDescription {
+    outcome::SubjectDescription::new(
+        EX_SUBJECT,
+        vec![earl::SOFTWARE.into(), earl::TEST_SUBJECT.into()],
+        vec![
+            (
+                EX_MAKER.into(),
+                outcome::DescriptionTerm::Iri(EX_ASSERTOR.into()),
+            ),
+            (
+                EX_NAME.into(),
+                outcome::DescriptionTerm::Text("Engine 1.0".into()),
+            ),
+        ],
+    )
+}
+
+fn example_assertor() -> outcome::AssertorDescription {
+    outcome::AssertorDescription::new(
+        EX_ASSERTOR,
+        vec![earl::ASSERTOR.into()],
+        vec![(
+            EX_NAME.into(),
+            outcome::DescriptionTerm::Text("An Assertor".into()),
+        )],
+    )
+}
+
+fn compared() -> outcome::Observation {
+    outcome::Observation {
+        kind: outcome::OutcomeKind::Compared,
+        reason: None,
+        message: String::new(),
+    }
+}
+
+fn record(case: &str, observed: outcome::OutcomeKind) -> outcome::Record {
+    let observed = outcome::Observation {
+        kind: observed,
+        reason: None,
+        message: String::new(),
+    };
+    outcome::Record {
+        case: case.into(),
+        profile: "example".into(),
+        surface: "native".into(),
+        expected: compared(),
+        passed: observed.kind == outcome::OutcomeKind::Compared,
+        observed,
+        artifacts: vec![],
+    }
+}
+
+/// The report's EARL as sorted N-Triples text.
+fn earl_lines(report: &outcome::Report) -> String {
+    let dataset = outcome::to_earl(report).unwrap();
+    let bytes = purrdf_rdf::serialize_dataset(
+        dataset.as_ref(),
+        "application/n-triples",
+        purrdf_core::SerializeGraph::Dataset,
     )
     .unwrap();
-    records[0].expected.kind = outcome::OutcomeKind::Crash;
-    assert!(
-        outcome::to_earl(
-            &records,
-            "http://example.org/assertor",
-            "http://example.org/engine"
+    let text = String::from_utf8(bytes).unwrap();
+    let mut lines: Vec<&str> = text.lines().collect();
+    lines.sort_unstable();
+    let mut sorted = lines.join("\n");
+    sorted.push('\n');
+    sorted
+}
+
+/// Records in two IRI styles (a SPARQL-suite `manifest#test` and a shexTest
+/// manifest fragment), given in any order, render byte-identically, and the
+/// EARL and the scoreboard line are projections of the same sorted records.
+fn a_report_renders_both_projections_over_two_iri_styles() {
+    use outcome::OutcomeKind::{Compared, Mismatch};
+    let sparql = "http://example.org/sparql/tests/manifest#test_1";
+    let shex = "http://example.org/shexTest/validation/manifest#1dot";
+    let build = |order: [(&str, outcome::OutcomeKind); 3], info: bool| {
+        outcome::Report::new(
+            example_subject(),
+            example_assertor(),
+            order
+                .into_iter()
+                .map(|(case, kind)| outcome::ReportRecord {
+                    info: (info && kind == Mismatch).then(|| "the reason".to_owned()),
+                    record: record(case, kind),
+                })
+                .collect(),
         )
-        .is_err()
+        .unwrap()
+    };
+    let forward = build(
+        [
+            (sparql, Compared),
+            (shex, Mismatch),
+            (
+                "http://example.org/shexTest/validation/manifest#2dot",
+                Compared,
+            ),
+        ],
+        true,
     );
+    let backward = build(
+        [
+            (
+                "http://example.org/shexTest/validation/manifest#2dot",
+                Compared,
+            ),
+            (shex, Mismatch),
+            (sparql, Compared),
+        ],
+        true,
+    );
+    assert_eq!(forward, backward);
+    assert_eq!(earl_lines(&forward), earl_lines(&backward));
+    let cases: Vec<&str> = forward
+        .records()
+        .iter()
+        .map(|entry| entry.record.case.as_str())
+        .collect();
+    assert_eq!(
+        cases,
+        [
+            shex,
+            "http://example.org/shexTest/validation/manifest#2dot",
+            sparql
+        ]
+    );
+    let lines = earl_lines(&forward);
+    assert!(lines.contains(&format!("<{shex}>")) && lines.contains(&format!("<{sparql}>")));
+    assert_eq!(lines.matches("earl#info").count(), 1);
+    // `earl:info` is a property of the result, never of the assertion.
+    assert!(
+        lines
+            .lines()
+            .filter(|line| line.contains("earl#info"))
+            .all(|line| line.starts_with("_:result")),
+        "earl:info sits on a result"
+    );
+    assert_eq!(
+        forward.scoreboard_line("EXAMPLE", "failed"),
+        "EXAMPLE: passed 2, failed 1 of 3"
+    );
+    // Without info no `earl:info` statement is written.
+    assert_eq!(
+        earl_lines(&build(
+            [
+                (sparql, Compared),
+                (shex, Mismatch),
+                ("http://example.org/other", Compared)
+            ],
+            false
+        ))
+        .matches("earl#info")
+        .count(),
+        0
+    );
+}
+
+/// Every outcome category maps to its EARL outcome; an inapplicable record is
+/// `earl:inapplicable`, not `earl:failed`, and is counted by neither side of the line.
+fn inapplicable_and_other_unfinished_outcomes_map_to_their_earl_terms() {
+    use outcome::OutcomeKind::{Compared, Crash, Inapplicable, Mismatch, Unexecuted};
+    let case = |n: u32| format!("http://example.org/case/{n}");
+    let kinds = [Compared, Mismatch, Inapplicable, Unexecuted, Crash];
+    let report = outcome::Report::new(
+        example_subject(),
+        example_assertor(),
+        kinds
+            .iter()
+            .zip(0..)
+            .map(|(kind, n)| record(&case(n), *kind).into())
+            .collect(),
+    )
+    .unwrap();
+    let lines = earl_lines(&report);
+    for (term, count) in [
+        ("passed", 1),
+        ("failed", 1),
+        ("inapplicable", 1),
+        ("untested", 1),
+        ("cantTell", 1),
+    ] {
+        assert_eq!(
+            lines
+                .matches(&format!("<http://www.w3.org/ns/earl#{term}> ."))
+                .count(),
+            count,
+            "{term}"
+        );
+    }
+    assert_eq!(
+        report.scoreboard_line("EXAMPLE", "failed"),
+        "EXAMPLE: passed 1, failed 1 of 5"
+    );
+}
+
+/// The golden covers the whole rendering of a fixed `example.org` report.
+fn the_earl_rendering_matches_its_golden() {
+    let report = outcome::Report::new(
+        example_subject(),
+        example_assertor(),
+        vec![
+            outcome::ReportRecord {
+                record: record(
+                    "http://example.org/suite/manifest#b",
+                    outcome::OutcomeKind::Mismatch,
+                ),
+                info: Some("a stated reason".to_owned()),
+            },
+            record(
+                "http://example.org/suite/manifest#a",
+                outcome::OutcomeKind::Compared,
+            )
+            .into(),
+            record(
+                "http://example.org/suite/manifest#c",
+                outcome::OutcomeKind::Inapplicable,
+            )
+            .into(),
+        ],
+    )
+    .unwrap();
+    purrdf_testkit::assert_golden!("earl-report.nt", &earl_lines(&report));
+}
+
+fn route_subject(route: &str) -> outcome::SubjectDescription {
+    outcome::SubjectDescription::new(
+        format!("{EX_SUBJECT}#route={route}"),
+        vec![earl::TEST_SUBJECT.into()],
+        vec![(
+            EX_NAME.into(),
+            outcome::DescriptionTerm::Text(format!("Engine, route {route}")),
+        )],
+    )
+}
+
+/// One subject cannot be asserted about one test twice, whatever the profile,
+/// surface or verdicts of the two records; the refusal is typed and names both.
+fn a_duplicate_case_is_refused_per_subject() {
+    let case = "http://example.org/t1";
+    let mut second = record(case, outcome::OutcomeKind::Mismatch);
+    second.profile = "other".into();
+    second.surface = "other".into();
+    let refused = outcome::Report::new(
+        example_subject(),
+        example_assertor(),
+        vec![
+            record(case, outcome::OutcomeKind::Compared).into(),
+            second.clone().into(),
+        ],
+    );
+    assert_eq!(
+        refused,
+        Err(purrdf_conformance_kit::GradeError::DuplicateAssertion {
+            subject: EX_SUBJECT.to_owned(),
+            case: case.to_owned(),
+        })
+    );
+    // The same two records are accepted as two subjects, and two subjects with
+    // one IRI are not.
+    let accepted = |second_subject: outcome::SubjectDescription| {
+        outcome::Report::with_subjects(
+            example_assertor(),
+            vec![
+                outcome::SubjectReport {
+                    subject: route_subject("a"),
+                    records: vec![record(case, outcome::OutcomeKind::Compared).into()],
+                },
+                outcome::SubjectReport {
+                    subject: second_subject,
+                    records: vec![second.clone().into()],
+                },
+            ],
+        )
+    };
+    accepted(route_subject("b")).unwrap();
+    assert!(matches!(
+        accepted(route_subject("a")),
+        Err(purrdf_conformance_kit::GradeError::Malformed(_))
+    ));
+    assert!(outcome::Report::with_subjects(example_assertor(), Vec::new()).is_err());
+}
+
+/// Two subjects render in one graph, each with its own description and its own
+/// assertions, whatever order they were given in; the scoreboard counts both.
+fn two_subjects_render_with_their_own_descriptions() {
+    use outcome::OutcomeKind::{Compared, Mismatch};
+    let case = "http://example.org/t1";
+    let build = |order: [&str; 2]| {
+        outcome::Report::with_subjects(
+            example_assertor(),
+            order
+                .into_iter()
+                .map(|route| outcome::SubjectReport {
+                    subject: route_subject(route),
+                    records: vec![
+                        record(case, if route == "a" { Compared } else { Mismatch }).into(),
+                    ],
+                })
+                .collect(),
+        )
+        .unwrap()
+    };
+    let report = build(["b", "a"]);
+    assert_eq!(report, build(["a", "b"]));
+    let lines = earl_lines(&report);
+    assert_eq!(lines, earl_lines(&build(["a", "b"])));
+    for route in ["a", "b"] {
+        assert!(lines.contains(&format!(
+            "<{EX_SUBJECT}#route={route}> <{EX_NAME}> \"Engine, route {route}\" ."
+        )));
+        // The subject carries exactly one assertion about the test.
+        assert_eq!(
+            lines
+                .lines()
+                .filter(
+                    |line| line.ends_with(&format!("earl#subject> <{EX_SUBJECT}#route={route}> ."))
+                )
+                .count(),
+            1,
+            "{route}"
+        );
+    }
+    assert_eq!(lines.matches("earl#Assertion").count(), 2);
+    assert_eq!(
+        report.scoreboard_line("EXAMPLE", "failed"),
+        "EXAMPLE: passed 1, failed 1 of 2"
+    );
+    purrdf_testkit::assert_golden!("earl-two-subjects.nt", &lines);
 }
 
 fn deep_terms_respect_kernel_admission_without_stack_recursion() {
@@ -914,6 +1238,11 @@ purrdf_testkit::harness_main!(
     composite_blank_renaming_is_global_across_permuted_rows,
     source_metadata_and_empty_graph_declarations_are_observable,
     earl_verdicts_require_valid_expectations_and_actual_observations,
+    a_report_renders_both_projections_over_two_iri_styles,
+    inapplicable_and_other_unfinished_outcomes_map_to_their_earl_terms,
+    the_earl_rendering_matches_its_golden,
+    a_duplicate_case_is_refused_per_subject,
+    two_subjects_render_with_their_own_descriptions,
     deep_terms_respect_kernel_admission_without_stack_recursion,
     malformed_result_set_bindings_and_partial_indices_are_refused,
     inference_metadata_requires_three_term_rows_and_keeps_source_scope,

@@ -60,15 +60,85 @@ use structured_zstd::dictionary::{
 
 /// A dictionary could not be built from the supplied corpus.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DictError(pub String);
+#[non_exhaustive]
+pub enum DictError {
+    /// All supplied samples were empty.
+    EmptyCorpus {
+        /// Native authoring operation.
+        operation: DictOperation,
+        /// Original number of supplied samples.
+        samples: usize,
+        /// Requested finalized dictionary bytes.
+        target_len: usize,
+    },
+    /// Explanation from the external dictionary implementation.
+    External {
+        /// Native operation that called the external implementation.
+        operation: DictOperation,
+        /// Original input byte count.
+        input_bytes: usize,
+        /// Requested output bytes, absent for dictionary decoding.
+        target_len: Option<usize>,
+        /// Original opaque external explanation.
+        message: String,
+    },
+}
+
+/// The dictionary operation that refused its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DictOperation {
+    /// Canonical trailing-window construction.
+    Raw,
+    /// Explicitly seeded FastCOVER construction.
+    Train,
+    /// Parse an existing finalized dictionary.
+    Decode,
+}
+
+impl DictOperation {
+    /// Stable operation code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Raw => "raw-content",
+            Self::Train => "train",
+            Self::Decode => "decode",
+        }
+    }
+}
+
+impl DictError {
+    /// Original human-readable refusal, without its display prefix.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::EmptyCorpus { .. } => "empty corpus",
+            Self::External { message, .. } => message,
+        }
+    }
+}
 
 impl core::fmt::Display for DictError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "dictionary construction failed: {}", self.0)
+        write!(f, "dictionary construction failed: {}", self.detail())
     }
 }
 
 impl std::error::Error for DictError {}
+
+impl purrdf_hash::error::StructuredError for DictError {
+    purrdf_hash::error_visit! {
+        EmptyCorpus { operation, samples, target_len } => "gts-dictionary-empty-corpus" {
+            "operation" => Code(operation.as_str()), "samples" => Unsigned(*samples as u128),
+            "target_len" => ByteCount(*target_len as u128),
+        },
+        External { operation, input_bytes, target_len, message } => "gts-dictionary-external" {
+            "operation" => Code(operation.as_str()), "input_bytes" => ByteCount(*input_bytes as u128),
+            "target_len" => Value(target_len.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::ByteCount(value as u128))),
+            "message" => Message(message),
+        },
+    }
+}
 
 /// Canonical, order-independent concatenation of the corpus.
 ///
@@ -113,10 +183,20 @@ fn derive_seed(concat: &[u8]) -> u64 {
 pub fn raw_content_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, DictError> {
     let concat = canonical_concat(corpus);
     if concat.is_empty() {
-        return Err(DictError("empty corpus".to_owned()));
+        return Err(DictError::EmptyCorpus {
+            operation: DictOperation::Raw,
+            samples: corpus.len(),
+            target_len,
+        });
     }
-    finalize_raw_dict(&concat, &concat, target_len, FinalizeOptions::default())
-        .map_err(|err| DictError(err.to_string()))
+    finalize_raw_dict(&concat, &concat, target_len, FinalizeOptions::default()).map_err(|err| {
+        DictError::External {
+            operation: DictOperation::Raw,
+            input_bytes: concat.len(),
+            target_len: Some(target_len),
+            message: err.to_string(),
+        }
+    })
 }
 
 /// The seed FastCOVER's reservoir sampler runs under — always explicit.
@@ -175,7 +255,11 @@ pub fn trained_dict(
 ) -> Result<Vec<u8>, DictError> {
     let concat = canonical_concat(corpus);
     if concat.is_empty() {
-        return Err(DictError("empty corpus".to_owned()));
+        return Err(DictError::EmptyCorpus {
+            operation: DictOperation::Train,
+            samples: corpus.len(),
+            target_len,
+        });
     }
     let mut out = Vec::new();
     let result = {
@@ -189,7 +273,12 @@ pub fn trained_dict(
             FinalizeOptions::default(),
         )
     };
-    result.map_err(|err| DictError(err.to_string()))?;
+    result.map_err(|err| DictError::External {
+        operation: DictOperation::Train,
+        input_bytes: concat.len(),
+        target_len: Some(target_len),
+        message: err.to_string(),
+    })?;
     Ok(out)
 }
 
@@ -202,7 +291,12 @@ pub fn trained_dict(
 pub fn dictionary_id(dict: &[u8]) -> Result<u32, DictError> {
     Dictionary::decode_dict(dict)
         .map(|parsed| parsed.id)
-        .map_err(|err| DictError(err.to_string()))
+        .map_err(|err| DictError::External {
+            operation: DictOperation::Decode,
+            input_bytes: dict.len(),
+            target_len: None,
+            message: err.to_string(),
+        })
 }
 
 #[cfg(test)]
@@ -287,11 +381,19 @@ mod tests {
     fn producers_reject_empty_corpus() {
         assert_eq!(
             trained_dict(&[], 4096, DictSeed::FromCorpus).expect_err("empty corpus is rejected"),
-            DictError("empty corpus".to_owned())
+            DictError::EmptyCorpus {
+                operation: DictOperation::Train,
+                samples: 0,
+                target_len: 4096
+            }
         );
         assert_eq!(
             raw_content_dict(&[], 4096).expect_err("empty corpus must be rejected"),
-            DictError("empty corpus".to_owned())
+            DictError::EmptyCorpus {
+                operation: DictOperation::Raw,
+                samples: 0,
+                target_len: 4096
+            }
         );
     }
 

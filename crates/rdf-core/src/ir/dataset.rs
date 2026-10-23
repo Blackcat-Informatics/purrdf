@@ -44,6 +44,8 @@ use crate::{
 use super::term::{BlankScope, TermId, TermValue};
 use super::triple::{OrdinalRows, compare_masked, component_mask, masked_permutation, masked_rows};
 
+mod inspection;
+
 /// Declare the shared sparse frozen-row location lookup on resident carriers.
 macro_rules! source_location_method {
     ($(#[$meta:meta])*) => {
@@ -982,6 +984,67 @@ impl Iterator for QuadPatternCursor {
 impl std::iter::FusedIterator for QuadPatternCursor {}
 
 impl RdfDataset {
+    /// Visit physical source records that changed between two independently
+    /// frozen carriers. IDs belong to the indicated original carrier; dictionary
+    /// ordinals and interning order never substitute for value identity.
+    ///
+    /// This includes nonliteral statements, reifiers and annotations, preserving
+    /// their physical stream. Chronological visibility and reclassification must
+    /// still be evaluated by the chronological source owner.
+    ///
+    /// # Errors
+    /// Returns original work-list storage refusal or the consumer's typed error.
+    pub fn visit_source_changes_with_memory<
+        S: purrdf_lex::allocation::Admission + ?Sized,
+        E: From<purrdf_lex::allocation::StorageError>,
+    >(
+        &self,
+        next: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        mut visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::StatisticsStream,
+            QuadIds,
+            &mut purrdf_lex::allocation::Memory<'_, S>,
+        ) -> Result<(), E>,
+    ) -> Result<crate::source::SourceDifferenceWork, E> {
+        use crate::source::SourceSide;
+        self.statistics.source_directory().visit_changes(
+            next.statistics.source_directory(),
+            memory,
+            |added, record, memory| {
+                let (side, dataset) = if added {
+                    (SourceSide::Next, next)
+                } else {
+                    (SourceSide::Previous, self)
+                };
+                let row = dataset.source_record_row(record);
+                visit(side, record.stream, row, memory)
+            },
+        )
+    }
+
+    pub(crate) fn source_record_row(
+        &self,
+        record: super::source_directory::SourceRecord,
+    ) -> QuadIds {
+        let index = record.ordinal as usize;
+        match record.stream {
+            crate::StatisticsStream::Asserted => QuadIds::from(self.quads[index]),
+            crate::StatisticsStream::Reifiers => {
+                let (s, o, g) = self.reifiers[index];
+                let p = self
+                    .rdf_reifies_id()
+                    .expect("validated nonempty reifier table has its predicate");
+                QuadIds { s, p, o, g }
+            }
+            crate::StatisticsStream::Annotations => {
+                let (s, p, o, g) = self.annotations[index];
+                QuadIds { s, p, o, g }
+            }
+        }
+    }
+
     pub(crate) fn predicate_statistics(&self) -> &super::statistics::LocalStatistics {
         &self.statistics
     }
@@ -2282,7 +2345,7 @@ impl RdfDataset {
     /// Number of RDF records across ordinary, reifier, and annotation tables.
     #[must_use]
     pub fn rdf_row_count(&self) -> usize {
-        self.quads.len() + self.reifiers.len() + self.annotations.len()
+        super::statement_row_count!(self)
     }
 
     /// UTF-8 arena bytes retained by the RDF term dictionary.

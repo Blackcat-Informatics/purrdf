@@ -201,7 +201,7 @@ def asset_names(version: str) -> set[str]:
         "license-evidence-cargo.json",
         f"purrdf-text-lexicons-{version}.tar.gz",
         "SHA256SUMS",
-    }
+    } | set(notes_module.EARL_FILES)
 
 
 def identity(release: dict, tag: str, title: str, notes: bytes, *, draft: bool):
@@ -231,7 +231,7 @@ def verify_assets(
     assets = release.get("assets")
     names = asset_names(version)
     if not isinstance(assets, list) or len(assets) != len(names):
-        raise ReleaseError("release needs exactly five C, lexicon and checksum assets")
+        raise ReleaseError(f"release needs exactly {len(names)} release assets")
     by_name = {asset.get("name"): asset for asset in assets if isinstance(asset, dict)}
     if set(by_name) != names:
         raise ReleaseError(
@@ -275,7 +275,7 @@ def verify_assets(
         name: digest for name, digest in hashes.items() if name != "SHA256SUMS"
     }:
         raise ReleaseError(
-            "retained release checksums do not match the four distribution assets"
+            "retained release checksums do not match the distribution assets"
         )
     if expected is not None and hashes != expected:
         raise ReleaseError("draft assets differ from the audited local distribution")
@@ -292,7 +292,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     if release is not None and release.get("draft") is False:
         identity(release, tag, title, notes, draft=False)
         verify_assets(github, release, version)
-        print(f"OK: existing immutable {tag} and all five retained assets verified")
+        print(f"OK: existing immutable {tag}, {len(release['assets'])} assets verified")
         return
     if release is not None and release.get("draft") is not True:
         raise ReleaseError("existing release has no valid draft verdict")
@@ -351,7 +351,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     release = github.release(tag)
     identity(release, tag, title, notes, draft=False)
     verify_assets(github, release, version, expected)
-    print(f"OK: immutable {tag} published with all five verified assets")
+    print(f"OK: immutable {tag} published with all {len(paths)} verified assets")
 
 
 def main() -> int:

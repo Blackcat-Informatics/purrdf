@@ -14,6 +14,8 @@
 //! pre-binding list the evaluator's interned entry points take, so a validation
 //! does not re-allocate the shape's variable names once per focus node.
 
+pub(crate) mod coordinates;
+
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -818,7 +820,7 @@ thread_local! {
     /// per focus chunk, so every rayon worker sees the same registry without shared
     /// mutation, and the evaluator's own parallel workers receive it through `EvalCtx`
     /// rather than by reading this thread-local.
-    static CURRENT_PROPERTY_FUNCTIONS: RefCell<Option<Arc<PropertyFunctionRegistry>>> = const { RefCell::new(None) };
+    static CURRENT_PROPERTY_FUNCTIONS: RefCell<Option<Arc<PropertyFunctionRegistry<'static>>>> = const { RefCell::new(None) };
 
     /// The custom-aggregate registry in scope for the current validation, set by
     /// [`enter_aggregate_scope`]. [`run_query_view`] snapshots it into the query
@@ -1057,9 +1059,10 @@ pub fn enter_execution_scope(state: Arc<GovernorState>, sources: QuerySources) -
 ///   environment is re-prepared at checkout rather than run).
 #[derive(Default)]
 pub struct AmbientContext {
+    coordinates: Option<coordinates::Runtime>,
     functions: Option<Arc<BoundFunctionRegistry>>,
     parser_options: Option<Arc<ParserOptions>>,
-    property_functions: Option<Arc<PropertyFunctionRegistry>>,
+    property_functions: Option<Arc<PropertyFunctionRegistry<'static>>>,
     aggregates: Option<Arc<AggregateRegistry>>,
     governors: Option<Arc<GovernorState>>,
     sources: Option<Arc<QuerySources>>,
@@ -1072,6 +1075,7 @@ pub struct AmbientContext {
 impl std::fmt::Debug for AmbientContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AmbientContext")
+            .field("coordinates", &self.coordinates.is_some())
             .field("functions", &self.functions.is_some())
             .field("parser_options", &self.parser_options.is_some())
             .field("property_functions", &self.property_functions.is_some())
@@ -1091,7 +1095,8 @@ impl AmbientContext {
     /// validation in progress.
     #[must_use]
     pub const fn is_idle(&self) -> bool {
-        self.functions.is_none()
+        self.coordinates.is_none()
+            && self.functions.is_none()
             && self.parser_options.is_none()
             && self.property_functions.is_none()
             && self.aggregates.is_none()
@@ -1107,6 +1112,7 @@ impl AmbientContext {
 /// See [`AmbientContext`].
 pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
     AmbientContext {
+        coordinates: coordinates::replace(next.coordinates),
         functions: CURRENT_FUNCTIONS.with(|slot| slot.replace(next.functions)),
         parser_options: CURRENT_PARSER_OPTIONS.with(|slot| slot.replace(next.parser_options)),
         property_functions: CURRENT_PROPERTY_FUNCTIONS
@@ -1128,17 +1134,16 @@ pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
 /// back off the state, which [`GovernorState::poll_stop`] latched, exactly as they do for
 /// a trip inside a query. The message exists so the `Err` that unwinds the validation
 /// names what happened if some caller reads it anyway.
-pub(crate) fn stopped_between_evaluations(cause: StopCause) -> String {
-    format!(
-        "validation stopped between evaluations ({cause:?}); a conformance verdict cannot be \
-         computed from a validation that did not finish"
-    )
+pub(crate) fn stopped_between_evaluations(cause: StopCause) -> crate::error::ShapesError {
+    crate::error::ProcessorFailure::Stopped(cause).into()
 }
 
 /// Poll the stop signal of `governors` — the state read once, before a loop, with
 /// [`current_governors`] — and turn a fired signal into the error that unwinds the
 /// validation. `None` (the ungoverned path) costs one branch.
-pub(crate) fn poll_between_evaluations(governors: Option<&GovernorState>) -> Result<(), String> {
+pub(crate) fn poll_between_evaluations(
+    governors: Option<&GovernorState>,
+) -> Result<(), crate::error::ShapesError> {
     match governors.and_then(GovernorState::poll_stop) {
         Some(cause) => Err(stopped_between_evaluations(cause)),
         None => Ok(()),
@@ -1210,7 +1215,7 @@ fn run_query_view<
                     options,
                 )
             })
-            .map_err(|error| format!("query evaluation error: {error}"))?;
+            .map_err(crate::xpath::query_error)?;
         law.admit(invocation, prepared.source_query())?;
     }
 
@@ -1225,7 +1230,7 @@ fn run_query_view<
             engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
         })
         .map_err(crate::xpath::query_error)?;
-    certify_governed(outcome).map_err(crate::error::ShapesError::from)
+    certify_governed(outcome)
 }
 
 /// Read a governed run's receipt and reduce it to the answer a conformance verdict
@@ -1237,7 +1242,9 @@ fn run_query_view<
 /// checking. A `conforms` computed over a truncated bag, or over a relation that
 /// declared its index was not whole, is not a verdict; both are refused here by
 /// name.
-fn certify_governed<R>(outcome: InternedGoverned<Result<R, String>>) -> Result<R, String> {
+fn certify_governed<R>(
+    outcome: InternedGoverned<Result<R, String>>,
+) -> Result<R, crate::error::ShapesError> {
     match outcome {
         InternedGoverned::Complete {
             value, relations, ..
@@ -1260,19 +1267,16 @@ fn certify_governed<R>(outcome: InternedGoverned<Result<R, String>>) -> Result<R
                 })
                 .collect();
             if !incomplete.is_empty() {
-                return Err(format!(
-                    "a relation this query invoked declares its index was not whole ({}); a \
-                     conformance verdict cannot be computed over an index that was not whole",
-                    incomplete.join("; ")
-                ));
+                return Err(crate::error::ProcessorFailure::IncompleteRelation {
+                    relations: incomplete,
+                }
+                .into());
             }
-            value
+            value.map_err(crate::error::ShapesError::from)
         }
-        InternedGoverned::BudgetExhausted(exhausted) => Err(format!(
-            "validation budget exhausted: {}; a conformance verdict cannot be computed \
-             from a truncated solution bag",
-            exhausted.tripped
-        )),
+        InternedGoverned::BudgetExhausted(exhausted) => {
+            Err(crate::error::ProcessorFailure::Governor(exhausted.tripped).into())
+        }
     }
 }
 
@@ -1302,11 +1306,12 @@ static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
 /// held them apart is a door that can forget one of them. See that module's
 /// documentation for why the separateness was the bug.
 struct AmbientScopes {
+    now: Option<Arc<purrdf_xsd::temporal::DateTime>>,
     /// The SHACL-AF function table in scope, if a validation installed one. Bound
     /// against `env` already — see [`bind_in_current_env`].
     functions: Option<Arc<BoundFunctionRegistry>>,
     /// The extension environment this query's text is interpreted relative to.
-    env: Arc<ExtensionEnv>,
+    env: Arc<ExtensionEnv<'static>>,
     /// The operation budget in force, if a validation installed one.
     governors: Option<Arc<GovernorState>>,
     /// The `SERVICE` and `LOAD` sources in force, if an execution scope installed them.
@@ -1346,6 +1351,7 @@ impl AmbientScopes {
             .as_ref()
             .map(crate::query_law::Runtime::function_admission);
         Ok(Self {
+            now: coordinates::now(),
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
             env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
             governors,
@@ -1374,7 +1380,7 @@ impl AmbientScopes {
         dataset: &'a D,
         declared_prebound: &'a [&'a str],
         bnode_mint_prefix: Option<&'a str>,
-    ) -> Result<QueryOptions<'a>, crate::error::ShapesError> {
+    ) -> Result<QueryOptions<'a, 'a>, crate::error::ShapesError> {
         let functions = self.functions();
         // The graph THIS query is reading, handed to any expression-bodied
         // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
@@ -1407,6 +1413,12 @@ impl AmbientScopes {
             .with_remote(remote)
             .with_load(load)
             .with_declared_prebound(declared_prebound);
+        let options = self
+            .now
+            .as_ref()
+            .map_or(options, |now| options.with_now(now));
+        let options =
+            coordinates::next_seed().map_or(options, |seed| options.with_entropy_seed(seed));
         let options = self.native_xpath.as_ref().map_or(options, |configuration| {
             options.with_xpath_regex(configuration.profile, configuration.limits)
         });
@@ -1486,7 +1498,7 @@ impl AmbientScopes {
 /// alive than the one this holds today.
 struct PlanConfiguration {
     /// The extension environment in scope when the plan was admitted.
-    env: Arc<ExtensionEnv>,
+    env: Arc<ExtensionEnv<'static>>,
 }
 
 impl PlanConfiguration {
@@ -1567,7 +1579,11 @@ impl ShaclExecution {
     /// The pre-binding rewrite binds a parameter in every property-function call in
     /// the query — an `OPTIONAL` arm, an unprojected sub-`SELECT`, an `EXISTS` body —
     /// so the plan admits calls there with the parameter bound.
-    fn prepare(query: &str, parameters: &[&str], scopes: &AmbientScopes) -> Result<Self, String> {
+    fn prepare(
+        query: &str,
+        parameters: &[&str],
+        scopes: &AmbientScopes,
+    ) -> Result<Self, crate::error::ShapesError> {
         debug_assert!(
             parameters_are_distinct(parameters),
             "a repeated parameter name has no single slot to bind and must fall back to the \
@@ -1659,7 +1675,7 @@ fn declared_shape_context(parameters: &[&str], scopes: &AmbientScopes) -> &'stat
     if scopes
         .query_law
         .as_ref()
-        .is_some_and(|law| law.profile() == crate::profile::ShaclProfile::WD_20260918)
+        .is_some_and(|law| law.profile().is_shacl12())
     {
         &[]
     } else {
@@ -1749,7 +1765,7 @@ fn run_bound_view<
             )
         })
         .map_err(crate::xpath::query_error)?;
-    certify_governed(outcome).map_err(crate::error::ShapesError::from)
+    certify_governed(outcome)
 }
 
 /// How many distinct query texts one worker keeps prepared.
@@ -1823,7 +1839,7 @@ fn checkout_execution(
     query: &str,
     parameters: &[&str],
     scopes: &AmbientScopes,
-) -> Result<ShaclExecution, String> {
+) -> Result<ShaclExecution, crate::error::ShapesError> {
     let cached = PREPARED_EXECUTIONS.with(|cache| {
         cache.borrow_mut().get_mut(query).and_then(|entries| {
             entries
@@ -2117,7 +2133,7 @@ impl Drop for FunctionScope {
 /// # Errors
 ///
 /// A message if a registered relation's or aggregate's declaration methods panic.
-pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
+pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let options = current_parser_options();
@@ -2171,10 +2187,10 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
 /// cost on the exact path the plan cache's reusable key buffer exists to keep
 /// allocation-free.
 struct CachedEnv {
-    relations: Option<Arc<PropertyFunctionRegistry>>,
+    relations: Option<Arc<PropertyFunctionRegistry<'static>>>,
     aggregates: Option<Arc<AggregateRegistry>>,
     options: Option<Arc<ParserOptions>>,
-    env: Arc<ExtensionEnv>,
+    env: Arc<ExtensionEnv<'static>>,
 }
 
 impl CachedEnv {
@@ -2187,10 +2203,10 @@ impl CachedEnv {
     /// identity unusable in general.
     fn matching(
         &self,
-        relations: Option<&Arc<PropertyFunctionRegistry>>,
+        relations: Option<&Arc<PropertyFunctionRegistry<'static>>>,
         aggregates: Option<&Arc<AggregateRegistry>>,
         options: Option<&Arc<ParserOptions>>,
-    ) -> Option<Arc<ExtensionEnv>> {
+    ) -> Option<Arc<ExtensionEnv<'static>>> {
         fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
             match (left, right) {
                 (None, None) => true,
@@ -2275,7 +2291,7 @@ pub fn enter_function_scope(registry: Arc<BoundFunctionRegistry>) -> FunctionSco
 #[must_use]
 #[derive(Debug)]
 pub struct PropertyFunctionScope {
-    previous: Option<Arc<PropertyFunctionRegistry>>,
+    previous: Option<Arc<PropertyFunctionRegistry<'static>>>,
     /// A thread-local restoration guard must be dropped on the thread where it
     /// was created; this marker makes that invariant compile-time enforced.
     _not_send: PhantomData<Rc<()>>,
@@ -2291,7 +2307,7 @@ impl Drop for PropertyFunctionScope {
 /// Install `registry` as the current property-function table, returning a guard that
 /// restores the previous table when dropped.
 pub fn enter_property_function_scope(
-    registry: Arc<PropertyFunctionRegistry>,
+    registry: Arc<PropertyFunctionRegistry<'static>>,
 ) -> PropertyFunctionScope {
     let previous = CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
     PropertyFunctionScope {
@@ -2307,7 +2323,7 @@ pub fn enter_property_function_scope(
 /// [`enter_property_function_scope`], because a thread-local is not visible from the
 /// threads a worker pool forks — the same reason [`current_governors`] exists.
 #[must_use]
-pub fn current_property_functions() -> Option<Arc<PropertyFunctionRegistry>> {
+pub fn current_property_functions() -> Option<Arc<PropertyFunctionRegistry<'static>>> {
     CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow().clone())
 }
 
@@ -2449,8 +2465,7 @@ pub fn current_call_depth() -> u32 {
 /// `$currentShape` are the query's own variables there, valued or not. The
 /// compatibility law and the 2017 Recommendation pre-bind both.
 fn law_binds_shape_context() -> bool {
-    crate::query_law::current()
-        .is_none_or(|law| law.profile() != crate::profile::ShaclProfile::WD_20260918)
+    crate::query_law::current().is_none_or(|law| !law.profile().is_shacl12())
 }
 
 /// The shape context the selected law pre-binds: as given, or none under a law that
@@ -3481,11 +3496,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &purrdf_sparql_eval::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+        where
+            Self: 'cursor,
+        {
             let banned = matches!(
                 args.get(0),
                 Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "banned"
@@ -3736,11 +3754,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &purrdf_sparql_eval::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(FixedRowCursor {
                 rows: vec![self.row.clone()].into_iter(),
             }))
@@ -3752,7 +3773,7 @@ mod tests {
     /// environment across two runs must hold one `Arc` and clone it, not call this
     /// twice — that distinction is exactly what `still_current`'s `Arc::ptr_eq`
     /// tests.
-    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry> {
+    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry<'static>> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             STILL_CURRENT_REL.to_owned(),
@@ -3775,7 +3796,7 @@ mod tests {
     /// test — the production call sites in `components.rs` and `rules.rs` differ
     /// from this only in which parameters they declare.
     fn still_current_ask(
-        registry: Arc<PropertyFunctionRegistry>,
+        registry: Arc<PropertyFunctionRegistry<'static>>,
         focus: &str,
     ) -> Result<bool, crate::error::ShapesError> {
         let _scope = enter_property_function_scope(registry);

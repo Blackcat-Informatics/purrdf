@@ -40,9 +40,15 @@ use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
 use crate::interner::Interner;
+
+mod axiom_source;
+pub(crate) mod input_source;
+pub(crate) mod key_proofs;
+pub(crate) mod key_values;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
+use axiom_source::AxiomSource;
 // `Decomp`/`Role` are used only by the `cfg(test)` sub-cardinality interning for the
 // concept-tree `NN`-rule; production no longer reads either here.
 #[cfg(test)]
@@ -69,6 +75,7 @@ pub(crate) mod query;
 pub(crate) mod roles;
 pub(crate) mod saturate;
 pub(crate) mod support;
+pub(crate) mod syntax;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
 ///
 /// Compiled only under `cfg(test)`: it decides no question this crate asks, so shipping it
@@ -105,6 +112,10 @@ pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept
 /// the honest shape rather than a state machine in disguise.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
+    pub(crate) syntax: syntax::Syntax,
+    pub(crate) query_syntax: syntax::Syntax,
+    /// Source anchors and explicit native derivation owners for prepared inputs.
+    pub(crate) inputs: input_source::Inputs,
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
     /// Term-id boundary before any query/refutation symbol is minted.
@@ -117,6 +128,7 @@ pub(crate) struct Kb {
     pub(crate) schema_budget: bounds::SchemaPreparationBudget,
     /// Deferred only by an honest incomplete preparation, never silently omitted.
     keys_applied: bool,
+    pub(crate) key_proofs: key_proofs::Records,
     /// Same-producer uncached control; absent from every shipped build.
     #[cfg(test)]
     pub(crate) schema_reference: bool,
@@ -131,6 +143,8 @@ pub(crate) struct Kb {
     pub(crate) bottom: u32,
     /// General concept inclusions `sub ⊑ sup`, as concept-id pairs.
     pub(crate) tbox: Vec<(u32, u32)>,
+    /// Original normalization anchor for each TBox entry, in exactly the same order.
+    pub(crate) tbox_sources: Vec<AxiomSource>,
     /// The internalized TBox: meta-concept ids `nnf(¬sub ⊔ sup)`, one per inclusion whose
     /// antecedent [`absorb`] could not guard.
     ///
@@ -138,6 +152,8 @@ pub(crate) struct Kb {
     /// is the encoding a general concept inclusion gets when nothing better applies, and
     /// [`Kb::absorbed`] is what "better" means.
     pub(crate) meta: Vec<u32>,
+    /// Original inclusion ordinal for each internalized meta-concept.
+    pub(crate) meta_sources: Vec<usize>,
     /// The **absorbed** TBox: one guarded clause `⋀ body → head` per inclusion whose
     /// antecedent is FAITHFUL — see [`absorb`] for the criterion, the per-shape dispositions
     /// and why a guarded clause is not merely an optimization of the internalized form.
@@ -146,6 +162,8 @@ pub(crate) struct Kb {
     /// one-atom guard `A(x) → D(x)`, and `∃r.C ⊑ D`, `A ⊓ B ⊑ D`, `{a} ⊑ D`, `rdfs:domain`
     /// and `rdfs:range` are the cases that used to branch on every node instead.
     pub(crate) absorbed: Vec<GuardedClause>,
+    /// Original inclusion ordinal for each rewritten/absorbed clause.
+    pub(crate) absorbed_sources: Vec<usize>,
     /// Concept id → whether holding it FORCES an at-least head, over the absorbed table's own
     /// closure — see [`absorb::generating`], which computes it.
     ///
@@ -211,12 +229,12 @@ pub(crate) struct Kb {
     /// absorbed table from the WHOLE inclusion list — is a pure function of [`Kb::tbox`]
     /// alone; the two negation-cache passes around it also cover concepts a caller interned
     /// since the last call (a named class, a query concept, a refutation witness), so they
-    /// stay unconditional. This flag gates only the middle pass: [`Kb::from_dataset`] already
+    /// stay unconditional. This flag gates only the middle pass: [`Kb::from_dataset_until`] already
     /// runs it once inside [`parser::build_until`], and every caller downstream that finalizes
     /// again after interning MORE concepts — [`Reasoner::new`](crate::reasoner::Reasoner::new)
     /// chief among them — would otherwise re-derive an identical absorbed table from an
-    /// unchanged inclusion list. [`Kb::push_gci`] is the only way [`Kb::tbox`] grows after
-    /// construction, and it clears this, so the flag cannot go stale.
+    /// unchanged inclusion list. [`Kb::push_gci_from`] and its interned ingress grow
+    /// [`Kb::tbox`] after construction; both clear this flag, so it cannot go stale.
     pub(crate) encoded: bool,
     /// How many times [`Kb::encode_until`] actually ran its absorption pass.
     ///
@@ -233,7 +251,7 @@ pub(crate) struct Kb {
     /// a parameter to a dozen private functions, and it cannot be forgotten at one call
     /// site and honoured at another.
     ///
-    /// `None` — the state [`Kb::from_dataset`] builds — is a run nothing can stop, which is
+    /// `None` — a [`Kb::from_dataset_until`] call without a signal — is a run nothing can stop, which is
     /// exactly the behaviour this lane had before the field existed. The stop-aware
     /// constructor installs this before key inference, so a key-bearing ontology cannot
     /// enter an uninterruptible tableau before the public governed path attaches its signal.
@@ -289,12 +307,19 @@ impl Kb {
         let top = table.top();
         let bottom = table.bottom();
         Self {
+            syntax: syntax::Syntax::default(),
+            query_syntax: syntax::Syntax::query(),
+            inputs: input_source::Inputs::default(),
             interner: Interner::default(),
             source_terms: 0,
+            meta_sources: Vec::new(),
+            absorbed_sources: Vec::new(),
+            tbox_sources: Vec::new(),
             table,
             schema: bounds::Preparation::default(),
             schema_budget: bounds::SchemaPreparationBudget::default(),
             keys_applied: false,
+            key_proofs: key_proofs::Records::default(),
             #[cfg(test)]
             schema_reference: false,
             #[cfg(test)]
@@ -346,7 +371,8 @@ impl Kb {
     /// cap; [`EntailError::Unsatisfiable`] if a key axiom is present over a knowledge base
     /// that is already unsatisfiable (every identification would then be entailed, so the
     /// key says nothing).
-    pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
+    #[cfg(test)]
+    pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
         Self::from_dataset_until(ds, None)
     }
 
@@ -354,12 +380,13 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// The same failures as [`Self::from_dataset`], plus [`EntailError::Stopped`] when the
-    /// signal fires before or during reverse mapping or key inference.
+    /// Malformed OWL syntax, source/storage refusal and incomplete key membership
+    /// decisions fail. [`EntailError::Stopped`] preserves the original signal
+    /// before or during reverse mapping or key inference.
     pub(crate) fn from_dataset_until<D: DatasetView>(
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::from_dataset_with_preparation(ds, stop, bounds::SchemaPreparationBudget::default())
     }
 
@@ -367,16 +394,26 @@ impl Kb {
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
         budget: bounds::SchemaPreparationBudget,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        Self::from_dataset_recording(ds, stop, budget, None)
+    }
+
+    pub(crate) fn from_dataset_recording<D: DatasetView>(
+        ds: &D,
+        stop: Option<Arc<dyn StopSignal>>,
+        budget: bounds::SchemaPreparationBudget,
+        input: Option<[u8; 32]>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
             return Err(EntailError::Stopped);
         }
         let mut kb = parser::build_with_preparation(ds, stop.as_deref(), budget)?;
+        kb.key_proofs = input.map_or(key_proofs::Records::Disabled, key_proofs::Records::Pending);
         kb.stop = stop;
         if kb.stopped() {
             return Err(EntailError::Stopped);
         }
-        kb.apply_keys()?;
+        kb.apply_keys().map_err(EntailError::with_read_error)?;
         Ok(kb)
     }
 
@@ -411,48 +448,83 @@ impl Kb {
             return Ok(());
         }
         self.finalize()?;
+        let input = self.key_proofs.input();
+        let context = input.map(|input| proof::DlProofContext::borrowing_prepared_kb(self, input));
+        let mut evidence = context.as_ref().map(key_proofs::Evidence::for_phase);
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+        let values = key_values::Index::new(
+            &self.abox_roles,
+            self.keys
+                .iter()
+                .flat_map(|(_, properties)| properties.iter().copied()),
+            self.stop.as_deref(),
+            &mut memory,
+        )?;
+        let mut reads = key_values::Reads::default();
         let named: Vec<u32> = self.individuals.iter().copied().collect();
-        let mut forced: Vec<(u32, u32)> = Vec::new();
-        for (class, properties) in &self.keys {
+        let mut forced: Vec<(usize, u32, u32)> = Vec::new();
+        for (key, (class, properties)) in self.keys.iter().enumerate() {
             // The individuals this key ranges over, in ascending id order.
             let mut members: Vec<u32> = Vec::new();
             for &individual in &named {
-                if self.entails_instance(individual, *class)? {
+                let belongs = match (&mut evidence, &context) {
+                    (Some(evidence), Some(context)) => {
+                        evidence.entails(key, individual, *class, context)?
+                    }
+                    (None, None) => self.entails_instance(individual, *class)?,
+                    _ => unreachable!("key recording is selected by its original input identity"),
+                };
+                if belongs {
                     members.push(individual);
                 }
             }
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
-                    if properties
-                        .iter()
-                        .all(|&property| self.agrees_on(left, right, property))
-                    {
-                        forced.push((left, right));
+                    let start = reads.values.len();
+                    let mut matches = true;
+                    for &property in properties {
+                        let Some(common) =
+                            values.common(left, right, property, self.stop.as_deref())?
+                        else {
+                            matches = false;
+                            break;
+                        };
+                        reads.push(common)?;
+                    }
+                    if matches {
+                        reads.finish(start)?;
+                        forced.push((key, left, right));
+                    } else {
+                        reads.values.truncate(start);
                     }
                 }
             }
         }
-        self.same_as.extend(forced);
+        values.release(&mut memory)?;
+        drop(context);
+        let stop = self.stop.as_deref();
+        self.inputs
+            .record_key_equalities(self.same_as.len(), &forced, || {
+                if stop.is_some_and(StopSignal::stopped) {
+                    Err(EntailError::Stopped)
+                } else {
+                    Ok(())
+                }
+            })?;
+        assert!(
+            self.inputs.key_values.is_none(),
+            "key value evidence is published once with its equality batch"
+        );
+        reads.base = self.same_as.len();
+        self.inputs.key_values = Some(reads);
+        if let Some(evidence) = evidence {
+            self.key_proofs = key_proofs::Records::Ready(evidence);
+        }
+        self.same_as
+            .extend(forced.into_iter().map(|(_, left, right)| (left, right)));
         self.keys_applied = true;
         Ok(())
-    }
-
-    /// Whether `left` and `right` share at least one asserted `property` value, and neither
-    /// is without one.
-    ///
-    /// A key property with no value on one of the two individuals does not identify them —
-    /// OWL 2 requires the key values to EXIST and to coincide — so an absent value answers
-    /// `false` rather than vacuously `true`.
-    fn agrees_on(&self, left: u32, right: u32, property: u32) -> bool {
-        let values = |individual: u32| -> BTreeSet<u32> {
-            self.abox_roles
-                .iter()
-                .filter(|&&(subject, predicate, _)| subject == individual && predicate == property)
-                .map(|&(_, _, object)| object)
-                .collect()
-        };
-        let left = values(left);
-        !left.is_empty() && values(right).intersection(&left).next().is_some()
     }
 
     /// The constructs this knowledge base could not fully handle.
@@ -472,10 +544,22 @@ impl Kb {
     /// Clears [`Kb::encoded`]: this is the one way [`Kb::tbox`] grows after construction, and
     /// [`Kb::encode_until`]'s absorption pass must see the grown list on the next call rather
     /// than skip itself over an inclusion it has not yet absorbed.
+    #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
+        self.push_gci_from(sub, sup, AxiomSource::Unrecorded);
+    }
+
+    /// Keep the original source anchor at the same ingress that invalidates encoding.
+    pub(crate) fn push_gci_from(&mut self, sub: Concept, sup: Concept, source: AxiomSource) {
         let sub_id = self.table.intern(sub);
         let sup_id = self.table.intern(sup);
+        self.push_gci_ids_from(sub_id, sup_id, source);
+    }
+
+    /// Interned ingress shared with built-in laws; never leaves source/order stale.
+    pub(crate) fn push_gci_ids_from(&mut self, sub_id: u32, sup_id: u32, source: AxiomSource) {
         self.tbox.push((sub_id, sup_id));
+        self.tbox_sources.push(source);
         self.encoded = false;
         self.schema = bounds::Preparation::default();
     }
@@ -494,6 +578,15 @@ impl Kb {
     /// completeness limit the finished terminology forces. Call once after all axioms and
     /// assertions are in place.
     pub(crate) fn finalize(&mut self) -> Result<(), EntailError> {
+        self.finalize_until(|| Ok::<(), EntailError>(()))
+    }
+
+    /// Complete the same encoding with a selected fallible work boundary.
+    pub(crate) fn finalize_until<E: From<roles::RoleHierarchyError>>(
+        &mut self,
+        mut poll: impl FnMut() -> Result<(), E>,
+    ) -> Result<(), E> {
+        poll()?;
         // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
         // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
         // so those sub-cardinalities must be interned now, before encoding. The production
@@ -501,7 +594,8 @@ impl Kb {
         // and its concept table is left byte-for-byte as it was.
         #[cfg(test)]
         self.intern_sub_cardinalities();
-        self.encode_until(|| Ok::<(), EntailError>(()))
+        self.encode_until(&mut poll)?;
+        poll()
     }
 
     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
@@ -551,7 +645,9 @@ impl Kb {
                 &mut poll,
             )?;
             self.absorbed = absorption.clauses;
+            self.absorbed_sources = absorption.clause_sources;
             self.meta = absorption.meta;
+            self.meta_sources = absorption.meta_sources;
             self.encoded = true;
             #[cfg(test)]
             {
@@ -758,18 +854,26 @@ impl Kb {
         individual: u32,
         concept_id: u32,
     ) -> Result<bool, EntailError> {
+        self.with_negative_instance(individual, concept_id, |assumptions| {
+            hyper::consistent(self, assumptions).map(|consistent| !consistent)
+        })
+    }
+
+    /// The original consistency guard and selected negative membership question.
+    pub(crate) fn with_negative_instance<T>(
+        &self,
+        individual: u32,
+        concept_id: u32,
+        decide: impl FnOnce(&Assumptions<'_>) -> Result<T, EntailError>,
+    ) -> Result<T, EntailError> {
         if !self.is_consistent()? {
             return Err(EntailError::Unsatisfiable);
         }
         let neg = self.table.negate(concept_id);
-        let consistent = hyper::consistent(
-            self,
-            &Assumptions {
-                types: &[(individual, neg)],
-                ..Assumptions::of_kb()
-            },
-        )?;
-        Ok(!consistent)
+        decide(&Assumptions {
+            types: &[(individual, neg)],
+            ..Assumptions::of_kb()
+        })
     }
 
     /// Whether `sub_id ⊑ sup_id` is entailed — i.e. a fresh witness in `sub ⊓ ¬sup` has no

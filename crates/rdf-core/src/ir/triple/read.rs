@@ -24,6 +24,14 @@ pub enum TripleReadError {
     SharedOwnership(SharedCloneError),
 }
 
+impl purrdf_hash::error::StructuredError for TripleReadError {
+    purrdf_hash::error_visit! {
+        NamedGraphsUnsupported => "triple-read-named-graphs-unsupported" {},
+        Storage(cause) => "triple-read-storage" { "cause" => Cause(cause) },
+        SharedOwnership(cause) => "triple-read-shared-ownership" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for TripleReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -455,6 +463,25 @@ impl DatasetView for TripleRead<'_> {
         self.ready()
             .ok()
             .map(|()| self as &dyn crate::SnapshotStatistics<TermId>)
+    }
+
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        self.graph(graph)?;
+        Ok(Some(
+            self.dataset
+                .statistics
+                .source_summary(predicate, graph, stream),
+        ))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        self.ready()?;
+        Ok(Some(self.dataset.statistics.statement_count()))
     }
 
     fn statement_cardinality_estimate(

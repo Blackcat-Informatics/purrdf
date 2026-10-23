@@ -62,6 +62,17 @@ pub enum AnswerError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for AnswerError {
+    purrdf_hash::error_visit! {
+        Aborted => "answer-evidence-aborted" {},
+        EnumerationRequired => "answer-evidence-enumeration-required" {},
+        NotFinished => "answer-evidence-not-finished" {},
+        AlreadyFinished => "answer-evidence-already-finished" {},
+        InvalidUndecided => "answer-evidence-invalid-undecided" {},
+        Storage(cause) => "answer-evidence-storage" { "cause" => Cause(cause) },
+    }
+}
+
 impl core::fmt::Display for AnswerError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

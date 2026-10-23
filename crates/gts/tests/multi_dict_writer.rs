@@ -267,7 +267,10 @@ fn append_rejects_out_of_range_and_conflicting_declared_levels() {
     )]);
     let malformed = segment_append_state(&out_of_range)
         .expect_err("an unrepresentable declared level must fail closed");
-    assert!(malformed.contains("level is out of range"), "{malformed}");
+    assert!(
+        malformed.to_string().contains("level is out of range"),
+        "{malformed}"
+    );
 
     let conflicting = header_with_catalog(vec![
         (
@@ -290,6 +293,19 @@ fn append_rejects_out_of_range_and_conflicting_declared_levels() {
     let err = Writer::appending(&conflicting)
         .expect_err("conflicting on-wire zstd levels must fail closed");
     assert!(err.to_string().contains("conflicting zstd levels"), "{err}");
+    let fields = purrdf_testkit::error_capture::Capture::read(&err).child("cause");
+    assert_eq!(fields.code, "gts-writer-append-levels");
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Event;
+    assert!(matches!(
+        fields.events.as_slice(),
+        [
+            Event::BeginList(Some("levels"), 2),
+            Event::Value(None, ErrorValue::Signed(3)),
+            Event::Value(None, ErrorValue::Signed(12)),
+            Event::EndList
+        ]
+    ));
 }
 
 /// (e) A pack whose catalog names a `dct` absent from the header `"dct"` map

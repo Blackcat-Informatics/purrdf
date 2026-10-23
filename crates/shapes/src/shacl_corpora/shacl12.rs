@@ -48,24 +48,79 @@ use super::{
 /// The vendored SHACL 1.2 suite root.
 pub const SHACL12_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl12/tests");
 
+/// The `gh-pages` commit of `w3c/data-shapes` the vendored suite was taken from
+/// (`vectors/shacl12/PROVENANCE.md`, written by `scripts/vendor-shacl12.py`).
+/// Bump only together with that script's pin, on a deliberate re-vendor.
+pub const W3C12_SUITE_COMMIT: &str = "4cd469867a1cc6d2fff80e8a40723b26c695d67a";
+
+/// Exact number of approved entries reachable from the SHACL root,
+/// `tests/manifest.ttl` (which includes `core/`, `sparql/`, `node-expr/` and
+/// `inference-rules/` but not `sparql-rl/`). These are the entries the Working
+/// Group's reports page collects, so they are the scope of a SHACL 1.2 EARL
+/// report. Bump only on a deliberate re-vendor.
+pub const W3C12_SHACL_ROOT_APPROVED: usize = 382;
+
+/// Entries the engine fails against their UNAMENDED expectation because the
+/// specification text contradicts that expectation: `(test id, the clause and the
+/// observable difference)`. Such an entry is graded, reported `earl:failed` with
+/// this rationale as its `earl:info`, and counted under its own scoreboard label. An entry that starts to
+/// pass is refused (`XPASS`), as is an id no discovered entry has.
+pub const SPEC_CONTRADICTED: &[(&str, &str)] = &[(
+    "node-expr/shnex-sparql/hasLang-example",
+    "SPARQL 1.2 Query, Grammar, rule [141] BuiltInCall: 'hasLANG' '(' Expression ')' takes \
+     exactly one argument (the function table, section 17.4.2.10, lists one parameter, `term`). \
+     The approved test evaluates `[ sparql:hasLang ( \"hello\"@en \"en\" ) ]`, two arguments, and \
+     expects `true`; a processor that applies the grammar's arity refuses the call and cannot \
+     produce that result.",
+)];
+
+/// [`SPEC_CONTRADICTED`] pinned by count, so an entry cannot be added or dropped
+/// without this number moving with it.
+pub const SPEC_CONTRADICTED_COUNT: usize = 1;
+
+/// The conformance classes the SHACL root's entries use, which an implementation
+/// reporting on the root claims. Spelled through `purrdf_iri::vocab::sht`.
+pub const W3C12_CLAIMED_CLASSES: [&str; 6] = [
+    sht12::CONFORMANCE_CORE,
+    sht12::CONFORMANCE_SPARQL_VALIDATION,
+    sht12::CONFORMANCE_NODE_EXPR,
+    sht12::CONFORMANCE_INFERENCE_RULES,
+    sht12::CONFORMANCE_SPARQL_NODE_EXPR,
+    sht12::CONFORMANCE_SPARQL_CUSTOM_FUNCTIONS,
+];
+
+/// The class of an entry that states no `mf:requires`, by its top-level folder:
+/// the Working Group reports page's `DEFAULT_CRITERIA` (`reports.js`), ported.
+/// `None` for a folder the page has no default for (it reports such an entry as
+/// `Unspecified`).
+#[must_use]
+pub fn default_conformance_class(folder: &str) -> Option<&'static str> {
+    match folder {
+        "core" => Some(sht12::CONFORMANCE_CORE),
+        "inference-rules" => Some(sht12::CONFORMANCE_INFERENCE_RULES),
+        "node-expr" => Some(sht12::CONFORMANCE_NODE_EXPR),
+        _ => None,
+    }
+}
+
 /// Exact number of test entries the manifest roots must discover.
 ///
 /// The per-type split is pinned by [`W3C12_CASES_BY_TYPE`]; this is its sum.
 /// Bump only on a deliberate re-vendor (the corpus is byte-frozen).
-pub const W3C12_TOTAL_CASES: usize = 547;
+pub const W3C12_TOTAL_CASES: usize = 592;
 
 /// The discovered count of each test type, pinned so a walk that lost one kind
 /// of test while gaining another cannot keep the total.
 pub const W3C12_CASES_BY_TYPE: &[(&str, usize)] = &[
-    ("sht:Validate", 174),
+    ("sht:Validate", 213),
     ("sht:EvalNodeExpr", 143),
     ("sht:Infer", 27),
-    ("srlt:RulesPositiveSyntaxTest", 109),
+    ("srlt:RulesPositiveSyntaxTest", 111),
     ("srlt:RulesNegativeSyntaxTest", 30),
     ("srlt:RulesPositiveWellFormednessTest", 4),
     ("srlt:RulesNegativeWellFormednessTest", 4),
-    ("srlt:RulesPositiveStratificationTest", 5),
-    ("srlt:RulesNegativeStratificationTest", 5),
+    ("srlt:RulesPositiveStratificationTest", 7),
+    ("srlt:RulesNegativeStratificationTest", 7),
     ("srlt:RulesEvalTest", 46),
 ];
 
@@ -92,26 +147,14 @@ pub const W3C12_UNLISTED_TYPED_NODES: &[(&str, &str)] = &[(
 /// is exactly the silent coverage loss the reachability guard exists to stop; the
 /// SHACL 1.0 harness grades its one such file, the `sht:proposed`
 /// `nodeValidator-001.ttl`, the same way (`shacl_corpora::W3C_PROPOSED_UNINCLUDED`). Running them is not counting them: their entries are
-/// discovered with `listed == false`, and the harness grades and reports them in
+/// discovered with [`Root12::Unlisted`], and the harness grades and reports them in
 /// a category of their own, never among the approved suite's passes.
-pub const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[
-    (
-        "core/node/xone-002.ttl",
-        "approved sh:xone test (empty sh:xone list); core/node/manifest.ttl includes \
-         only xone-001 and xone-duplicate",
-    ),
-    (
-        "core/node/xone-003.ttl",
-        "approved sh:xone test (shacl-shacl sh:minListLength warning on an empty \
-         sh:xone); core/node/manifest.ttl includes only xone-001 and xone-duplicate",
-    ),
-    (
-        "inference-rules/rdfs/rdfs1.ttl",
-        "byte-identical copy of inference-rules/rectangle-condition.ttl left in rdfs/; \
+pub const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[(
+    "inference-rules/rdfs/rdfs1.ttl",
+    "byte-identical copy of inference-rules/rectangle-condition.ttl left in rdfs/; \
          its entry resolves to a distinct IRI (inference-rules/rdfs/rectangle-condition) \
          and is graded like any other",
-    ),
-];
+)];
 
 const SHT: &str = sht12::NS;
 const SRLT: &str = "http://www.w3.org/ns/sparql-rl-tests#";
@@ -127,6 +170,50 @@ use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 use purrdf_xsd::datatype::XSD_BOOLEAN;
 
 // ── The case models ───────────────────────────────────────────────────────────
+
+/// Which manifest root discovered an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Root12 {
+    /// The SHACL root, `tests/manifest.ttl`: the one the Working Group's reports
+    /// page collects from.
+    Shacl,
+    /// The SPARQL 1.2 RL root, `sparql-rl/manifest-sparql-rl.ttl`, which the SHACL
+    /// root does not include.
+    SparqlRl,
+    /// A vendored file no upstream manifest includes
+    /// ([`W3C12_UNINCLUDED_MANIFESTS`]).
+    Unlisted,
+}
+
+impl Root12 {
+    /// Whether an upstream manifest lists the entry (every root but
+    /// [`Self::Unlisted`]).
+    #[must_use]
+    pub fn is_listed(self) -> bool {
+        self != Self::Unlisted
+    }
+}
+
+/// An entry's `mf:status`; any other value is a discovery failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Status12 {
+    /// `sht:approved`.
+    Approved,
+    /// `sht:proposed`.
+    Proposed,
+}
+
+impl Status12 {
+    fn from_iri(iri: &str) -> Option<Self> {
+        if iri == sht12::APPROVED {
+            Some(Self::Approved)
+        } else if iri == sht12::PROPOSED {
+            Some(Self::Proposed)
+        } else {
+            None
+        }
+    }
+}
 
 /// The seven SPARQL 1.2 RL test types (`srlt:` vocabulary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -244,6 +331,13 @@ pub enum Body {
     Srl(SrlCase),
 }
 
+/// Whether an entry found under `root` with `status` is in the scope of a SHACL 1.2
+/// EARL report: approved, and reachable from the SHACL root.
+#[must_use]
+pub fn in_earl_scope(root: Root12, status: Option<Status12>) -> bool {
+    root == Root12::Shacl && status == Some(Status12::Approved)
+}
+
 /// One discovered SHACL 1.2 test entry.
 #[derive(Debug)]
 pub struct Case12 {
@@ -253,14 +347,53 @@ pub struct Case12 {
     /// The id's directory, e.g. `core/node`.
     pub section: String,
     pub body: Body,
-    /// Whether an upstream manifest lists the entry. `false` for the entries of
-    /// [`W3C12_UNINCLUDED_MANIFESTS`], which no upstream manifest includes: they
-    /// are graded, but they are not the approved suite, and a harness reports
-    /// them apart from it.
-    pub listed: bool,
+    /// The manifest root that discovered the entry. [`Root12::Unlisted`] for the
+    /// entries of [`W3C12_UNINCLUDED_MANIFESTS`], which no upstream manifest
+    /// includes: they are graded, but they are not the approved suite, and a
+    /// harness reports them apart from it.
+    pub root: Root12,
+    /// The `mf:requires` conformance classes the entry states, in IRI order.
+    pub requires: Vec<String>,
+    /// The entry's `mf:status`. `None` only for [`Root12::SparqlRl`] entries,
+    /// whose manifests carry no `mf:status`; every other entry states exactly
+    /// one, `sht:approved` or `sht:proposed`.
+    pub status: Option<Status12>,
 }
 
 impl Case12 {
+    /// Whether the entry is an approved one reachable from the SHACL root: the
+    /// entries a SHACL 1.2 EARL report covers.
+    #[must_use]
+    pub fn is_approved_shacl_root(&self) -> bool {
+        in_earl_scope(self.root, self.status)
+    }
+
+    /// The conformance classes the entry is reported under, by the Working
+    /// Group reports page's rule: its `mf:requires` values, or, when it states
+    /// none, the default of its top-level folder
+    /// ([`default_conformance_class`]).
+    ///
+    /// Only SHACL-root entries are classified; any other returns no class. A
+    /// SHACL-root entry with neither `mf:requires` nor a folder default is a
+    /// panic: the page would report it as `Unspecified`.
+    #[must_use]
+    pub fn conformance_classes(&self) -> Vec<String> {
+        if self.root != Root12::Shacl {
+            return Vec::new();
+        }
+        if !self.requires.is_empty() {
+            return self.requires.clone();
+        }
+        let folder = self.id.split('/').next().unwrap_or_default();
+        match default_conformance_class(folder) {
+            Some(class) => vec![class.to_owned()],
+            None => panic!(
+                "{}: no mf:requires and no default conformance class for folder {folder}",
+                self.id
+            ),
+        }
+    }
+
     /// The manifest's test type, as a prefixed name.
     pub fn type_label(&self) -> String {
         match &self.body {
@@ -281,18 +414,20 @@ pub fn shacl12_root() -> PathBuf {
         .expect("vectors/shacl12/tests corpus directory must exist")
 }
 
-/// The manifest roots, in walk order, each with whether it is one of the suite's
-/// own: the two top-level manifests (`true`), then [`W3C12_UNINCLUDED_MANIFESTS`]
-/// (`false`).
-fn manifest_roots(root: &Path) -> Vec<(PathBuf, bool)> {
+/// The manifest roots, in walk order, each with the [`Root12`] it discovers
+/// under: the two top-level manifests, then [`W3C12_UNINCLUDED_MANIFESTS`].
+fn manifest_roots(root: &Path) -> Vec<(PathBuf, Root12)> {
     let mut roots = vec![
-        (root.join("manifest.ttl"), true),
-        (root.join("sparql-rl/manifest-sparql-rl.ttl"), true),
+        (root.join("manifest.ttl"), Root12::Shacl),
+        (
+            root.join("sparql-rl/manifest-sparql-rl.ttl"),
+            Root12::SparqlRl,
+        ),
     ];
     for (relative, _) in W3C12_UNINCLUDED_MANIFESTS {
         let path = root.join(relative);
         assert!(path.is_file(), "{relative} is not a vendored file");
-        roots.push((path, false));
+        roots.push((path, Root12::Unlisted));
     }
     roots
 }
@@ -300,15 +435,13 @@ fn manifest_roots(root: &Path) -> Vec<(PathBuf, bool)> {
 /// Every test entry the manifest roots reach, in manifest order.
 ///
 /// Asserts [`W3C12_TOTAL_CASES`], [`W3C12_CASES_BY_TYPE`], id uniqueness, and the
-/// reachability and listed-ness guards in the module docs.
+/// reachability and listed-ness guards, and [`W3C12_SHACL_ROOT_APPROVED`] in the module docs.
 pub fn shacl12_cases() -> Vec<Case12> {
     let root = shacl12_root();
     let mut cases: Vec<Case12> = Vec::new();
-    for (manifest, listed) in manifest_roots(&root) {
+    for (manifest, discovered_by) in manifest_roots(&root) {
         walk_manifest(&manifest, &mut |g, entry, manifest_path| {
-            let mut case = parse_case(g, entry, manifest_path, &root);
-            case.listed = listed;
-            cases.push(case);
+            cases.push(parse_case(g, entry, manifest_path, &root, discovered_by));
         });
     }
 
@@ -385,7 +518,13 @@ fn entry_types(g: &RdfDataset, entry: &Term) -> Vec<String> {
 }
 
 /// Parse one entry; an entry of any type this module does not know PANICS.
-fn parse_case(g: &Arc<RdfDataset>, entry: &Term, manifest_path: &Path, root: &Path) -> Case12 {
+fn parse_case(
+    g: &Arc<RdfDataset>,
+    entry: &Term,
+    manifest_path: &Path,
+    root: &Path,
+    discovered_by: Root12,
+) -> Case12 {
     let Term::NamedNode(entry_iri) = entry else {
         panic!(
             "{}: test entry must be an IRI, got {entry}",
@@ -406,6 +545,7 @@ fn parse_case(g: &Arc<RdfDataset>, entry: &Term, manifest_path: &Path, root: &Pa
             .unwrap_or_else(|| panic!("{id}: sht:Validate entry was not parsed"));
         tc.id.clone_from(&id);
         tc.section.clone_from(&section);
+        tc.profile = crate::profile::ShaclProfile::ED_20261016;
         Body::Validate(tc)
     } else if ty == sht12::EVAL_NODE_EXPR {
         Body::NodeExpr(parse_node_expr_case(g, entry, manifest_path, &id))
@@ -416,12 +556,45 @@ fn parse_case(g: &Arc<RdfDataset>, entry: &Term, manifest_path: &Path, root: &Pa
     } else {
         panic!("{id}: unknown SHACL 1.2 test type <{ty}> — grade it, do not skip it");
     };
+    let status = parse_status(g, entry, &id, discovered_by);
+    let requires = parse_requires(g, entry, &id);
     Case12 {
         id,
         section,
         body,
-        listed: true,
+        root: discovered_by,
+        requires,
+        status,
     }
+}
+
+/// The entry's `mf:status`: exactly one `sht:approved` or `sht:proposed`. Any
+/// other or missing value is a panic, except on a SPARQL 1.2 RL entry, whose
+/// manifests carry no `mf:status` at all (a stated one is still checked).
+fn parse_status(g: &RdfDataset, entry: &Term, id: &str, discovered_by: Root12) -> Option<Status12> {
+    let values = objects(g, entry, mf::STATUS);
+    match values.as_slice() {
+        [] if discovered_by == Root12::SparqlRl => None,
+        [Term::NamedNode(n)] => Some(Status12::from_iri(n.as_str()).unwrap_or_else(|| {
+            panic!(
+                "{id}: mf:status <{}> is neither sht:approved nor sht:proposed",
+                n.as_str()
+            )
+        })),
+        other => panic!("{id}: expected exactly one mf:status IRI, got {other:?}"),
+    }
+}
+
+/// The entry's `mf:requires` IRIs, sorted and unique.
+fn parse_requires(g: &RdfDataset, entry: &Term, id: &str) -> Vec<String> {
+    let classes: BTreeSet<String> = objects(g, entry, mf::REQUIRES)
+        .into_iter()
+        .map(|t| match t {
+            Term::NamedNode(n) => n.as_str().to_owned(),
+            other => panic!("{id}: mf:requires must be an IRI, got {other}"),
+        })
+        .collect();
+    classes.into_iter().collect()
 }
 
 /// The single object of `(subject, predicate, ?)`, panicking on none or several.

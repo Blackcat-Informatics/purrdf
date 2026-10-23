@@ -65,7 +65,7 @@
 //! [`ServiceProof::encode`] is byte-identical run to run and on `wasm32`.
 
 use purrdf_core::TermBox;
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::convert::Infallible;
@@ -97,6 +97,7 @@ use crate::report::Construct;
 const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
 const PREPARATION_SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v3");
 
+pub mod causal;
 mod current;
 
 /// Wire kind for [`TermValue::Iri`].
@@ -852,9 +853,19 @@ impl ServiceProof {
     /// [`DlProofError::Canonicalization`] if `ontology` — wholly caller-supplied — refuses
     /// canonicalization; otherwise [`DlProofError::InputMismatch`] or
     /// [`DlProofError::WrongQuestion`].
-    pub fn binds(&self, ontology: &RdfDataset, question: &Question) -> Result<(), DlProofError> {
+    pub fn binds<D: DatasetView>(
+        &self,
+        ontology: &D,
+        question: &Question,
+    ) -> Result<(), DlProofError<D::ReadError>> {
         let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
             .map_err(DlProofError::Canonicalization)?;
+        self.binds_identity(expected, question)
+            .map_err(DlProofError::with_read_error)
+    }
+
+    /// Bind the same proof fields to the consumer's independently computed input identity.
+    fn binds_identity(&self, expected: [u8; 32], question: &Question) -> Result<(), DlProofError> {
         if expected != self.input {
             return Err(DlProofError::InputMismatch {
                 expected: purrdf_hash::hex::encode(&expected),
@@ -1001,22 +1012,68 @@ impl ServiceProof {
     /// # Errors
     ///
     /// Any [`DlProofError`] — every one of them is a rejection of an invalid proof.
-    pub fn verify(
+    pub fn verify<D: DatasetView>(
         &self,
-        ontology: &RdfDataset,
+        ontology: &D,
         question: &Question,
         certificate: Option<&DlCertificate>,
-        ctx: &DlProofContext,
-    ) -> Result<ServiceReplay, DlProofError> {
+        ctx: &DlProofContext<'_>,
+    ) -> Result<ServiceReplay, DlProofError<D::ReadError>> {
         self.binds(ontology, question)?;
+        self.verify_prepared(question, certificate, ctx)
+            .map_err(DlProofError::with_read_error)
+    }
+
+    /// Verify against the consumer's immutable, already prepared source context.
+    ///
+    /// The context supplies the source identity computed by its consumer-owned
+    /// constructor; the requested question remains caller-supplied. Both owning
+    /// and borrowed contexts use the same source binding, trust-base checks and
+    /// native replay as [`Self::verify`]. This form reuses the checked source
+    /// identity instead of canonicalizing the complete ontology again per proof.
+    /// Prepare the requested question before constructing the context, as for
+    /// [`crate::reasoner::Reasoner::borrowed_proof_context`].
+    ///
+    /// `certificate` retains the exact requirements of [`Self::verify`], including
+    /// operational receipts and services that issue no DL certificate.
+    ///
+    /// # Errors
+    /// Any [`DlProofError`], including a different prepared input, question or
+    /// calculus, invalid claims, receipts or replay, and caller cancellation.
+    pub fn verify_prepared(
+        &self,
+        question: &Question,
+        certificate: Option<&DlCertificate>,
+        ctx: &DlProofContext<'_>,
+    ) -> Result<ServiceReplay, DlProofError> {
+        self.verify_prepared_inner(question, certificate, ctx, None)
+    }
+
+    /// One native verification loop, with requested causal capture in that same replay.
+    fn verify_prepared_inner(
+        &self,
+        question: &Question,
+        certificate: Option<&DlCertificate>,
+        ctx: &DlProofContext<'_>,
+        mut causal: Option<&mut causal::Captures>,
+    ) -> Result<ServiceReplay, DlProofError> {
+        self.binds_identity(ctx.input(), question)?;
         let mut checks = CheckReport::new();
-        // The input identity and the question are the consumer's own recomputations.
+        // The identity was computed by consumer preparation; both bindings are checked here.
         checks.attest(2);
         self.check_claims(&mut checks)?;
         self.check_receipt(certificate, &mut checks)?;
         let mut replayed = 0_usize;
         for (index, run) in self.runs.iter().enumerate() {
             let Some(proof) = run.proof.as_ref() else {
+                if causal.is_some() {
+                    return Err(causal::unavailable(
+                        index,
+                        None,
+                        crate::owl_dl::proof::source::causal::CausalSupportKind::Recording,
+                        "the selected run has no recorded native proof".to_owned(),
+                    ));
+                }
                 // A run past the recording ceiling is accounted for but not traced. Never
                 // presented as checked.
                 checks.leave(1);
@@ -1031,10 +1088,15 @@ impl ServiceProof {
                     ),
                 });
             }
-            if proof
-                .clashes()
-                .iter()
-                .any(|step| step.schema_evidence().is_some())
+            if causal.is_some()
+                || proof
+                    .merges()
+                    .iter()
+                    .any(crate::owl_dl::proof::MergeStep::has_current_support)
+                || proof
+                    .clashes()
+                    .iter()
+                    .any(|step| step.schema_evidence().is_some())
             {
                 current::check_run(self, index, ctx)?;
             }
@@ -1046,16 +1108,32 @@ impl ServiceProof {
                         roles: &run.assumptions.roles,
                         fresh_types: &run.assumptions.fresh_types,
                     };
-                    checks.absorb(
-                        proof
-                            .replay_refutation_assuming(ctx, &assumptions)?
-                            .checks(),
-                    );
+                    if let Some(causal) = causal.as_deref_mut() {
+                        let (replay, capture) = proof
+                            .replay_refutation_recording(ctx, &assumptions)
+                            .map_err(|error| causal::run_error(index, error))?;
+                        checks.absorb(replay.checks());
+                        causal.push(index, replay, capture)?;
+                    } else {
+                        checks.absorb(
+                            proof
+                                .replay_refutation_assuming(ctx, &assumptions)?
+                                .checks(),
+                        );
+                    }
                 }
                 ProofAnswer::Consistent => {
                     checks.absorb(proof.replay_completion(ctx)?.checks());
                 }
                 ProofAnswer::Undecided => {
+                    if causal.is_some() {
+                        return Err(causal::unavailable(
+                            index,
+                            None,
+                            crate::owl_dl::proof::source::causal::CausalSupportKind::Undecided,
+                            "the selected run is undecided".to_owned(),
+                        ));
+                    }
                     let assumptions = Assumptions {
                         include_abox: run.assumptions.include_abox,
                         types: &run.assumptions.types,
@@ -2327,7 +2405,7 @@ pub(crate) fn refutation_claim(subject: ClaimSubject, answer: Verdict, runs: &[u
 mod tests {
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::*;
     use crate::EntailError;
@@ -2383,7 +2461,7 @@ mod tests {
 
     /// A checking context built the way a CONSUMER builds one: from their own copy of the data
     /// and their own copy of the question, with nothing the producer shipped.
-    fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext {
+    fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext<'static> {
         let mut checker = Reasoner::with_proofs(ontology).expect("the fixture reverse-maps");
         checker
             .prepare(question)
@@ -3968,11 +4046,11 @@ mod tests {
             ),
             (
                 "instance-retrieval",
-                "06f904105e4067b818e7dda54feadc97710f7a29804c297f0eae1ef360706940",
+                "a832aa53d7e7489326a9e33566c69523bbb8246aac0dbcfa7af6819f6f513fbe",
             ),
             (
                 "axiom-entailment",
-                "679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879",
+                "bada3584baaee90a558f429add646d9d6dfc59eaffbf2dc889ecb71ffcbeff1a",
             ),
             (
                 "classification",
@@ -3980,7 +4058,7 @@ mod tests {
             ),
             (
                 "realization",
-                "163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76",
+                "edb8a0a810077d651de1ad60afcca2f6ed3e14f65471733e72fe0a3ad1d9b25e",
             ),
             (
                 "module-extraction",

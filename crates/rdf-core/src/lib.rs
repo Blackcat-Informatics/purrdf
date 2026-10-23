@@ -77,6 +77,7 @@ pub mod describe;
 pub mod diagnostic;
 pub mod evidence;
 pub mod query_scope;
+pub mod source;
 pub mod statistics;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
 // sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
@@ -131,6 +132,8 @@ pub mod model;
 pub mod named_graph;
 // CSV and TSV on the W3C CSVW dialect model.
 pub mod csv;
+/// Inline owning or immutable borrowed storage without a cloning contract.
+pub mod ownership;
 pub mod sink;
 // Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
 pub mod small;
@@ -186,7 +189,7 @@ pub use fno::{
 pub use governor::{
     EvidenceLease, ExpressionErrorEvidence, GovernorEvidence, ResourceDimension, ResourceVector,
     SilencedEvidence, SilencedEvidenceBuilder, SilencedInvocation, SilencedKind, SilencedTarget,
-    StopCause, TrippedGovernor,
+    StopCause, StopSignal, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 #[cfg(not(target_arch = "wasm32"))]
@@ -215,25 +218,26 @@ pub use ir::{
     PageFaultKind, PageGeneration, PageId, PageMaterialization, PagePart, PageProvider,
     PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
     PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack,
-    PagedStackError, PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, PipelineBundle,
-    PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
-    QuadRef, QuadValues, QueryIndexAllocationError, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, RecordKind, RecordValues,
-    ReservedVocabulary, SkolemError, StackPageOrigin, StackSource, SubsetPageProvider, TermBox,
-    TermId, TermPosition, TermRef, TermValue, TermVisit, TripleDataset, TripleDatasetBuilder,
-    TripleIds, TripleOrder, TripleRead, TripleReadError, TripleReifierRow, TripleReservation,
-    TripleRows, TripleStorageLayout, ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view,
-    canonical_paged_seal, canonical_relabel, canonical_relabel_with_mapping, canonicalize,
-    canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
-    check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
-    deskolemize, fold_term, graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
+    PagedStackError, PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot,
+    PagedStackSnapshotError, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle,
+    QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, QueryIndexAllocationError,
+    RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, RecordKind, RecordValues, ReservedVocabulary, SkolemError, StackPageOrigin,
+    StackSource, SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
+    TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead, TripleReadError,
+    TripleReifierRow, TripleReservation, TripleRows, TripleStorageLayout,
+    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_paged_seal,
+    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
+    canonicalize_view, canonicalize_with, check_admissible, check_admissible_flat_view,
+    check_admissible_view, dataset_diff, datasets_isomorphic, deskolemize, fold_term,
+    graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
     try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
-    try_graph_digest_view, visit_nested,
+    try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with,
+    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
 };
 pub use ir::{
-    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
-    pack_digest, restore_pack, verify_pack,
+    DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
+    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,

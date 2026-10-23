@@ -246,6 +246,13 @@ pub enum PackCheckpoint {
     AfterRows,
 }
 
+impl purrdf_hash::error::StructuredError for PackCheckpoint {
+    purrdf_hash::error_visit! {
+        BeforeRows => "pack-before-rows" {},
+        AfterRows => "pack-after-rows" {},
+    }
+}
+
 impl std::fmt::Display for PackCheckpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -274,7 +281,7 @@ impl From<DrainCheckpoint> for PackCheckpoint {
 /// Why building or opening a pack container failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum PackError {
+pub enum PackError<E = core::convert::Infallible> {
     /// The buffer's leading 8 bytes are not `MAGIC`.
     BadMagic,
     /// The header's `version` field is not `FORMAT_VERSION`.
@@ -302,7 +309,9 @@ pub enum PackError {
     /// symmetric, while a [`CanonError::ReservedVocabulary`] one carries IRIs whose
     /// acceptance would have let a different dataset forge this pack's identity.
     /// Collapsing them into one variant would have made the second unreportable.
-    CanonRefused(CanonError),
+    CanonRefused(CanonError<E>),
+    /// Importing or freezing the decoded RDF surface failed with its native cause.
+    Materialization(super::certify::DatasetMaterializationError<E>),
     /// [`super::certify::verify_pack`]'s independent RDFC-1.0 recompute over the
     /// pack's own decoded contents disagreed with the header's stored
     /// `rdfc_digest` field. Unlike [`Self::SectionDigestMismatch`], this is NOT a
@@ -329,8 +338,8 @@ pub enum PackError {
     ViewNotReady {
         /// Which checkpoint observed the failure.
         checkpoint: PackCheckpoint,
-        /// The view's own typed root cause, rendered through its `Display`.
-        cause: String,
+        /// The original read or term-identity failure, retained without formatting.
+        cause: crate::TermLookupError<E>,
     },
     /// The DICT section failed to decode.
     Dict(PackDictError),
@@ -340,7 +349,34 @@ pub enum PackError {
     Side(PackSideError),
 }
 
-impl std::fmt::Display for PackError {
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for PackError<E> {
+    purrdf_hash::error_visit! {
+        BadMagic => "pack-bad-magic" {},
+        UnsupportedVersion(version) => "pack-unsupported-version" {
+            "version" => Unsigned(u128::from(*version)),
+        },
+        Truncated => "pack-truncated" {},
+        Malformed(message) => "pack-malformed" { "message" => Text(message) },
+        SectionDigestMismatch { kind } => "pack-section-digest-mismatch" {
+            "kind" => Unsigned(u128::from(*kind)),
+        },
+        CanonRefused(cause) => "pack-canonical-refusal" { "cause" => Cause(cause) },
+        Materialization(cause) => "pack-materialization" { "cause" => Cause(cause) },
+        RdfcDigestMismatch { expected, computed } => "pack-rdfc-digest-mismatch" {
+            "expected" => Bytes(expected),
+            "computed" => Bytes(computed),
+        },
+        ViewNotReady { checkpoint, cause } => "pack-view-not-ready" {
+            "checkpoint" => Record(checkpoint),
+            "cause" => Cause(cause),
+        },
+        Dict(cause) => "pack-dictionary" { "cause" => Cause(cause) },
+        Triples(cause) => "pack-triples" { "cause" => Cause(cause) },
+        Side(cause) => "pack-side" { "cause" => Cause(cause) },
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for PackError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BadMagic => write!(f, "pack-container: bad magic"),
@@ -355,6 +391,9 @@ impl std::fmt::Display for PackError {
             ),
             Self::CanonRefused(err) => {
                 write!(f, "pack-container: canonicalization refused: {err}")
+            }
+            Self::Materialization(cause) => {
+                write!(f, "pack-container: materialization refused: {cause}")
             }
             Self::RdfcDigestMismatch { expected, computed } => {
                 write!(
@@ -375,21 +414,10 @@ impl std::fmt::Display for PackError {
     }
 }
 
-impl std::error::Error for PackError {
-    /// The wrapped section error, for the three variants that delegate to one.
-    ///
-    /// A pack is read section by section, and `Dict`, `Triples` and `Side` exist to say
-    /// WHICH section refused while the section's own error says why. Without this the
-    /// two halves were split: the standard chain reported the section and stopped, and
-    /// the reason — which byte, which bound, which digest — was reachable only by
-    /// matching this enum.
-    ///
-    /// The rest return `None` because they are container-level facts with nothing
-    /// beneath them: a bad magic, a truncation, an unsupported version, a digest that
-    /// did not match, or a canonicalization budget spent are each complete as stated.
-    /// [`Self::ViewNotReady`] joins them because the source view's root cause is a
-    /// caller-supplied associated type this enum cannot name; it is rendered into
-    /// `cause` at the boundary instead, so nothing about it is lost.
+impl<E: std::error::Error + 'static> std::error::Error for PackError<E> {
+    /// The original section, reader, materialization or canonicalization cause.
+    /// Container-level facts such as a bad magic or mismatched digest have no
+    /// underlying error and remain terminal in the standard source chain.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Dict(inner) => Some(inner),
@@ -400,18 +428,15 @@ impl std::error::Error for PackError {
             | Self::Truncated
             | Self::Malformed(_)
             | Self::SectionDigestMismatch { .. }
-            | Self::ViewNotReady { .. }
             | Self::RdfcDigestMismatch { .. } => None,
             Self::CanonRefused(inner) => Some(inner),
+            Self::Materialization(cause) => Some(cause),
+            Self::ViewNotReady { cause, .. } => Some(cause),
         }
     }
 }
 
-impl From<PackDictError> for PackError {
-    fn from(e: PackDictError) -> Self {
-        Self::Dict(e)
-    }
-}
+purrdf_lex::variant_from!(impl<E> PackError<E> { Dict(PackDictError) });
 
 // ---------------------------------------------------------------------------
 // PackBuilder — the offline factory writer.
@@ -493,12 +518,17 @@ impl PackBuilder {
     /// dict/triples/side encode steps are infallible; the ONLY way this method
     /// otherwise fails is if one of THIS module's own just-written sections fails
     /// to re-open — a broken-invariant bug, not a data-dependent error.
-    pub fn build_view_bytes<D: FallibleDatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+    /// The returned error retains the reader's native cause, including term lookup
+    /// classification, without calling `Display` or `Debug`. Explicit formatting
+    /// remains available when the caller requests a human diagnostic.
+    pub fn build_view_bytes<D: FallibleDatasetView>(
+        view: &D,
+    ) -> Result<Vec<u8>, PackError<D::ReadError>> {
         match checkpointed_drain(view, encode_view) {
             Ok(result) => result,
             Err(failure) => Err(PackError::ViewNotReady {
                 checkpoint: PackCheckpoint::from(failure.checkpoint),
-                cause: failure.error.to_string(),
+                cause: crate::TermLookupError::Read(failure.error),
             }),
         }
     }
@@ -521,14 +551,14 @@ impl PackBuilder {
 /// Scratch is bounded by the source's own dimensions: one dictionary's values, one
 /// partition list, two side-table column sets — the same buffers the flat path
 /// always allocated, with no per-row owned copy retained beyond its use.
-fn source_read_error(error: impl std::fmt::Display) -> PackError {
+fn source_read_error<E>(error: crate::TermLookupError<E>) -> PackError<E> {
     PackError::ViewNotReady {
         checkpoint: PackCheckpoint::AfterRows,
-        cause: error.to_string(),
+        cause: error,
     }
 }
 
-fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError<D::ReadError>> {
     let encoded_dict = PackDict::try_encode(view).map_err(source_read_error)?;
     let dict_bytes = encoded_dict.to_bytes();
     let n_terms = encoded_dict.n_terms();

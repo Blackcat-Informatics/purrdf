@@ -76,6 +76,11 @@ harness = false
 name = "physical_shapes"
 harness = false
 
+[[test]]
+# Governed text retrieval, including captured borrowed producers, native/WASM.
+name = "search_property_function"
+harness = false
+
 [[bench]]
 name = "physical_shapes"
 harness = false

@@ -216,9 +216,11 @@ impl OperationImageCurve {
             || target.realization != reference.id().digest()
             || target.swapped_axes != (reference.axes() == crate::AxisOrder::LatLon)
         {
-            return Err(progress.retained_message(
-                "image curve requires its actual geographic target",
-                GeoError::Config,
+            return Err(crate::BindingConfigError::image_target(
+                target,
+                Some(&reference),
+                crate::ImageTargetReason::CurveReference,
+                &mut progress,
             ));
         }
         let mut context = MetricContext::new(reference.clone(), policy)?;
@@ -294,7 +296,7 @@ impl OperationImageCurve {
                     }
                     None => GeometryBody::Point(Some(source.start)),
                 };
-                Geometry::new_with_memory(dim, body, memory)
+                Geometry::new(dim, body)
             },
             |_, _| Ok(()),
         )?;
@@ -551,8 +553,12 @@ impl OperationImageCurve {
     ) -> Result<OperationImageEnclosure, GeoError> {
         let mut progress = WorkProgress::new(observer);
         if context.reference() != &self.reference {
-            return Err(progress
-                .retained_message("image curve/context reference mismatch", GeoError::Config));
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.reference,
+                crate::ReferenceMismatchReason::ImageCurveContext,
+                &mut progress,
+            ));
         }
         context.begin(1)?;
         let policy = context.policy();
@@ -892,7 +898,7 @@ mod tests {
         ));
         assert!(matches!(
             a.enclosure(&Rat::from_i64(-1), &Rat::one(), 96, &mut context),
-            Err(GeoError::Domain(_))
+            Err(error) if error.is_domain_error()
         ));
     }
 
@@ -1043,7 +1049,7 @@ mod tests {
                 None,
                 ExecutionPolicy::geometry()
             ),
-            Err(GeoError::Domain(_)),
+            Err(error) if error.is_domain_error(),
         ));
     }
 
@@ -1147,7 +1153,7 @@ mod tests {
                     None,
                     policy,
                 ),
-                Err(GeoError::Domain(_))
+                Err(error) if error.is_domain_error()
             ));
         }
     }

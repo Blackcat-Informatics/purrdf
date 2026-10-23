@@ -179,6 +179,8 @@ pub enum XsdDatatype {
     Boolean,
     /// `xsd:string`.
     String,
+    /// `xsd:anyURI`, with fixed XML whitespace collapse.
+    AnyUri,
     /// `xsd:date`.
     Date,
     /// `xsd:time`.
@@ -263,6 +265,7 @@ impl XsdDatatype {
             "double" => Self::Double,
             "boolean" => Self::Boolean,
             "string" => Self::String,
+            "anyURI" => Self::AnyUri,
             "date" => Self::Date,
             "time" => Self::Time,
             "dateTime" => Self::DateTime,
@@ -303,6 +306,7 @@ impl XsdDatatype {
             Self::Double => XSD_DOUBLE,
             Self::Boolean => XSD_BOOLEAN,
             Self::String => XSD_STRING,
+            Self::AnyUri => XSD_ANY_URI,
             Self::Date => XSD_DATE,
             Self::Time => XSD_TIME,
             Self::DateTime => XSD_DATE_TIME,
@@ -439,6 +443,7 @@ mod tests {
             XsdDatatype::Double,
             XsdDatatype::Boolean,
             XsdDatatype::String,
+            XsdDatatype::AnyUri,
             XsdDatatype::Date,
             XsdDatatype::Time,
             XsdDatatype::DateTime,

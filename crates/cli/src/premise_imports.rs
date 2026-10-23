@@ -158,7 +158,7 @@ impl PremiseImports {
         let loaded: Vec<&str> = self.map.loaded().collect();
         if self.map.is_empty()
             && try_imported_iris(view, &loaded)
-                .map_err(|error| purrdf_entail::EntailError::SourceRead(error.to_string()))?
+                .map_err(purrdf_entail::EntailError::SourceRead)?
                 .is_empty()
         {
             return report::materialize_reported(view, plan, limits, target);

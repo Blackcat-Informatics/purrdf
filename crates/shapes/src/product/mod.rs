@@ -221,8 +221,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x45, 0x04, 0xff, 0x68, 0xf4, 0x0d, 0x1a, 0x27, 0x88, 0x46, 0x8f, 0x8f, 0xf8, 0x5b, 0xf9, 0x55,
-    0x09, 0xfc, 0x0e, 0xd6, 0x86, 0x47, 0x62, 0x29, 0xdd, 0x2f, 0xb8, 0xff, 0xeb, 0x48, 0xa6, 0x3d,
+    0x31, 0x02, 0x47, 0x33, 0xbe, 0x4b, 0x99, 0xd1, 0xbf, 0xf1, 0x6a, 0x7e, 0x16, 0x7c, 0xcd, 0xf1,
+    0x57, 0x42, 0xf8, 0x15, 0x83, 0x3a, 0x71, 0x72, 0xd9, 0x41, 0xb0, 0x12, 0x07, 0xcb, 0x95, 0x75,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -235,7 +235,8 @@ static EMPTY_FUNCTIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
 static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
 
 /// The canonical empty property-function registry. See [`EMPTY_FUNCTIONS`].
-static EMPTY_PROPERTY_FUNCTIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+static EMPTY_PROPERTY_FUNCTIONS: PropertyFunctionRegistry<'static> =
+    PropertyFunctionRegistry::EMPTY;
 
 /// The parse configuration that declares nothing — the value a host which never
 /// declared a namespace binds, and the one every product written before row 11
@@ -370,7 +371,7 @@ pub struct HostBindings<'a> {
     /// The host's custom-aggregate table.
     aggregates: &'a AggregateRegistry,
     /// The host's property-function table.
-    property_functions: &'a PropertyFunctionRegistry,
+    property_functions: &'a PropertyFunctionRegistry<'a>,
     /// The caller's opaque name for the build of the native implementations behind
     /// the three registries' injected declarations. EMPTY means "nothing injected
     /// to identify".
@@ -409,7 +410,7 @@ impl<'a> HostBindings<'a> {
     pub const fn new(
         functions: &'a UserFunctionRegistry,
         aggregates: &'a AggregateRegistry,
-        property_functions: &'a PropertyFunctionRegistry,
+        property_functions: &'a PropertyFunctionRegistry<'a>,
         implementation_identity: &'a [u8],
         parser_options: &'a ParserOptions,
     ) -> Self {
@@ -435,7 +436,7 @@ impl<'a> HostBindings<'a> {
     pub const fn without_declarations(
         functions: &'a UserFunctionRegistry,
         aggregates: &'a AggregateRegistry,
-        property_functions: &'a PropertyFunctionRegistry,
+        property_functions: &'a PropertyFunctionRegistry<'a>,
         implementation_identity: &'a [u8],
     ) -> Self {
         Self::new(
@@ -461,7 +462,7 @@ impl<'a> HostBindings<'a> {
 
     /// The host's property-function table.
     #[must_use]
-    pub const fn property_functions(&self) -> &'a PropertyFunctionRegistry {
+    pub const fn property_functions(&self) -> &'a PropertyFunctionRegistry<'a> {
         self.property_functions
     }
 

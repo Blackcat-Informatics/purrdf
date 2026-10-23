@@ -726,6 +726,21 @@ terminal! {
 }
 
 terminal! {
+    /// XML 1.1 Second Edition §2.2 production `[2]`, `Char`.
+    ///
+    /// <https://www.w3.org/TR/xml11/#NT-Char>. This is the selected character
+    /// domain for XSD 1.1 text values. Restricted characters remain characters;
+    /// an XML serializer must escape them. NUL, surrogates, U+FFFE and U+FFFF
+    /// are excluded. XML 1.0 parsing continues to use [`is_xml_char`].
+    tables XML11_CHAR_ASCII, XML11_CHAR_NON_ASCII;
+    pub const fn is_xml11_char(char);
+    base_ranges: &[];
+    ranges_fn: xml11_char_ranges;
+    ascii: [(0x01, 0x7F)];
+    non_ascii: [(0x80, 0xD7FF), (0xE000, 0xFFFD), (0x10000, 0x0010_FFFF)];
+}
+
+terminal! {
     /// `PN_CHARS_BASE ::= [A-Z] | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] |`
     /// `[#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF] | [#x200C-#x200D] |`
     /// `[#x2070-#x218F] | [#x2C00-#x2FEF] | [#x3001-#xD7FF] | [#xF900-#xFDCF] |`
@@ -1368,6 +1383,14 @@ pub enum UcharError {
     NotAScalar,
 }
 
+impl purrdf_hash::error::StructuredError for UcharError {
+    purrdf_hash::error_visit! {
+        NotAnEscape => "uchar-not-an-escape" {},
+        BadHex => "uchar-bad-hex" {},
+        NotAScalar => "uchar-not-a-scalar" {},
+    }
+}
+
 /// Decode the `UCHAR` at the start of `bytes` (whose first byte is the
 /// backslash): the scalar and the bytes the escape spans (`6` or `10`).
 ///
@@ -1667,11 +1690,11 @@ mod tests {
         is_iriref_forbidden_byte, is_json_string_forbidden_byte, is_pn_chars, is_pn_chars_base,
         is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_unicode_white_space,
         is_varname_continue, is_varname_start, is_ws, is_ws_char, is_xml_char, is_xml_name_char,
-        is_xml_name_start_char, json_string_forbidden_ranges, pn_chars_base_ranges,
+        is_xml_name_start_char, is_xml11_char, json_string_forbidden_ranges, pn_chars_base_ranges,
         pn_chars_ranges, pn_chars_u_ranges, pn_local_esc_ranges, pn_local_start_ranges,
         ranges_sorted_disjoint, unicode_white_space_ranges, varname_continue_ranges,
         varname_start_ranges, ws_ranges, xml_char_ranges, xml_name_char_ranges,
-        xml_name_start_char_ranges,
+        xml_name_start_char_ranges, xml11_char_ranges,
     };
 
     /// Every Unicode scalar value, in order.
@@ -1887,6 +1910,7 @@ mod tests {
                 is_ipvfuture_address_char,
             ),
             ("xml_char", xml_char_ranges(), is_xml_char),
+            ("xml11_char", xml11_char_ranges(), is_xml11_char),
             ("pn_chars_base", pn_chars_base_ranges(), is_pn_chars_base),
             ("pn_chars_u", pn_chars_u_ranges(), is_pn_chars_u),
             ("pn_chars", pn_chars_ranges(), is_pn_chars),

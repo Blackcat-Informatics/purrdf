@@ -447,21 +447,10 @@ fn certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failur
                         );
                     }
                     Certificate::Refused | Certificate::Sticky => {
-                        if !bounded && matches!(certificate, Certificate::Refused) {
-                            let Err(FallibleSparqlError::Query { diagnostic, .. }) = result else {
-                                panic!("unbounded non-latching refusal must remain fatal");
-                            };
-                            assert_eq!(diagnostic.code, "native-sparql-source-read");
-                            assert_eq!(
-                                diagnostic.message,
-                                format!("dataset read failed: {}", Deleted(low))
-                            );
-                        } else {
-                            assert!(
-                                matches!(result, Err(FallibleSparqlError::Operational { error: Deleted(id), .. }) if id == low),
-                                "{certificate:?} {low:?}: {result:?}"
-                            );
-                        }
+                        assert!(
+                            matches!(result, Err(FallibleSparqlError::Operational { error: Deleted(id), .. }) if id == low),
+                            "{certificate:?}, bounded={bounded}, {low:?}: {result:?}"
+                        );
                     }
                 }
                 assert_eq!(host.certificates.load(Ordering::Relaxed), 1);

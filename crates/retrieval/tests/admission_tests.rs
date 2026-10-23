@@ -48,7 +48,7 @@ use registry::{
 /// The stratum is its own rather than the catch-all's because a stratum carries
 /// one producer; what moves the fingerprint is the extra declaration, and it
 /// moves it either way.
-fn registry_with_different_declaration() -> PropertyFunctionRegistry {
+fn registry_with_different_declaration() -> PropertyFunctionRegistry<'static> {
     let mut registry = fixture_registry();
     registry.register_ranked(
         ex("pf/extra"),
@@ -93,11 +93,14 @@ impl PropertyFunction for NoModeProducer {
         0
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(RowCursor {
             rows: Vec::new().into_iter(),
         }))
@@ -106,7 +109,7 @@ impl PropertyFunction for NoModeProducer {
 
 /// The fixture's mandatory catch-all producer, plus a producer that declares no
 /// access mode under a stratum of its own.
-fn registry_with_a_modeless_producer() -> PropertyFunctionRegistry {
+fn registry_with_a_modeless_producer() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/any"),
@@ -138,7 +141,7 @@ fn registry_with_a_modeless_producer() -> PropertyFunctionRegistry {
 /// landed yet, or no triple carries the configured predicate. The registry's
 /// declaration is honest and the relation is perfectly invocable; it simply has
 /// nothing to return, which is a fact only the relation can report.
-fn registry_with_an_empty_producer() -> PropertyFunctionRegistry {
+fn registry_with_an_empty_producer() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/any"),
@@ -169,7 +172,7 @@ fn registry_with_an_empty_producer() -> PropertyFunctionRegistry {
 /// it first, which is the only way to reach the ceiling dimension at the waist. The
 /// relation still emits three rows, because what is being tested is the bound the
 /// text carries and not the corpus behind it.
-fn registry_with_a_deep_producer() -> PropertyFunctionRegistry {
+fn registry_with_a_deep_producer() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/deep"),
@@ -183,7 +186,7 @@ fn registry_with_a_deep_producer() -> PropertyFunctionRegistry {
     registry
 }
 
-fn fresh_plan(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> Plan {
+fn fresh_plan(registry: &PropertyFunctionRegistry<'static>, stats: &MockStatistics) -> Plan {
     purrdf_retrieval::plan(&mixed_request(), registry, stats).expect("the fixture request plans")
 }
 
@@ -657,7 +660,7 @@ const DEEP_WEIGHT_UNITS: i64 = 200;
 /// The declared row count is a claim about the relation, not an allocation: the
 /// mock emits three rows whatever it declares, so the fixture states a bound of
 /// twenty million without producing one.
-fn deep_registry() -> PropertyFunctionRegistry {
+fn deep_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/any"),
@@ -2192,7 +2195,7 @@ fn producer_of_arity(
 /// genuinely receives more than one term of a request is one that takes more
 /// than one shape, which is what this declares. The requests these fixtures use
 /// against it carry a literal and an IRI seed for exactly that reason.
-fn catch_all_registry(mandatory: bool) -> PropertyFunctionRegistry {
+fn catch_all_registry(mandatory: bool) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/catch-all"),
@@ -2231,7 +2234,7 @@ fn catch_all_registry(mandatory: bool) -> PropertyFunctionRegistry {
 ///
 /// The two are in separate strata because a stratum carries one producer; what
 /// this fixture needs from `pf/free` is only that *something* survives planning.
-fn unplaceable_registry(mandatory: bool) -> PropertyFunctionRegistry {
+fn unplaceable_registry(mandatory: bool) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/renders"),
@@ -2249,7 +2252,7 @@ fn unplaceable_registry(mandatory: bool) -> PropertyFunctionRegistry {
 /// A registry whose literal-only producer is declared mandatory by the host: it
 /// accepts a lexical term and nothing else, so it can serve a whole request only
 /// when the whole request is lexical.
-fn literal_only_registry(mandatory: bool) -> PropertyFunctionRegistry {
+fn literal_only_registry(mandatory: bool) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/literal"),
@@ -2271,7 +2274,7 @@ fn literal_only_registry(mandatory: bool) -> PropertyFunctionRegistry {
 }
 
 /// Narrow the catch-all's binding to the request's first term only, and admit.
-fn admit_narrowed(registry: &PropertyFunctionRegistry) -> Result<(), AdmissionError> {
+fn admit_narrowed(registry: &PropertyFunctionRegistry<'static>) -> Result<(), AdmissionError> {
     let stats = statistics("r1");
     let mut plan = purrdf_retrieval::plan(&lexical_and_seed_request(), registry, &stats)
         .expect("the request plans");

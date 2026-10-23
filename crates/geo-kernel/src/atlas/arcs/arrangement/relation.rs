@@ -1287,10 +1287,10 @@ fn region_sides(
                             break;
                         }
                         selected[0].push_reserved(crate::atlas::polygon_base_membership(
-                            polygon, &states[0],
+                            polygon, &states[0], progress,
                         )?);
                         selected[1].push_reserved(crate::atlas::polygon_base_membership(
-                            polygon, &states[1],
+                            polygon, &states[1], progress,
                         )?);
                         let base = crate::atlas::ring_intersection_location(
                             closed_states.iter().copied().map(Ok),
@@ -1323,11 +1323,12 @@ fn region_sides(
                     )?
                     .0;
                     for side in 0..2 {
-                        row[side] = if crate::atlas::region_membership(input, &selected[side])? {
-                            Set::Interior
-                        } else {
-                            Set::Exterior
-                        };
+                        row[side] =
+                            if crate::atlas::region_membership(input, &selected[side], progress)? {
+                                Set::Interior
+                            } else {
+                                Set::Exterior
+                            };
                     }
                     if matches!(input, PreparedRegion::ComplementOfPolygons(_))
                         && *row == [Set::Exterior; 2]

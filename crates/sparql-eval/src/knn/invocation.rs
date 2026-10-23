@@ -300,11 +300,11 @@ impl AdmittedKnnInvocation {
     ///
     /// # Errors
     /// Returns the original producer, constraint or allocation failure.
-    pub fn cursor_scoped<S: RankSource + 'static>(
+    pub fn cursor_scoped<'query, S: RankSource + 'query>(
         self,
         source: S,
         scope: &dyn crate::CandidateScope,
-    ) -> Result<crate::WorkspaceCursor, EvalError> {
+    ) -> Result<crate::WorkspaceCursor<'query>, EvalError> {
         let workspace = &self.workspace;
         let (candidates, work, depth) = match self.invocation.answer {
             KnnAnswer::Search {
@@ -382,23 +382,23 @@ impl AdmittedKnnInvocation {
         self.prepared_cursor(source, ranked, declarations, work)
     }
 
-    fn prepared_cursor<S: RankSource + 'static>(
+    fn prepared_cursor<'query, S: RankSource + 'query>(
         self,
         source: S,
         ranked: crate::AdmittedVec<Ranked>,
         declarations: crate::AdmittedVec<(usize, crate::RowEvidence)>,
         work: u64,
-    ) -> Result<crate::WorkspaceCursor, EvalError> {
+    ) -> Result<crate::WorkspaceCursor<'query>, EvalError> {
         self.into_cursor(source, Some(ranked), Some(declarations), work)
     }
 
-    fn into_cursor<S: RankSource + 'static>(
+    fn into_cursor<'query, S: RankSource + 'query>(
         self,
         source: S,
         ranked: Option<crate::AdmittedVec<Ranked>>,
         declarations: Option<crate::AdmittedVec<(usize, crate::RowEvidence)>>,
         work: u64,
-    ) -> Result<crate::WorkspaceCursor, EvalError> {
+    ) -> Result<crate::WorkspaceCursor<'query>, EvalError> {
         let workspace = self.workspace.clone();
         let mut cursor =
             RankedCursor::with_admission(source, self.invocation, self.admission, self.workspace);
@@ -412,10 +412,10 @@ impl AdmittedKnnInvocation {
     ///
     /// # Errors
     /// Returns checked layout overflow, workspace refusal or allocator failure.
-    pub fn cursor<S: RankSource + 'static>(
+    pub fn cursor<'query, S: RankSource + 'query>(
         self,
         source: S,
-    ) -> Result<crate::WorkspaceCursor, EvalError> {
+    ) -> Result<crate::WorkspaceCursor<'query>, EvalError> {
         self.into_cursor(source, None, None, 0)
     }
 }

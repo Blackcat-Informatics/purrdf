@@ -25,7 +25,11 @@ use purrdf_shapes::{AdmissionReason, QueryPurpose, ShaclProfile, ShapesImports};
 
 const PREFIXES: &str =
     "@prefix ex: <http://example.org/> . @prefix sh: <http://www.w3.org/ns/shacl#> .";
-const PROFILES: [ShaclProfile; 2] = [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918];
+const PROFILES: [ShaclProfile; 3] = [
+    ShaclProfile::REC_20170720,
+    ShaclProfile::WD_20260918,
+    ShaclProfile::ED_20261016,
+];
 const BACKREFERENCE: &str = r#"
     ex:S a sh:NodeShape; sh:targetNode ex:n;
         sh:property [ sh:path ex:p; sh:pattern "(a)\\1" ] .
@@ -762,6 +766,144 @@ fn public_global_rule_execution_audits_original_query_even_for_an_empty_join() {
                 .filter(|quad| quad.predicate == "http://example.org/q")
                 .count(),
             1
+        );
+    }
+}
+
+/// One shape whose `sh:sparql` constraint runs `select`, targeting `ex:n`.
+fn values_constraint(select: &str) -> String {
+    format!(
+        r"ex:S a sh:NodeShape; sh:targetNode ex:n;
+            sh:sparql [ sh:select '''{select}''' ] ."
+    )
+}
+
+/// SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries MUST not contain a `VALUES`
+/// clause that mentions any potentially pre-bound variable". The draft law refuses a
+/// VALUES clause over `$this`, over a constraint component's parameter variable, and
+/// admits (and runs) one over a variable nothing pre-binds; the Recommendation law
+/// refuses all of them ("SPARQL queries must not contain a VALUES clause").
+#[test]
+fn values_is_refused_only_when_it_mentions_a_pre_bound_variable_under_the_draft_law() {
+    let data = turtle::data(PREFIXES, r#"ex:n ex:p "forbidden", "fine" ."#);
+    let local = values_constraint(
+        r#"SELECT $this ?value WHERE {
+            VALUES ?value { "forbidden" }
+            $this <http://example.org/p> ?value .
+        }"#,
+    );
+    let mentions_this =
+        values_constraint("SELECT $this WHERE { VALUES $this { <http://example.org/n> } }");
+
+    let draft = ValidationOptions::default().with_profile(ShaclProfile::WD_20260918);
+    let shapes = parsed(&local, &draft).expect("a VALUES clause over an unbound name is admitted");
+    let report = PreparedShapes::new(shapes)
+        .bind_complete_shared_dataset(Arc::clone(&data))
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert!(
+        !report.legacy().conforms,
+        "the admitted query runs and finds the value"
+    );
+    assert_eq!(report.results().len(), 1);
+
+    let shapes = parsed(&mentions_this, &draft).expect("the draft refuses it at execution");
+    match PreparedShapes::new(shapes)
+        .bind_complete_shared_dataset(Arc::clone(&data))
+        .unwrap()
+        .validate()
+        .expect_err("a VALUES clause over $this is refused")
+    {
+        CompleteValidationError::Admission(refusal) => {
+            assert_eq!(refusal.reason(), AdmissionReason::Values);
+            assert_eq!(refusal.variable(), Some("this"));
+        }
+        error => panic!("the typed admission refusal must survive: {error:?}"),
+    }
+
+    // A constraint component's parameter variable is potentially pre-bound too.
+    let component = |variable: &str| {
+        format!(
+            r"ex:C a sh:ConstraintComponent; sh:parameter [ sh:path ex:argument ];
+                sh:nodeValidator [ a sh:SPARQLSelectValidator;
+                    sh:select 'SELECT $this WHERE {{ VALUES ?{variable} {{ true }} }}' ] .
+            ex:S a sh:NodeShape; sh:targetNode ex:n; ex:argument true ."
+        )
+    };
+    let named = parsed(&component("argument"), &draft).unwrap();
+    match PreparedShapes::new(named)
+        .bind_complete_shared_dataset(Arc::clone(&data))
+        .unwrap()
+        .validate()
+        .expect_err("a VALUES clause over a parameter variable is refused")
+    {
+        CompleteValidationError::Admission(refusal) => {
+            assert_eq!(refusal.reason(), AdmissionReason::Values);
+            assert_eq!(refusal.variable(), Some("argument"));
+        }
+        error => panic!("the typed admission refusal must survive: {error:?}"),
+    }
+    let other = parsed(&component("other"), &draft).unwrap();
+    PreparedShapes::new(other)
+        .bind_complete_shared_dataset(data)
+        .unwrap()
+        .validate()
+        .expect("a VALUES clause over a name the component does not pre-bind is admitted");
+
+    // Under the Recommendation law every VALUES clause is refused when the shapes load.
+    let rec = ValidationOptions::default().with_profile(ShaclProfile::REC_20170720);
+    for text in [&local, &mentions_this] {
+        match parsed(text, &rec).expect_err("the Recommendation refuses every VALUES clause") {
+            CompleteValidationError::Admission(refusal) => {
+                assert_eq!(refusal.profile(), ShaclProfile::REC_20170720);
+                assert_eq!(refusal.reason(), AdmissionReason::Values);
+            }
+            error => panic!("the typed admission refusal must survive: {error:?}"),
+        }
+    }
+}
+
+/// A dated-law admission refusal of a custom function's `sh:select` body, reached through a
+/// SPARQL call, fails the validation with the typed admission refusal: the call's SPARQL
+/// error is for evaluation failures only (SHACL 1.2 SPARQL Extensions, "Evaluation of
+/// Custom SPARQL Functions"), and a query the law never admitted is not evaluated at all.
+/// The neighbour body, a `VALUES` clause over a name nothing pre-binds, is admitted and
+/// returns its value.
+#[test]
+fn a_dated_admission_refusal_inside_a_function_body_still_fails_the_validation() {
+    let data = turtle::data(PREFIXES, r#"ex:n ex:p "x" ."#);
+    let shapes_with = |body_select: &str| {
+        format!(
+            r"ex:f a sh:ListParameterExpressionFunction ;
+                 sh:bodyExpression [ sh:select '''{body_select}''' ] .
+               ex:S a sh:NodeShape; sh:targetNode ex:n;
+                 sh:sparql [ sh:select '''SELECT $this ?value WHERE {{
+                   BIND (<http://example.org/f>() AS ?value) }}''' ] ."
+        )
+    };
+    let refused =
+        shapes_with("SELECT ?v WHERE { VALUES $this { <http://example.org/n> } ?v ?p ?o }");
+    let admitted = shapes_with("SELECT ?v WHERE { VALUES ?v { 7 } }");
+    for profile in [ShaclProfile::WD_20260918, ShaclProfile::ED_20261016] {
+        let options = ValidationOptions::default().with_profile(profile);
+        let run = |text: &str| {
+            PreparedShapes::new(parsed(text, &options).expect("the shapes graph loads"))
+                .bind_complete_shared_dataset(Arc::clone(&data))
+                .unwrap()
+                .validate()
+        };
+        match run(&refused).expect_err("the refused body must fail the validation") {
+            CompleteValidationError::Admission(refusal) => {
+                assert_eq!(refusal.reason(), AdmissionReason::Values, "{profile:?}");
+            }
+            error => panic!("{profile:?}: the typed admission refusal must survive: {error:?}"),
+        }
+        let report = run(&admitted).expect("the neighbour body is admitted");
+        assert_eq!(
+            report.results().len(),
+            1,
+            "{profile:?}: the admitted body returns 7"
         );
     }
 }

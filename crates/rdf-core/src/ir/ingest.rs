@@ -38,6 +38,9 @@ use super::term::{BlankScope, TermId};
 use crate::{FastMap, FastSet, RdfLiteral};
 use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
 
+mod error;
+use error::IngestError;
+
 /// Preserve native failure fields across the dependency-free event protocol.
 fn event_storage_error(error: StorageError) -> EventError {
     match error {
@@ -397,9 +400,7 @@ impl RdfEventSink for DatasetSink {
         // Cancellation guard: a sink that observed a Break MUST NOT freeze. A source
         // honoring the protocol never calls finish after a Break, but defend anyway.
         if self.cancelled {
-            return Err(EventError::message(
-                "finish called after a cancelled (ControlFlow::Break) drive",
-            ));
+            return Err(EventError::Cancelled);
         }
 
         self.builder = Some(RdfDatasetBuilder::new());
@@ -484,7 +485,7 @@ impl RdfEventSink for DatasetSink {
             .freeze()
             .map_err(|diagnostic| match diagnostic.storage_error() {
                 Some(error) => event_storage_error(error),
-                None => EventError::message(format!("freeze failed: {diagnostic}")),
+                None => EventError::native(IngestError::Freeze(diagnostic)),
             })?;
         self.frozen = Some(dataset);
         Ok(())
@@ -546,9 +547,10 @@ impl<'a> FrozenDatasetSource<'a> {
                 // The datatype is an interned IRI term in the dataset; resolve it to
                 // its IRI string so the protocol carries the datatype by value.
                 let TermRef::Iri(datatype_iri) = self.dataset.resolve(datatype) else {
-                    return Err(EventError::message(
-                        "literal datatype did not resolve to an IRI",
-                    ));
+                    return Err(EventError::native(IngestError::Datatype {
+                        literal: event_id.0,
+                        datatype: datatype.index(),
+                    }));
                 };
                 sink.term(
                     event_id,
@@ -620,7 +622,10 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
             // Resolve the bound triple term to its (s, p, o) so the protocol carries a
             // reified statement, not an id-to-id binding.
             let TermRef::Triple { s, p, o } = self.dataset.resolve(triple) else {
-                return Err(EventError::message("reifier did not bind a triple term"));
+                return Err(EventError::native(IngestError::Reifier {
+                    reifier: reifier.index(),
+                    triple: triple.index(),
+                }));
             };
             let event = EventTriple {
                 s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
@@ -1026,7 +1031,7 @@ mod tests {
         );
         // And an explicit finish after cancellation refuses to freeze.
         let err = sink.inner.finish().expect_err("finish after cancel fails");
-        assert!(matches!(err, EventError::Message(_)));
+        assert_eq!(err, EventError::Cancelled);
     }
 
     #[test]

@@ -24,15 +24,77 @@ use crate::{
 
 const PROFILE_BINDING_DOMAIN: Domain = Domain::new(b"purrdf-geo-kernel/carrier-bindings/v1");
 
-/// Borrowed failure of the original carrier-resolution body. Diagnostic text
-/// is created only by its caller's resident or retained native allocation home.
+/// Borrowed failure of the original carrier-resolution body. Owned fields
+/// are created only by its caller's resident or retained native allocation home.
 enum CarrierResolutionFailure<'a> {
+    ConflictingOperation {
+        first: &'a OperationBinding,
+        second: &'a OperationBinding,
+        first_chain: Digest32,
+        second_chain: Digest32,
+    },
+    EmptyMetricSources,
+    AmbiguousMetricSurface {
+        first: &'a Crs,
+        second: &'a Crs,
+    },
+    ImageEndpoints {
+        reason: crate::ImageEndpointReason,
+        expected_source: crate::operation::OperationReference,
+        actual_source: crate::operation::OperationReference,
+        expected_target: crate::operation::OperationReference,
+        actual_target: crate::operation::OperationReference,
+    },
     UnknownReference(&'a Crs),
     UnknownOperation(&'a Crs),
     MissingOperation(&'a Crs, &'a Crs),
-    Configuration(&'static str),
-    ConflictingReference(&'a Crs),
-    InvalidEndpoint(&'a Crs),
+    MultipleOperations {
+        source: &'a Crs,
+        target: &'a Crs,
+        first: Digest32,
+        second: Digest32,
+    },
+    ConflictingEndpoint {
+        carrier: &'a Crs,
+        first: crate::operation::OperationReference,
+        second: crate::operation::OperationReference,
+    },
+    InvalidEndpoint {
+        carrier: &'a Crs,
+        expected: crate::operation::OperationReference,
+        actual: crate::operation::OperationReference,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for CarrierResolutionFailure<'_> {
+    purrdf_hash::error_visit! {
+        ConflictingOperation { first, second, first_chain, second_chain } => "carrier-conflicting-operation" {
+            "operation" => Record(&first.name), "first_source" => Record(&first.source), "first_target" => Record(&first.target),
+            "first_chain" => Record(first_chain), "second_source" => Record(&second.source), "second_target" => Record(&second.target),
+            "second_chain" => Record(second_chain)
+        },
+        EmptyMetricSources => "carrier-empty-metric-sources" {},
+        AmbiguousMetricSurface { first, second } => "carrier-ambiguous-metric-surface" {
+            "first" => Record(*first), "second" => Record(*second)
+        },
+        ImageEndpoints { reason, expected_source, actual_source, expected_target, actual_target } => "carrier-image-endpoints" {
+            "reason" => Record(reason),
+            "expected_source" => Record(expected_source), "actual_source" => Record(actual_source),
+            "expected_target" => Record(expected_target), "actual_target" => Record(actual_target)
+        },
+        UnknownReference(reference) => "carrier-unknown-reference" { "reference" => Record(*reference) },
+        UnknownOperation(operation) => "carrier-unknown-operation" { "operation" => Record(*operation) },
+        MissingOperation(source, target) => "carrier-missing-operation" { "source" => Record(*source), "target" => Record(*target) },
+        MultipleOperations { source, target, first, second } => "carrier-multiple-operations" {
+            "source" => Record(*source), "target" => Record(*target), "first" => Record(first), "second" => Record(second)
+        },
+        ConflictingEndpoint { carrier, first, second } => "carrier-conflicting-endpoint" {
+            "carrier" => Record(*carrier), "first" => Record(first), "second" => Record(second)
+        },
+        InvalidEndpoint { carrier, expected, actual } => "carrier-invalid-endpoint" {
+            "carrier" => Record(*carrier), "expected" => Record(expected), "actual" => Record(actual)
+        },
+    }
 }
 
 impl CarrierResolutionFailure<'_> {
@@ -40,22 +102,85 @@ impl CarrierResolutionFailure<'_> {
         self,
         memory: &mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission + '_>,
     ) -> Result<GeoError, purrdf_lex::allocation::StorageError> {
-        Ok(match self {
-            Self::UnknownReference(crs) => GeoError::UnregisteredCrs(memory.string(crs.as_str())?),
-            Self::UnknownOperation(name) => GeoError::Config(
-                memory.format(&format_args!("unregistered coordinate operation <{name}>"))?,
-            ),
-            Self::MissingOperation(source, target) => GeoError::MissingOperation {
-                source: memory.string(source.as_str())?,
-                target: memory.string(target.as_str())?,
-            },
-            Self::Configuration(message) => GeoError::Config(memory.string(message)?),
-            Self::ConflictingReference(crs) => GeoError::Config(memory.format(&format_args!(
-                "conflicting reference registration for <{crs}>"
-            ))?),
-            Self::InvalidEndpoint(carrier) => GeoError::Config(memory.format(&format_args!(
-                "operation endpoint disagrees with declared carrier <{carrier}>"
-            ))?),
+        memory.try_scope(|memory| {
+            let cause = match self {
+                Self::ConflictingOperation {
+                    first,
+                    second,
+                    first_chain,
+                    second_chain,
+                } => crate::BindingConfigError::ConflictingOperation {
+                    operation: memory.string(first.name.as_str())?,
+                    first_source: memory.string(first.source.as_str())?,
+                    first_target: memory.string(first.target.as_str())?,
+                    first_chain,
+                    second_source: memory.string(second.source.as_str())?,
+                    second_target: memory.string(second.target.as_str())?,
+                    second_chain,
+                },
+                Self::EmptyMetricSources => crate::BindingConfigError::EmptyMetricSources,
+                Self::AmbiguousMetricSurface { first, second } => {
+                    crate::BindingConfigError::AmbiguousMetricSurface {
+                        first: memory.string(first.as_str())?,
+                        second: memory.string(second.as_str())?,
+                    }
+                }
+                Self::ImageEndpoints {
+                    reason,
+                    expected_source,
+                    actual_source,
+                    expected_target,
+                    actual_target,
+                } => crate::BindingConfigError::ImageEndpoints {
+                    reason,
+                    expected_source,
+                    actual_source,
+                    expected_target,
+                    actual_target,
+                },
+                Self::UnknownReference(crs) => {
+                    return Ok(GeoError::UnregisteredCrs(memory.string(crs.as_str())?));
+                }
+                Self::MissingOperation(source, target) => {
+                    return Ok(GeoError::MissingOperation {
+                        source: memory.string(source.as_str())?,
+                        target: memory.string(target.as_str())?,
+                    });
+                }
+                Self::UnknownOperation(name) => crate::BindingConfigError::UnknownOperation {
+                    operation: memory.string(name.as_str())?,
+                },
+                Self::InvalidEndpoint {
+                    carrier,
+                    expected,
+                    actual,
+                } => crate::BindingConfigError::InvalidEndpoint {
+                    carrier: memory.string(carrier.as_str())?,
+                    expected,
+                    actual,
+                },
+                Self::MultipleOperations {
+                    source,
+                    target,
+                    first,
+                    second,
+                } => crate::BindingConfigError::MultipleOperations {
+                    source: memory.string(source.as_str())?,
+                    target: memory.string(target.as_str())?,
+                    first,
+                    second,
+                },
+                Self::ConflictingEndpoint {
+                    carrier,
+                    first,
+                    second,
+                } => crate::BindingConfigError::ConflictingEndpoint {
+                    carrier: memory.string(carrier.as_str())?,
+                    first,
+                    second,
+                },
+            };
+            memory.boxed(cause).map(GeoError::BindingConfiguration)
         })
     }
 
@@ -402,18 +527,24 @@ impl GeoProfile {
             return if reference == *CRS84_REFERENCE {
                 Ok(())
             } else {
-                Err(progress.retained_message(
-                    "CRS84 always denotes WGS84 longitude/latitude",
-                    GeoError::Config,
+                Err(crate::BindingConfigError::reference_registration(
+                    &crs,
+                    &reference,
+                    &CRS84_REFERENCE,
+                    crate::ReferenceRegistrationReason::Crs84,
+                    progress,
                 ))
             };
         }
         if crs.as_str() == ogc::EPSG4326
             && reference != CRS84_REFERENCE.clone().with_axes(AxisOrder::LatLon)
         {
-            return Err(progress.retained_message(
-                "EPSG:4326 registration requires WGS84 with explicit latitude/longitude axes",
-                GeoError::Config,
+            return Err(crate::BindingConfigError::reference_registration(
+                &crs,
+                &reference,
+                &CRS84_REFERENCE.clone().with_axes(AxisOrder::LatLon),
+                crate::ReferenceRegistrationReason::Epsg4326,
+                progress,
             ));
         }
         for operation in &self.operations {
@@ -448,7 +579,13 @@ impl GeoProfile {
             .binary_search_by(|entry| entry.crs.cmp(&crs))
         {
             Ok(index) if self.references[index].reference == reference => Ok(()),
-            Ok(_) => Err(CarrierResolutionFailure::ConflictingReference(&crs).retained(progress)),
+            Ok(index) => Err(crate::BindingConfigError::reference_registration(
+                &crs,
+                &reference,
+                &self.references[index].reference,
+                crate::ReferenceRegistrationReason::ConflictingRegistration,
+                progress,
+            )),
             Err(index) => {
                 self.references = self.references.inserted_with(
                     index,
@@ -561,24 +698,35 @@ impl GeoProfile {
         progress: &mut crate::context::WorkProgress<'_>,
     ) -> Result<(), GeoError> {
         if metres_per_unit.signum() <= 0 {
-            return Err(progress.retained_message(
-                "linear output units require a positive exact metre factor",
-                GeoError::Config,
+            return Err(crate::BindingConfigError::unit_factor(
+                &unit,
+                &metres_per_unit,
+                None,
+                crate::UnitFactorReason::NonPositive,
+                progress,
             ));
         }
         if unit.as_str() == ogc::uom::METRE {
             return if metres_per_unit == Rat::one() {
                 Ok(())
             } else {
-                Err(progress
-                    .retained_message("the official metre always has factor one", GeoError::Config))
+                Err(crate::BindingConfigError::unit_factor(
+                    &unit,
+                    &metres_per_unit,
+                    Some(&Rat::one()),
+                    crate::UnitFactorReason::OfficialMetre,
+                    progress,
+                ))
             };
         }
         match self.units.binary_search_by(|entry| entry.unit.cmp(&unit)) {
             Ok(index) if self.units[index].metres_per_unit == metres_per_unit => Ok(()),
-            Ok(_) => Err(progress.retained_message(
-                "conflicting linear output-unit registration",
-                GeoError::Config,
+            Ok(index) => Err(crate::BindingConfigError::unit_factor(
+                &unit,
+                &metres_per_unit,
+                Some(&self.units[index].metres_per_unit),
+                crate::UnitFactorReason::ConflictingRegistration,
+                progress,
             )),
             Err(index) => {
                 self.units = self.units.inserted_with(
@@ -625,7 +773,7 @@ impl GeoProfile {
         self.units
             .binary_search_by(|entry| entry.unit.cmp(unit))
             .map(|index| std::borrow::Cow::Borrowed(&self.units[index].metres_per_unit))
-            .map_err(|_| GeoError::domain(format!("unregistered linear output unit <{unit}>")))
+            .map_err(|_| crate::VocabularyError::unregistered_output_unit(unit))
     }
 
     /// Register a compiled operation chain under an exact caller-supplied IRI.
@@ -757,8 +905,13 @@ impl GeoProfile {
             .binary_search_by(|entry| entry.name.cmp(&binding.name))
         {
             Ok(index) if self.operations[index] == binding => Ok(()),
-            Ok(_) => Err(progress
-                .retained_message("conflicting operation name registration", GeoError::Config)),
+            Ok(index) => Err(CarrierResolutionFailure::ConflictingOperation {
+                first: &self.operations[index],
+                second: &binding,
+                first_chain: self.operations[index].chain.id(),
+                second_chain: binding.chain.id(),
+            }
+            .retained(progress)),
             Err(index) => {
                 self.operations =
                     self.operations
@@ -880,6 +1033,10 @@ impl GeoProfile {
             .map_err(CarrierResolutionFailure::resident)
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "The pre-admission refusal borrows original bindings and carries exact endpoint identities inline; boxing it would allocate before its caller admits the diagnostic"
+    )]
     fn operation_between_resolution<'a, 'b>(
         &'a self,
         source: &'b Crs,
@@ -891,9 +1048,12 @@ impl GeoProfile {
                 if let Some(previous) = found
                     && previous.id() != binding.chain.id()
                 {
-                    return Err(CarrierResolutionFailure::Configuration(
-                        "multiple distinct coordinate chains; name the intended operation explicitly",
-                    ));
+                    return Err(CarrierResolutionFailure::MultipleOperations {
+                        source,
+                        target,
+                        first: previous.id(),
+                        second: binding.chain.id(),
+                    });
                 }
                 found = Some(&binding.chain);
             }
@@ -910,9 +1070,7 @@ impl GeoProfile {
     /// Refuses empty input, missing carriers/chains and ambiguous target surfaces.
     pub fn metric_reference(&self, sources: &[&Crs]) -> Result<Crs, GeoError> {
         let Some(first) = sources.first() else {
-            return Err(GeoError::config(
-                "metric reference requires a source carrier",
-            ));
+            return Err(CarrierResolutionFailure::EmptyMetricSources.resident());
         };
         for source in sources {
             self.operation_reference(source)?;
@@ -955,9 +1113,11 @@ impl GeoProfile {
             if reachable {
                 if let Some(previous) = selected {
                     if !self.reference(previous)?.same_surface(reference) {
-                        return Err(GeoError::config(
-                            "multiple reachable physical metric surfaces; name the intended operation image explicitly",
-                        ));
+                        return Err(CarrierResolutionFailure::AmbiguousMetricSurface {
+                            first: previous,
+                            second: target,
+                        }
+                        .resident());
                     }
                     if target < previous {
                         selected = Some(target);
@@ -1084,6 +1244,10 @@ impl GeoProfile {
             .map_err(CarrierResolutionFailure::resident)
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "The pre-admission refusal borrows original bindings and carries exact endpoint identities inline; boxing it would allocate before its caller admits the diagnostic"
+    )]
     fn projected_operation_reference_resolution<'a>(
         &self,
         crs: &'a Crs,
@@ -1120,10 +1284,14 @@ impl GeoProfile {
                 if endpoint.unit == CoordinateUnit::Degrees {
                     return Err(CarrierResolutionFailure::UnknownReference(crs));
                 }
-                if declared.is_some_and(|previous| previous != endpoint) {
-                    return Err(CarrierResolutionFailure::Configuration(
-                        "conflicting operation carrier realizations, units or axes",
-                    ));
+                if let Some(previous) = declared
+                    && previous != endpoint
+                {
+                    return Err(CarrierResolutionFailure::ConflictingEndpoint {
+                        carrier: crs,
+                        first: previous,
+                        second: endpoint,
+                    });
                 }
                 declared = Some(endpoint);
             }
@@ -1212,10 +1380,14 @@ impl GeoProfile {
             if chain.operations().first().expect("compiled chain").source() != source_reference
                 || chain.operations().last().expect("compiled chain").target() != target_reference
             {
-                return Err(progress.retained_message(
-                    "chain endpoints disagree with registered actual carriers",
-                    GeoError::Config,
-                ));
+                return Err(CarrierResolutionFailure::ImageEndpoints {
+                    reason: crate::ImageEndpointReason::Chain,
+                    expected_source: source_reference,
+                    actual_source: chain.operations().first().expect("compiled chain").source(),
+                    expected_target: target_reference,
+                    actual_target: chain.operations().last().expect("compiled chain").target(),
+                }
+                .retained(&mut progress));
             }
             let admitted_source = crate::operation::AdmittedImageSource::prepare(
                 source.geometry(),
@@ -1887,16 +2059,22 @@ impl LinearUnitBinding {
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original endpoint identities remain on the stack until the caller admits their owned diagnostic; a box here would create an unpriced allocation"
+)]
 fn validate_endpoint_resolution<'a>(
     carrier: &'a Crs,
     reference: &GeographicReference,
     endpoint: crate::operation::OperationReference,
 ) -> Result<(), CarrierResolutionFailure<'a>> {
-    if endpoint.realization != reference.id().digest()
-        || endpoint.unit != crate::operation::CoordinateUnit::Degrees
-        || endpoint.swapped_axes != (reference.axes() == AxisOrder::LatLon)
-    {
-        return Err(CarrierResolutionFailure::InvalidEndpoint(carrier));
+    let expected = geographic_operation_reference(reference, reference.id());
+    if endpoint != expected {
+        return Err(CarrierResolutionFailure::InvalidEndpoint {
+            carrier,
+            expected,
+            actual: endpoint,
+        });
     }
     Ok(())
 }
@@ -1940,6 +2118,374 @@ mod tests {
         CoordinateOperation, CoordinateUnit, OperationModel, OperationReference,
     };
     use crate::{MetricContext, MetricWorkObserver, Rat};
+
+    #[test]
+    fn native_reference_refusals_keep_original_declarations_without_warming_identity() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let cold = GeographicReference::cgcs2000();
+        assert!(cold.cached_identity().is_none());
+        assert_eq!(
+            Capture::read(&cold).child("axes").code,
+            "axis-order-longitude-latitude"
+        );
+        assert!(cold.cached_identity().is_none());
+
+        for (name, actual, expected, code) in [
+            (
+                ogc::CRS84,
+                cold.clone(),
+                GeographicReference::wgs84(),
+                "reference-registration-crs84",
+            ),
+            (
+                ogc::EPSG4326,
+                GeographicReference::wgs84(),
+                GeographicReference::wgs84().with_axes(AxisOrder::LatLon),
+                "reference-registration-epsg4326",
+            ),
+            (
+                "https://example.org/reference",
+                cold,
+                GeographicReference::wgs84(),
+                "reference-registration-conflicting",
+            ),
+        ] {
+            let mut profile = GeoProfile::standard();
+            let carrier = Crs::new(name).unwrap();
+            if code == "reference-registration-conflicting" {
+                profile
+                    .register_reference(carrier.clone(), expected.clone())
+                    .unwrap();
+                profile
+                    .register_reference(carrier.clone(), expected.clone())
+                    .unwrap();
+            }
+            let error = profile
+                .register_reference(carrier, actual.clone())
+                .unwrap_err();
+            let clone = error.clone();
+            drop((profile, error));
+            let fields = Capture::read(clone.original()).child("cause");
+            assert_eq!(fields.code, "carrier-reference-registration");
+            assert_eq!(fields.child("reason").code, code);
+            assert!(matches!(fields.field("reference"), ErrorValue::Iri(value) if value == name));
+            assert!(matches!(
+                fields.child("actual").field("ellipsoid"),
+                ErrorValue::Record(_)
+            ));
+            let GeoError::BindingConfiguration(cause) = clone.original() else {
+                panic!("native reference refusal")
+            };
+            let crate::BindingConfigError::ReferenceRegistration {
+                actual: original_actual,
+                expected: original_expected,
+                ..
+            } = &**cause
+            else {
+                panic!("original reference declarations")
+            };
+            assert_eq!(original_actual, &actual);
+            assert_eq!(original_expected, &expected);
+        }
+    }
+
+    #[test]
+    fn native_unit_refusals_keep_exact_factors_and_registration_priority() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        for (name, factor, expected, code) in [
+            (ogc::uom::METRE, -2, None, "unit-factor-nonpositive"),
+            (ogc::uom::METRE, 2, Some(1), "unit-factor-official-metre"),
+            (
+                "https://example.org/unit",
+                4,
+                Some(3),
+                "unit-factor-conflicting-registration",
+            ),
+        ] {
+            let mut profile = GeoProfile::standard();
+            let unit = Crs::new(name).unwrap();
+            if expected == Some(3) {
+                profile
+                    .register_linear_unit(unit.clone(), Rat::from_i64(3))
+                    .unwrap();
+                // An identical re-registration remains accepted.
+                profile
+                    .register_linear_unit(unit.clone(), Rat::from_i64(3))
+                    .unwrap();
+            }
+            let error = profile
+                .register_linear_unit(unit, Rat::from_i64(factor))
+                .unwrap_err();
+            let clone = error.clone();
+            drop((profile, error));
+            let fields = Capture::read(clone.original()).child("cause");
+            assert_eq!(fields.code, "carrier-unit-factor");
+            assert_eq!(fields.child("reason").code, code);
+            assert!(matches!(fields.field("unit"), ErrorValue::Iri(value) if value == name));
+            assert!(matches!(fields.field("actual"), ErrorValue::Record(_)));
+            let GeoError::BindingConfiguration(cause) = clone.original() else {
+                panic!("native unit refusal")
+            };
+            let crate::BindingConfigError::UnitFactor {
+                actual,
+                expected: original,
+                ..
+            } = &**cause
+            else {
+                panic!("original exact unit factors")
+            };
+            assert_eq!(&**actual, &Rat::from_i64(factor));
+            assert_eq!(
+                original.as_ref().map(|value| &**value),
+                expected.map(Rat::from_i64).as_ref()
+            );
+            if expected.is_none() {
+                assert!(matches!(fields.field("expected"), ErrorValue::Absent));
+            }
+        }
+    }
+
+    #[test]
+    fn unresolved_output_unit_keeps_its_original_identifier_and_domain_class() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let profile = GeoProfile::standard();
+        let unit = Crs::new("https://example.org/unit/未知").unwrap();
+        let error = profile.metres_per_unit_value(&unit).unwrap_err();
+        drop(unit);
+        drop(profile);
+        let last = error.clone();
+        drop(error);
+        let fields = Capture::read(&last).child("cause");
+        assert_eq!(fields.code, "vocabulary-unregistered-output-unit");
+        assert!(matches!(
+            fields.field("unit"),
+            ErrorValue::Iri("https://example.org/unit/未知")
+        ));
+        assert!(last.is_expression_error());
+        assert_eq!(
+            last.detail(),
+            "unregistered linear output unit <https://example.org/unit/未知>"
+        );
+        assert_eq!(
+            GeoProfile::standard()
+                .metres_per_unit(&Crs::new(ogc::uom::METRE).unwrap())
+                .unwrap(),
+            Rat::one()
+        );
+    }
+
+    #[test]
+    fn native_metric_selection_refusals_keep_the_original_carrier_pair() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let empty = GeoProfile::standard().metric_reference(&[]).unwrap_err();
+        assert_eq!(
+            Capture::read(&empty).child("cause").code,
+            "carrier-empty-metric-sources"
+        );
+        assert_eq!(empty.detail(), "metric reference requires a source carrier");
+
+        let first = Crs::new("https://example.org/first-surface").unwrap();
+        let second = Crs::new("https://example.org/second-surface").unwrap();
+        let resident = CarrierResolutionFailure::AmbiguousMetricSurface {
+            first: &first,
+            second: &second,
+        }
+        .resident();
+        let mut progress = crate::context::WorkProgress::integer(None);
+        let metered = CarrierResolutionFailure::AmbiguousMetricSurface {
+            first: &first,
+            second: &second,
+        }
+        .retained(&mut progress);
+        drop((first, second));
+        for error in [resident, metered] {
+            let clone = error.clone();
+            drop(error);
+            let fields = Capture::read(clone.original()).child("cause");
+            assert_eq!(fields.code, "carrier-ambiguous-metric-surface");
+            assert!(matches!(
+                fields.field("first"),
+                ErrorValue::Iri("https://example.org/first-surface")
+            ));
+            assert!(matches!(
+                fields.field("second"),
+                ErrorValue::Iri("https://example.org/second-surface")
+            ));
+        }
+    }
+
+    #[test]
+    fn native_operation_lookup_keeps_the_original_identifier_in_both_paths() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let profile = GeoProfile::standard();
+        let name = Crs::new("https://example.org/original-operation").unwrap();
+        let resident = profile.operation(&name).unwrap_err();
+        let mut context = MetricContext::wgs84().unwrap();
+        let mut progress = crate::context::WorkProgress::integer(None);
+        let metered = profile
+            .operation_with_progress(&name, &mut context, &mut progress)
+            .unwrap_err();
+        drop((name, profile));
+        assert_eq!(resident.to_string(), metered.to_string());
+        for error in [resident, metered] {
+            let cloned = error.clone();
+            drop(error);
+            let fields = Capture::read(cloned.original()).child("cause");
+            assert_eq!(fields.code, "carrier-unknown-operation");
+            assert!(matches!(
+                fields.field("operation"),
+                ErrorValue::Iri("https://example.org/original-operation")
+            ));
+        }
+    }
+
+    #[test]
+    fn refused_second_native_field_refunds_the_first_field_before_return() {
+        use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+
+        let source = Crs::new("https://example.org/source").unwrap();
+        let target = Crs::new("https://example.org/target").unwrap();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident as &mut dyn Admission);
+        // Exercise accounting overflow without allocating the huge baseline.
+        // The first real string fits; admitting the second cannot fit usize.
+        let baseline = usize::MAX - source.as_str().len();
+        memory.add_bytes(baseline).unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let result =
+            CarrierResolutionFailure::MissingOperation(&source, &target).with_memory(&mut memory);
+        let allocations = window.close();
+        assert!(matches!(result, Err(StorageError::SizeOverflow)));
+        assert_eq!(allocations.allocations, 1);
+        assert_eq!(allocations.requested_bytes, source.as_str().len() as u64);
+        assert_eq!(memory.admitted_bytes(), baseline);
+    }
+
+    #[test]
+    fn native_endpoint_refusal_keeps_required_and_actual_reference_fields() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let carrier = Crs::new("https://example.org/original-carrier").unwrap();
+        let reference = GeographicReference::wgs84();
+        let actual = OperationReference {
+            realization: Digest32::new([7; 32]),
+            unit: CoordinateUnit::Metres,
+            swapped_axes: true,
+        };
+        let error = validate_endpoint_resolution(&carrier, &reference, actual)
+            .unwrap_err()
+            .resident();
+        drop((carrier, reference));
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "carrier-invalid-endpoint");
+        assert!(matches!(
+            fields.field("carrier"),
+            ErrorValue::Iri("https://example.org/original-carrier")
+        ));
+        assert_eq!(
+            fields.child("expected").child("unit").code,
+            "operation-unit-degrees"
+        );
+        let actual = fields.child("actual");
+        assert_eq!(actual.child("unit").code, "operation-unit-metres");
+        assert!(matches!(
+            actual.field("swapped_axes"),
+            ErrorValue::Boolean(true)
+        ));
+        assert!(
+            matches!(actual.child("realization").field("bytes"), ErrorValue::Bytes(bytes) if bytes == [7; 32])
+        );
+    }
+
+    #[test]
+    fn native_binding_conflicts_keep_original_chain_ids_and_endpoint_axes() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let (mut profile, target) = projected_profile();
+        let source = Crs::new(ogc::CRS84).unwrap();
+        let first = profile.operation_between(&source, &target).unwrap().id();
+        let mut endpoint = profile.operation_reference(&target).unwrap();
+        endpoint.swapped_axes = true;
+        let operation = CoordinateOperation::compile(
+            profile.operation_reference(&source).unwrap(),
+            endpoint,
+            OperationModel::WebMercator {
+                radius: Rat::from_i64(6_371_000),
+            },
+        )
+        .unwrap();
+        let chain = OperationChain::compile(vec![operation]).unwrap();
+        let second = chain.id();
+        let registration = profile
+            .register_operation(
+                Crs::new("http://example.org/project").unwrap(),
+                source.clone(),
+                target.clone(),
+                chain.clone(),
+            )
+            .unwrap_err();
+        profile
+            .register_operation(
+                Crs::new("https://example.org/second-operation").unwrap(),
+                source.clone(),
+                target.clone(),
+                chain,
+            )
+            .unwrap();
+        let chains = profile.operation_between(&source, &target).unwrap_err();
+        let endpoints = profile.operation_reference(&target).unwrap_err();
+        drop((profile, source, target));
+        let fields = Capture::read(registration.original()).child("cause");
+        assert_eq!(fields.code, "carrier-conflicting-operation");
+        assert!(matches!(
+            fields.field("operation"),
+            ErrorValue::Iri("http://example.org/project")
+        ));
+        assert!(matches!(
+            fields.field("first_source"),
+            ErrorValue::Iri(ogc::CRS84)
+        ));
+        assert!(matches!(
+            fields.field("second_target"),
+            ErrorValue::Iri("http://example.org/projected")
+        ));
+        assert!(
+            matches!(fields.child("first_chain").field("bytes"), ErrorValue::Bytes(bytes) if bytes == first.as_bytes())
+        );
+        assert!(
+            matches!(fields.child("second_chain").field("bytes"), ErrorValue::Bytes(bytes) if bytes == second.as_bytes())
+        );
+        let fields = Capture::read(&chains).child("cause");
+        assert_eq!(fields.code, "carrier-multiple-operations");
+        assert!(
+            matches!(fields.child("first").field("bytes"), ErrorValue::Bytes(bytes) if bytes == first.as_bytes())
+        );
+        assert!(
+            matches!(fields.child("second").field("bytes"), ErrorValue::Bytes(bytes) if bytes == second.as_bytes())
+        );
+        let fields = Capture::read(&endpoints).child("cause");
+        assert_eq!(fields.code, "carrier-conflicting-endpoint");
+        assert!(matches!(
+            fields.child("first").field("swapped_axes"),
+            ErrorValue::Boolean(false)
+        ));
+        assert!(matches!(
+            fields.child("second").field("swapped_axes"),
+            ErrorValue::Boolean(true)
+        ));
+    }
 
     fn projected_profile() -> (GeoProfile, Crs) {
         let mut profile = GeoProfile::standard();

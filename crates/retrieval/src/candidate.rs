@@ -56,6 +56,17 @@ pub enum CandidatePlanError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for CandidatePlanError {
+    purrdf_hash::error_visit! {
+        Plan(cause) => "candidate-plan" { "cause" => Cause(cause) },
+        DepthWithoutProbe { stratum, requested, ceiling } => "candidate-depth-without-probe" { "stratum" => Iri(stratum.as_str()), "requested" => Unsigned(u128::from(*requested)), "ceiling" => Unsigned(u128::from(*ceiling)) },
+        DuplicateDepth { stratum } => "candidate-duplicate-depth" { "stratum" => Iri(stratum.as_str()) },
+        MissingDepth { stratum } => "candidate-missing-depth" { "stratum" => Iri(stratum.as_str()) },
+        UnexpectedDepth { stratum } => "candidate-unexpected-depth" { "stratum" => Iri(stratum.as_str()) },
+        InvalidEncoding { reason } => "candidate-invalid-encoding" { "reason" => Text(reason) },
+    }
+}
+
 impl std::fmt::Display for CandidatePlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -191,6 +202,22 @@ impl CandidateDepths {
     #[must_use]
     pub fn sorted(&self) -> Vec<(&Iri, u32)> {
         self.iter().collect()
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CandidateDepths {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self(depths) = self;
+        visitor.variant("retrieval-candidate-depths");
+        visitor.begin_list(Some("depths"), depths.len());
+        for (stratum, depth) in depths.iter() {
+            visitor.begin_record(None, "retrieval-stratum-depth");
+            visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+            visitor.value(Some("depth"), ErrorValue::Unsigned(u128::from(*depth)));
+            visitor.end_record();
+        }
+        visitor.end_list();
     }
 }
 
@@ -414,7 +441,7 @@ impl Eq for CandidatePlan {}
 pub fn plan_candidates(
     terms: &[RequestTerm],
     depths: &CandidateDepths,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     statistics: &impl Statistics,
 ) -> Result<CandidatePlan, CandidatePlanError> {
     let parts = crate::planner::plan_read(

@@ -726,7 +726,7 @@ purrdf validate (--shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
                 [--from <F>] [--base <IRI>] [--format <F>]
                 [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
                 [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--no-ceiling]
-                [--xpath-regex <PROFILE>] [IN] [OUT]
+                [--xpath-regex <PROFILE>] [--shacl-profile <ID>] [IN] [OUT]
 ```
 
 Validate an RDF data graph against a SHACL shapes graph — SHACL 1.2 Core,
@@ -879,7 +879,27 @@ purrdf validate --shapes shapes.ttl --deadline 5s data.ttl
 
 # Decide every pattern under the dated XPath F&O 3.1 law.
 purrdf validate --shapes shapes.ttl --xpath-regex xpath-3.1-2017-03-21 data.ttl
+
+# Validate under the SHACL 1.2 editor's-draft law the W3C test suite is graded under.
+purrdf validate --shapes shapes.ttl --shacl-profile shacl-ed-2026-10-16 data.ttl
 ```
+
+**SHACL law.** `--shacl-profile <ID>` selects one exact, dated SHACL law by its
+stable id: `shacl-rec-2017-07-20` (the 2017 Recommendation), `shacl-wd-2026-09-18`
+(the SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the data-shapes editor's
+draft at the commit the W3C SHACL 1.2 test suite is taken from, the law the
+PurRDF EARL report is graded under). The id is decoded once, exactly, by
+`purrdf_validate::complete_profile`; an id it does not know (for example
+`shacl-ed-2026-10-17`) is refused with its `unsupported-profile` status (exit 2),
+and no nearby edition is substituted. A dated law carries its own XPath pattern
+law, so `--xpath-regex` may name only that same law; naming another
+(`--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`) is a
+usage error (exit 2). The law applies to `--shapes`, to `--shapes-product` (a
+prepared product stores no SHACL law; the restore takes it from the request, so
+one product answers under any law its shapes graph is admitted under), to the
+`--changes` lane and under the governors. Omitted, the compatibility law runs,
+exactly as before this flag existed. Node-expression (`node-expr`) and SPARQL 1.2
+RL records are law-independent and take no such flag.
 
 **Pattern laws.** `--xpath-regex <PROFILE>` decides every pattern of the
 validation — `sh:pattern` and SHACL-SPARQL `REGEX`/`REPLACE` alike — under a
@@ -1095,7 +1115,7 @@ sections:
 ```text
 load accepted
 shacl-shacl 1
-result <http://www.w3.org/ns/shacl#DatatypeConstraintComponent> focus <http://example.org/S> path <http://www.w3.org/ns/shacl#closed> value <http://www.w3.org/ns/shacl#ByTypes> shape _:… severity <http://www.w3.org/ns/shacl#Violation> superseded closed-by-types
+result <http://www.w3.org/ns/shacl#InConstraintComponent> focus <http://example.org/S> path <http://www.w3.org/ns/shacl#nodeKind> value _:… shape _:… severity <http://www.w3.org/ns/shacl#Violation> superseded list-valued-node-kind
 functions 1
 call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/Tagger>
 validators 1

@@ -119,7 +119,13 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
             });
             assert!(pairs.insert(ranks), "each source-type pair occurs once");
             let promoted = ranks[0].max(ranks[1]).max(usize::from(division));
-            let lexical = if promoted < 2 { scalar } else { exponential };
+            // An integer result is spelled plainly; a decimal an operator computed
+            // carries its point.
+            let lexical = match promoted {
+                0 => scalar.to_owned(),
+                1 => format!("{scalar}.0"),
+                _ => exponential.to_owned(),
+            };
             assert_eq!(
                 row[result],
                 Some(TermValue::typed_literal(lexical, TYPES[promoted])),
@@ -127,8 +133,7 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
             );
         }
     }
-    for (local, scalar, exponential) in [("unplus-2", "3", "3.0E0"), ("unminus-2", "-3", "-3.0E0")]
-    {
+    for (local, scalar, exponential) in [("unplus-2", "3", ""), ("unminus-2", "-3", "-3.0E0")] {
         let case = case("expr-ops", local);
         let run::RunOutcome::Eval {
             result: SparqlResult::Solutions {
@@ -161,12 +166,20 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
                 .position(|kind| *kind == datatype)
                 .expect("source type");
             assert!(types.insert(rank));
+            // Unary plus is the identity (XPath `op:numeric-unary-plus`), so it
+            // returns its operand's own spelling at every rank: the source is
+            // `3`, and the approved `result-unplus-2.srx` spells the float `3`
+            // too. Unary minus computes a new number: a decimal carries its
+            // point and a float or double its exponent.
+            let lexical = match rank {
+                _ if local == "unplus-2" => scalar.to_owned(),
+                0 => scalar.to_owned(),
+                1 => format!("{scalar}.0"),
+                _ => exponential.to_owned(),
+            };
             assert_eq!(
                 row[result],
-                Some(TermValue::typed_literal(
-                    if rank < 2 { scalar } else { exponential },
-                    TYPES[rank]
-                ))
+                Some(TermValue::typed_literal(lexical, TYPES[rank]))
             );
         }
     }

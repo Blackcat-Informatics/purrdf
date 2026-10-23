@@ -1949,7 +1949,7 @@ mod tests {
     #[test]
     fn median_odd_group() {
         let v = fold(MEDIAN, &[vec![int(1)], vec![int(3)], vec![int(2)]]).expect("bound");
-        assert_eq!(lex(&v), "2");
+        assert_eq!(lex(&v), "2.0");
     }
 
     #[test]
@@ -2021,7 +2021,7 @@ mod tests {
     fn percentile_zero_is_the_minimum_and_one_is_the_maximum() {
         let rows = vec![vec![int(1)], vec![int(2)], vec![int(3)]];
         let p0 = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("0")), &rows).expect("bound");
-        assert_eq!(lex(&p0), "1");
+        assert_eq!(lex(&p0), "1.0");
         let p1 = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("1")), &rows).expect("bound");
         assert_eq!(lex(&p1), "3");
     }
@@ -2194,7 +2194,7 @@ mod tests {
     #[test]
     fn var_pop_matches_the_known_dataset() {
         let v = fold(VAR_POP, &moments_rows()).expect("bound");
-        assert_eq!(lex(&v), "4");
+        assert_eq!(lex(&v), "4.0");
     }
 
     #[test]
@@ -2224,7 +2224,7 @@ mod tests {
     #[test]
     fn population_variance_of_a_single_value_group_is_zero() {
         let v = fold(VAR_POP, &[vec![int(5)]]).expect("bound");
-        assert_eq!(lex(&v), "0");
+        assert_eq!(lex(&v), "0.0");
     }
 
     #[test]

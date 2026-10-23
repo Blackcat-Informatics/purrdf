@@ -108,7 +108,8 @@ pub use provider::{
 pub use query::{PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView};
 pub use stack::{
     CanonicalPagedError, PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView,
-    PagedStackSnapshot, StackPageOrigin, StackSource, canonical_paged_seal,
+    PagedStackSnapshot, PagedStackSnapshotError, StackPageOrigin, StackSource,
+    canonical_paged_seal,
 };
 pub use translation::PageTranslation;
 
@@ -1400,6 +1401,23 @@ impl DatasetView for PagedDataset {
 
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<GlobalTermId>> {
         Some(&self.statistics.values)
+    }
+
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Ok(Some(
+            self.statistics
+                .values
+                .source_summary(predicate, graph, stream),
+        ))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        Ok(Some(self.statistics.values.statement_count()))
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {

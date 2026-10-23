@@ -47,6 +47,23 @@ encoding.
 
 ## Design commitments
 
+`seminaive::Maintained` owns a materialized model across signed base transactions.
+It retains original row and dictionary identities, removes unsupported cycles,
+repairs chosen finite witnesses and propagates stratified negation. `begin` takes
+an original `ChangeBatch`; `resume_until` admits cumulative native work, including
+preparation, joins, sorting, merging and replacement storage layouts. A pause
+retains its current frames. `model_delta` exposes exact net membership changes
+only after the original host watermark is acknowledged.
+
+Initialization uses the same retained native execution loop. `new_in` and
+`new_reclaiming_in` accept the supplemental storage admission; original sealed
+buffers keep their original owners. `initialization_work` counts the initial
+grant independently of later transactions. `new_reclaiming` additionally retires
+unused owned dictionary terms after rows, proofs and the latest result release
+them. No raw identity is reassigned. Independent proof checking re-decides native
+filters and grouped negation; caller-defined callbacks require their own meaning
+and are explicitly refused by that checker.
+
 * **One rule IR: the DL-clause.** Every rule is
   `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, where each disjunct `Cᵢ` is itself a
   conjunction of head atoms — so `A ⊑ ∃r.C`, which lowers to
@@ -83,8 +100,11 @@ encoding.
   131,072 facts and 1,048,576 join steps on `wasm32`, where the store lives in
   one linear memory, and 4,194,304 facts and 1,048,576 join steps everywhere
   else (`DEFAULT_MAX_STORED_FACTS`, `DEFAULT_MAX_JOIN_STEPS`, chosen at compile
-  time from the target architecture). The term-arena ceiling
-  (`MAX_TERM_ARENA_BYTES`) stays a constant. A limit can only refuse: a run
+  time from the target architecture). The term-arena ceiling defaults to
+  `DEFAULT_MAX_TERM_ARENA_BYTES` (16 MiB); callers can select it with
+  `EvalOptions::with_max_term_arena_bytes` or remove the logical ceiling with
+  `EvalOptions::without_term_arena_limit`. Physical admission still applies.
+  A limit can only refuse: a run
   inside its limits returns the least model, the same under every limit that
   admits it, and a run past one returns `EvalError::BudgetExhausted` naming the
   limit, the numbers and the knob that raises it — never a truncated model.

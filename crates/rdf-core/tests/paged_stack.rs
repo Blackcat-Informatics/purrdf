@@ -15,8 +15,8 @@ use purrdf_core::{
     BlankScope, CanonicalPagedError, DatasetView, FallibleDatasetView, GlobalTermId, GraphMatch,
     InMemoryPageProvider, PackBuilder, PageFault, PageGeneration, PageId, PageMaterialization,
     PageProvider, PagedDataset, PagedQueryError, PagedQueryLimits, PagedStack, PagedStackError,
-    PagedStackEvidence, RdfDataset, RdfDatasetBuilder, RdfTextDirection, StackPageOrigin, TermBox,
-    TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
+    PagedStackEvidence, PagedStackSnapshotError, RdfDataset, RdfDatasetBuilder, RdfTextDirection,
+    StackPageOrigin, TermBox, TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
 };
 
 fn iri(name: &str) -> TermValue {
@@ -189,6 +189,156 @@ fn construction_append_and_snapshot_do_not_read_lower_pages() {
     );
     assert_eq!(surface(&view).len(), 2);
     assert_eq!(evidence(&view), receipt);
+}
+
+#[test]
+fn historical_prefixes_match_eager_seals_and_exclude_pending_head() {
+    let base = row("base", "always");
+    let a = row("a", "first");
+    let b = row("b", "second");
+    let mut stack = PagedStack::new(vec![sealed(vec![page(std::slice::from_ref(&base))])]).unwrap();
+    stack
+        .append(sealed(vec![page(std::slice::from_ref(&a))]), Vec::new())
+        .unwrap();
+    stack
+        .append(sealed(vec![page(std::slice::from_ref(&b))]), Vec::new())
+        .unwrap();
+    stack.append(sealed(Vec::new()), vec![a.clone()]).unwrap();
+    stack
+        .append(sealed(vec![page(std::slice::from_ref(&a))]), Vec::new())
+        .unwrap();
+    stack.append(sealed(Vec::new()), vec![b.clone()]).unwrap();
+    assert_eq!(stack.sealed_delta_count(), 5);
+    stack.insert(row("pending", "head")).unwrap();
+    assert!(stack.remove(&a).unwrap());
+    stack.declare_named_graph(iri("pending-graph")).unwrap();
+    let expected = [
+        vec![base.clone()],
+        vec![base.clone(), a.clone()],
+        vec![base.clone(), a.clone(), b.clone()],
+        vec![base.clone(), b.clone()],
+        vec![base.clone(), a.clone(), b],
+        vec![base, a],
+    ];
+    for (count, rows) in expected.iter().enumerate() {
+        let snapshot = stack.snapshot_at(count).unwrap();
+        assert_eq!(snapshot.sealed_depth(), count + 1);
+        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+        let eager = canonical_paged_seal(page(rows).as_ref(), bound(1)).unwrap();
+        assert_eq!(
+            surface(&view),
+            surface(&eager.query_view(PagedQueryLimits::UNBOUNDED))
+        );
+        assert_eq!(view.named_graphs().count(), 0);
+        let receipt = evidence(&view);
+        assert_eq!(receipt.sources.len(), count + 1);
+        assert_eq!(receipt.head.as_ref(), []);
+        assert_eq!(receipt.removals.last().unwrap().as_ref(), []);
+        assert_eq!(receipt.head_bytes, 0);
+        assert!(
+            receipt
+                .requested_origins
+                .iter()
+                .all(|origin| matches!(origin,
+            StackPageOrigin::Sealed { layer, .. } if *layer < count as u64 + 1))
+        );
+    }
+    assert!(matches!(
+        stack.snapshot_at(6),
+        Err(PagedStackSnapshotError::Position {
+            requested: 6,
+            available: 5,
+        })
+    ));
+}
+
+#[test]
+fn historical_zero_keeps_all_bases_and_head_seals_advance_the_position() {
+    let first = row("first", "base");
+    let second = row("second", "base");
+    let added = row("added", "delta");
+    let mut stack = PagedStack::new(vec![
+        sealed(vec![page(std::slice::from_ref(&first))]),
+        sealed(vec![page(std::slice::from_ref(&second))]),
+    ])
+    .unwrap();
+    assert_eq!(stack.sealed_delta_count(), 0);
+    let original = stack.snapshot_at(0).unwrap();
+    assert!(stack.remove(&first).unwrap());
+    stack.seal_head(bound(1)).unwrap();
+    assert_eq!(stack.sealed_delta_count(), 1);
+    let removed = stack.snapshot_at(1).unwrap();
+    assert_eq!(
+        surface(&removed.query_view(PagedQueryLimits::UNBOUNDED)),
+        BTreeSet::from([second.clone()])
+    );
+    stack.insert(added.clone()).unwrap();
+    stack.seal_head(bound(1)).unwrap();
+    assert_eq!(stack.sealed_delta_count(), 2);
+    assert_eq!(
+        surface(
+            &stack
+                .snapshot_at(2)
+                .unwrap()
+                .query_view(PagedQueryLimits::UNBOUNDED)
+        ),
+        BTreeSet::from([second.clone(), added])
+    );
+    assert_eq!(
+        surface(&original.query_view(PagedQueryLimits::UNBOUNDED)),
+        BTreeSet::from([first, second.clone()])
+    );
+    assert_eq!(
+        surface(&removed.query_view(PagedQueryLimits::UNBOUNDED)),
+        BTreeSet::from([second])
+    );
+}
+
+#[test]
+fn historical_prefix_checks_and_owns_only_selected_sources() {
+    let first = Arc::new(ProbeProvider::new(
+        vec![page(&[row("first", "value")])],
+        None,
+    ));
+    let later = Arc::new(ProbeProvider::new(
+        vec![page(&[row("later", "value")])],
+        None,
+    ));
+    let weak_later = Arc::downgrade(&later);
+    let mut stack = PagedStack::new(vec![Arc::new(
+        PagedDataset::from_provider(first.clone()).unwrap(),
+    )])
+    .unwrap();
+    stack
+        .append(
+            Arc::new(PagedDataset::from_provider(later.clone()).unwrap()),
+            Vec::new(),
+        )
+        .unwrap();
+    later.generation.store(8, Ordering::Relaxed);
+    let checks = later.generation_reads.load(Ordering::Relaxed);
+    let reads = later.reads.load(Ordering::Relaxed);
+    let history = stack.snapshot_at(0).unwrap();
+    let view = history.query_view(PagedQueryLimits::UNBOUNDED);
+    assert_eq!(surface(&view), BTreeSet::from([row("first", "value")]));
+    evidence(&view);
+    assert_eq!(later.generation_reads.load(Ordering::Relaxed), checks);
+    assert_eq!(later.reads.load(Ordering::Relaxed), reads);
+    assert!(matches!(stack.snapshot(), Err(PagedStackError::Read(_))));
+    assert!(matches!(
+        stack.snapshot_at(1),
+        Err(PagedStackSnapshotError::Stack(PagedStackError::Read(_)))
+    ));
+    drop(stack);
+    drop(later);
+    assert!(weak_later.upgrade().is_none());
+    first.generation.store(8, Ordering::Relaxed);
+    let view = history.query_view(PagedQueryLimits::UNBOUNDED);
+    assert_eq!(view.quads().next(), None);
+    assert!(matches!(
+        view.operation_status(),
+        ViewOperationStatus::Failed { .. }
+    ));
 }
 
 #[test]

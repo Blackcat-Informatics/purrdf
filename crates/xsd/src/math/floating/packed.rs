@@ -36,6 +36,17 @@ pub enum FloatProductBackend {
     Simd128,
 }
 
+impl purrdf_hash::error::StructuredError for FloatProductBackend {
+    purrdf_hash::error_visit! {
+        Portable => "float-product-portable" {},
+        Sse2 => "float-product-sse2" {},
+        Avx2 => "float-product-avx2" {},
+        Avx512 => "float-product-avx512" {},
+        Neon => "float-product-neon" {},
+        Simd128 => "float-product-simd128" {},
+    }
+}
+
 impl Backend for FloatProductBackend {
     // Four-endpoint measurements prefer AVX2 for individual products and SSE2
     // over padded AVX-512 for sustained small-lane work. The complete prepared

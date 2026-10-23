@@ -298,3 +298,66 @@ fn an_ungoverned_validation_is_unchanged() {
          governed fuel consumption"
     );
 }
+
+/// An evaluation failure inside a custom function body is that call's
+/// SPARQL error, but a governor trip inside the body is a failure of the processor and
+/// still ends the validation: the governed entry reports the typed trip, never a report
+/// that treats the starved call as an unbound value.
+///
+/// This observes the LATCHED outcome only: the governed entry reads the trip off the shared
+/// `GovernorState`, which wins over whatever the validation itself returned, so the test
+/// would also pass if the trip were wrongly read as an evaluation failure. That the failure
+/// is not swallowed is pinned by the non-latched neighbours in `custom_node_expressions.rs`
+/// (`a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed_cause`,
+/// `body_level_processor_failures_are_typed`) and the unit test beside `sparql_call_result`.
+///
+/// The body is a three-way cross join, so it dominates the cost and the half-cost budget
+/// trips inside it rather than in the surrounding constraint query.
+#[test]
+fn a_governor_trip_inside_a_function_body_still_fails_the_validation() {
+    let shapes_ttl = format!(
+        r#"
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix shnex:  <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix ex:     <{EX}> .
+
+ex:countAll a sh:ListParameterExpressionFunction ;
+  sh:bodyExpression [ sh:select """
+    SELECT (COUNT(*) AS ?n) WHERE {{ ?a ?p ?o . ?b ?q ?r . ?c ?s ?t }}
+  """ ] .
+
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:sparql [
+    sh:message "counted" ;
+    sh:select """
+      SELECT $this ?value WHERE {{ BIND (<{EX}countAll>() AS ?value) }}
+    """ ;
+  ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&shapes_ttl, None).expect("parse shapes");
+    let data = people(3);
+    let run = |governors: &QueryGovernors| {
+        validate_dataset_with_governors(&data, &shapes, None, governors)
+            .expect("a tripped governor is an outcome, not a validation failure")
+    };
+
+    let metered = run(&QueryGovernors::METERED);
+    let GovernedValidation::Complete { report, evidence } = &metered else {
+        panic!("METERED bounds nothing: {metered:?}");
+    };
+    assert_eq!(report.results.len(), 3, "one counted value per person");
+    assert!(
+        report.results.iter().all(|r| r.value.is_some()),
+        "the call returned a value for every person: {:?}",
+        report.results
+    );
+    let cost = evidence.consumed_in(ResourceDimension::Fuel);
+
+    let starved = run(&QueryGovernors::UNBOUNDED.with_fuel(cost / 2));
+    assert!(
+        matches!(starved, GovernedValidation::BudgetExhausted { .. }),
+        "a trip inside the body is not an unbound value: {starved:?}"
+    );
+}

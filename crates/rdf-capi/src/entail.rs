@@ -82,21 +82,15 @@ fn materialize_to_nquads_bytes(
     program: &str,
     imports: &[(&str, &str)],
     premise_iris: &[&str],
-    max_stored_facts: Option<u64>,
-    max_join_steps: Option<u64>,
+    limits: &MaterializeLimits,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let limits = MaterializeLimits {
-        max_stored_facts,
-        max_join_steps,
-        host: RegimeHost::CAbi,
-    };
     let (nquads, report) = materialize_to_nquads_string_with(
         regime,
         document,
         program,
         imports,
         premise_iris,
-        &limits,
+        limits,
     )?
     .into_parts();
     Ok((nquads.into_bytes(), report.into_bytes()))
@@ -132,7 +126,8 @@ fn materialize_to_nquads_bytes(
 /// `max_stored_facts` bounds the facts each evaluation store may hold and
 /// `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
 /// `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
-/// 1048576 join steps natively — or point at an exact limit. A run past either fails
+/// 1048576 join steps natively — or point at an exact limit. `max_term_arena_bytes`
+/// bounds retained term surfaces, defaulting to 16777216 bytes. A run past a limit fails
 /// the call naming the limit, the numbers and the parameter that raises it; a run inside
 /// them returns exactly the closure larger limits would, and the report's
 /// `contract-hash` names the calculus under the limits in force.
@@ -153,7 +148,7 @@ fn materialize_to_nquads_bytes(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_nquads` and `out_report` must be writable pointers; `out_error` must be
 /// null or writable.
 #[unsafe(no_mangle)]
@@ -168,6 +163,7 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_nquads: *mut *mut PurrdfBuffer,
     out_report: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -211,10 +207,7 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
                 program,
                 &imports,
                 &premise_iris,
-                // SAFETY: the caller's contract — null or readable.
-                max_stored_facts.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_join_steps.as_ref().copied(),
+                &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
             .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_nquads = into_handle(PurrdfBuffer(nquads));
@@ -851,17 +844,23 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 // would compile, link and ship — and never appear in the committed header, which is the
 // definition of a dark capability on this host.
 
-/// The two nullable evaluation-limit pointers every entailment entry point takes, as the
+/// The three nullable evaluation-limit pointers every entailment entry point takes, as the
 /// boundary's limits, spelled for this host.
 ///
 /// # Safety
-/// `max_stored_facts` and `max_join_steps` must each be null or readable.
-unsafe fn c_limits(max_stored_facts: *const u64, max_join_steps: *const u64) -> MaterializeLimits {
+/// All three limit pointers must each be null or readable.
+pub(crate) unsafe fn c_limits(
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
+) -> MaterializeLimits {
     MaterializeLimits {
         // SAFETY: the caller's contract — null or readable.
         max_stored_facts: unsafe { max_stored_facts.as_ref() }.copied(),
         // SAFETY: the caller's contract — null or readable.
         max_join_steps: unsafe { max_join_steps.as_ref() }.copied(),
+        // SAFETY: the caller's contract — null or readable.
+        max_term_arena_bytes: unsafe { max_term_arena_bytes.as_ref() }.copied(),
         host: RegimeHost::CAbi,
     }
 }
@@ -994,7 +993,7 @@ pub(crate) unsafe fn import_pairs<'a>(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -1009,6 +1008,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1048,7 +1048,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
                     pattern,
                     &imports,
                     &premise_iris,
-                    &c_limits(max_stored_facts, max_join_steps),
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                 ),
                 out_answer,
                 out_certificate,
@@ -1100,7 +1100,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -1115,6 +1115,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1152,7 +1153,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
                     conclusion,
                     &imports,
                     &premise_iris,
-                    &c_limits(max_stored_facts, max_join_steps),
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                 ),
                 out_answer,
                 out_certificate,
@@ -1195,7 +1196,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -1210,6 +1211,7 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1247,7 +1249,7 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
                     conclusion,
                     &imports,
                     &premise_iris,
-                    &c_limits(max_stored_facts, max_join_steps),
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                 ),
                 out_answer,
                 out_certificate,
@@ -1864,7 +1866,7 @@ mod tests {
     #[test]
     fn the_golden_proof_bytes_survive_the_c_abi() {
         let cases = purrdf_validate::regime::dl_proof_golden_vectors().expect("the artifact");
-        let schema_cases = [
+        let additional_cases = [
             "schema-preparation-empty-consistency",
             "schema-preparation-empty-class",
             "schema-preparation-asserted",
@@ -1874,18 +1876,19 @@ mod tests {
             "schema-preparation-data-extent",
             "schema-preparation-data-containment",
             "schema-preparation-union-neighbor",
+            "recursive-nominal-introduction",
         ];
         assert_eq!(
             cases.len(),
-            PROOF_SERVICE_NAMES.len() + schema_cases.len(),
-            "the original service cases and every prepared-schema case",
+            PROOF_SERVICE_NAMES.len() + additional_cases.len(),
+            "the original service, prepared-schema and recursive NI cases",
         );
         assert!(
             cases
                 .iter()
                 .map(purrdf_validate::regime::DlProofVector::name)
-                .eq(PROOF_SERVICE_NAMES.into_iter().chain(schema_cases)),
-            "the original service prefix and all nine named schema cases stay present",
+                .eq(PROOF_SERVICE_NAMES.into_iter().chain(additional_cases)),
+            "the original service prefix and every named additional case stay present",
         );
         for case in &cases {
             let document = CString::new(case.input()).expect("no NUL");
@@ -2036,9 +2039,18 @@ mod tests {
 
     #[test]
     fn materialize_emits_closure_and_report() {
-        let (nquads, report) =
-            materialize_to_nquads_bytes(SCHEMA, "rdfs", "", &[], &[], None, None)
-                .expect("rdfs closure");
+        let (nquads, report) = materialize_to_nquads_bytes(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &MaterializeLimits {
+                host: RegimeHost::CAbi,
+                ..MaterializeLimits::default()
+            },
+        )
+        .expect("rdfs closure");
         let nquads = String::from_utf8(nquads).expect("utf8");
         let report = String::from_utf8(report).expect("utf8");
         assert!(nquads.contains(
@@ -2060,8 +2072,18 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_to_nquads_bytes(SCHEMA, "RDFS", "", &[], &[], None, None)
-                .expect_err("case-sensitive"),
+            materialize_to_nquads_bytes(
+                SCHEMA,
+                "RDFS",
+                "",
+                &[],
+                &[],
+                &MaterializeLimits {
+                    host: RegimeHost::CAbi,
+                    ..MaterializeLimits::default()
+                },
+            )
+            .expect_err("case-sensitive"),
             rules_bytes("rdfs-plus").expect_err("unknown"),
             implemented_rules_bytes("rdfs-plus").expect_err("unknown"),
         ] {
@@ -2084,24 +2106,53 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let (_, report) =
-                materialize_to_nquads_bytes(SCHEMA, regime, program, &[], &[], None, None)
-                    .unwrap_or_else(|error| panic!("{regime}: {error}"));
+            let (_, report) = materialize_to_nquads_bytes(
+                SCHEMA,
+                regime,
+                program,
+                &[],
+                &[],
+                &MaterializeLimits {
+                    host: RegimeHost::CAbi,
+                    ..MaterializeLimits::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("{regime}: {error}"));
             let report = String::from_utf8(report).expect("utf8");
             assert!(report.contains(&format!("\nregime {regime}\n")), "{report}");
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], None, None)
-            .expect_err("a rule document for a rule-table regime");
+        let error = materialize_to_nquads_bytes(
+            SCHEMA,
+            "rdfs",
+            RIF_PROGRAM,
+            &[],
+            &[],
+            &MaterializeLimits {
+                host: RegimeHost::CAbi,
+                ..MaterializeLimits::default()
+            },
+        )
+        .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
 
     #[test]
     fn a_malformed_document_is_an_error() {
         assert!(
-            materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "", &[], &[], None, None)
-                .is_err()
+            materialize_to_nquads_bytes(
+                "this is not n-quads\n",
+                "rdfs",
+                "",
+                &[],
+                &[],
+                &MaterializeLimits {
+                    host: RegimeHost::CAbi,
+                    ..MaterializeLimits::default()
+                }
+            )
+            .is_err()
         );
     }
 
@@ -2171,6 +2222,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -2195,11 +2247,13 @@ mod tests {
         let program = CString::new("").expect("no interior NUL");
         let run = |regime: &str,
                    facts: Option<u64>,
-                   steps: Option<u64>|
+                   steps: Option<u64>,
+                   arena: Option<u64>|
          -> Result<(String, String), String> {
             let regime = CString::new(regime).expect("no interior NUL");
             let facts_ptr = facts.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
             let steps_ptr = steps.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let arena_ptr = arena.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
             let mut nquads: *mut PurrdfBuffer = std::ptr::null_mut();
             let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
             let mut error: *mut PurrdfError = std::ptr::null_mut();
@@ -2217,11 +2271,16 @@ mod tests {
                     0,
                     facts_ptr,
                     steps_ptr,
+                    arena_ptr,
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
                 );
                 if status != PurrdfStatus::Ok as i32 {
+                    assert!(
+                        nquads.is_null() && report.is_null(),
+                        "a refused run publishes no output"
+                    );
                     let text = std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
                         .to_string_lossy()
                         .into_owned();
@@ -2231,14 +2290,14 @@ mod tests {
                 Ok((take(nquads), take(report)))
             }
         };
-        let (closure, report) = run("rdfs", None, None).expect("the default");
+        let (closure, report) = run("rdfs", None, None, None).expect("the default");
         let stored: u64 = report
             .lines()
             .find_map(|line| line.strip_prefix("budget stored-facts "))
             .expect("a stored-facts line")
             .parse()
             .expect("a count");
-        let refused = run("rdfs", Some(stored - 1), None).expect_err("one fact short");
+        let refused = run("rdfs", Some(stored - 1), None, None).expect_err("one fact short");
         assert!(
             refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
                 && refused.ends_with(
@@ -2246,13 +2305,34 @@ mod tests {
                 ),
             "{refused}"
         );
-        let (exact, _) = run("rdfs", Some(stored), None).expect("exactly the store");
+        let (exact, _) = run("rdfs", Some(stored), None, None).expect("exactly the store");
         assert_eq!(exact, closure);
-        let steps = run("owl-rl", None, Some(1)).expect_err("one join step");
+        let steps = run("owl-rl", None, Some(1), None).expect_err("one join step");
         assert!(
             steps.ends_with("raise it with purrdf_entail_materialize_to_nquads's max_join_steps"),
             "{steps}"
         );
+        let bytes: u64 = report
+            .lines()
+            .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let refused = run("rdfs", None, None, Some(bytes - 1)).expect_err("one byte short");
+        assert!(
+            refused.contains(&format!(
+                "term arena bytes limit: {bytes} observed, {} permitted",
+                bytes - 1
+            )),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with(
+                "raise it with purrdf_entail_materialize_to_nquads's max_term_arena_bytes"
+            ),
+            "{refused}"
+        );
+        assert_eq!(run("rdfs", None, None, Some(bytes)).unwrap().0, closure);
     }
 
     #[test]
@@ -2308,6 +2388,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -2341,6 +2422,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut nquads,
@@ -2585,6 +2667,7 @@ mod tests {
                             0,
                             std::ptr::null(),
                             std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2605,6 +2688,7 @@ mod tests {
                             0,
                             std::ptr::null(),
                             std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2623,6 +2707,7 @@ mod tests {
                             0,
                             std::ptr::null(),
                             0,
+                            std::ptr::null(),
                             std::ptr::null(),
                             std::ptr::null(),
                             a,
@@ -2691,6 +2776,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2709,6 +2795,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2725,6 +2812,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
                         std::ptr::null(),
                         std::ptr::null(),
                         &raw mut answer,
@@ -2776,6 +2864,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2794,6 +2883,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2810,6 +2900,7 @@ mod tests {
                         1,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
                         std::ptr::null(),
                         std::ptr::null(),
                         a,
@@ -2840,6 +2931,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw mut answer,
                 &raw mut certificate,
                 std::ptr::null_mut(),
@@ -2863,6 +2955,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     a,
@@ -3082,6 +3175,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     a,
                     c,
                     e,
@@ -3109,6 +3203,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer_ptr,
@@ -3153,6 +3248,7 @@ mod tests {
                     1,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer_ptr,
@@ -3208,6 +3304,7 @@ mod tests {
             usize,
             *const u64,
             *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3233,6 +3330,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer,
@@ -3265,6 +3363,7 @@ mod tests {
                         1,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         e,
@@ -3285,6 +3384,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     1,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer,
@@ -3323,6 +3423,7 @@ mod tests {
             usize,
             *const u64,
             *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3348,6 +3449,7 @@ mod tests {
                             0,
                             premise_iris.as_ptr(),
                             1,
+                            std::ptr::null(),
                             std::ptr::null(),
                             std::ptr::null(),
                             a,
@@ -3433,6 +3535,7 @@ mod tests {
                         count,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
                         std::ptr::null(),
                         std::ptr::null(),
                         n,
@@ -3526,6 +3629,7 @@ mod tests {
             usize,
             *const u64,
             *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3542,7 +3646,9 @@ mod tests {
             ),
         ];
         for (entry, name) in entries {
-            let run = |steps: &u64| {
+            let run = |steps: Option<u64>, arena: Option<u64>| {
+                let steps_ptr = steps.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+                let arena_ptr = arena.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
                 // SAFETY: every C string and the limit outlive the call; the tables are empty.
                 unsafe {
                     attempt(|a, c, e| {
@@ -3556,7 +3662,8 @@ mod tests {
                             std::ptr::null(),
                             0,
                             std::ptr::null(),
-                            std::ptr::from_ref(steps),
+                            steps_ptr,
+                            arena_ptr,
                             a,
                             c,
                             e,
@@ -3564,17 +3671,36 @@ mod tests {
                     })
                 }
             };
-            let refused = run(&one).expect_err("one join step");
+            let refused = run(Some(one), None).expect_err("one join step");
             assert!(
                 refused.contains("evaluation exceeded the join-step limit: ")
                     && refused.ends_with(&format!("raise it with {name}'s max_join_steps")),
                 "{name}: {refused}"
             );
-            let (answer, _) = run(&plenty).expect("the default, stated");
+            let (answer, certificate) = run(Some(plenty), None).expect("the default, stated");
             assert!(
                 answer.starts_with("mechanism strict-table\n"),
                 "{name}: {answer}"
             );
+            let bytes: u64 = certificate
+                .lines()
+                .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let refused = run(None, Some(bytes - 1)).expect_err("one byte short");
+            assert!(
+                refused.contains(&format!(
+                    "term arena bytes limit: {bytes} observed, {} permitted",
+                    bytes - 1
+                )),
+                "{name}: {refused}"
+            );
+            assert!(
+                refused.ends_with(&format!("raise it with {name}'s max_term_arena_bytes")),
+                "{name}: {refused}"
+            );
+            assert_eq!(run(None, Some(bytes)).unwrap().0, answer);
         }
     }
 }

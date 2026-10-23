@@ -309,17 +309,17 @@ struct OriginalOpenScope<'a> {
     reason: purrdf_core::evidence::ReasonId,
 }
 
-impl purrdf_sparql_eval::EvidenceSource<purrdf_core::TermId> for OriginalOpenScope<'_> {
+impl<I: purrdf_core::ViewTermId> purrdf_sparql_eval::EvidenceSource<I> for OriginalOpenScope<'_> {
     fn claim(
         &self,
-        _: &purrdf_core::QuadIds,
+        _: &purrdf_core::QuadIds<I>,
     ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
         Ok(None)
     }
 
     fn scope(
         &self,
-        _: purrdf_core::GraphMatch,
+        _: purrdf_core::GraphMatch<I>,
     ) -> Result<purrdf_sparql_eval::EvidenceScope, EvalError> {
         Ok(purrdf_sparql_eval::EvidenceScope {
             completeness: purrdf_core::evidence::SearchCompleteness::Undetermined,
@@ -336,17 +336,17 @@ impl purrdf_sparql_eval::EvidenceSource<purrdf_core::TermId> for OriginalOpenSco
     }
 }
 
-impl purrdf_sparql_eval::EvidenceSource<purrdf_core::TermId> for OriginalClosedScope {
+impl<I: purrdf_core::ViewTermId> purrdf_sparql_eval::EvidenceSource<I> for OriginalClosedScope {
     fn claim(
         &self,
-        _: &purrdf_core::QuadIds,
+        _: &purrdf_core::QuadIds<I>,
     ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
         Ok(None)
     }
 
     fn scope(
         &self,
-        _: purrdf_core::GraphMatch,
+        _: purrdf_core::GraphMatch<I>,
     ) -> Result<purrdf_sparql_eval::EvidenceScope, EvalError> {
         Ok(purrdf_sparql_eval::EvidenceScope {
             completeness: purrdf_core::evidence::SearchCompleteness::Complete,
@@ -361,6 +361,326 @@ impl purrdf_sparql_eval::EvidenceSource<purrdf_core::TermId> for OriginalClosedS
     ) -> Result<Option<purrdf_core::evidence::ReasonDescription<'_>>, EvalError> {
         Ok(None)
     }
+}
+
+#[derive(Debug)]
+struct RetrievalReadProvider {
+    bytes: purrdf_core::SegmentedBytes,
+    refuse: std::sync::atomic::AtomicBool,
+    failed_reads: AtomicU64,
+    length_drift: std::sync::atomic::AtomicBool,
+}
+
+impl purrdf_core::SegmentedProvider for RetrievalReadProvider {
+    fn snapshot(&self) -> purrdf_core::SegmentedSnapshot {
+        purrdf_core::SegmentedProvider::snapshot(&self.bytes)
+    }
+    fn byte_len(&self) -> u64 {
+        purrdf_core::SegmentedProvider::byte_len(&self.bytes)
+            + u64::from(self.length_drift.load(Ordering::Relaxed))
+    }
+    fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), purrdf_core::SegmentedError> {
+        if self.refuse.load(Ordering::Relaxed) {
+            self.failed_reads.fetch_add(1, Ordering::Relaxed);
+            return Err(purrdf_core::SegmentedError::Provider {
+                operation: "scoped retrieval read",
+                host_code: Some(71),
+            });
+        }
+        purrdf_core::SegmentedProvider::read_at(&self.bytes, position, output)
+    }
+}
+
+fn retrieval_stack() -> (
+    purrdf_core::SegmentedStackSnapshot,
+    Arc<RetrievalReadProvider>,
+) {
+    let limits = purrdf_core::SegmentedBuildLimits::new(128, 8192, 128, 512, 1).unwrap();
+    let mut builder = purrdf_core::SegmentedBuilder::new(limits).unwrap();
+    for (local, text, _) in corpus() {
+        let values = [
+            TermValue::iri(ex(local)),
+            TermValue::iri(NOTE),
+            TermValue::simple_literal(text),
+        ];
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        builder
+            .push_quad(purrdf_core::QuadIds {
+                s: ids[0],
+                p: ids[1],
+                o: ids[2],
+                g: None,
+            })
+            .unwrap();
+    }
+    let image = builder.seal().unwrap();
+    let provider = Arc::new(RetrievalReadProvider {
+        bytes: image.provider(),
+        refuse: std::sync::atomic::AtomicBool::new(false),
+        failed_reads: AtomicU64::new(0),
+        length_drift: std::sync::atomic::AtomicBool::new(false),
+    });
+    let layer = purrdf_core::SegmentedLayer::new(
+        provider.clone(),
+        image.receipt().clone(),
+        purrdf_core::SegmentedLayerMetadata::default(),
+    )
+    .unwrap();
+    let mut stack = purrdf_core::SegmentedStack::default();
+    stack
+        .publish(vec![Arc::new(layer)], retrieval_read_limits())
+        .unwrap();
+    (stack.snapshot().unwrap(), provider)
+}
+
+fn retrieval_read_limits() -> purrdf_core::SegmentedReadLimits {
+    purrdf_core::SegmentedReadLimits::new(16_000_000, 2, 4096, 20_000_000, 8)
+}
+
+#[derive(Debug)]
+struct RefusingCandidate<'a> {
+    original: &'a OriginalTimeConstraint,
+    provider: &'a RetrievalReadProvider,
+    decisions: AtomicU64,
+}
+
+impl purrdf_sparql_eval::CandidateConstraint for RefusingCandidate<'_> {
+    fn identity(&self) -> purrdf_hash::hex::Digest32 {
+        purrdf_sparql_eval::CandidateConstraint::identity(self.original)
+    }
+    fn decide(
+        &self,
+        candidate: &TermValue,
+        evidence: &purrdf_sparql_eval::QueryEvidence,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_core::query_scope::ConstraintDecision, EvalError> {
+        let result = purrdf_sparql_eval::CandidateConstraint::decide(
+            self.original,
+            candidate,
+            evidence,
+            workspace,
+        );
+        self.decisions.fetch_add(1, Ordering::Relaxed);
+        self.provider.refuse.store(true, Ordering::Relaxed);
+        result
+    }
+}
+
+fn fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal() {
+    let registry = registry();
+    let profile = profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let request = request().with_constraints(vec![RequestTerm::Temporal {
+        predicate: iri("https://example.org/when"),
+        lower: Some("2026-10-10T00:00:00Z".to_owned()),
+        upper: None,
+    }]);
+    let constraint = OriginalTimeConstraint {
+        cause: TermValue::iri("https://example.org/missing-time"),
+        concern: TermValue::Triple {
+            s: purrdf_core::TermBox::new(TermValue::iri("https://example.org/request")),
+            p: purrdf_core::TermBox::new(TermValue::iri("https://example.org/when")),
+            o: purrdf_core::TermBox::new(TermValue::simple_literal("2026-10-10")),
+        },
+    };
+    let declared = [purrdf_retrieval::ConstraintBinding {
+        request: &request.constraints[0],
+        evaluator: &constraint,
+    }];
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&declared);
+    let resident = block_on(purrdf_retrieval::search_scoped(
+        &request,
+        &registry,
+        &NoStatistics,
+        &dataset(),
+        &env,
+        &profile,
+        &bindings,
+        &OriginalClosedScope,
+    ))
+    .unwrap();
+    let (snapshot, provider) = retrieval_stack();
+    let source = snapshot.query(retrieval_read_limits()).unwrap();
+    let (answer, _) = block_on(purrdf_retrieval::search_scoped_fallible(
+        &request,
+        &registry,
+        &NoStatistics,
+        &source,
+        &env,
+        &profile,
+        &bindings,
+        &OriginalClosedScope,
+    ))
+    .unwrap();
+    assert_eq!(
+        answer.result.rows.as_slice(),
+        resident.result.rows.as_slice()
+    );
+    assert_eq!(answer.result.evidence_id, resident.result.evidence_id);
+    assert_eq!(answer.scopes.len(), resident.scopes.len());
+    assert!(
+        answer
+            .fused
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .any(|row| row.evidence.is_undecided())
+    );
+    assert_eq!(provider.failed_reads.load(Ordering::Relaxed), 0);
+    drop(answer);
+    drop(source);
+
+    let source = snapshot.query(retrieval_read_limits()).unwrap();
+    let refusing = RefusingCandidate {
+        original: &constraint,
+        provider: &provider,
+        decisions: AtomicU64::new(0),
+    };
+    let declared = [purrdf_retrieval::ConstraintBinding {
+        request: &request.constraints[0],
+        evaluator: &refusing,
+    }];
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&declared);
+    let failure = block_on(purrdf_retrieval::search_scoped_fallible(
+        &request,
+        &registry,
+        &NoStatistics,
+        &source,
+        &env,
+        &profile,
+        &bindings,
+        &OriginalClosedScope,
+    ))
+    .unwrap_err();
+    assert!(refusing.decisions.load(Ordering::Relaxed) > 0);
+    assert!(provider.failed_reads.load(Ordering::Relaxed) > 0);
+    assert!(
+        matches!(
+            failure,
+            purrdf_retrieval::FallibleSearchError::Read(
+                purrdf_sparql_eval::FallibleSparqlError::Operational {
+                    error: purrdf_core::SegmentedError::Provider {
+                        operation: "scoped retrieval read",
+                        host_code: Some(71)
+                    },
+                    ..
+                }
+            )
+        ),
+        "original operational error: {failure:?}"
+    );
+}
+
+fn fallible_scoped_composition_refuses_deferred_exclusions_and_final_descriptor_drift() {
+    let registry = registry();
+    let profile = profile();
+    let request = request();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request, &registry, &NoStatistics).unwrap();
+    let compiled = compile(&planned, &env).unwrap();
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&[]);
+    let (snapshot, provider) = retrieval_stack();
+    let source = snapshot.query(retrieval_read_limits()).unwrap();
+    let failure = block_on(purrdf_sparql_eval::with_fallible_read(
+        &source,
+        |operation| {
+            let (compiled, registry, source, bindings, provider) =
+                (&compiled, &registry, &source, &bindings, &provider);
+            async move {
+                let scoped = purrdf_retrieval::execute_scoped_in_read(
+                    compiled,
+                    registry,
+                    source,
+                    ReadSchedule::Materialised,
+                    bindings,
+                    &OriginalClosedScope,
+                    &operation,
+                )
+                .unwrap();
+                assert_eq!(scoped.result.streams.len(), 2);
+                provider.refuse.store(true, Ordering::Relaxed);
+                let absent = Term::new(format!("<{}>", ex("absent")));
+                let mut refused = false;
+                for mut read in scoped.result.streams {
+                    if read.stream.exclusion(&absent).await.is_err() {
+                        refused = true;
+                        break;
+                    }
+                }
+                assert!(
+                    refused,
+                    "a deferred original lookup reaches the refusing provider"
+                );
+                // Even an enclosing consumer that catches the stream's stop signal
+                // cannot publish this otherwise successful value after the read fails.
+                71_u64
+            }
+        },
+    ))
+    .unwrap_err();
+    assert!(provider.failed_reads.load(Ordering::Relaxed) > 0);
+    assert!(matches!(
+        failure,
+        purrdf_sparql_eval::FallibleSparqlError::Operational {
+            error: purrdf_core::SegmentedError::Provider {
+                operation: "scoped retrieval read",
+                host_code: Some(71)
+            },
+            ..
+        }
+    ));
+    drop(source);
+    provider.refuse.store(false, Ordering::Relaxed);
+    let failed_reads = provider.failed_reads.load(Ordering::Relaxed);
+
+    let source = snapshot.query(retrieval_read_limits()).unwrap();
+    let failure = block_on(purrdf_sparql_eval::with_fallible_read(
+        &source,
+        |operation| {
+            let (compiled, registry, source, bindings, provider) =
+                (&compiled, &registry, &source, &bindings, &provider);
+            async move {
+                let scoped = purrdf_retrieval::execute_scoped_in_read(
+                    compiled,
+                    registry,
+                    source,
+                    ReadSchedule::Materialised,
+                    bindings,
+                    &OriginalClosedScope,
+                    &operation,
+                )
+                .unwrap();
+                assert_eq!(scoped.result.streams.len(), 2);
+                for mut read in scoped.result.streams {
+                    while read.stream.next().await.unwrap().is_some() {}
+                    read.stream.receipt().await.unwrap();
+                }
+                // All consumers succeeded. Only the final original source checkpoint
+                // observes that its previously certified descriptor changed afterward.
+                provider.length_drift.store(true, Ordering::Relaxed);
+                72_u64
+            }
+        },
+    ))
+    .unwrap_err();
+    assert!(matches!(
+        failure,
+        purrdf_sparql_eval::FallibleSparqlError::Operational {
+            error: purrdf_core::SegmentedError::SnapshotMismatch,
+            ..
+        }
+    ));
+    assert_eq!(provider.failed_reads.load(Ordering::Relaxed), failed_reads);
 }
 
 fn scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion() {
@@ -1018,7 +1338,7 @@ fn space_over(rows: &[(&str, Vec<f64>)], guard: KnnGuard) -> EmbeddingSpace {
 
 /// Register both real relations as ranked producers, using the declaration each
 /// relation hands out for a caller-supplied stratum.
-fn registry() -> PropertyFunctionRegistry {
+fn registry() -> PropertyFunctionRegistry<'static> {
     registry_with(EmbeddingKnnRelation::new(Arc::new(embedding_space())))
 }
 
@@ -1026,14 +1346,14 @@ fn registry() -> PropertyFunctionRegistry {
 /// relation, the same space and the same host declarations, so two registries built
 /// from two relations over one space differ in the relation's arithmetic and in
 /// nothing else.
-fn registry_with<A: Arithmetic>(knn: EmbeddingKnnRelation<A>) -> PropertyFunctionRegistry {
+fn registry_with<A: Arithmetic>(knn: EmbeddingKnnRelation<A>) -> PropertyFunctionRegistry<'static> {
     registry_with_text(knn, TextSearchRelation::new(Arc::new(text_index())))
 }
 
 fn registry_with_text<A: Arithmetic>(
     knn: EmbeddingKnnRelation<A>,
     text: TextSearchRelation,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text_declaration = text
@@ -1456,7 +1776,7 @@ fn the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_st
 // runtime-agnostic future; see the same allow on `search` itself.
 #[allow(clippy::future_not_send)]
 async fn manual_composition(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &NoStatistics,
     data: &RdfDataset,
     env: &AdmissionEnvironment<'_>,
@@ -1811,7 +2131,7 @@ fn one_stratum_profile(stratum: &str) -> FusionProfile {
 /// The declaration is the relation's own rather than one written here, which is
 /// what makes the assertions below statements about the shipped producer: a
 /// hand-written `Unique` would only prove that this test can write the word.
-fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
+fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let text = TextSearchRelation::new(Arc::new(index));
     let declaration = text
@@ -1832,7 +2152,7 @@ fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
 }
 
 /// Register the nearest-neighbour relation alone, under its own declaration.
-fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry {
+fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let knn = EmbeddingKnnRelation::new(Arc::new(space));
     let declaration = knn.ranked_declaration(
@@ -1860,7 +2180,7 @@ fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry {
 /// reported as having broken its promise rather than as an opaque error.
 fn answer_under_the_declared_contract(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     data: &RdfDataset,
     profile: &FusionProfile,
 ) -> SearchResult {
@@ -2271,12 +2591,15 @@ impl PropertyFunction for CountingTextRelation {
         self.inner.supports_candidate_scope()
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.opened.fetch_add(1, Ordering::Relaxed);
         let cursor = self.inner.open_admitted(args, ceiling, workspace.clone())?;
         if self.refuse_suffix.is_none() && self.attachment.is_none() {
@@ -2312,7 +2635,7 @@ impl PropertyFunction for CountingTextRelation {
 }
 
 struct PrefixRefusalCursor {
-    cursor: purrdf_sparql_eval::WorkspaceCursor,
+    cursor: purrdf_sparql_eval::WorkspaceCursor<'static>,
     calls: Option<Arc<AtomicU64>>,
     attachment: Option<NativeAttachment>,
 }
@@ -2371,7 +2694,7 @@ impl PfCursor for PrefixRefusalCursor {
 ///
 /// The declaration is the shipped relation's own — read off the relation before it
 /// is wrapped — so the registry describes the real producer and not the wrapper.
-fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
+fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry<'static>, Arc<AtomicU64>) {
     let mut registry = PropertyFunctionRegistry::new();
     let inner = TextSearchRelation::new(Arc::new(index));
     let declaration = inner
@@ -2404,7 +2727,7 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
 /// bound is the one thing neither of those two can report.
 fn sole_producer_answer(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     data: &RdfDataset,
 ) -> (purrdf_retrieval::Plan, SearchResult) {
     let statistics = NoStatistics;
@@ -2566,7 +2889,9 @@ const SAMPLE_EVIDENCE: &str = "this space was embedded over the first half of \
 /// The space really is short — it is built from a truncated row list, not
 /// labelled as though it were — so the declaration beside it is a statement a
 /// reader can falsify by deleting the truncation.
-fn registry_over_a_partial_vector_space(fidelity: RankFidelity) -> PropertyFunctionRegistry {
+fn registry_over_a_partial_vector_space(
+    fidelity: RankFidelity,
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text = TextSearchRelation::new(Arc::new(text_index()));
@@ -2602,7 +2927,7 @@ fn registry_over_a_partial_vector_space(fidelity: RankFidelity) -> PropertyFunct
 }
 
 /// Run the standard request against `registry` over the whole dataset.
-fn answer_from(registry: &PropertyFunctionRegistry) -> SearchResult {
+fn answer_from(registry: &PropertyFunctionRegistry<'static>) -> SearchResult {
     let data = dataset();
     let statistics = NoStatistics;
     let environment = AdmissionEnvironment {
@@ -3300,6 +3625,8 @@ fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
 }
 
 purrdf_testkit::harness_main!(
+    fallible_scoped_composition_refuses_deferred_exclusions_and_final_descriptor_drift,
+    fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal,
     scoped_native_owner_refusal_precedes_original_producer_open,
     native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows,
     scoped_fused_acceptance_retains_original_two_stratum_scores_and_order,

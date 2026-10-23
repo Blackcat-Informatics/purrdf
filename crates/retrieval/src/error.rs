@@ -459,6 +459,36 @@ pub enum PlanError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for PlanError {
+    purrdf_hash::error_visit! {
+        VersionMismatch { found, expected } => "retrieval-plan-version-mismatch" { "found" => Unsigned(u128::from(*found)), "expected" => Unsigned(u128::from(*expected)) },
+        NoApplicableProducers => "retrieval-plan-no-applicable-producers" {},
+        InvalidRequestTerm { term, reason } => "retrieval-plan-invalid-request-term" { "term" => Record(term.as_ref()), "reason" => Text(reason) },
+        ReadBoundBeyondDepthRange { requested, ceiling } => "retrieval-plan-read-bound-beyond-range" { "requested" => Unsigned(*requested as u128), "ceiling" => Unsigned(u128::from(*ceiling)) },
+        RegistryDeclaration { message } => "retrieval-plan-registry-declaration" { "message" => Message(message) },
+        Truncated { offset } => "retrieval-plan-truncated" { "offset" => ByteCount(*offset as u128) },
+        InvalidTag { what, tag } => "retrieval-plan-invalid-tag" { "what" => Code(what), "tag" => Unsigned(u128::from(*tag)) },
+        InvalidUtf8 { what } => "retrieval-plan-invalid-utf8" { "what" => Code(what) },
+        InvalidIri { text, source } => "retrieval-plan-invalid-iri" { "text" => Iri(text), "source" => Cause(source) },
+        InvalidJson { pointer, reason } => "retrieval-plan-invalid-json" { "pointer" => Text(pointer), "reason" => Text(reason) },
+        TrailingBytes { extra } => "retrieval-plan-trailing-bytes" { "extra" => ByteCount(*extra as u128) },
+        UndeclaredRowBound { stratum, producer } => "retrieval-plan-undeclared-row-bound" { "stratum" => Iri(stratum), "producer" => Iri(producer) },
+        DuplicateStatisticsSubject { subject } => "retrieval-plan-duplicate-statistics-subject" { "subject" => Text(subject) },
+        DuplicateStratumDerivation { stratum } => "retrieval-plan-duplicate-stratum-derivation" { "stratum" => Iri(stratum) },
+        DuplicateStratumDepth { stratum } => "retrieval-plan-duplicate-stratum-depth" { "stratum" => Iri(stratum) },
+        NonAscendingCanonicalKeys { section, previous, key } => "retrieval-plan-non-ascending-keys" { "section" => Record(section), "previous" => Text(previous), "key" => Text(key) },
+        NonAscendingSelectivityTerms { section, subject, previous, request_term } => "retrieval-plan-non-ascending-selectivity" { "section" => Record(section), "subject" => Text(subject), "previous" => Unsigned(u128::from(*previous)), "request_term" => Unsigned(u128::from(*request_term)) },
+        DuplicateSelectivityTerm { section, subject, request_term } => "retrieval-plan-duplicate-selectivity-term" { "section" => Record(section), "subject" => Text(subject), "request_term" => Unsigned(u128::from(*request_term)) },
+        DepthNotDerivable { stratum, recorded, derived } => "retrieval-plan-depth-not-derivable" { "stratum" => Iri(stratum), "recorded" => Unsigned(u128::from(*recorded)), "derived" => Unsigned(u128::from(*derived)) },
+        DepthWithoutDerivation { stratum } => "retrieval-plan-depth-without-derivation" { "stratum" => Iri(stratum) },
+        DerivationWithoutDepth { stratum } => "retrieval-plan-derivation-without-depth" { "stratum" => Iri(stratum) },
+        DerivationWithoutStatisticsEntry { stratum } => "retrieval-plan-derivation-without-statistics" { "stratum" => Iri(stratum) },
+        StatisticsEntryContradictsDerivation { stratum, dimension, snapshot, derivation } => "retrieval-plan-statistics-contradiction" { "stratum" => Iri(stratum), "dimension" => Record(dimension), "snapshot" => Text(snapshot), "derivation" => Text(derivation) },
+        SelectivityTermOutOfRange { subject, request_term, request_terms } => "retrieval-plan-selectivity-term-out-of-range" { "subject" => Text(subject), "request_term" => Unsigned(u128::from(*request_term)), "request_terms" => Unsigned(*request_terms as u128) },
+        UnconsultedStatisticsSubject { subject } => "retrieval-plan-unconsulted-statistics-subject" { "subject" => Text(subject) },
+    }
+}
+
 impl std::fmt::Display for PlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -680,6 +710,14 @@ pub enum CanonicalSection {
     StatisticsEntries,
 }
 
+impl purrdf_hash::error::StructuredError for CanonicalSection {
+    purrdf_hash::error_visit! {
+        StratumDepths => "canonical-section-stratum-depths" {},
+        StratumDerivations => "canonical-section-stratum-derivations" {},
+        StatisticsEntries => "canonical-section-statistics-entries" {},
+    }
+}
+
 impl core::fmt::Display for CanonicalSection {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let name = match self {
@@ -707,6 +745,14 @@ pub enum StatisticsDimension {
     SelectivityPpm,
     /// The request-term indices that aggregate was summed over.
     SelectivityTerms,
+}
+
+impl purrdf_hash::error::StructuredError for StatisticsDimension {
+    purrdf_hash::error_visit! {
+        Cardinality => "statistics-dimension-cardinality" {},
+        SelectivityPpm => "statistics-dimension-selectivity-ppm" {},
+        SelectivityTerms => "statistics-dimension-selectivity-terms" {},
+    }
 }
 
 impl core::fmt::Display for StatisticsDimension {
@@ -971,6 +1017,28 @@ pub enum FusionError {
         /// The deepest depth a plan's 32-bit depth field can carry.
         limit: u64,
     },
+}
+
+impl purrdf_hash::error::StructuredError for FusionError {
+    purrdf_hash::error_visit! {
+        NativeFailure(cause) => "fusion-native-failure" { "cause" => Cause(cause) },
+        Overflow => "fusion-overflow" {},
+        Protocol(cause) => "fusion-protocol" { "cause" => Cause(cause.as_ref()) },
+        InvalidK { k } => "fusion-invalid-k" { "k" => Unsigned(u128::from(*k)) },
+        InvalidRank { rank } => "fusion-invalid-rank" { "rank" => Unsigned(u128::from(*rank)) },
+        InvalidWidth { max_width } => "fusion-invalid-width" { "max_width" => Unsigned(u128::from(*max_width)) },
+        EmptyWeights => "fusion-empty-weights" {},
+        NonPositiveWeight { stratum, weight } => "fusion-non-positive-weight" { "stratum" => Iri(stratum), "weight" => Record(weight) },
+        NonPositiveCrossingWeight { weight } => "fusion-non-positive-crossing-weight" { "weight" => Record(weight) },
+        UnknownStratum { stratum } => "fusion-unknown-stratum" { "stratum" => Iri(stratum) },
+        DuplicateStratum { stratum } => "fusion-duplicate-stratum" { "stratum" => Iri(stratum) },
+        PlanIdMismatch { expected, got } => "fusion-plan-id-mismatch" { "expected" => Record(expected), "got" => Value(got.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))) },
+        ReadBoundMismatch { planned, requested } => "fusion-read-bound-mismatch" { "planned" => Record(planned), "requested" => Record(requested) },
+        MalformedProfile(reason) => "fusion-malformed-profile" { "reason" => Text(reason) },
+        MaxContributionsExceeded { item, count, max } => "fusion-max-contributions-exceeded" { "item" => Text(item), "count" => Unsigned(u128::from(*count)), "max" => Unsigned(u128::from(*max)) },
+        DepthUnreachable { depth, saturates_at } => "fusion-depth-unreachable" { "depth" => Unsigned(u128::from(*depth)), "saturates_at" => Unsigned(u128::from(*saturates_at)) },
+        DepthBeyondPlanRange { depth, limit } => "fusion-depth-beyond-plan-range" { "depth" => Unsigned(u128::from(*depth)), "limit" => Unsigned(u128::from(*limit)) },
+    }
 }
 
 impl std::fmt::Display for FusionError {

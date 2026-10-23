@@ -15,7 +15,8 @@ use purrdf_shapes::product::ShapesProfile;
 use purrdf_validate::{
     CompleteValidationStatus, SarifOptions, complete_profile, complete_report_payload,
     complete_report_to_json, complete_report_to_sarif_string, complete_validation_status,
-    validate_complete_documents, validate_complete_product, validate_complete_sources,
+    requested_shacl_profile, validate_complete_documents, validate_complete_product,
+    validate_complete_sources,
 };
 
 const SHAPES: &str = r#"
@@ -109,6 +110,13 @@ fn unsupported_admission_semantic_and_resource_refusals_are_not_verdicts() {
         complete_profile(ShaclProfile::REC_20170720.id()).unwrap(),
         ShaclProfile::REC_20170720
     );
+    assert_eq!(
+        complete_profile("shacl-ed-2026-10-16").unwrap(),
+        ShaclProfile::ED_20261016
+    );
+    let (status, unsupported) = complete_profile("shacl-ed-2026-10-17").unwrap_err();
+    assert_eq!(status, CompleteValidationStatus::UnsupportedProfile);
+    assert_eq!(unsupported.id(), "shacl-ed-2026-10-17");
     let options = ValidationOptions::default().with_profile(ShaclProfile::REC_20170720);
     let minus = SHAPES.replace(
         "SELECT $this WHERE {}",
@@ -175,7 +183,11 @@ fn reached_native_query_resources_use_machine_codes_and_recover_with_current_lim
         "SELECT $this WHERE {}",
         "SELECT $this WHERE { FILTER(REGEX('a', 'a')) }",
     );
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let options = ValidationOptions::default().with_profile(profile);
         let low = options.clone().with_xpath_regex(
             profile.xpath_profile().unwrap(),
@@ -225,7 +237,11 @@ fn dated_some_value_discards_ordinary_query_failures_but_retains_resource_refusa
         "<http://example.org/missingFunction>($this)",
         "REGEX(STR($this), \"bad\", \"i\")",
     );
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let options = ValidationOptions::default().with_profile(profile);
         let discarded = validate_complete_documents(shapes, None, &data, &options, &[]);
         assert_eq!(
@@ -282,7 +298,11 @@ fn shared_product_doors_apply_the_current_bundle_before_source_admission() {
         .unwrap()
         .declared_identity()
         .digest();
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let options = ValidationOptions::default().with_profile(profile);
         for rebuild in [false, true] {
             for expected in [None, Some(&identity)] {
@@ -585,4 +605,37 @@ fn one_complete_result_carries_every_validation_result_property() {
     let source = graph.blank_labels().source_of(&label).unwrap();
     assert_eq!(source.source(), graph.source_context().data());
     assert_eq!(source.label(), "list");
+}
+
+/// The one reading every host shares for its optional SHACL-law request: no id is the
+/// compatibility law, an exact id is that law, an unknown id leads with the
+/// `unsupported-profile` status, and a dated law refuses an XPath law other than its own
+/// while accepting its own.
+#[test]
+fn a_host_request_selects_one_exact_law_beside_its_xpath_law() {
+    assert_eq!(requested_shacl_profile(None, None), Ok(None));
+    assert_eq!(
+        requested_shacl_profile(None, Some(Profile::Xpath20)),
+        Ok(None)
+    );
+    assert_eq!(
+        requested_shacl_profile(Some("shacl-ed-2026-10-16"), None),
+        Ok(Some(ShaclProfile::ED_20261016))
+    );
+    assert_eq!(
+        requested_shacl_profile(Some("shacl-ed-2026-10-16"), Some(Profile::Xpath31)),
+        Ok(Some(ShaclProfile::ED_20261016))
+    );
+    let message = requested_shacl_profile(Some("shacl-ed-2026-10-17"), None).unwrap_err();
+    assert!(message.starts_with("unsupported-profile: "), "{message}");
+    assert!(message.contains("shacl-ed-2026-10-17"), "{message}");
+    let conflict =
+        requested_shacl_profile(Some("shacl-ed-2026-10-16"), Some(Profile::Xpath20)).unwrap_err();
+    assert!(
+        conflict.contains("shacl-ed-2026-10-16") && conflict.contains("requires"),
+        "{conflict}"
+    );
+    // The 2017 Recommendation requires XPath 2.0: the pair the other way round.
+    assert!(requested_shacl_profile(Some("shacl-rec-2017-07-20"), Some(Profile::Xpath31)).is_err());
+    assert!(requested_shacl_profile(Some("shacl-rec-2017-07-20"), Some(Profile::Xpath20)).is_ok());
 }

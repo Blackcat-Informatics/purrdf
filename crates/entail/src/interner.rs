@@ -143,8 +143,8 @@ impl Interner {
 pub(crate) fn intern_into(
     b: &mut RdfDatasetBuilder,
     v: &TermValue,
-) -> Result<TermId, crate::EntailError> {
-    Ok(b.intern_value(v)?)
+) -> Result<TermId, purrdf_lex::allocation::StorageError> {
+    b.intern_value(v)
 }
 
 #[cfg(test)]

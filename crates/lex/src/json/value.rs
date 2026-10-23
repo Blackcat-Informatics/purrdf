@@ -58,6 +58,46 @@ pub enum Value {
     Object(Object),
 }
 
+impl purrdf_hash::error::StructuredError for Value {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Null => visitor.variant("json-null"),
+            Self::Bool(value) => {
+                visitor.variant("json-boolean");
+                visitor.value(Some("value"), ErrorValue::Boolean(*value));
+            }
+            Self::Number(value) => {
+                visitor.variant("json-number");
+                visitor.value(Some("lexeme"), ErrorValue::Text(value.lexeme()));
+            }
+            Self::String(value) => {
+                visitor.variant("json-string");
+                visitor.value(Some("value"), ErrorValue::Text(value));
+            }
+            Self::Array(values) => {
+                visitor.variant("json-array");
+                visitor.begin_list(Some("values"), values.len());
+                for value in values {
+                    visitor.value(None, ErrorValue::Record(value));
+                }
+                visitor.end_list();
+            }
+            Self::Object(object) => {
+                visitor.variant("json-object");
+                visitor.begin_list(Some("members"), object.len());
+                for (name, value) in object {
+                    visitor.begin_record(None, "json-member");
+                    visitor.value(Some("name"), ErrorValue::Text(name));
+                    visitor.value(Some("value"), ErrorValue::Record(value));
+                    visitor.end_record();
+                }
+                visitor.end_list();
+            }
+        }
+    }
+}
+
 /// A JSON object: its members in order, repeated names retained.
 ///
 /// [`Object::get`] answers the FIRST member with a name; [`Object::insert`]

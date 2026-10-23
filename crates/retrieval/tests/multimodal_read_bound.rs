@@ -618,11 +618,14 @@ impl PropertyFunction for CountingProducer {
         }
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // A bound position is an input the call site supplied, and the engine
         // drops any row that disagrees with it there; echoing it back is the
         // cheapest correct behaviour, exactly as the other mock producers in
@@ -825,7 +828,9 @@ fn accepted_terms(predicate: &str) -> Vec<AcceptedTerm> {
 }
 
 /// The registry for one configuration, with both producers' read counters.
-fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
+fn configured_registry(
+    config: Configuration,
+) -> (PropertyFunctionRegistry<'static>, [Arc<Reads>; 2]) {
     generational_registry(config, None)
 }
 
@@ -833,7 +838,7 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
 fn generational_registry(
     config: Configuration,
     generations: Option<Generations>,
-) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
+) -> (PropertyFunctionRegistry<'static>, [Arc<Reads>; 2]) {
     let domains = declared_domains(config.blocks);
     let prefixes = candidate_prefixes(config.results);
     let counters = [Arc::new(Reads::default()), Arc::new(Reads::default())];
@@ -2001,7 +2006,7 @@ impl Declared {
 }
 
 /// The registry for one declared configuration.
-fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
+fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     for entry in strata {
         let arity = PfArity::new(1, 1);

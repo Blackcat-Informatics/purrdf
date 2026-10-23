@@ -203,7 +203,8 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// graph of the dataset, holding its triples, the regime's axioms and every conclusion —
 /// and `max_join_steps` the candidate solutions the rules may enumerate, for the `RDF`,
 /// `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default: 4194304 facts and
-/// 1048576 join steps. A run past either raises `ValueError` naming the limit, the
+/// 1048576 join steps. `max_term_arena_bytes` bounds retained term surfaces and defaults
+/// to 16777216 bytes. A run past a limit raises `ValueError` naming the limit, the
 /// numbers and the keyword argument that raises it; a run inside them returns exactly the
 /// closure larger limits would, and the report's `contract-hash` names the calculus under
 /// the limits in force.
@@ -223,7 +224,7 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// `program` that is wrong for the regime, for an import-table refusal, for an inconsistent
 /// knowledge base, and for a passed evaluation limit.
 #[pyfunction]
-#[pyo3(signature = (dataset, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[pyo3(signature = (dataset, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(
     clippy::too_many_arguments,
@@ -239,10 +240,12 @@ fn materialize(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> PyResult<(PyRdfDataset, String)> {
     let limits = MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: RegimeHost::Python,
     };
     // Arguments become plain Rust data (a native regime, an owned `Arc` handle)
@@ -293,7 +296,8 @@ fn materialize(
 /// `imports` and `premise_iris` are [`materialize`]'s: the document is closed over its
 /// `owl:imports` closure, and an import the table does not resolve raises by name.
 ///
-/// `max_stored_facts` and `max_join_steps` are [`materialize`]'s evaluation limits.
+/// `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` are
+/// [`materialize`]'s evaluation limits.
 ///
 /// Raises `ValueError` on a malformed document, an unknown regime spelling
 /// (naming the accepted set), a `program` that is wrong for the regime, or an import-table
@@ -302,7 +306,7 @@ fn materialize(
 /// witness triples included, exactly as [`materialize`] documents — and on a passed
 /// evaluation limit, naming the keyword argument that raises it.
 #[pyfunction]
-#[pyo3(signature = (data, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[pyo3(signature = (data, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(
     clippy::too_many_arguments,
@@ -318,11 +322,13 @@ fn materialize_nt(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let limits = MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: RegimeHost::PythonText,
     };
     // Parse + chase + canonical serialization + report rendering run detached
@@ -671,21 +677,23 @@ fn explain_conclusion(
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
 
-/// The two optional evaluation-limit keywords every conclusion-directed service takes, as the
+/// The three optional evaluation-limit keywords every conclusion-directed service takes, as the
 /// boundary's limits, spelled for this host: a refusal names the keyword of the function the
 /// caller called.
 const fn python_limits(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> MaterializeLimits {
     MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: RegimeHost::Python,
     }
 }
 
-/// Borrow a Python-supplied import table as the boundary's [`ImportList`] — or, for the
+/// Borrow a Python-supplied import table as [`purrdf_validate::regime::ImportList`] — or, for the
 /// SHACL module's shapes-graph functions, its `ShapesImportList`, which has the same shape.
 ///
 /// Every service that takes `imports` takes it as a `Sequence[tuple[str, str]]`, which PyO3
@@ -798,14 +806,15 @@ fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
 /// and the IRI parser's `iri-*` condition as its presentation's `detail`. Every function
 /// here that takes `premise_iris` refuses the same way.
 ///
-/// # `max_stored_facts`, `max_join_steps` — the evaluation limits
+/// # `max_stored_facts`, `max_join_steps`, `max_term_arena_bytes` — the evaluation limits
 ///
 /// Keyword-only, and [`materialize`]'s: they bound every evaluation the question is answered
 /// with — the premise's closure and each re-chase a mechanism beyond the rule table runs —
 /// for the `RDF`, `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default (4194304 facts,
 /// 1048576 join steps). A run past one raises `ValueError` naming the limit, the numbers and
 /// this function's keyword; a run inside them answers exactly as larger limits would.
-/// [`graph_entails`] and [`verify_entailment`] take the same two.
+/// The term arena defaults to 16777216 bytes. [`graph_entails`] and
+/// [`verify_entailment`] take the same three controls.
 ///
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
 /// signature does not carry, so both are refused by name rather than served by a weaker
@@ -815,7 +824,7 @@ fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
 /// binding to project), on an `owl:imports` `imports` does not resolve, and on an
 /// inconsistent premise, whose refusal carries the full report.
 #[pyfunction]
-#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
 #[allow(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly \
@@ -831,6 +840,7 @@ fn certain_answers(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
@@ -843,7 +853,7 @@ fn certain_answers(
                 pattern,
                 &table,
                 &premise_iris,
-                &python_limits(max_stored_facts, max_join_steps),
+                &python_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
         })
         .map_err(PyValueError::new_err)?;
@@ -877,7 +887,7 @@ fn certain_answers(
 ///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
 #[allow(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly \
@@ -893,6 +903,7 @@ fn graph_entails(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
@@ -905,7 +916,7 @@ fn graph_entails(
                 conclusion,
                 &table,
                 &premise_iris,
-                &python_limits(max_stored_facts, max_join_steps),
+                &python_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
         })
         .map_err(PyValueError::new_err)?;
@@ -931,7 +942,7 @@ fn graph_entails(
 ///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
 #[allow(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly \
@@ -947,6 +958,7 @@ fn verify_entailment(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
@@ -959,7 +971,7 @@ fn verify_entailment(
                 conclusion,
                 &table,
                 &premise_iris,
-                &python_limits(max_stored_facts, max_join_steps),
+                &python_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
         })
         .map_err(PyValueError::new_err)?;

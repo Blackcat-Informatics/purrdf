@@ -25,7 +25,11 @@ fn ordinary_query_failures_do_not_erase_an_execution_cause() {
         let _scope = enter(prepared.xpath_configuration(profile, Limits::new()));
         let ordinary =
             || RdfDiagnostic::error("native-sparql-custom-function", "missing authored function");
-        assert!(query_error(ordinary()).contains("missing authored function"));
+        assert!(
+            query_error(ordinary())
+                .to_string()
+                .contains("missing authored function")
+        );
         assert!(root_result(Ok::<_, ShapesError>(())).is_ok());
 
         let fatal = RdfDiagnostic::error(
@@ -41,7 +45,11 @@ fn ordinary_query_failures_do_not_erase_an_execution_cause() {
                 .to_string()
                 .contains("opaque host execution failure")
         );
-        assert!(fatal_message.contains("opaque host execution failure"));
+        assert!(
+            fatal_message
+                .to_string()
+                .contains("opaque host execution failure")
+        );
         let Some(cause) = error.cause else {
             panic!("the actual first execution cause must remain attached");
         };

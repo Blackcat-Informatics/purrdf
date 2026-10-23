@@ -327,6 +327,9 @@ pub(crate) fn assignment_search(
     Ok(found.then_some((counts, assignment)))
 }
 
+// Keep one bounded, independently inspectable matcher frame. The continuation
+// loop replaces recursion without erasing this kernel's assembly boundary.
+#[inline(never)]
 fn search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],

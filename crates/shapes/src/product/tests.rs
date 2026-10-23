@@ -486,11 +486,14 @@ impl PropertyFunction for EmptyRelation {
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         0
     }
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(EmptyCursor))
     }
 }

@@ -94,8 +94,69 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use purrdf_core::ListErrorKind;
-use purrdf_core::collections::{SoleObject, walk_rdf_list};
+use purrdf_core::collections::{ListError, SoleObject, walk_rdf_list};
+
+/// The reasoning producer that refused an original RDF collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionPhase {
+    /// OWL 2 RL's collection-to-relation pre-pass.
+    OwlRl,
+    /// OWL Direct-Semantics class-expression extraction.
+    OwlDirect,
+}
+
+impl purrdf_hash::error::StructuredError for CollectionPhase {
+    purrdf_hash::error_visit! {
+        OwlRl => "collection-owl-rl" {},
+        OwlDirect => "collection-owl-direct" {},
+    }
+}
+
+/// Original collection refusal in source-independent RDF term coordinates.
+/// The ordered prefix, failed cell and head retain blank scope and literal metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionError {
+    /// The producer that refused the collection.
+    pub phase: CollectionPhase,
+    /// The original collection head.
+    pub head: purrdf_core::TermValue,
+    /// The strict walker's original fault, failed cell and ordered members.
+    pub original: ListError<purrdf_core::TermValue>,
+}
+
+impl purrdf_hash::error::StructuredError for CollectionError {
+    purrdf_hash::error_visit! {
+        @record self { phase, head, original } => "entailment-collection-error" {
+            "phase" => Record(&self.phase), "head" => Term(&self.head),
+            "original" => Cause(&self.original),
+        }
+    }
+}
+
+impl fmt::Display for CollectionError {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.phase {
+            CollectionPhase::OwlRl => write!(
+                out,
+                "entailment collection error: the RDF collection under {} is malformed at the cell {}: {}",
+                crate::engine::surface_of(&self.head),
+                crate::engine::surface_of(&self.original.node),
+                self.original.kind
+            ),
+            CollectionPhase::OwlDirect => write!(
+                out,
+                "entailment parse error: malformed RDF list: {}",
+                self.original.kind
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CollectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.original)
+    }
+}
 
 use crate::vocab::{
     OWL_DISTINCTMEMBERS, OWL_HASKEY, OWL_INTERSECTIONOF, OWL_MEMBERS, OWL_ONEOF,
@@ -284,11 +345,9 @@ fn index_surface(index: usize) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MalformedList {
     /// The list head the walk started from, as its lexical surface.
-    head: String,
-    /// The cell the walk stopped at, as its lexical surface.
-    cell: String,
-    /// Which invariant of a collection that cell broke.
-    kind: ListErrorKind,
+    pub(crate) head: String,
+    /// The original fault, failed cell and ordered prefix in lexical surfaces.
+    pub(crate) original: ListError<String>,
 }
 
 impl fmt::Display for MalformedList {
@@ -296,7 +355,7 @@ impl fmt::Display for MalformedList {
         write!(
             f,
             "the RDF collection under {} is malformed at the cell {}: {}",
-            self.head, self.cell, self.kind
+            self.head, self.original.node, self.original.kind
         )
     }
 }
@@ -365,12 +424,8 @@ impl ListIndex {
         let mut facts = Vec::new();
         let mut indices: BTreeSet<usize> = BTreeSet::new();
         for head in &self.heads {
-            // `rdf:nil` is the EMPTY collection, and an empty collection is well formed:
-            // it simply contributes no member. A rule whose premise needs one therefore
-            // does not fire, which is what "no members" means.
-            if head == &nil {
-                continue;
-            }
+            // A clean rdf:nil yields no member. Let the strict walker inspect it
+            // as well: rdf:first or rdf:rest on nil makes the collection malformed.
             let members = walk_rdf_list(
                 head.as_str(),
                 Some(nil.as_str()),
@@ -379,8 +434,7 @@ impl ListIndex {
             )
             .map_err(|error| MalformedList {
                 head: head.clone(),
-                cell: error.node.to_owned(),
-                kind: error.kind,
+                original: error.map(str::to_owned),
             })?;
             for (index, member) in members.into_iter().enumerate() {
                 facts.push(InternalFact {

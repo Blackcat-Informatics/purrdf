@@ -681,18 +681,23 @@ pub(super) fn term(
 fn exact_rational(value: &Rat, decode: &Decode<'_, '_, '_, '_>) -> Result<Value, GeoCallError> {
     match super::profile::exact_decimal(value, decode) {
         Ok(text) => Ok(Value::String(text)),
-        Err(GeoCallError::Engine(GeoError::Domain(_))) => Ok(Object::new()
-            .with_memory_cell(
-                "numerator",
-                decode.integer_text(&value.numerator())?,
-                decode.storage.memory(),
-            )?
-            .with_memory_cell(
-                "denominator",
-                decode.integer_text(&value.denominator())?,
-                decode.storage.memory(),
-            )?
-            .into()),
+        Err(GeoCallError::Engine(error))
+            if matches!(error.original(), GeoError::GeometryDomain(cause)
+                if matches!(&**cause, purrdf_geo_kernel::GeometryDomainError::NonDecimalParameter { .. })) =>
+        {
+            Ok(Object::new()
+                .with_memory_cell(
+                    "numerator",
+                    decode.integer_text(&value.numerator())?,
+                    decode.storage.memory(),
+                )?
+                .with_memory_cell(
+                    "denominator",
+                    decode.integer_text(&value.denominator())?,
+                    decode.storage.memory(),
+                )?
+                .into())
+        }
         Err(original) => Err(original),
     }
 }
@@ -730,6 +735,62 @@ fn environment_evidence(
             .into(),
     })
 }
+fn vocabulary_cause(
+    error: &purrdf_geo_kernel::VocabularyError,
+    decode: &Decode<'_, '_, '_, '_>,
+) -> Result<Value, GeoCallError> {
+    use purrdf_geo_kernel::{VocabularyError, VocabularyNamespace};
+    let code = match error {
+        VocabularyError::UnregisteredOutputUnit { .. } => "vocabulary-unregistered-output-unit",
+        VocabularyError::UndeclaredUnit { .. } => "vocabulary-undeclared-unit",
+        VocabularyError::UnitMismatch { .. } => "vocabulary-unit-mismatch",
+        VocabularyError::MissingMetre { .. } => "vocabulary-missing-metre",
+        VocabularyError::MissingSimpleFeatures { .. } => "vocabulary-missing-simple-features",
+        VocabularyError::EmptyNamespace(_) => "vocabulary-empty-namespace",
+        VocabularyError::EmptyUnit { .. } => "vocabulary-empty-unit",
+        VocabularyError::ConflictingUnit { .. } => "vocabulary-conflicting-unit",
+        VocabularyError::EmptyMetre => "vocabulary-empty-metre",
+    };
+    let fields = Object::new().with_memory_cell("code", code, decode.storage.memory())?;
+    Ok(match error {
+        VocabularyError::UnregisteredOutputUnit { unit } => {
+            fields.with_memory_cell("unit", unit.as_str(), decode.storage.memory())?
+        }
+        VocabularyError::UndeclaredUnit { crs }
+        | VocabularyError::MissingMetre { crs }
+        | VocabularyError::EmptyUnit { crs } => {
+            fields.with_memory_cell("crs", crs.as_str(), decode.storage.memory())?
+        }
+        VocabularyError::UnitMismatch {
+            crs,
+            declared,
+            requested,
+        } => fields
+            .with_memory_cell("crs", crs.as_str(), decode.storage.memory())?
+            .with_memory_cell("declared", declared.as_str(), decode.storage.memory())?
+            .with_memory_cell("requested", requested.as_str(), decode.storage.memory())?,
+        VocabularyError::MissingSimpleFeatures { kind } => {
+            fields.with_memory_cell("kind", kind.geojson_type(), decode.storage.memory())?
+        }
+        VocabularyError::EmptyNamespace(namespace) => {
+            let code = match namespace {
+                VocabularyNamespace::Core => "vocabulary-namespace-core",
+                VocabularyNamespace::Function => "vocabulary-namespace-function",
+                VocabularyNamespace::SimpleFeatures => "vocabulary-namespace-simple-features",
+            };
+            let namespace =
+                Object::new().with_memory_cell("code", code, decode.storage.memory())?;
+            fields.with_memory_cell("namespace", Value::from(namespace), decode.storage.memory())?
+        }
+        VocabularyError::ConflictingUnit { crs, first, second } => fields
+            .with_memory_cell("crs", crs.as_str(), decode.storage.memory())?
+            .with_memory_cell("first", first.as_str(), decode.storage.memory())?
+            .with_memory_cell("second", second.as_str(), decode.storage.memory())?,
+        VocabularyError::EmptyMetre => fields,
+    }
+    .into())
+}
+
 pub(super) fn refusal_admitted(
     error: &GeoCallError,
     invocation: &super::invocation::Invocation,
@@ -758,10 +819,26 @@ pub(super) fn refusal(
             let code = match error {
                 GeoError::SourceRead(_) => "source-read",
                 GeoError::Arity(_) => "arity",
-                GeoError::Config(_) => "configuration",
-                GeoError::Literal(_) => "literal",
+                GeoError::Config(_) | GeoError::NoRelationFamilies => "configuration",
+                GeoError::Literal(_) | GeoError::ArgumentInput(_) => "literal",
                 GeoError::Unsupported(_) => "unsupported",
                 GeoError::Domain(_) => "domain",
+                GeoError::NativeMath(purrdf_xsd::math::MathError::Domain(reason)) => {
+                    fields = fields.with_memory_cell("reason", *reason, decode.storage.memory())?;
+                    "domain"
+                }
+                GeoError::Vocabulary(cause) => {
+                    fields = fields.with_memory_cell(
+                        "cause",
+                        vocabulary_cause(cause, decode)?,
+                        decode.storage.memory(),
+                    )?;
+                    if error.is_expression_error() {
+                        "domain"
+                    } else {
+                        "configuration"
+                    }
+                }
                 GeoError::CoordinateOutOfRange { axis, value } => {
                     fields = fields
                         .with_memory_cell("axis", *axis, decode.storage.memory())?
@@ -803,12 +880,69 @@ pub(super) fn refusal(
                     fields = fields.with_memory_cell("roots", *roots, decode.storage.memory())?;
                     "ambiguous-transform"
                 }
-                GeoError::InvalidEllipsoid(reason) => {
-                    fields = fields.with_memory_cell("reason", *reason, decode.storage.memory())?;
+                GeoError::InvalidEllipsoid(cause) => {
+                    fields = fields
+                        .with_memory_cell(
+                            "reason",
+                            cause.requirement.message(),
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "semimajor",
+                            exact_rational(&cause.semimajor, decode)?,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "inverse_flattening",
+                            exact_rational(&cause.inverse_flattening, decode)?,
+                            decode.storage.memory(),
+                        )?;
                     "invalid-ellipsoid"
                 }
-                GeoError::InvalidExecutionPolicy(reason) => {
-                    fields = fields.with_memory_cell("reason", *reason, decode.storage.memory())?;
+                GeoError::InvalidExecutionPolicy(limits) => {
+                    let limits = Object::new()
+                        .with_memory_cell(
+                            "max_output_elements",
+                            limits.max_output_elements,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_work_items",
+                            limits.max_work_items,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_workspace_bytes",
+                            limits.max_workspace_bytes,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_iterations",
+                            limits.max_iterations,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_subdivision_levels",
+                            limits.max_subdivision_levels,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_precision_bits",
+                            limits.max_precision_bits,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_scratch_destinations",
+                            limits.max_scratch_destinations,
+                            decode.storage.memory(),
+                        )?;
+                    fields = fields
+                        .with_memory_cell(
+                            "reason",
+                            error.detail().as_ref(),
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell("limits", Value::from(limits), decode.storage.memory())?;
                     "invalid-policy"
                 }
                 GeoError::PrecisionExhausted { bits } => {
@@ -1082,6 +1216,9 @@ pub(super) fn refusal(
                     "duplicate-point-key"
                 }
                 GeoError::PointIndexReferenceMismatch => "point-index-reference-mismatch",
+                _ if error.is_configuration_error() => "configuration",
+                _ if error.is_domain_error() => "domain",
+                _ if error.is_expression_error() => "literal",
                 _ => "engine-refusal",
             };
             fields = fields

@@ -21,6 +21,12 @@ pub struct Rat {
     value: Rational,
 }
 
+impl purrdf_hash::error::StructuredError for Rat {
+    purrdf_hash::error_visit! {
+        @record self { value } => "geometric-rational" { "value" => Record(&self.value) }
+    }
+}
+
 impl Rat {
     const fn wrap(value: Rational) -> Self {
         Self { value }

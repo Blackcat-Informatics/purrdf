@@ -127,13 +127,17 @@ raised nests that condition under `presentation.detail`, for example
 the IRI failure without parsing English. The error message and the record's
 `code`, `message` and other keys are unchanged.
 
-- **No unwinding across the boundary.** Every function runs inside
-  `catch_unwind`; a caught panic becomes `PURRDF_STATUS_PANIC` (never a process
-  abort across FFI).
+- **No unwinding across the boundary.** Fallible entry points use
+  `catch_unwind`; a caught unwinding panic becomes `PURRDF_STATUS_PANIC`.
+  Entry points without an error channel return their guard's default value
+  after a caught panic. Aborting panics and other process aborts cannot be
+  converted into status codes.
 - **`int32_t` status + out-params.** Fallible functions return a
-  `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
+  `PurrdfStatus` value (as `int32_t`) and write results through out-pointers.
+  When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
+  there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.11.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.12.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -241,6 +245,12 @@ the IRI failure without parsing English. The error message and the record's
   publishing an output or changing the input dataset. The underlying native
   graph policy is shared with Rust, Python and WASM; no struct layout or existing
   status value changes.
+
+  `0.11.0` → `0.12.0` adds nullable `const uint64_t *max_term_arena_bytes`
+  immediately after `max_join_steps` on the four regime materialization/conclusion
+  services and all three governed entailment-query variants. Rebuild affected C
+  callers against the new header; `NULL` retains the default. Refusals preserve
+  original byte counts and name this parameter on the function called.
 
 ## Shapes-graph tools
 
@@ -473,6 +483,23 @@ SPARQL 1.2 RL filter or assignment, and each `sh:pattern` of a rule condition; o
 `PURRDF_STATUS_REGEX_RESOURCE_ERROR` with no dataset, inference or output written.
 `purrdf_shacl_lint_shapes` has no twin: it certifies a shapes graph without compiling or
 matching any of its patterns. The entailment services (`purrdf_entail_*`) take no law.
+
+### The dated SHACL law
+
+`purrdf_shacl_validate_to_sarif_law` is `purrdf_shacl_validate_to_sarif_xpath_regex` with a
+nullable `shacl_profile` after `regex_profile`, before its out-parameters. It selects one
+exact, dated SHACL law by its stable id: `shacl-rec-2017-07-20` (the 2017 Recommendation),
+`shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the
+data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under). It is the law
+`purrdf validate --shacl-profile` selects. The id is decoded once, exactly, by
+`purrdf_validate::complete_profile`; NULL runs the compatibility law, as the entry points
+without the suffix do. An id that names no law (`shacl-ed-2026-10-17`, another letter case,
+the empty string) is `PURRDF_STATUS_INVALID_ARGUMENT` whose message leads with the
+`unsupported-profile` status; no nearby edition is substituted. A dated law carries its own
+XPath bundle, so a `regex_profile` naming another law is `PURRDF_STATUS_INVALID_ARGUMENT`
+too, while the same law (or NULL) runs. A shapes graph the law's text refuses is refused at
+load as `PURRDF_STATUS_PARSE_ERROR`, never validated under another law. No existing
+signature changed: this is an additional export.
 
 ## Governed execution
 

@@ -10,7 +10,7 @@
 //! `<sparql xmlns="http://www.w3.org/2005/sparql-results#">` root with a
 //! `<head>` of `<variable>`s, then either `<results>` (SELECT) or `<boolean>`
 //! (ASK). The CONSTRUCT (`Graph`) kind is undefined for SRX and hard-fails with
-//! [`Error::Format`].
+//! [`Error::UnsupportedResult`].
 //!
 //! # RDF 1.2 base direction — the `its:dir` spelling
 //!
@@ -130,10 +130,10 @@ fn term_has_directional_literal(value: &TermValue) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] for a `Graph` (CONSTRUCT) result, which has no
+/// Returns [`Error::UnsupportedResult`] for a `Graph` (CONSTRUCT) result, which has no
 /// defined SRX representation.
 ///
-/// Returns [`Error::Format`] if any dynamic string value contains an
+/// Returns [`Error::XmlCharacter`] if any dynamic string value contains a
 /// scalar excluded by XML 1.0 `Char`, which cannot be represented even as a
 /// numeric character reference.
 pub fn to_xml(
@@ -155,7 +155,7 @@ pub fn to_xml(
 /// Write the full SRX document (root + head + body + optional provenance).
 /// The one wording for the CONSTRUCT-graph refusal, so the pre-emission check and
 /// the (now unreachable) match arm cannot report it differently.
-const GRAPH_IS_UNDEFINED_IN_SRX: &str =
+pub(crate) const GRAPH_IS_UNDEFINED_IN_SRX: &str =
     "SPARQL Results XML is undefined for CONSTRUCT graphs; serialize the graph as RDF";
 
 pub(crate) fn write_srx<W: TextOut + ?Sized>(
@@ -168,7 +168,10 @@ pub(crate) fn write_srx<W: TextOut + ?Sized>(
     // partial document was discarded on refusal; an incremental sink has already
     // sent those bytes downstream, so a kind-level refusal must precede byte one.
     if matches!(result, SparqlResult::Graph(_)) {
-        return Err(Error::Format(GRAPH_IS_UNDEFINED_IN_SRX.to_string()));
+        return Err(Error::UnsupportedResult {
+            format: crate::SparqlResultsFormat::Xml,
+            ask: false,
+        });
     }
 
     out.push_str("<?xml version=\"1.0\"?>\n");
@@ -200,7 +203,10 @@ pub(crate) fn write_srx<W: TextOut + ?Sized>(
         // Refused above, before any byte was emitted. Retained so the match stays
         // exhaustive without a panic site, and so both spellings cannot drift.
         SparqlResult::Graph(_) => {
-            return Err(Error::Format(GRAPH_IS_UNDEFINED_IN_SRX.to_string()));
+            return Err(Error::UnsupportedResult {
+                format: crate::SparqlResultsFormat::Xml,
+                ask: false,
+            });
         }
     }
 
@@ -242,10 +248,10 @@ fn write_results<W: TextOut + ?Sized>(
         for (column, cell) in row.iter().enumerate() {
             if let Some(value) = cell {
                 let var = variables.get(column).ok_or_else(|| {
-                    Error::MalformedTerm(format!(
-                        "binding column {column} has no variable header (row has {} vars)",
-                        variables.len()
-                    ))
+                    Error::MalformedTerm(crate::MalformedResult::MissingHeader {
+                        column,
+                        variables: variables.len(),
+                    })
                 })?;
                 out.push_str("      <binding name=\"");
                 xml_escape_attr(var, out)?;
@@ -335,9 +341,10 @@ fn write_term<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(),
                 // RDF predicates must be IRIs; a non-IRI predicate has no valid SRX
                 // <predicate> form → hard-fail per the serializer contract.
                 if !matches!(p.as_ref(), TermValue::Iri(_)) {
-                    return Err(Error::MalformedTerm(
-                        "triple-term predicate is not an IRI".to_string(),
-                    ));
+                    return Err(Error::MalformedTerm(crate::MalformedResult::Predicate {
+                        term: p.as_ref().clone(),
+                        cause: purrdf_core::NonIriPredicate,
+                    }));
                 }
                 out.push_str("<triple><subject>");
                 held.extend([
@@ -441,13 +448,13 @@ fn output_size_hint(result: &SparqlResult) -> usize {
 /// Append lossless XML 1.0 character data, refusing unrepresentable scalars.
 fn xml_escape_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), Error> {
     purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
-        .map_err(|error| Error::Format(error.to_string()))
+        .map_err(Error::XmlCharacter)
 }
 
 /// Append a lossless double-quoted XML 1.0 attribute value.
 fn xml_escape_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), Error> {
     purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
-        .map_err(|error| Error::Format(error.to_string()))
+        .map_err(Error::XmlCharacter)
 }
 
 #[cfg(test)]
@@ -957,7 +964,10 @@ mod tests {
         let dataset = builder.freeze().expect("dataset freezes");
         let result = SparqlResult::Graph(dataset.into());
         let err = to_xml(&result, &ResultProvenance::default(), None).expect_err("graph rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::UnsupportedResult { ask: false, .. }),
+            "expected result-form refusal: {err:?}"
+        );
     }
 
     #[test]
@@ -971,14 +981,26 @@ mod tests {
         let err = to_xml(&result, &ResultProvenance::default(), None)
             .expect_err("illegal C0 control char must be rejected");
         match &err {
-            Error::Format(msg) => {
+            Error::XmlCharacter(cause) => {
+                let msg = cause.to_string();
                 assert!(
                     msg.contains("U+0001"),
                     "error message must mention U+0001, got: {msg}"
                 );
             }
-            other => panic!("expected Error::Format, got: {other:?}"),
+            other => panic!("expected native XML character refusal, got: {other:?}"),
         }
+        drop(result);
+        let fields = purrdf_testkit::error_capture::Capture::read(&err);
+        let scalar = fields.child("cause");
+        assert!(matches!(
+            scalar.field("byte_offset"),
+            purrdf_hash::error::ErrorValue::ByteCount(3)
+        ));
+        assert!(matches!(
+            scalar.field("character"),
+            purrdf_hash::error::ErrorValue::Character('\u{1}')
+        ));
     }
 
     #[test]
@@ -1069,9 +1091,10 @@ mod term_walk_tests {
             return write_term(value, out);
         };
         if !matches!(p.as_ref(), TermValue::Iri(_)) {
-            return Err(Error::MalformedTerm(
-                "triple-term predicate is not an IRI".to_string(),
-            ));
+            return Err(Error::MalformedTerm(crate::MalformedResult::Predicate {
+                term: p.as_ref().clone(),
+                cause: purrdf_core::NonIriPredicate,
+            }));
         }
         out.push_str("<triple><subject>");
         reference_write(s, out)?;

@@ -148,9 +148,9 @@ pub(crate) fn unreached_import_refusal(iris: &[String], unanchored: &[String]) -
 
 /// Surface the report of a materialization run and hand back its closure, or render its
 /// refusal. See [`materialize_reported`].
-fn reported(
+fn reported<E: std::fmt::Display>(
     regime: &str,
-    outcome: Result<(Arc<RdfDataset>, ReasoningReport), EntailError>,
+    outcome: Result<(Arc<RdfDataset>, ReasoningReport), EntailError<E>>,
     limits: &MaterializeLimits,
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
@@ -161,9 +161,8 @@ fn reported(
         }
         Err(EntailError::Inconsistent(run)) => {
             surface(target, run.report())?;
-            Err(CliError::Runtime(
-                EntailError::Inconsistent(run).to_string(),
-            ))
+            let error: EntailError<E> = EntailError::Inconsistent(run);
+            Err(CliError::Runtime(error.to_string()))
         }
         Err(
             error @ (EntailError::Evaluate(
@@ -184,9 +183,9 @@ fn reported(
 /// The CLI's rendering of an entailment refusal from `service`: a passed evaluation limit
 /// names the command line's own flag (`--max-stored-facts`, `--max-join-steps`) through the
 /// shared boundary renderer, and every other refusal is [`import_refusal`]'s.
-pub(crate) fn entailment_refusal(
+pub(crate) fn entailment_refusal<E: std::fmt::Display>(
     regime: &str,
-    error: EntailError,
+    error: EntailError<E>,
     service: RegimeService,
 ) -> CliError {
     match error {
@@ -209,7 +208,7 @@ pub(crate) fn entailment_refusal(
 /// an import no `--import` pair resolves (exit 1, naming the pair that resolves it), a pair
 /// the premise's closure never reaches (a usage error, exit 2), and every other variant as
 /// its own diagnostic. Every entailment subcommand renders these through this one function.
-pub(crate) fn import_refusal(error: EntailError) -> CliError {
+pub(crate) fn import_refusal<E: std::fmt::Display>(error: EntailError<E>) -> CliError {
     match error {
         EntailError::UnresolvedImport(iri) => CliError::Runtime(format!(
             "unresolved-import: the premise owl:imports <{iri}>, which no --import pair \

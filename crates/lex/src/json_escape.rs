@@ -324,6 +324,26 @@ impl core::fmt::Display for JsonEscapeError {
 
 impl std::error::Error for JsonEscapeError {}
 
+impl purrdf_hash::error::StructuredError for JsonEscapeErrorKind {
+    purrdf_hash::error_visit! {
+        Truncated => "json-escape-truncated" {},
+        BadEscape => "json-escape-invalid" {},
+        BadHex => "json-escape-bad-hex" {},
+        UnpairedHigh => "json-escape-unpaired-high" {},
+        UnpairedLow => "json-escape-unpaired-low" {},
+        Storage(error) => "json-escape-storage" { "cause" => Cause(error) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for JsonEscapeError {
+    purrdf_hash::error_visit! {
+        @record self { kind, offset } => "json-escape" {
+            "kind" => Cause(&self.kind),
+            "offset" => ByteCount(self.offset as u128),
+        }
+    }
+}
+
 /// The four hex digits at the start of `bytes` as one UTF-16 code unit: the
 /// `4HEXDIG` of a `\u` escape, read without judging it as a scalar.
 ///

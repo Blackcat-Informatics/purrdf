@@ -632,6 +632,26 @@ pub enum VersionConflictKind {
     },
 }
 
+impl purrdf_hash::error::StructuredError for VersionConflict {
+    purrdf_hash::error_visit! {
+        @record self { first, second, kind } => "imports-version-conflict" {
+            "first" => Value(self.first.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
+            "second" => Value(self.second.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
+            "kind" => Record(&self.kind),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for VersionConflictKind {
+    purrdf_hash::error_visit! {
+        SameSeries { series, first_version, second_version } => "imports-same-series" {
+            "series" => Iri(series), "first_version" => Iri(first_version),
+            "second_version" => Iri(second_version),
+        },
+        IncompatibleWith { iri } => "imports-incompatible-with" { "iri" => Iri(iri) },
+    }
+}
+
 impl std::fmt::Display for VersionConflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let graph = |g: &Option<String>| {

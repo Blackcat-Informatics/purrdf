@@ -422,6 +422,16 @@
 # counts, not latency, allocations or an assertion that logical work increased.
 # END CONNECTED RULE EVALUATION TRANSITION.
 #
+# SELECTIVE DELTA JOIN TRANSITION.
+# Round deltas own indexed row ranges. Partial-round joins seed from delta, or
+# from a strictly smaller existing constant-key index followed immediately by
+# delta. Impossible constant patterns refuse before broad candidate expansion.
+# Cardinality advice never constructs a cold historical object permutation.
+# Advice is frozen before tasks; a sibling's lazy index cannot change round work.
+# Only measured join-steps change: every input, closure, witness, rule tally,
+# contract hash, stored-facts and term-arena-bytes field remains identical.
+# END SELECTIVE DELTA JOIN TRANSITION.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # A REFUSAL GOLDEN. This fixture belongs to CLASH_CORPUS, whose evidence is the OUTCOME
@@ -797,7 +807,7 @@
   boundaries: (1)
       datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=2011 stored-facts=126 term-arena-bytes=2704
+  budget: join-steps=2769 stored-facts=126 term-arena-bytes=2704
   contract-hash: f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
   termination: none
   inconsistency: none

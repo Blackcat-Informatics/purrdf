@@ -128,6 +128,15 @@ impl TermKind {
     }
 }
 
+impl purrdf_hash::error::StructuredError for TermKind {
+    purrdf_hash::error_visit! {
+        Iri => "gts-term-iri" {},
+        Literal => "gts-term-literal" {},
+        Bnode => "gts-term-blank-node" {},
+        Triple => "gts-term-triple" {},
+    }
+}
+
 /// An RDF term identified by append-order id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Term {
@@ -412,7 +421,7 @@ pub struct Suppression {
 }
 
 /// A machine-observable reader diagnostic (§2.3).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Diagnostic {
     /// Stable diagnostic code, matching the cross-engine diagnostic vocabulary.
     pub code: String,
@@ -420,6 +429,113 @@ pub struct Diagnostic {
     pub detail: String,
     /// Absolute CBOR item index when the problem belongs to a frame.
     pub frame_index: Option<u64>,
+    /// Original native refusal. Supplemental provenance is not part of the
+    /// diagnostic's original code/detail/frame identity or wire projection.
+    pub cause: Option<DiagnosticCause>,
+}
+
+/// Native diagnostic ownership, or the physical refusal to retain that owner.
+#[derive(Clone)]
+pub enum DiagnosticCause {
+    /// The original immutable error and its original shared owner.
+    Native(purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>),
+    /// An allocation failed before the native error could be retained.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+purrdf_hash::debug_non_exhaustive!(DiagnosticCause {});
+
+impl Diagnostic {
+    /// Attach an original native cause using the existing fallible allocation
+    /// and shared-owner homes. A physical refusal becomes the hard diagnostic;
+    /// it never authorizes dropping a cause and reporting the original as retained.
+    #[must_use]
+    pub fn with_native_cause(
+        mut self,
+        cause: impl purrdf_hash::error::NativeError + 'static,
+    ) -> Self {
+        match retain_native_cause(cause) {
+            Ok(cause) => self.cause = Some(DiagnosticCause::Native(cause)),
+            Err(error) => {
+                self.code = "DiagnosticStorageFailure".into();
+                self.detail = error.to_string();
+                self.cause = Some(DiagnosticCause::Storage(error));
+            }
+        }
+        self
+    }
+
+    /// Retain this complete diagnostic for a downstream error boundary.
+    ///
+    /// # Errors
+    /// Returns physical allocation refusal before publishing a new owner.
+    pub fn into_native_cause(
+        self,
+    ) -> Result<
+        purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>,
+        purrdf_lex::allocation::StorageError,
+    > {
+        retain_native_cause(self)
+    }
+
+    /// Borrow the original native cause without copying or rendering it.
+    #[must_use]
+    pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        match self.cause.as_ref()? {
+            DiagnosticCause::Native(cause) => Some(&***cause),
+            DiagnosticCause::Storage(error) => Some(error),
+        }
+    }
+}
+
+/// Retain an original native failure through the reader's shared cause owner.
+///
+/// Import and verification consumers use the same allocation and ownership path
+/// as reader diagnostics. Copies retain this owner without copying its payload.
+///
+/// # Errors
+/// Returns the original allocation refusal before publishing a partial owner.
+pub fn retain_native_cause(
+    cause: impl purrdf_hash::error::NativeError + 'static,
+) -> Result<
+    purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>,
+    purrdf_lex::allocation::StorageError,
+> {
+    use purrdf_lex::allocation::{Memory, Resident, SharedOwned, StorageError};
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let cause: Box<dyn purrdf_hash::error::NativeError> = memory.boxed(cause)?;
+    SharedOwned::try_from_admitted(cause, Resident).map_err(|_| StorageError::AllocationFailed)
+}
+
+impl PartialEq for Diagnostic {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.code, &self.detail, self.frame_index)
+            == (&other.code, &other.detail, other.frame_index)
+    }
+}
+impl Eq for Diagnostic {}
+
+impl core::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for Diagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.native_cause()
+            .map(|cause| cause as &dyn std::error::Error)
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Diagnostic {
+    purrdf_hash::error_visit! {
+        @record self { code, detail, frame_index, cause } => "gts-diagnostic" {
+            "code" => Code(&self.code), "detail" => Text(&self.detail),
+            "frame_index" => Value(self.frame_index.map_or(purrdf_hash::error::ErrorValue::Absent, |index| purrdf_hash::error::ErrorValue::Unsigned(u128::from(index)))),
+            "cause" => Value(self.native_cause().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
+        }
+    }
 }
 
 /// The verification outcome for a signed frame (§9.2).

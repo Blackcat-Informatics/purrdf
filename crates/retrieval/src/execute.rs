@@ -444,6 +444,115 @@ pub struct CandidateExecutionResult<'d> {
     pub producer_decisions: purrdf_sparql_eval::SharedWorkspace<Vec<crate::plan::ProducerDecision>>,
 }
 
+impl purrdf_hash::error::StructuredError for ReadStratum<'_> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            stratum,
+            plan_id,
+            requested_depth,
+            contract,
+            attestation,
+            stream,
+            admission_failure_settlement,
+        } = self;
+        visitor.variant("retrieval-read-stratum");
+        visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+        visitor.value(Some("plan_id"), ErrorValue::Record(plan_id));
+        visitor.value(
+            Some("requested_depth"),
+            ErrorValue::Unsigned(u128::from(*requested_depth)),
+        );
+        visitor.value(Some("contract"), ErrorValue::Record(contract));
+        visitor.value(Some("attestation"), ErrorValue::Record(attestation));
+        visitor.value(Some("stream"), ErrorValue::Record(stream));
+        match admission_failure_settlement {
+            None => visitor.value(Some("admission_failure_settlement"), ErrorValue::Absent),
+            Some(result) => {
+                visitor.begin_record(
+                    Some("admission_failure_settlement"),
+                    "retrieval-recorded-settlement",
+                );
+                match result {
+                    Ok(attestation) => {
+                        visitor.value(Some("kind"), ErrorValue::Code("settled"));
+                        visitor.value(
+                            Some("attestation"),
+                            attestation
+                                .as_ref()
+                                .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+                        );
+                    }
+                    Err(error) => {
+                        visitor.value(Some("kind"), ErrorValue::Code("refused"));
+                        visitor.value(Some("cause"), ErrorValue::Cause(error));
+                    }
+                }
+                visitor.end_record();
+            }
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CandidateExecutionResult<'_> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            streams,
+            statuses,
+            plan_id,
+            depths,
+            contracts,
+            unserved_terms,
+            producer_bindings,
+            producer_decisions,
+        } = self;
+        visitor.variant("retrieval-candidate-execution");
+        visitor.value(Some("plan_id"), ErrorValue::Record(plan_id));
+        visitor.value(Some("depths"), ErrorValue::Record(depths));
+        visit_list(
+            visitor,
+            Some("streams"),
+            streams.iter().map(|value| ErrorValue::Record(value)),
+        );
+        visitor.begin_list(Some("statuses"), statuses.len());
+        for (stratum, status) in statuses {
+            visitor.begin_record(None, "retrieval-stratum-status");
+            visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+            visitor.value(Some("status"), ErrorValue::Record(status));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visitor.begin_list(Some("contracts"), contracts.len());
+        for (stratum, contract) in contracts.iter() {
+            visitor.begin_record(None, "retrieval-stratum-contract");
+            visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+            visitor.value(Some("contract"), ErrorValue::Record(contract));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visit_list(
+            visitor,
+            Some("unserved_terms"),
+            unserved_terms.iter().map(|value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("producer_bindings"),
+            producer_bindings
+                .iter()
+                .map(|value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("producer_decisions"),
+            producer_decisions
+                .iter()
+                .map(|value| ErrorValue::Record(value)),
+        );
+    }
+}
+
 /// A whole-execution failure, as distinct from a per-stratum one.
 ///
 /// A per-stratum failure is *data* — a [`ProducerStatus::ExecutionFailed`] in
@@ -650,6 +759,19 @@ pub enum ExecutionError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for ExecutionError {
+    purrdf_hash::error_visit! {
+        NativeFailure(cause) => "retrieval-execution-native-failure" { "cause" => Cause(cause) },
+        MissingCandidateScope => "retrieval-execution-missing-candidate-scope" {},
+        SourceRead { reason } => "retrieval-execution-source-read" { "reason" => Text(reason) },
+        RegistryMismatch { expected, got } => "retrieval-execution-registry-mismatch" { "expected" => Record(expected), "got" => Record(got) },
+        InconsistentWitness { stratum, reason } => "retrieval-execution-inconsistent-witness" { "stratum" => Iri(stratum.as_str()), "reason" => Text(reason) },
+        RowBoundBreached { stratum, declared, pulled, mode } => "retrieval-execution-row-bound-breached" { "stratum" => Iri(stratum.as_str()), "declared" => Unsigned(u128::from(*declared)), "pulled" => Unsigned(u128::from(*pulled)), "mode" => Record(mode) },
+        UnitsNotAsAssembled { plan, reason } => "retrieval-execution-units-not-as-assembled" { "plan" => Record(plan), "reason" => Text(reason) },
+        EnvironmentNotDerivable { reason } => "retrieval-execution-environment-not-derivable" { "reason" => Text(reason) },
+    }
+}
+
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -797,6 +919,91 @@ enum RowSource<'d> {
 enum RankedRowsStorage {
     Caller(std::vec::IntoIter<(u64, Term, RowBlock)>),
     Native(purrdf_sparql_eval::AdmittedVecIntoIter<(u64, Term, RowBlock)>),
+}
+
+impl purrdf_hash::error::StructuredError for RankedRowsStorage {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let rows = match self {
+            Self::Caller(rows) => rows.as_slice(),
+            Self::Native(rows) => rows.as_slice(),
+        };
+        visitor.variant("retrieval-unconsumed-rows");
+        visitor.begin_list(Some("rows"), rows.len());
+        for (rank, term, block) in rows {
+            visitor.begin_record(None, "retrieval-ranked-row");
+            visitor.value(Some("rank"), ErrorValue::Unsigned(u128::from(*rank)));
+            visitor.value(Some("term"), ErrorValue::Term(term));
+            visitor.value(Some("block"), ErrorValue::Record(block));
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
+}
+
+impl purrdf_hash::error::StructuredError for StreamEnding {
+    purrdf_hash::error_visit! {
+        Exhausted => "retrieval-stream-exhausted" {},
+        DepthReached { rank } => "retrieval-stream-depth-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        RowBoundReached { rank } => "retrieval-stream-row-bound-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        SuppliedQueryEnded { rank } => "retrieval-stream-supplied-query-ended" { "rank" => Unsigned(u128::from(*rank)) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for OnDemandEnd {
+    purrdf_hash::error_visit! {
+        Ended(ending) => "retrieval-demand-ended" { "ending" => Record(ending) },
+        Failed(reason) => "retrieval-demand-failed" { "reason" => Text(reason.as_ref()) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RowSource<'_> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Materialised {
+                rows,
+                ending,
+                attested,
+            } => {
+                visitor.variant("retrieval-source-materialised");
+                visitor.value(Some("rows"), ErrorValue::Record(rows));
+                visitor.value(Some("ending"), ErrorValue::Record(ending));
+                visitor.value(
+                    Some("attested"),
+                    attested
+                        .as_ref()
+                        .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+                );
+            }
+            Self::OnDemand { read: _, ended } => {
+                // The live read is an execution capability. Never call even a
+                // nominally read-only provider method while inspecting a failure.
+                visitor.variant("retrieval-source-on-demand");
+                visitor.value(
+                    Some("ended"),
+                    ended
+                        .as_ref()
+                        .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+                );
+            }
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RankedStreamImpl<'_> {
+    purrdf_hash::error_visit! {
+        @record self { workspace, source, pulled, exhausted, exclusion, materialised,
+            run_invalidated, native_failure } => "retrieval-ranked-stream" {
+            "source" => Record(&self.source),
+            "pulled" => Unsigned(u128::from(self.pulled)),
+            "exhausted" => Boolean(self.exhausted),
+            "has_exclusion" => Boolean(self.exclusion.is_some()),
+            "materialised_counter" => Unsigned(u128::from(self.materialised)),
+            "run_invalidated" => Boolean(self.run_invalidated),
+            "native_failure" => Value(self.native_failure.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Cause(value)))
+        }
+    }
 }
 
 impl Iterator for RankedRowsStorage {
@@ -1012,7 +1219,8 @@ struct PreparedLookup {
 /// every call of a conforming unit invokes the one relation at one generation — so a
 /// verdict from any lookup answered by another index generation is refused, whichever
 /// alternative and lookup it was.
-struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync> {
+struct DatasetExclusion<'d, D: DatasetView + Sync> {
+    operation: purrdf_sparql_eval::ReadOperation<D::ReadError>,
     scoped: Option<ScopedLookup<'d, D::Id>>,
     /// The stratum this lookup answers for, so its refusals name a producer
     /// rather than a query.
@@ -1026,7 +1234,7 @@ struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible>
     /// the run that produced the rows. An execution prepared against one registry
     /// and run under another is refused by the evaluator, so the same value must
     /// reach both calls — see [`execute_within`]'s own single-environment note.
-    env: purrdf_sparql_eval::SharedWorkspace<ExtensionEnv>,
+    env: purrdf_sparql_eval::SharedWorkspace<ExtensionEnv<'static>>,
     /// The lookups themselves, one list per alternative and one lookup per
     /// qualifying call of it, in the order
     /// [`StratumUnit::exclusion_sparql`](crate::StratumUnit) derived them, each
@@ -1043,9 +1251,7 @@ struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible>
     pinned: PfAttestation,
 }
 
-impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> fmt::Debug
-    for DatasetExclusion<'_, D>
-{
+impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
     /// Names the stratum and nothing else. A prepared execution has no `Debug` a
     /// reader could act on, and a dataset's is unbounded — printing either would
     /// make a stream's `{:?}` a dump of the store it was read from.
@@ -1056,9 +1262,7 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> fmt::Debug
     }
 }
 
-impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> ExclusionLookup
-    for DatasetExclusion<'_, D>
-{
+impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
     fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
         let binding = self.candidates.borrow().get(candidate).cloned();
         for alternative in 0..self.lookups.len() {
@@ -1079,7 +1283,7 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> ExclusionLooku
     }
 }
 
-impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusion<'_, D> {
+impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
     /// Ask the `index`-th lookup of the `alternative`-th alternative whether
     /// `candidate`, bound as `binding` says, is out of its call's reach.
     fn ask(
@@ -1115,7 +1319,7 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
         match binding {
             Some(CandidateBinding::Id(id)) => {
                 execution
-                    .bind_id_admitted(slot, self.dataset, *id, &lookup_workspace)
+                    .bind_read_id_admitted(slot, self.dataset, *id, &self.operation)
                     .map_err(ProtocolError::NativeFailure)?;
             }
             Some(CandidateBinding::Value(value)) => {
@@ -1165,12 +1369,12 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
             };
         let (rows, witness) = self
             .engine
-            .execute_witnessed_admitted(
+            .execute_read_witnessed_admitted(
                 execution,
                 self.dataset,
                 options,
                 self.scoped.as_ref().map(|scoped| scoped.source),
-                &lookup_workspace,
+                &self.operation,
                 visit,
             )
             .map_err(|error| match error {
@@ -1195,7 +1399,7 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
                         self.dataset,
                         purrdf_sparql_eval::SolutionTerm::Existing(*id),
                         &scoped.workspace,
-                        |never| match never {},
+                        |error| self.operation.source_error(error),
                     ),
                 Some(CandidateBinding::Value(value)) => scoped.workspace.clone_term(value),
                 None => unreachable!("external canonical candidate retains its native value"),
@@ -1795,7 +1999,7 @@ pub async fn execute<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
 ) -> Result<C::Output<'d>, ExecutionError> {
     execute_within(compiled, registry, dataset, ReadSchedule::Materialised).await
@@ -1846,11 +2050,37 @@ pub async fn execute_within<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
     schedule: ReadSchedule,
 ) -> Result<C::Output<'d>, ExecutionError> {
-    execute_bound(compiled, registry, dataset, schedule, None)
+    let operation = resident_operation(dataset)?;
+    execute_read_within(compiled, registry, dataset, schedule, &operation)
+}
+
+pub(crate) fn resident_operation<D: DatasetView<ReadError = std::convert::Infallible>>(
+    dataset: &D,
+) -> Result<purrdf_sparql_eval::ReadOperation<std::convert::Infallible>, ExecutionError> {
+    NativeSparqlEngine::workspace_for_view_admitted(dataset)
+        .map(|workspace| purrdf_sparql_eval::ReadOperation::from_capability(&workspace))
+        .map_err(|error| match error {
+            purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
+                ExecutionError::NativeFailure(error)
+            }
+            error => ExecutionError::SourceRead {
+                reason: error.to_string(),
+            },
+        })
+}
+
+pub(crate) fn execute_read_within<'d, D: DatasetView + Sync, C: CompiledRead>(
+    compiled: &C,
+    registry: &PropertyFunctionRegistry<'static>,
+    dataset: &'d D,
+    schedule: ReadSchedule,
+    operation: &purrdf_sparql_eval::ReadOperation<D::ReadError>,
+) -> Result<C::Output<'d>, ExecutionError> {
+    execute_bound(compiled, registry, dataset, schedule, None, operation)
 }
 
 /// Execute the complete compiled hard-constraint set through its original
@@ -1866,21 +2096,36 @@ pub async fn execute_scoped_within<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
     schedule: ReadSchedule,
     bindings: &'d crate::ConstraintBindings<'d>,
     source: &'d dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
 ) -> Result<crate::ScopedExecution<C::Output<'d>>, ExecutionError> {
-    let workspace =
-        NativeSparqlEngine::workspace_for_view_admitted(dataset).map_err(|error| match error {
-            purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
-                ExecutionError::NativeFailure(error)
-            }
-            error => ExecutionError::SourceRead {
-                reason: error.to_string(),
-            },
-        })?;
+    let operation = resident_operation(dataset)?;
+    execute_scoped_in_read(
+        compiled, registry, dataset, schedule, bindings, source, &operation,
+    )
+}
+
+/// Execute scoped units under the original enclosing read operation.
+/// Consume and settle returned streams inside
+/// [`purrdf_sparql_eval::with_fallible_read`] before publishing their answer.
+/// Deferred exclusion lookups share that operation's original source-error owner.
+///
+/// # Errors
+/// Preserves native execution failures. Original operational causes remain in the
+/// enclosing operation and are returned at its final read checkpoint.
+pub fn execute_scoped_in_read<'d, D: DatasetView + Sync, C: CompiledRead>(
+    compiled: &C,
+    registry: &PropertyFunctionRegistry<'static>,
+    dataset: &'d D,
+    schedule: ReadSchedule,
+    bindings: &'d crate::ConstraintBindings<'d>,
+    source: &'d dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+    operation: &purrdf_sparql_eval::ReadOperation<D::ReadError>,
+) -> Result<crate::ScopedExecution<C::Output<'d>>, ExecutionError> {
+    let workspace = operation.capability();
     let mut scopes =
         purrdf_sparql_eval::AdmittedVec::with_capacity(compiled.units().len(), &workspace)
             .map_err(ExecutionError::NativeFailure)?;
@@ -1893,8 +2138,8 @@ pub async fn execute_scoped_within<
             bindings,
             source,
             receipts: &mut scopes,
-            workspace: &workspace,
         }),
+        operation,
     )?;
     Ok(crate::ScopedExecution {
         result,
@@ -1907,19 +2152,15 @@ struct ScopedExecutionInput<'a, 'b, I: purrdf_core::ViewTermId> {
     bindings: &'b crate::ConstraintBindings<'b>,
     source: &'b dyn purrdf_sparql_eval::EvidenceSource<I>,
     receipts: &'a mut purrdf_sparql_eval::AdmittedVec<crate::ScopedStratum>,
-    workspace: &'a purrdf_sparql_eval::WorkspaceCapability,
 }
 
-fn execute_bound<
-    'd,
-    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
-    C: CompiledRead,
->(
+fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
     schedule: ReadSchedule,
     mut scoped: Option<ScopedExecutionInput<'_, 'd, D::Id>>,
+    operation: &purrdf_sparql_eval::ReadOperation<D::ReadError>,
 ) -> Result<C::Output<'d>, ExecutionError> {
     if !compiled.constraints().is_empty() && scoped.is_none() {
         return Err(ExecutionError::MissingCandidateScope);
@@ -1939,20 +2180,7 @@ fn execute_bound<
 
     // One engine for the whole call, shared with the exclusion lookups it
     // compiles: they run after this call returns, on executions prepared here.
-    let execution_workspace =
-        match scoped.as_ref() {
-            Some(input) => input.workspace.clone(),
-            None => NativeSparqlEngine::workspace_for_view_admitted(dataset).map_err(|error| {
-                match error {
-                    purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
-                        ExecutionError::NativeFailure(error)
-                    }
-                    error => ExecutionError::SourceRead {
-                        reason: error.to_string(),
-                    },
-                }
-            })?,
-        };
+    let execution_workspace = operation.capability();
     let engine = purrdf_sparql_eval::SharedWorkspace::new_admitted(
         NativeSparqlEngine::new(),
         &execution_workspace,
@@ -2226,6 +2454,7 @@ fn execute_bound<
                         unit.declared_rows()
                     };
                     let read = CallRead {
+                        operation: operation.clone(),
                         workspace: scope_workspace.clone(),
                         stratum: unit
                             .stratum
@@ -2325,12 +2554,12 @@ fn execute_bound<
                     },
                 })?;
             let (receipt, witness) = engine
-                .execute_witnessed_admitted(
+                .execute_read_witnessed_admitted(
                     &mut execution,
                     dataset,
                     query_options,
                     Some(input.source),
-                    &scope_workspace,
+                    operation,
                     |outcome| {
                         let InternedOutcome::Solutions(solutions) = outcome else {
                             return Err(purrdf_sparql_eval::NativeDiagnostic::error(
@@ -2398,6 +2627,7 @@ fn execute_bound<
                             known_rows,
                             &ranked,
                             dataset,
+                            |error| ExecutionError::NativeFailure(operation.source_error(error)),
                         )?;
                     }
                     Ok::<_, ExecutionError>(ranked)
@@ -2503,12 +2733,12 @@ fn execute_bound<
                 continue;
             }
         };
-        let outcome = engine.execute_governed_admitted(
+        let outcome = engine.execute_read_governed_admitted(
             &mut execution,
             dataset,
             options(),
             &QueryGovernors::UNBOUNDED,
-            &scope_workspace,
+            operation,
             |outcome| match outcome {
                 InternedOutcome::Solutions(solutions) => {
                     materialize_cells_admitted(&solutions, &scope_workspace).map(Some)
@@ -2549,6 +2779,9 @@ fn execute_bound<
                                 cells.rows.iter().map(|row| row.cells.as_slice()),
                                 &ranked,
                                 dataset,
+                                |error| {
+                                    ExecutionError::NativeFailure(operation.source_error(error))
+                                },
                             )?;
                         }
                         Ok(Some((ranked, materialised, attestation)))
@@ -2682,6 +2915,7 @@ fn execute_bound<
         streams[position].stream.attach_exclusion(
             purrdf_sparql_eval::WorkspaceBox::new_admitted(
                 DatasetExclusion {
+                    operation: operation.clone(),
                     stratum,
                     engine: engine.clone(),
                     env: env.clone(),
@@ -2737,6 +2971,7 @@ fn index_candidate_rows<'a, D: DatasetView, C: std::borrow::Borrow<TermValue> + 
     rows: impl IntoIterator<Item = &'a [Option<C>]>,
     ranked: &[(u64, Term, RowBlock)],
     dataset: &D,
+    read_error: impl Fn(D::ReadError) -> ExecutionError,
 ) -> Result<(), ExecutionError> {
     let Some(column) = variables
         .iter()
@@ -2746,7 +2981,7 @@ fn index_candidate_rows<'a, D: DatasetView, C: std::borrow::Borrow<TermValue> + 
     };
     for ((_, term, _), row) in ranked.iter().zip(rows) {
         if let Some(value) = row.get(column).and_then(Option::as_ref) {
-            index_candidate(index, term, value.borrow(), dataset)?;
+            index_candidate(index, term, value.borrow(), dataset, &read_error)?;
         }
     }
     Ok(())
@@ -2761,15 +2996,12 @@ fn index_candidate<D: DatasetView>(
     term: &Term,
     value: &TermValue,
     dataset: &D,
+    read_error: impl Fn(D::ReadError) -> ExecutionError,
 ) -> Result<(), ExecutionError> {
     if index.contains_key(term) {
         return Ok(());
     }
-    let identity = dataset
-        .term_id_by_value(value)
-        .map_err(|error| ExecutionError::SourceRead {
-            reason: error.to_string(),
-        })?;
+    let identity = dataset.term_id_by_value(value).map_err(read_error)?;
     let binding = match identity {
         Some(id) => CandidateBinding::Id(id),
         None => {
@@ -3209,12 +3441,13 @@ impl CandidateColumns {
 /// `DepthReached`; a producer that runs out ends it `Exhausted`, or
 /// `RowBoundReached` where it filled a depth it could not be asked past.
 struct CallRead<'d, D: DatasetView + Sync> {
+    operation: purrdf_sparql_eval::ReadOperation<D::ReadError>,
     /// Native ownership authority shared by the producer and ranked identities.
     workspace: purrdf_sparql_eval::WorkspaceCapability,
     /// The stratum this read is for.
     stratum: Iri,
     /// The open invocation.
-    cursor: CallCursor,
+    cursor: CallCursor<'static>,
     /// Where the invocation's solutions carry the candidate and the block.
     columns: CandidateColumns,
     /// The planned depth: the most rows this stratum may contribute.
@@ -3339,15 +3572,20 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
                 && let Some(ranked) = &ranked
                 && let Some(value) = self.columns.candidate_of(&row.cells)
             {
-                index_candidate(&mut index.borrow_mut(), &ranked.1, value, self.dataset).map_err(
-                    |error| match error {
-                        ExecutionError::NativeFailure(error) => ReadFault::Native(error),
-                        error => ReadFault::Producer {
-                            reason: error.to_string(),
-                            whole_run: true,
-                        },
+                index_candidate(
+                    &mut index.borrow_mut(),
+                    &ranked.1,
+                    value,
+                    self.dataset,
+                    |error| ExecutionError::NativeFailure(self.operation.source_error(error)),
+                )
+                .map_err(|error| match error {
+                    ExecutionError::NativeFailure(error) => ReadFault::Native(error),
+                    error => ReadFault::Producer {
+                        reason: error.to_string(),
+                        whole_run: true,
                     },
-                )?;
+                })?;
             }
             if let Some(retained) = &self.retained {
                 retained
@@ -3558,6 +3796,37 @@ mod tests {
     use crate::iri::{Iri, Term};
     use crate::render::decode_term;
 
+    #[test]
+    fn structured_stream_inspection_leaves_unconsumed_rows_and_receipt_intact() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let term = Term::new("<http://example.org/remaining>");
+        let mut stream = super::RankedStreamImpl::new(
+            vec![(u64::MAX, term.clone(), RowBlock::Undeclared)],
+            StreamEnding::DepthReached { rank: u64::MAX },
+        );
+        let fields = Capture::read(&stream);
+        assert!(matches!(fields.field("pulled"), ErrorValue::Unsigned(0)));
+        let source = fields.child("source");
+        let rows = source.child("rows");
+        let entries = rows.records("rows");
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(entries[0].field("rank"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert_eq!(
+            source.child("ending").code,
+            "retrieval-stream-depth-reached"
+        );
+        drop(fields);
+        assert_eq!(
+            crate::block_on(stream.next()).unwrap(),
+            Some((u64::MAX, term, RowBlock::Undeclared))
+        );
+        assert_eq!(stream.rows_emitted(), 1);
+        assert!(crate::block_on(stream.next()).unwrap().is_none());
+    }
+
     #[derive(Debug)]
     struct RefusingProvider {
         bytes: purrdf_core::SegmentedBytes,
@@ -3613,7 +3882,11 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let mut candidates =
             super::CandidateIndex::new(&purrdf_sparql_eval::WorkspaceCapability::resident());
-        let error = super::index_candidate(&mut candidates, &term, &value, &source).unwrap_err();
+        let read_error = |error: purrdf_core::SegmentedError| ExecutionError::SourceRead {
+            reason: error.to_string(),
+        };
+        let error = super::index_candidate(&mut candidates, &term, &value, &source, read_error)
+            .unwrap_err();
         assert!(matches!(error, ExecutionError::SourceRead { .. }));
         assert_eq!(candidates.len(), 0);
         let healthy = purrdf_core::SegmentedSession::open(
@@ -3622,7 +3895,7 @@ mod tests {
             purrdf_core::SegmentedReadLimits::new(1_000_000, 2, 256, 1_000_000, 4),
         )
         .unwrap();
-        super::index_candidate(&mut candidates, &term, &value, &healthy).unwrap();
+        super::index_candidate(&mut candidates, &term, &value, &healthy, read_error).unwrap();
         assert!(
             matches!(candidates.get(&term), Some(super::CandidateBinding::Id(id)) if id.index() > 1_u64 << 53)
         );

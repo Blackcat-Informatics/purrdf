@@ -139,6 +139,20 @@ pub enum PackDictError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for PackDictError {
+    purrdf_hash::error_visit! {
+        Truncated { needed, found } => "pack-dictionary-truncated" {
+            "needed" => ByteCount(*needed as u128),
+            "found" => ByteCount(*found as u128),
+        },
+        Malformed(message) => "pack-dictionary-malformed" { "message" => Text(message) },
+        RelativeIri { iri, reason } => "pack-dictionary-relative-iri" {
+            "iri" => Iri(iri),
+            "cause" => Cause(reason),
+        },
+    }
+}
+
 impl fmt::Display for PackDictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

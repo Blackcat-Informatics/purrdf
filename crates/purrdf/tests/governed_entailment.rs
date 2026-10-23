@@ -359,10 +359,10 @@ fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
     assert_eq!(
         bindings(&result),
         vec![TermValue::typed_literal(
-            "2",
+            "2.0",
             "http://www.w3.org/2001/XMLSchema#decimal"
         )],
-        "MEDIAN of {{1, 2, 3}} is 2, computed over the closure the governed entry point answers"
+        "MEDIAN of {{1, 2, 3}} is the computed decimal 2.0, over the closure the governed entry point answers"
     );
 }
 

@@ -28,6 +28,14 @@ pub struct MetricSourceDomain {
     lower: [Rat; 2],
     upper: [Rat; 2],
 }
+impl purrdf_hash::error::StructuredError for MetricSourceDomain {
+    purrdf_hash::error_visit! {
+        @record self { lower, upper } => "metric-source-domain" {
+            "lower" => List(self.lower.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "upper" => List(self.upper.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value)))
+        }
+    }
+}
 
 crate::context::retained::native_detached_fields!(MetricSourceDomain {
     native: [lower, upper],
@@ -91,9 +99,8 @@ impl MetricSourceDomain {
                         .map_err(GeoError::NumericalScratch)?
                         .is_lt()
                     {
-                        return Err(progress.retained_message(
-                            "inverse source rectangle requires positive metre extents",
-                            GeoError::Config,
+                        return Err(crate::ModelInputError::source_rectangle(
+                            value, axis, progress,
                         ));
                     }
                 }
@@ -179,6 +186,13 @@ pub struct Polynomial2dInverse {
     pub polynomial: Polynomial2d,
     /// Every admissible source root is sought in this closed metre rectangle.
     pub source_domain: MetricSourceDomain,
+}
+impl purrdf_hash::error::StructuredError for Polynomial2dInverse {
+    purrdf_hash::error_visit! {
+        @record self { polynomial, source_domain } => "polynomial-2d-inverse" {
+            "polynomial" => Record(&self.polynomial), "source_domain" => Record(&self.source_domain)
+        }
+    }
 }
 
 crate::context::retained::native_detached_fields!(Polynomial2dInverse {
@@ -338,6 +352,13 @@ pub struct BilinearGridInverse {
     /// Explicit original source rectangle; no root outside it is admissible.
     pub source_domain: MetricSourceDomain,
 }
+impl purrdf_hash::error::StructuredError for BilinearGridInverse {
+    purrdf_hash::error_visit! {
+        @record self { grid, source_domain } => "bilinear-grid-inverse" {
+            "grid" => Record(&self.grid), "source_domain" => Record(&self.source_domain)
+        }
+    }
+}
 
 crate::context::retained::native_detached_fields!(BilinearGridInverse {
     native: [grid, source_domain],
@@ -355,18 +376,29 @@ impl BilinearGridInverse {
             .patch_bounds_with(columns - 2, rows - 2, values)
             .map_err(GeoError::NumericalScratch)?;
         for axis in 0..2 {
-            if values
+            let side = if values
                 .compare(&self.source_domain.lower[axis], &self.grid.origin()[axis])
                 .map_err(GeoError::NumericalScratch)?
                 .is_lt()
-                || values
-                    .compare(&self.source_domain.upper[axis], &upper[axis])
-                    .map_err(GeoError::NumericalScratch)?
-                    .is_gt()
             {
-                return Err(progress.retained_message(
-                    "grid inverse source rectangle extends beyond declared grid",
-                    GeoError::Config,
+                Some(crate::GridDomainSide::Lower)
+            } else if values
+                .compare(&self.source_domain.upper[axis], &upper[axis])
+                .map_err(GeoError::NumericalScratch)?
+                .is_gt()
+            {
+                Some(crate::GridDomainSide::Upper)
+            } else {
+                None
+            };
+            if let Some(side) = side {
+                return Err(crate::ModelInputError::inverse_rectangle(
+                    &self.grid,
+                    &self.source_domain,
+                    &upper,
+                    axis,
+                    side,
+                    progress,
                 ));
             }
         }
@@ -591,14 +623,9 @@ impl BilinearGridInverse {
         let inside = self
             .source_domain
             .contains_math([&point.x, &point.y], math, progress)?
-            && match self
+            && self
                 .grid
-                .location_math(&point.x, &point.y, true, math, progress)
-            {
-                Ok(_) => true,
-                Err(MathError::Domain(_)) => false,
-                Err(error) => return Err(error),
-            };
+                .contains_complete_patch_math(&point.x, &point.y, math, progress)?;
         certify(
             inside,
             target,

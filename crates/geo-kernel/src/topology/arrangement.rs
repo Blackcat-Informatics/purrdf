@@ -373,12 +373,24 @@ fn ordinate(
     let width = admission.expression_result(RationalAdd, &[b.x(), a.x()], 1, |values| {
         Ok(values.subtract(b.x(), a.x())?)
     })?;
-    let parameter =
-        admission.expression_result(RationalDivide, &[&offset, &width], 1, |values| {
-            values
-                .divide(&offset, &width)?
-                .ok_or_else(|| GeoError::domain("vertical edge has no open-slab ordinate"))
-        })?;
+    let parameter = admission.expression_observed(
+        RationalDivide,
+        &[&offset, &width],
+        1,
+        |values, progress| {
+            values.divide(&offset, &width)?.ok_or_else(|| {
+                crate::GeometryDomainError::edge_quotient(
+                    a,
+                    b,
+                    x,
+                    &offset,
+                    &width,
+                    crate::EdgeQuotientOperation::SlabOrdinate,
+                    progress,
+                )
+            })
+        },
+    )?;
     crate::SourceLinearEdge::interpolate_ordinate_admitted(a.y(), b.y(), &parameter, &mut admission)
 }
 fn push_event(
@@ -414,6 +426,51 @@ fn release_duplicate_events(
 mod tests {
     use super::*;
     use crate::{ExecutionLimits, ExecutionPolicy};
+
+    #[test]
+    fn vertical_slab_refusal_keeps_endpoints_and_actual_quotient_operands() {
+        let first = Coord::xy(Rat::from_i64(7), Rat::from_i64(-3));
+        let second = Coord::xy(Rat::from_i64(7), Rat::from_i64(11));
+        let x = Rat::from_i64(9);
+        let mut context = MetricContext::wgs84().unwrap();
+        let error = ordinate(
+            &first,
+            &second,
+            &x,
+            &mut context,
+            &mut WorkProgress::integer(None),
+        )
+        .unwrap_err();
+        let GeoError::GeometryDomain(cause) = error.original() else {
+            panic!("native slab refusal")
+        };
+        let crate::GeometryDomainError::EdgeQuotient {
+            operation,
+            endpoints,
+            x: original,
+            offset,
+            width,
+        } = &**cause
+        else {
+            panic!("original edge quotient")
+        };
+        assert_eq!(*operation, crate::EdgeQuotientOperation::SlabOrdinate);
+        assert_eq!(&**endpoints, &[first, second]);
+        assert_eq!(
+            (&**original, &**offset, &**width),
+            (&x, &Rat::from_i64(2), &Rat::zero())
+        );
+        assert_eq!(error.detail(), "vertical edge has no open-slab ordinate");
+        assert!(error.is_expression_error());
+        drop(context);
+        let capture = purrdf_testkit::error_capture::Capture::read(error.original()).child("cause");
+        assert_eq!(capture.code, "geometry-edge-quotient");
+        assert_eq!(
+            capture.child("operation").code,
+            "edge-quotient-slab-ordinate"
+        );
+        assert_eq!(capture.child("first").code, "coordinate");
+    }
 
     fn point(x: i64, y: i64) -> Coord {
         Coord::xy(Rat::from_i64(x), Rat::from_i64(y))
