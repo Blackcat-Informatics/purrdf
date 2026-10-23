@@ -136,8 +136,9 @@ pub(crate) fn node_expression_targets(
     shape: &Term,
     expr: &NodeExpr,
     disallows: &ConformanceDisallows,
+    model: Option<&std::sync::Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    crate::expression::eval_node_expr_in_run(data, shape, expr, disallows).map_err(|error| {
+    crate::expression::eval_node_expr_in_run(data, shape, expr, disallows, model).map_err(|error| {
         error.context(&format!(
             "sh:targetNode node expression on shape {shape} failed: "
         ))

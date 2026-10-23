@@ -49,9 +49,16 @@ fn ex_term(local: &str) -> Term {
     Term::NamedNode(ex(local))
 }
 
-/// The IRI of the fixture custom node-expression function.
-fn fixture_fn_iri() -> String {
-    ex("fn/average").as_str().to_owned()
+/// A live immutable domain for primitive codec examples; real ownership and
+/// teardown controls use independently parsed domains instead.
+fn fixture_index() -> &'static crate::shapes::link::ShapeIndex {
+    static INDEX: OnceLock<crate::shapes::link::ShapeIndex> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let definition = leaf_shape("SharedShape");
+        let mut definitions = ::purrdf_rdf::FastMap::default();
+        definitions.insert(definition.id.clone(), definition);
+        Arc::new(OnceLock::from(definitions))
+    })
 }
 
 /// A custom node-expression function declaration with no body installed.
@@ -71,7 +78,7 @@ fn fixture_recursive_fn() -> Arc<CustomFunction> {
     let func = fixture_fn();
     func.body
         .set(NodeExpr::CustomCall {
-            func: Arc::clone(&func),
+            func: func.iri.clone(),
             args: vec![(ArgKey::Index(0), NodeExpr::Arg(ArgKey::Index(0)))],
         })
         .expect("the fixture body installs once");
@@ -81,7 +88,7 @@ fn fixture_recursive_fn() -> Arc<CustomFunction> {
 /// A node shape with no constraints, targets, properties or rules.
 fn leaf_shape(id: &str) -> Shape {
     Shape {
-        catalog: None,
+        owner: None,
         id: ex_term(id),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -246,7 +253,7 @@ fn sample_shape_args() -> Vec<ShapeArg> {
         ShapeArg::Named(Box::new(leaf_shape("NamedShape"))),
         ShapeArg::Computed {
             expr: Box::new(NodeExpr::Path(Path::Predicate(ex("kind")))),
-            shapes: Arc::new(OnceLock::new()),
+            shapes: Arc::downgrade(fixture_index()),
         },
     ]
 }
@@ -306,7 +313,7 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
         }),
         NodeExpr::Arg(ArgKey::Index(0)),
         NodeExpr::CustomCall {
-            func: Arc::clone(func),
+            func: func.iri.clone(),
             args: vec![(ArgKey::Index(0), NodeExpr::This)],
         },
         NodeExpr::Empty,
@@ -343,6 +350,14 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
             query: "SELECT ?x WHERE { $this <https://example.org/p> ?x }".to_owned(),
             variable: "x".to_owned(),
             key: "sh:select",
+        },
+        NodeExpr::Owned {
+            expr: Box::new(NodeExpr::This),
+            owner: crate::shapes::ModelOwner::from_declarations(
+                Arc::clone(fixture_index()),
+                Vec::new(),
+            )
+            .unwrap(),
         },
     ]
 }
@@ -442,10 +457,10 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         },
         Constraint::NodeByExpression {
             expr: NodeExpr::CustomCall {
-                func: Arc::clone(func),
+                func: func.iri.clone(),
                 args: vec![(ArgKey::Index(0), NodeExpr::This)],
             },
-            shapes: Arc::new(OnceLock::new()),
+            shapes: Arc::downgrade(fixture_index()),
             messages: vec![Literal::new_simple_literal("shape")],
             severity: None,
         },
@@ -484,23 +499,212 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
                 Target::SubjectsOf(ex("notation")),
             ],
         },
+        Constraint::Reference(ex_term("SharedShape")),
     ]
 }
 
 // ── Codec harness ───────────────────────────────────────────────────────────────
 
-/// A writer whose declaration index holds exactly the fixture function.
+/// A primitive writer with the fixture's retained definition domain.
 fn test_writer() -> AstWriter {
-    let mut index = BTreeMap::new();
-    index.insert(fixture_fn_iri(), 0u64);
-    AstWriter::new(index)
+    let mut writer = AstWriter::new(BTreeMap::new());
+    writer
+        .index_ids
+        .insert(Arc::as_ptr(fixture_index()).addr(), 0);
+    writer
 }
 
 /// A reader whose declaration table holds exactly the fixture function.
 fn test_reader(bytes: &[u8]) -> AstReader<'_> {
     let mut reader = AstReader::new(bytes);
     reader.functions = vec![fixture_fn()];
+    reader.indexes.push(Arc::new(OnceLock::new()));
     reader
+}
+
+/// Locate the root sequence in a real codec prefix with no declarations.
+fn root_count_position(bytes: &[u8]) -> usize {
+    let mut reader = AstReader::new(bytes);
+    let domains = reader.count().unwrap();
+    reader.indexes = (0..domains).map(|_| Arc::new(OnceLock::new())).collect();
+    assert_eq!(reader.count().unwrap(), 0);
+    reader.owner().unwrap().unwrap();
+    for _ in 0..domains {
+        if reader.flag().unwrap() {
+            reader.seq(AstReader::shape).unwrap();
+        }
+    }
+    reader.pos
+}
+
+#[test]
+fn decoding_refuses_a_function_owning_its_own_model_before_installing_bodies() {
+    let function = fixture_fn();
+    let owner = crate::shapes::ModelOwner::from_functions(vec![Arc::clone(&function)]).unwrap();
+    let shapes = Shapes {
+        owner: Arc::clone(&owner),
+        ..Shapes::default()
+    };
+    let valid = encode_ast_derived(&shapes).unwrap();
+    decode_ast(&valid).expect("an uncalled bodiless declaration is representable");
+
+    // Locate the body presence flag by decoding the real prefix. Keep the source
+    // metadata unfilled: constructing a native strong cycle would leak the test.
+    let mut prefix = AstReader::new(&valid);
+    assert_eq!(prefix.count().unwrap(), 1);
+    prefix.indexes.push(Arc::clone(&owner.index));
+    assert_eq!(prefix.count().unwrap(), 1);
+    prefix.named_node().unwrap();
+    prefix.custom_fn_kind().unwrap();
+    prefix.seq(AstReader::arg_key).unwrap();
+    prefix.count().unwrap();
+    prefix.functions.push(Arc::clone(&function));
+    prefix.owner().unwrap().unwrap();
+    let body_flag = prefix.pos;
+    assert!(!prefix.flag().unwrap());
+
+    let mut body = test_writer();
+    body.owners.insert(Arc::as_ptr(&owner).addr(), 0);
+    body.node_expr(&NodeExpr::Owned {
+        expr: Box::new(NodeExpr::This),
+        owner,
+    })
+    .unwrap();
+    let mut malformed = valid.clone();
+    malformed[body_flag] = 1;
+    let body_start = body_flag + 1;
+    malformed.splice(body_start..body_start, body.out);
+    let refusal = decode_ast(&malformed).unwrap_err();
+    assert_eq!(refusal.dimension(), ProductDimension::Malformed);
+    assert!(
+        refusal.message().contains("strong ownership cycle"),
+        "{refusal}"
+    );
+    assert!(function.body.get().is_none());
+    decode_ast(&valid).expect("the non-owning neighbour still decodes");
+}
+
+#[test]
+fn decoding_refuses_a_definition_owning_its_own_index_before_filling_cells() {
+    let shapes = crate::engine::parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         <http://example.org/Root> a sh:NodeShape;
+           sh:nodeByExpression <http://example.org/Root> .",
+        None,
+    )
+    .unwrap();
+    let valid = encode_ast_derived(&shapes).unwrap();
+    decode_ast(&valid).expect("ordinary exported roots retain their model");
+    let mut prefix = AstReader::new(&valid);
+    assert_eq!(prefix.count().unwrap(), 1);
+    prefix.indexes.push(Arc::new(OnceLock::new()));
+    assert_eq!(prefix.count().unwrap(), 0);
+    prefix.owner().unwrap().unwrap();
+    assert!(prefix.flag().unwrap());
+    assert_eq!(prefix.count().unwrap(), 1);
+    let definition_owner = prefix.pos;
+    assert_eq!(prefix.byte().unwrap(), 0, "the original definition is bare");
+    let mut malformed = valid.clone();
+    malformed.splice(definition_owner..=definition_owner, [1, 0]);
+    let refusal = decode_ast(&malformed).unwrap_err();
+    assert_eq!(refusal.dimension(), ProductDimension::Malformed);
+    assert!(
+        refusal.message().contains("strong ownership cycle"),
+        "{refusal}"
+    );
+    decode_ast(&valid).expect("the bare-definition neighbour still decodes");
+}
+
+#[test]
+fn duplicate_function_headers_are_refused_before_bodies_are_installed() {
+    let mut shapes = crate::engine::parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix ex: <http://example.org/> .
+         ex:a a sh:ListParameterExpressionFunction; sh:bodyExpression \"one\" .
+         ex:b a sh:ListParameterExpressionFunction; sh:bodyExpression \"two\" .",
+        None,
+    )
+    .unwrap();
+    shapes.node_shapes.clear();
+    let valid = encode_ast_derived(&shapes).unwrap();
+    decode_ast(&valid).expect("distinct declarations decode");
+    let mut reader = AstReader::new(&valid);
+    reader.count().unwrap();
+    assert_eq!(reader.count().unwrap(), 2);
+    let first = reader.named_node().unwrap();
+    reader.custom_fn_kind().unwrap();
+    reader.seq(AstReader::arg_key).unwrap();
+    reader.count().unwrap();
+    let second = reader.named_node().unwrap();
+    assert_eq!(first.as_str().len(), second.as_str().len());
+    let start = reader.pos - second.as_str().len();
+    let end = reader.pos;
+    let mut malformed = valid.clone();
+    malformed[start..end].copy_from_slice(first.as_str().as_bytes());
+    let refusal = decode_ast(&malformed).unwrap_err();
+    assert_eq!(refusal.dimension(), ProductDimension::Malformed);
+    assert_eq!(
+        refusal.preparation_refusal(),
+        Some(&crate::PreparationRefusal::DuplicateFunction(first))
+    );
+    decode_ast(&valid).expect("the distinct-header neighbour still decodes");
+}
+
+#[test]
+fn catalog_codec_preserves_logical_cycles_shared_roots_and_owner_release() {
+    let mut left = leaf_shape("Left");
+    let mut right = leaf_shape("Right");
+    left.constraints
+        .push(Constraint::Reference(right.id.clone()));
+    right
+        .constraints
+        .push(Constraint::Reference(left.id.clone()));
+    let catalog = crate::shapes::ModelOwner::from_definitions(vec![left, right]).unwrap();
+    let shapes = shapes_of(vec![
+        catalog.root(&ex_term("Left")).unwrap(),
+        catalog.root(&ex_term("Right")).unwrap(),
+    ]);
+    let bytes = encode_ast_derived(&shapes).unwrap();
+    let mut roots = decode_ast(&bytes).unwrap().node_shapes.into_iter();
+    let left = roots.next().unwrap();
+    let right = roots.next().unwrap();
+    assert!(roots.next().is_none());
+    assert!(Arc::ptr_eq(
+        left.owner.as_ref().unwrap(),
+        right.owner.as_ref().unwrap()
+    ));
+    let restored = left.owner.as_ref().unwrap();
+    assert!(
+        matches!(restored.definition(&ex_term("Left")).unwrap().constraints.as_slice(),
+        [Constraint::Reference(id)] if *id == ex_term("Right"))
+    );
+    assert!(
+        matches!(restored.definition(&ex_term("Right")).unwrap().constraints.as_slice(),
+        [Constraint::Reference(id)] if *id == ex_term("Left"))
+    );
+    let weak = Arc::downgrade(restored);
+    drop(roots);
+    drop(left);
+    assert!(weak.upgrade().is_some());
+    drop(right);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn catalog_codec_refuses_unknown_forward_and_redeclared_owners() {
+    // Unknown references and owners without an admitted definition domain refuse.
+    for bytes in [&[1, 0][..], &[2, 0, 1, 1, 0][..]] {
+        assert!(test_reader(bytes).owner().is_err());
+    }
+    let catalog = crate::shapes::ModelOwner::from_definitions(vec![leaf_shape("Leaf")]).unwrap();
+    let mut reader = test_reader(&[2, 0, 0]);
+    reader.owners.push(Arc::clone(&catalog));
+    assert!(reader.owner().is_err());
+
+    // An index addresses an existing owner, not a sequence of unread bytes.
+    let mut reader = test_reader(&[1, 100]);
+    reader.owners = vec![Arc::clone(&catalog); 101];
+    assert!(Arc::ptr_eq(&reader.owner().unwrap().unwrap(), &catalog));
+    assert_eq!(reader.remaining(), 0);
 }
 
 /// Decode `bytes` with one [`AstReader`] method, answering the value and how many
@@ -515,7 +719,7 @@ macro_rules! reader_fn {
         |bytes: &[u8]| {
             let mut reader = test_reader(bytes);
             let value = reader.$method()?;
-            Ok((value, reader.pos))
+            Ok((value, reader.pos, Arc::clone(&reader.indexes[0])))
         }
     };
 }
@@ -542,7 +746,7 @@ fn roundtrip_tags<T>(
     declared: u8,
     samples: &[T],
     write: impl Fn(&mut AstWriter, &T) -> Result<(), ShapesProductError>,
-    read: impl Fn(&[u8]) -> Result<(T, usize), ShapesProductError>,
+    read: impl Fn(&[u8]) -> Result<(T, usize, crate::shapes::link::ShapeIndex), ShapesProductError>,
 ) {
     assert_eq!(
         samples.len(),
@@ -562,7 +766,7 @@ fn roundtrip_tags<T>(
              codec does",
         );
 
-        let (value, consumed) =
+        let (value, consumed, domain) =
             read(&bytes).unwrap_or_else(|error| panic!("{label}[{index}]: {error}"));
         assert_eq!(
             consumed,
@@ -571,6 +775,7 @@ fn roundtrip_tags<T>(
         );
 
         let mut again = test_writer();
+        again.index_ids.insert(Arc::as_ptr(&domain).addr(), 0);
         write(&mut again, &value).expect("a decoded value re-encodes");
         assert_eq!(
             again.out, bytes,
@@ -639,6 +844,7 @@ fn round_trip(shapes: &Shapes) -> (Vec<u8>, Vec<u8>, Shapes) {
     let bytes = encode_ast_derived(shapes).expect("the fixture encodes");
     let parts = decode_ast(&bytes).expect("the fixture decodes");
     let rebuilt = Shapes {
+        owner: parts.owner,
         node_shapes: parts.node_shapes,
         box_role_vocab: parts.box_role_vocab,
         target_types: parts.target_types,
@@ -836,7 +1042,13 @@ fn full_fixture() -> Shapes {
     constraints.extend(arg_key_constraints);
 
     let shape = Shape {
-        catalog: None,
+        owner: Some(
+            crate::shapes::ModelOwner::from_declarations(
+                Arc::clone(fixture_index()),
+                vec![Arc::clone(&func)],
+            )
+            .unwrap(),
+        ),
         id: ex_term("EverythingShape"),
         targets: sample_targets(),
         constraints,
@@ -1071,9 +1283,12 @@ fn unknown_variant_tag_is_unsupported_capability() {
         encode_ast_derived(&shapes_of(vec![leaf_shape("Only")])).expect("the fixture encodes");
     decode_ast(&bytes).expect("the unmodified product decodes");
     let mut corrupted = bytes;
-    // Byte 0 is the declaration count (0), byte 1 the node-shape count (1), byte 2
-    // the first shape's id TERM tag — raise it past the tag space.
-    corrupted[2] = TAGS_TERM;
+    let mut prefix = AstReader::new(&corrupted);
+    prefix.pos = root_count_position(&corrupted);
+    assert_eq!(prefix.count().unwrap(), 1);
+    assert!(prefix.owner().unwrap().is_none());
+    let term_tag = prefix.pos;
+    corrupted[term_tag] = TAGS_TERM;
     let error = decode_ast(&corrupted).expect_err("an unknown term tag must be refused");
     assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);
 }
@@ -1344,10 +1559,14 @@ fn order_key_negative_zero_is_canonical() {
 fn custom_function_cycle_encodes_as_dag() {
     let func = fixture_recursive_fn();
     let shapes = shapes_of(vec![Shape {
+        owner: Some(
+            crate::shapes::ModelOwner::from_declarations(Arc::default(), vec![Arc::clone(&func)])
+                .unwrap(),
+        ),
         constraints: vec![
             Constraint::Expression {
                 expr: NodeExpr::CustomCall {
-                    func: Arc::clone(&func),
+                    func: func.iri.clone(),
                     args: vec![(ArgKey::Index(0), NodeExpr::This)],
                 },
                 messages: vec![],
@@ -1357,7 +1576,7 @@ fn custom_function_cycle_encodes_as_dag() {
             // hold one entry, and both sites must reference it by index.
             Constraint::Expression {
                 expr: NodeExpr::CustomCall {
-                    func: Arc::clone(&func),
+                    func: func.iri.clone(),
                     args: vec![(ArgKey::Index(1), NodeExpr::Empty)],
                 },
                 messages: vec![],
@@ -1383,19 +1602,19 @@ fn custom_function_cycle_encodes_as_dag() {
     assert_eq!(decoded.params, func.params);
     assert_eq!(decoded.required, func.required);
 
-    // The cycle is restored, not flattened: the decoded body calls the decoded
-    // function itself, through the very same handle.
+    // The logical cycle is restored without an owning backreference: the body
+    // names the unique declaration retained by the model.
     let body = decoded.body().expect("the body is installed");
     match body {
         NodeExpr::CustomCall { func: callee, .. } => assert!(
-            Arc::ptr_eq(callee, decoded),
-            "the body must call the SAME handle, not a copy: a copy would give the recursion a \
-             second, divergent definition",
+            callee == &decoded.iri,
+            "the body must reference the same unique decoded declaration by IRI",
         ),
         other => panic!("the body is not the call it was written as: {other:?}"),
     }
 
     let rebuilt = Shapes {
+        owner: parts.owner,
         node_shapes: parts.node_shapes,
         ..Shapes::default()
     };
@@ -1406,52 +1625,81 @@ fn custom_function_cycle_encodes_as_dag() {
     );
 
     // A declaration whose body was never installed is a distinct, legal state.
+    let unfilled = fixture_fn();
     let bodiless = shapes_of(vec![Shape {
-        constraints: vec![Constraint::Expression {
-            expr: NodeExpr::CustomCall {
-                func: fixture_fn(),
-                args: Vec::new(),
-            },
-            messages: vec![],
-            severity: None,
-        }],
+        owner: Some(
+            crate::shapes::ModelOwner::from_declarations(
+                Arc::default(),
+                vec![Arc::clone(&unfilled)],
+            )
+            .unwrap(),
+        ),
+        constraints: Vec::new(),
         ..leaf_shape("Bodiless")
     }]);
     let bytes = encode_ast_derived(&bodiless).expect("a bodiless declaration encodes");
     let parts = decode_ast(&bytes).expect("it decodes");
     assert!(parts.custom_functions[0].body.get().is_none());
     assert_ne!(bytes, encode_ast_derived(&shapes).expect("encodes"));
+    let mut called = bodiless;
+    called.node_shapes[0]
+        .constraints
+        .push(Constraint::Expression {
+            expr: NodeExpr::CustomCall {
+                func: unfilled.iri.clone(),
+                args: Vec::new(),
+            },
+            messages: Vec::new(),
+            severity: None,
+        });
+    let refusal = encode_ast_derived(&called)
+        .expect_err("a called declaration must have a body before preparation");
+    assert_eq!(
+        refusal.preparation_refusal(),
+        Some(&crate::PreparationRefusal::MissingFunctionBody(
+            unfilled.iri.clone()
+        ))
+    );
 }
 
-/// Two SEPARATE declarations of one function IRI are refused rather than unified,
-/// paired with the valid case they are one byte away from.
+/// Separate domains preserve distinct declarations of the same function IRI.
 #[test]
-fn two_declarations_of_one_function_iri_are_refused() {
+fn same_named_declarations_in_distinct_domains_are_preserved() {
     let call = |func: Arc<CustomFunction>| Constraint::Expression {
-        expr: NodeExpr::CustomCall {
-            func,
-            args: Vec::new(),
+        expr: NodeExpr::Owned {
+            owner: crate::shapes::ModelOwner::from_declarations(
+                Arc::default(),
+                vec![Arc::clone(&func)],
+            )
+            .unwrap(),
+            expr: Box::new(NodeExpr::CustomCall {
+                func: func.iri.clone(),
+                args: Vec::new(),
+            }),
         },
         messages: vec![],
         severity: None,
     };
 
-    // INVALID: two handles, same IRI. Picking one would give half the call sites
-    // a body they were never written against.
-    let first = fixture_fn();
-    let second = fixture_fn();
+    // Distinct owners retain both original declarations.
+    let first = fixture_recursive_fn();
+    let second = fixture_recursive_fn();
     assert!(!Arc::ptr_eq(&first, &second));
     let clashing = shapes_of(vec![Shape {
         constraints: vec![call(first), call(second)],
         ..leaf_shape("Clashing")
     }]);
-    let error =
-        encode_ast_derived(&clashing).expect_err("two declarations of one IRI must be refused");
-    assert_eq!(error.dimension(), ProductDimension::Malformed);
+    let bytes = encode_ast_derived(&clashing).expect("distinct domains encode");
+    let parts = decode_ast(&bytes).expect("distinct domains decode");
+    assert_eq!(parts.custom_functions.len(), 2);
+    assert!(!Arc::ptr_eq(
+        &parts.custom_functions[0],
+        &parts.custom_functions[1]
+    ));
 
     // VALID: the same two call sites sharing ONE declaration — which is what the
     // parser actually produces, and what a refusal here must not touch.
-    let shared = fixture_fn();
+    let shared = fixture_recursive_fn();
     let sharing = shapes_of(vec![Shape {
         constraints: vec![call(Arc::clone(&shared)), call(shared)],
         ..leaf_shape("Sharing")
@@ -1881,16 +2129,17 @@ fn an_oversized_sequence_count_does_not_reserve_for_itself() {
         HOSTILE * size_of::<Shape>() > 16 * 1024 * 1024,
         "the fixture must describe a reservation large enough to be worth refusing",
     );
-    let mut bytes = vec![0u8]; // field 1: an empty declaration table.
+    let empty = encode_ast_derived(&Shapes::default()).unwrap();
+    let mut bytes = empty[..root_count_position(&empty)].to_vec();
     let mut count = Vec::new();
     write_varint(&mut count, HOSTILE as u64);
-    bytes.extend_from_slice(&count); // field 3: the node-shape count.
+    bytes.extend_from_slice(&count); // The node-shape count after the real prefix.
     bytes.resize(bytes.len() + HOSTILE, 0xff);
     let error = decode_ast(&bytes).expect_err("an unreadable element must refuse");
     assert_eq!(
         error.dimension(),
         ProductDimension::UnsupportedCapability,
-        "0xff is not a Term tag this build implements, got {error}",
+        "0xff is not a model-owner tag this build implements, got {error}",
     );
 
     // VALID: a sequence LONGER than the clamp that the bytes really do carry.
@@ -1930,16 +2179,20 @@ fn a_non_boolean_byte_is_malformed() {
 #[test]
 fn the_decoded_shape_index_is_one_shared_handle() {
     let shapes = shapes_of(vec![Shape {
+        owner: Some(
+            crate::shapes::ModelOwner::from_declarations(Arc::clone(fixture_index()), Vec::new())
+                .unwrap(),
+        ),
         constraints: vec![
             Constraint::NodeByExpression {
                 expr: NodeExpr::This,
-                shapes: Arc::new(OnceLock::new()),
+                shapes: Arc::downgrade(fixture_index()),
                 messages: vec![],
                 severity: None,
             },
             Constraint::NodeByExpression {
                 expr: NodeExpr::Empty,
-                shapes: Arc::new(OnceLock::new()),
+                shapes: Arc::downgrade(fixture_index()),
                 messages: vec![],
                 severity: None,
             },
@@ -1948,7 +2201,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
                     node: Box::new(NodeExpr::This),
                     shape: ShapeArg::Computed {
                         expr: Box::new(NodeExpr::Path(Path::Predicate(ex("kind")))),
-                        shapes: Arc::new(OnceLock::new()),
+                        shapes: Arc::downgrade(fixture_index()),
                     },
                 },
                 messages: vec![],
@@ -1961,7 +2214,8 @@ fn the_decoded_shape_index_is_one_shared_handle() {
     let bytes = encode_ast_derived(&shapes).expect("encodes");
     let parts = decode_ast(&bytes).expect("decodes");
 
-    let mut handles: Vec<&Arc<OnceLock<::purrdf_rdf::FastMap<Term, Shape>>>> = Vec::new();
+    let mut handles: Vec<&std::sync::Weak<OnceLock<::purrdf_rdf::FastMap<Term, Shape>>>> =
+        Vec::new();
     for constraint in &parts.node_shapes[0].constraints {
         match constraint {
             Constraint::NodeByExpression { shapes, .. } => handles.push(shapes),
@@ -1977,26 +2231,18 @@ fn the_decoded_shape_index_is_one_shared_handle() {
         }
     }
     assert_eq!(handles.len(), 3);
+    let domain = &parts.node_shapes[0].owner.as_ref().unwrap().index;
     for handle in &handles {
         assert!(
-            Arc::ptr_eq(handle, &parts.shape_index),
+            handle.ptr_eq(&Arc::downgrade(domain)),
             "every site must share the ONE index `AstParts::shape_index` hands out; a per-site \
              default would type-check and leave every constraint with a private, permanently \
              empty table",
         );
         assert!(
-            handle.get().is_none(),
-            "the index is filled by a later stage"
+            handle.upgrade().unwrap().get().is_some(),
+            "the original initialized domain is restored before publication"
         );
-    }
-
-    // Filling it once reaches every site, which is the whole point of sharing it.
-    parts
-        .shape_index
-        .set(::purrdf_rdf::FastMap::default())
-        .expect("the index fills once");
-    for handle in &handles {
-        assert!(handle.get().is_some());
     }
 }
 

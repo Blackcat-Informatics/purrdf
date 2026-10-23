@@ -583,7 +583,7 @@ pub enum Constraint {
         /// and cloning the shapes per constraint would be pure waste. The
         /// `OnceLock` is filled once, at the end of the shapes-graph parse, so a
         /// shape carrying this constraint can itself appear in the table.
-        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
+        shapes: std::sync::Weak<OnceLock<FastMap<Term, Shape>>>,
         /// Optional per-constraint message override (from `sh:message` on the
         /// expression node).
         messages: Vec<Literal>,
@@ -789,9 +789,9 @@ pub struct PropertyShape {
 /// A node shape.
 #[derive(Debug, Clone)]
 pub struct Shape {
-    /// Shared definitions for identity references. Catalog definitions themselves
-    /// carry no owning handle, so recursive references do not create Arc cycles.
-    pub catalog: Option<Arc<ShapeCatalog>>,
+    /// The complete declaration and resolution domain retained by an exported
+    /// root. Definitions inside that domain have no owning backreference.
+    pub owner: Option<Arc<ModelOwner>>,
     /// The shape node identity (IRI or blank node).
     pub id: Term,
     /// Target declarations for this shape.
@@ -837,17 +837,65 @@ pub struct Shape {
     pub rules: Vec<crate::rules::Rule>,
 }
 
-/// Immutable definitions shared by identity-referenced shapes.
-///
-/// The public roots own this catalog; definitions only name each other by RDF
-/// identity. Cloning a root retains the graph without cloning its definitions.
-pub struct ShapeCatalog {
+/// The declaration and resolution domain retained by exported model roots.
+/// Logical calls name declarations by IRI, keeping recursive calls non-owning.
+pub struct ModelOwner {
     pub(crate) index: link::ShapeIndex,
+    pub(crate) functions: Box<[Arc<crate::expression::CustomFunction>]>,
 }
 
-purrdf_hash::debug_non_exhaustive!(ShapeCatalog {});
+purrdf_hash::debug_non_exhaustive!(ModelOwner {});
 
-impl ShapeCatalog {
+impl ModelOwner {
+    /// Retain authored functions with an initialized empty shape domain.
+    ///
+    /// # Errors
+    /// Refuses duplicate function identities.
+    pub fn from_functions(
+        functions: Vec<Arc<crate::expression::CustomFunction>>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        Self::from_model(Vec::new(), functions)
+    }
+
+    /// An initialized empty declaration and shape domain.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            index: Arc::new(OnceLock::from(FastMap::default())),
+            functions: Box::new([]),
+        }
+    }
+
+    pub(crate) fn from_declarations(
+        index: link::ShapeIndex,
+        mut functions: Vec<Arc<crate::expression::CustomFunction>>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        functions.sort_unstable_by(|left, right| left.iri.as_str().cmp(right.iri.as_str()));
+        if let Some(pair) = functions.windows(2).find(|pair| pair[0].iri == pair[1].iri) {
+            return Err(crate::PreparationRefusal::DuplicateFunction(
+                pair[0].iri.clone(),
+            ));
+        }
+        Ok(Arc::new(Self {
+            index,
+            functions: functions.into_boxed_slice(),
+        }))
+    }
+
+    /// The declaration with this identity in the original model domain.
+    #[must_use]
+    pub fn function(&self, iri: &NamedNode) -> Option<&Arc<crate::expression::CustomFunction>> {
+        self.functions
+            .binary_search_by(|function| function.iri.as_str().cmp(iri.as_str()))
+            .ok()
+            .map(|position| &self.functions[position])
+    }
+}
+
+// The empty domain has an initialized index, unlike a derived empty OnceLock.
+purrdf_hash::default_from_new!(ModelOwner => empty);
+
+impl ModelOwner {
     /// Admit a complete definition table. Ownership stays on exported roots.
     ///
     /// # Errors
@@ -855,12 +903,23 @@ impl ShapeCatalog {
     pub fn from_definitions(
         definitions: Vec<Shape>,
     ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        Self::from_model(definitions, Vec::new())
+    }
+
+    /// Retain complete authored shape definitions and function declarations.
+    ///
+    /// # Errors
+    /// Refuses repeated identities and definitions that already own a domain.
+    pub fn from_model(
+        definitions: Vec<Shape>,
+        functions: Vec<Arc<crate::expression::CustomFunction>>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
         let mut entries = FastMap::with_capacity_and_hasher(
             definitions.len(),
             purrdf_hash::fixed::FixedState::default(),
         );
         for definition in definitions {
-            if definition.catalog.is_some() {
+            if definition.owner.is_some() {
                 return Err(crate::PreparationRefusal::OwningDefinition(Arc::new(
                     definition.id,
                 )));
@@ -876,9 +935,7 @@ impl ShapeCatalog {
                 }
             }
         }
-        Ok(Arc::new(Self {
-            index: Arc::new(OnceLock::from(entries)),
-        }))
+        Self::from_declarations(Arc::new(OnceLock::from(entries)), functions)
     }
 
     /// Borrow the original definition with this RDF identity.
@@ -896,7 +953,7 @@ impl ShapeCatalog {
     pub fn root(self: &Arc<Self>, id: &Term) -> Option<Shape> {
         let definition = self.definition(id)?;
         Some(Shape {
-            catalog: Some(Arc::clone(self)),
+            owner: Some(Arc::clone(self)),
             id: definition.id.clone(),
             targets: definition.targets.clone(),
             constraints: vec![Constraint::Reference(definition.id.clone())],
@@ -931,6 +988,8 @@ impl ShapeCatalog {
 )]
 #[derive(Debug, Clone)]
 pub struct Shapes {
+    /// The original declarations retained even when the graph has no shape roots.
+    pub owner: Arc<ModelOwner>,
     /// The TOP-LEVEL shapes of the shapes graph: every shape validation starts
     /// from. That is every node shape, every property shape with targets of its
     /// own (wrapped as a single-property [`Shape`]), and every other shape an
@@ -1153,6 +1212,7 @@ impl Shapes {
 impl Default for Shapes {
     fn default() -> Self {
         Self {
+            owner: Arc::default(),
             node_shapes: Vec::new(),
             rules: crate::rules::RuleGraph::default(),
             box_role_vocab: None,
@@ -2264,7 +2324,7 @@ impl<'s> Parser<'s> {
         // The global rules, rule sets and the rules entailment regime (SHACL 1.2
         // Inference Rules), parsed after every shape so a global rule's conditions and
         // node expressions resolve exactly as a shape rule's do.
-        let rules = self.parse_rule_graph()?;
+        let mut rules = self.parse_rule_graph()?;
 
         let custom_fns = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&custom_fns)?;
@@ -2276,10 +2336,10 @@ impl<'s> Parser<'s> {
         // `sh:nodeByExpression` resolution table (§7.2), register the
         // expression-bodied functions — and PROVE the sharing topology, which is
         // the part no downstream test could observe. See `shapes::link`.
-        if preparation == Preparation::LinkedModel {
-            let declarations: Vec<Arc<crate::expression::CustomFunction>> =
-                custom_fns.iter().map(Arc::clone).collect();
-            link::link_shapes(
+        let declarations: Vec<Arc<crate::expression::CustomFunction>> =
+            custom_fns.iter().map(Arc::clone).collect();
+        let owner = if preparation == Preparation::LinkedModel {
+            let owner = link::link_shapes(
                 &node_shapes,
                 &self.node_shape_index,
                 &declarations,
@@ -2292,7 +2352,19 @@ impl<'s> Parser<'s> {
                 .map_err(|error| error.to_string())?;
 
             self.check_node_by_expression_constants()?;
-        }
+            owner
+        } else {
+            ModelOwner::from_declarations(Arc::clone(&self.node_shape_index), declarations)
+                .map_err(|error| error.to_string())?
+        };
+        link::retain_roots(&mut node_shapes, &mut rules, &owner);
+        let expressions: Vec<_> = expressions
+            .into_iter()
+            .map(|expr| NodeExpr::Owned {
+                expr: Box::new(expr),
+                owner: Arc::clone(&owner),
+            })
+            .collect();
 
         let provenance = ParseProvenance::new(
             self.base.clone(),
@@ -2314,6 +2386,7 @@ impl<'s> Parser<'s> {
         };
 
         let shapes = Shapes {
+            owner,
             node_shapes,
             rules,
             box_role_vocab: self.box_role_vocab.clone(),
@@ -2508,8 +2581,8 @@ impl<'s> Parser<'s> {
     /// Taking a handle is also what tells [`Self::parse`] the index is wanted: a
     /// shapes graph with no such constraint never calls this, so the index is never
     /// built.
-    pub(crate) fn share_node_shape_index(&self) -> Arc<OnceLock<FastMap<Term, Shape>>> {
-        Arc::clone(&self.node_shape_index)
+    pub(crate) fn share_node_shape_index(&self) -> link::ShapeIndexRef {
+        Arc::downgrade(&self.node_shape_index)
     }
 
     /// The first object of `(subject, predicate, ?)` as a string literal value.
@@ -2561,7 +2634,7 @@ impl<'s> Parser<'s> {
         let deactivated = ps.deactivated;
         let deactivated_when = ps.deactivated_when.clone();
         Ok(Shape {
-            catalog: None,
+            owner: None,
             id,
             targets,
             constraints: vec![],
@@ -2903,7 +2976,7 @@ impl<'s> Parser<'s> {
         self.check_annotations_applied(id)?;
 
         Ok(Shape {
-            catalog: None,
+            owner: None,
             id: id.clone(),
             targets,
             constraints: parsed.constraints,
@@ -3692,7 +3765,7 @@ impl<'s> Parser<'s> {
                 parser.parse_property_shape(&id)
             })?;
             Ok(Shape {
-                catalog: None,
+                owner: None,
                 id,
                 targets: vec![],
                 constraints: vec![],

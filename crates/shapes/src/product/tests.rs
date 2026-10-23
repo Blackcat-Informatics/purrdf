@@ -879,6 +879,7 @@ fn declared_identity_readable_without_admission() {
             "class-catalog",
             "parse-configuration",
             "included-graphs",
+            "model",
         ],
         "the binding is DECODABLE, which is what lets a caller see which input moved",
     );

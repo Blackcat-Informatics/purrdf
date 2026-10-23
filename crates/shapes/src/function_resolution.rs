@@ -115,6 +115,7 @@ impl Shapes {
             seen_shapes: BTreeSet::new(),
             seen_catalogs: BTreeSet::new(),
             fns_in_flight: BTreeSet::new(),
+            model: Arc::clone(&self.owner),
         };
         for shape in &self.node_shapes {
             walk.shape(shape);
@@ -130,11 +131,12 @@ impl Shapes {
 /// visited set (a shape's calls are recorded under its own id), custom-function
 /// bodies are a stack (the owner label embeds the caller).
 struct Walk<'a> {
+    model: Arc<crate::shapes::ModelOwner>,
     shapes: &'a Shapes,
     out: FunctionResolution,
     seen_shapes: BTreeSet<(usize, String)>,
     seen_catalogs: BTreeSet<usize>,
-    fns_in_flight: BTreeSet<String>,
+    fns_in_flight: BTreeSet<(usize, usize)>,
 }
 
 impl Walk<'_> {
@@ -164,15 +166,17 @@ impl Walk<'_> {
     }
 
     fn shape(&mut self, shape: &Shape) {
+        let previous_model = Arc::clone(&self.model);
+        if let Some(model) = &shape.owner {
+            self.model = Arc::clone(model);
+        }
         let id = shape.id.to_string();
-        let owner = shape
-            .catalog
-            .as_ref()
-            .map_or(0, |catalog| Arc::as_ptr(catalog).addr());
+        let owner = Arc::as_ptr(&self.model).addr();
         if !self.seen_shapes.insert((owner, id.clone())) {
+            self.model = previous_model;
             return;
         }
-        if let Some(catalog) = &shape.catalog
+        if let Some(catalog) = &shape.owner
             && self.seen_catalogs.insert(owner)
         {
             for definition in catalog.definitions() {
@@ -187,6 +191,7 @@ impl Walk<'_> {
         for property in &shape.property_shapes {
             self.property(property);
         }
+        self.model = previous_model;
     }
 
     fn property(&mut self, property: &PropertyShape) {
@@ -318,17 +323,29 @@ impl Walk<'_> {
                 self.exprs(args, owner);
             }
             NodeExpr::CustomCall { func, args } => {
-                let iri = func.iri.as_str().to_owned();
-                self.record(owner, &iri, FunctionBinding::Custom);
+                let iri = func.as_str();
+                let function = self.model.function(func).cloned();
+                self.record(owner, iri, FunctionBinding::Custom);
                 for (_, arg) in args {
                     self.node_expr(arg, owner);
                 }
-                if self.fns_in_flight.insert(iri.clone()) {
-                    if let Some(body) = func.body.get() {
-                        self.node_expr(body, &format!("{owner} via <{iri}>"));
+                if let Some(function) = function {
+                    let key = (
+                        Arc::as_ptr(&self.model).addr(),
+                        Arc::as_ptr(&function).addr(),
+                    );
+                    if self.fns_in_flight.insert(key) {
+                        if let Some(body) = function.body.get() {
+                            self.node_expr(body, &format!("{owner} via <{iri}>"));
+                        }
+                        self.fns_in_flight.remove(&key);
                     }
-                    self.fns_in_flight.remove(&iri);
                 }
+            }
+            NodeExpr::Owned { expr, owner: model } => {
+                let previous = std::mem::replace(&mut self.model, Arc::clone(model));
+                self.node_expr(expr, owner);
+                self.model = previous;
             }
             NodeExpr::ConformsToShape { node, shape } => {
                 self.record(owner, shnex::CONFORMS_TO_SHAPE, FunctionBinding::Native);

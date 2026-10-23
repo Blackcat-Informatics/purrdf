@@ -2433,14 +2433,13 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
 fn indexed_shape_by_id<'a>(
     plan: ShapePlan<'a>,
     index: u32,
-    resolved: &'a FastMap<Term, Shape>,
     ds: &impl ShaclRead,
     id: TermId,
 ) -> Result<Option<ShapePlan<'a>>, crate::error::ShapesError> {
     if let Some(node) = plan.binding().indexed_node(index, id)? {
-        return plan.indexed(index, node, resolved);
+        return plan.indexed(index, node);
     }
-    plan.indexed(index, &term_id_to_native(ds, id), resolved)
+    plan.indexed(index, &term_id_to_native(ds, id))
 }
 
 // ── Per-constraint evaluator ───────────────────────────────────────────────────
@@ -3782,22 +3781,12 @@ fn eval_constraint<'a, S: ResultSink>(
         PlannedConstraint::NodeByExpression {
             expr,
             lowered,
-            shapes,
             index,
             messages: cmsg,
             severity: csev,
         } => {
             let sev = source.severity_over(csev.as_ref());
             let msg = source.messages_over(cmsg);
-            // The index is filled at the end of the shapes-graph parse; an unfilled
-            // one means this constraint escaped that parse, which would silently
-            // make every conformance check vacuous. Refuse loudly instead.
-            let resolved = shapes.get().ok_or_else(|| {
-                crate::error::ShapesError::internal(format!(
-                    "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
-                     shape index was never filled"
-                ))
-            })?;
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             let next_depth = depth.saturating_add(1);
             for value_node in value_nodes {
@@ -3898,16 +3887,13 @@ fn eval_constraint<'a, S: ResultSink>(
                             if terms[..position].contains(shape_node) {
                                 continue;
                             }
-                            check_against!(
-                                context.plan.indexed(index, shape_node, resolved)?,
-                                shape_node
-                            );
+                            check_against!(context.plan.indexed(index, shape_node)?, shape_node);
                         }
                     }
                     crate::expression::ShapeNodes::Interned(ids) => {
                         for &shape_id in ids {
                             check_against!(
-                                indexed_shape_by_id(context.plan, index, resolved, ds, shape_id)?,
+                                indexed_shape_by_id(context.plan, index, ds, shape_id)?,
                                 term_id_to_native(ds, shape_id)
                             );
                         }
@@ -5125,7 +5111,7 @@ mod tests {
 
     fn shape_with(id: &str, constraints: Vec<Constraint>) -> Shape {
         Shape {
-            catalog: None,
+            owner: None,
             id: ex(id),
             targets: vec![],
             constraints,
@@ -5143,7 +5129,7 @@ mod tests {
     fn prop_shape(id: &str, path_iri: &str, constraints: Vec<Constraint>) -> Shape {
         use crate::shapes::Path;
         Shape {
-            catalog: None,
+            owner: None,
             id: ex(id),
             targets: vec![],
             constraints: vec![],
@@ -5559,7 +5545,7 @@ mod tests {
              ex:a a ex:Thing .\n"
         ));
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -5617,7 +5603,7 @@ mod tests {
              ex:a a ex:Thing .\n"
         ));
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -5665,7 +5651,7 @@ mod tests {
              ex:reifier rdf:reifies <<( ex:a ex:p ex:b )>> .\n"
         ));
         let reifier_shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("ReifierShape"),
             targets: vec![],
             constraints: vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
@@ -5681,7 +5667,7 @@ mod tests {
             rules: vec![],
         };
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -6972,7 +6958,7 @@ mod tests {
             "@prefix ex: <{EX}> . ex:child ex:parent ex:parent_node ."
         ));
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7036,7 +7022,7 @@ mod tests {
             ])))
         };
         let shape_with = |constraints: Vec<Constraint>| Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7098,7 +7084,7 @@ mod tests {
             "@prefix ex: <{EX}> . ex:unrelated ex:something ex:other ."
         ));
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7280,7 +7266,7 @@ mod tests {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
         // Would fail NodeKind(Iri) if active.
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
@@ -7419,7 +7405,7 @@ mod tests {
             })
             .collect();
         Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![Constraint::Closed {
@@ -7828,7 +7814,7 @@ mod tests {
     fn deactivated_property_shape_produces_no_results() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7866,7 +7852,7 @@ mod tests {
     fn property_shape_severity_and_message_propagate() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],

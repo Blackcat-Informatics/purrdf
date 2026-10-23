@@ -521,6 +521,7 @@ fn render_params(params: &[ArgKey]) -> String {
 fn collect_arg_keys(expr: &crate::expression::NodeExpr, out: &mut Vec<ArgKey>) {
     use crate::expression::{FnCall, NodeExpr};
     match expr {
+        NodeExpr::Owned { expr, .. } => collect_arg_keys(expr, out),
         NodeExpr::Arg(key) => out.push(key.clone()),
         NodeExpr::CustomCall { args, .. } => {
             for (_, arg) in args {

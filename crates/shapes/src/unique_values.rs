@@ -56,6 +56,8 @@ use crate::term::Term;
 /// its grouping is built from.
 #[derive(Debug)]
 pub(crate) struct UniqueSpec {
+    /// The original declaration domain used by computed targets.
+    pub(crate) owner: Option<std::sync::Arc<crate::shapes::ModelOwner>>,
     /// The node of the shape that declares the constraint, which the data
     /// graph's `sh:shape` declarations name.
     pub(crate) shape: Term,
@@ -120,8 +122,14 @@ impl UniqueGroups {
             return Ok(groups);
         }
         let ds = data.core_view();
-        let targets =
-            crate::engine::resolve_focus_nodes(data, &spec.shape, &spec.targets, binding, classes)?;
+        let targets = crate::engine::resolve_focus_nodes(
+            data,
+            &spec.shape,
+            &spec.targets,
+            binding,
+            classes,
+            spec.owner.as_ref(),
+        )?;
         // The first target seen with each tuple, and whether a second one has
         // been seen since — so the first is marked colliding exactly once.
         let mut first: ::purrdf_rdf::FastMap<ValueKey, (TermId, bool)> =

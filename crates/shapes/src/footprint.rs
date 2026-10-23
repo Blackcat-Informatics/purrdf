@@ -745,6 +745,7 @@ impl FootprintWalk {
     /// over-approximates. A wildcard in the OUTER match would fall the other way.
     pub(crate) fn record_expression(&mut self, expr: &NodeExpr) {
         match expr {
+            NodeExpr::Owned { expr, .. } => self.record_expression(expr),
             // A path expression is evaluated from the current focus node, so its
             // steps are read exactly as a property shape's are.
             NodeExpr::Path(path) => self.record_path_steps(path, &[]),

@@ -663,7 +663,7 @@ impl ImportContext<'_> {
         self.import_object_logic(object, path, &mut constraints)?;
         self.audit_object_keywords(object, path)?;
         Ok(Shape {
-            catalog: None,
+            owner: None,
             id,
             targets,
             constraints,
@@ -768,7 +768,7 @@ impl ImportContext<'_> {
             None => self.import_scalar_schema(schema, path, &mut constraints)?,
         }
         Ok(Shape {
-            catalog: None,
+            owner: None,
             id,
             targets: Vec::new(),
             constraints,
@@ -1799,7 +1799,7 @@ impl ImportContext<'_> {
         let mut constraints = Vec::new();
         self.import_scalar_schema(schema, path, &mut constraints)?;
         Ok(Shape {
-            catalog: None,
+            owner: None,
             id: self.nested_shape_id(path),
             targets: Vec::new(),
             constraints,

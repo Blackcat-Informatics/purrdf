@@ -22,7 +22,6 @@ use crate::expression::{
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::provenance::ParseProvenance;
-use crate::shapes::link::ShapeIndex;
 use crate::sparql::enter_call_depth_scope;
 use crate::term::{NamedNode, Term, term_value_to_native};
 
@@ -163,7 +162,12 @@ impl Parser<'_> {
                     .collect(),
             );
         }
-        crate::shapes::link::register_expression_bodied_functions(&unreached, registry);
+        let owner = crate::shapes::ModelOwner::from_declarations(
+            Arc::clone(&self.node_shape_index),
+            index.iter().map(Arc::clone).collect(),
+        )
+        .map_err(|error| error.to_string())?;
+        crate::shapes::link::register_expression_bodied_functions(&unreached, &owner, registry);
         Ok(())
     }
 
@@ -691,6 +695,7 @@ fn blank_node_argument_is_error() -> bool {
 /// The recursion guard is SEEDED from `call.depth`, so a cycle that passed through
 /// SPARQL to get here keeps counting rather than restarting.
 pub(crate) fn invoke_expression_function(
+    owner: &Arc<crate::shapes::ModelOwner>,
     func: &Arc<CustomFunction>,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
@@ -725,7 +730,7 @@ pub(crate) fn invoke_expression_function(
     let mut guard = RecursionGuard::with_depth(call.depth);
     let _depth = enter_call_depth_scope(call.depth);
     let result = sparql_call_result(
-        eval_custom_function_call(&store, func, &args, &mut guard),
+        eval_custom_function_call(&store, owner, func, &args, &mut guard),
         "custom SPARQL function",
     )?;
     Ok(result.as_ref().map(Term::to_term_value))
@@ -818,7 +823,7 @@ impl NativeListCallee {
 pub(crate) fn invoke_native_list_function(
     iri: &str,
     callee: &NativeListCallee,
-    shape_index: &ShapeIndex,
+    owner: &Arc<crate::shapes::ModelOwner>,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
     let mut args: Vec<NodeExpr> = Vec::with_capacity(call.args.len());
@@ -849,7 +854,7 @@ pub(crate) fn invoke_native_list_function(
             node: Box::new(node),
             shape: ShapeArg::Computed {
                 expr: Box::new(shape),
-                shapes: Arc::clone(shape_index),
+                shapes: Arc::downgrade(&owner.index),
             },
         }
     };
@@ -861,6 +866,10 @@ pub(crate) fn invoke_native_list_function(
     let mut guard = RecursionGuard::with_depth(call.depth);
     let _depth = enter_call_depth_scope(call.depth);
     let focus = Term::NamedNode(NamedNode::from(iri));
+    let expr = NodeExpr::Owned {
+        expr: Box::new(expr),
+        owner: Arc::clone(owner),
+    };
     let out = sparql_call_result(
         eval_node_expr(&store, &focus, &expr, &mut guard).map(Some),
         &format!("built-in SPARQL function <{iri}>"),

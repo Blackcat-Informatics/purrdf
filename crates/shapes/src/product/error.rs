@@ -143,13 +143,17 @@ pub enum ProductDimension {
     /// field is out of range, a length disagrees with its payload, or a
     /// reference points outside the container.
     Malformed,
+    /// The native workspace could not admit or allocate the required storage.
+    Resource,
+    /// The encoded declarative model differs from the model bound by the identity.
+    Model,
 }
 
 impl ProductDimension {
     /// Every admission dimension, in declaration order — the order in which a
     /// decoder checks them. Iterate this rather than hand-listing variants, so a
     /// new dimension reaches every consumer.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::Magic,
         Self::FormatVersion,
         Self::StageId,
@@ -172,6 +176,8 @@ impl ProductDimension {
         Self::UnsupportedCapability,
         Self::DepthLimit,
         Self::Malformed,
+        Self::Resource,
+        Self::Model,
     ];
 
     /// The number of admission dimensions.
@@ -208,6 +214,8 @@ impl ProductDimension {
             Self::UnsupportedCapability => "unsupported-capability",
             Self::DepthLimit => "depth-limit",
             Self::Malformed => "malformed",
+            Self::Resource => "resource",
+            Self::Model => "model",
         }
     }
 }
@@ -248,9 +256,16 @@ pub struct ShapesProductError {
 impl From<crate::error::PreparationRefusal> for ShapesProductError {
     fn from(error: crate::error::PreparationRefusal) -> Self {
         let dimension = match &error {
+            crate::error::PreparationRefusal::Storage(_) => ProductDimension::Resource,
             crate::error::PreparationRefusal::StackMargin => ProductDimension::DepthLimit,
             crate::error::PreparationRefusal::DuplicateDefinition(_)
             | crate::error::PreparationRefusal::OwningDefinition(_)
+            | crate::error::PreparationRefusal::UnknownFunction(_)
+            | crate::error::PreparationRefusal::DuplicateFunction(_)
+            | crate::error::PreparationRefusal::MissingFunctionBody(_)
+            | crate::error::PreparationRefusal::UnboundModel
+            | crate::error::PreparationRefusal::ExpiredIndex
+            | crate::error::PreparationRefusal::ForeignIndex
             | crate::error::PreparationRefusal::UnknownReference(_)
             | crate::error::PreparationRefusal::UnboundReference => ProductDimension::Malformed,
         };
@@ -383,6 +398,8 @@ mod tests {
                 ProductDimension::UnsupportedCapability => 19,
                 ProductDimension::DepthLimit => 20,
                 ProductDimension::Malformed => 21,
+                ProductDimension::Resource => 22,
+                ProductDimension::Model => 23,
             };
             assert_eq!(
                 ProductDimension::ALL[declared_index],

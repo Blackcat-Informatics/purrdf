@@ -444,9 +444,10 @@ impl Shapes {
 /// re-walks nobody can observe, and a visited set for functions loses sites.
 #[derive(Default)]
 struct InFlight {
-    /// Custom-function IRIs whose `sh:bodyExpression` is currently being walked.
+    model: Option<Arc<crate::shapes::ModelOwner>>,
+    /// Original model/declaration identities whose body is currently being walked.
     /// Removed on the way out — see the type docs.
-    fns: std::collections::BTreeSet<String>,
+    fns: std::collections::BTreeSet<(usize, usize)>,
     /// Shape ids already walked. Never removed — see the type docs.
     shapes: std::collections::BTreeSet<(usize, String)>,
     catalogs: std::collections::BTreeSet<usize>,
@@ -456,8 +457,9 @@ struct InFlight {
 fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     let id = shape.id.to_string();
     let owner = shape
-        .catalog
+        .owner
         .as_ref()
+        .or(flight.model.as_ref())
         .map_or(0, |catalog| Arc::as_ptr(catalog).addr());
     if !flight.shapes.insert((owner, id.clone())) {
         // Already walked. Its constraints are recorded under its own id, so a second
@@ -467,7 +469,11 @@ fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
         return;
     }
 
-    if let Some(catalog) = &shape.catalog
+    let previous_model = flight.model.clone();
+    if let Some(model) = &shape.owner {
+        flight.model = Some(Arc::clone(model));
+    }
+    if let Some(catalog) = &shape.owner
         && flight.catalogs.insert(owner)
     {
         for definition in catalog.definitions() {
@@ -486,6 +492,7 @@ fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     for property in &shape.property_shapes {
         walk_property(property, sink, flight);
     }
+    flight.model = previous_model;
 }
 
 /// Record every SPARQL text one property shape and its descendants carry.
@@ -717,17 +724,34 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, sink: &mut dyn SparqlSink, fligh
             // whose evaluation invokes the relation. The body is interned once the
             // whole graph has parsed, so an unfilled cell means the declaration never
             // linked and there is nothing to read.
-            let iri = func.iri.as_str().to_owned();
-            if flight.fns.insert(iri.clone()) {
-                if let Some(body) = func.body.get() {
-                    walk_node_expr(body, &format!("{owner} via <{iri}>"), sink, flight);
+            let iri = func.as_str();
+            let function = flight
+                .model
+                .as_ref()
+                .and_then(|model| model.function(func))
+                .cloned();
+            if let Some(function) = function {
+                let model = flight
+                    .model
+                    .as_ref()
+                    .map_or(0, |model| Arc::as_ptr(model).addr());
+                let key = (model, Arc::as_ptr(&function).addr());
+                if flight.fns.insert(key) {
+                    if let Some(body) = function.body.get() {
+                        walk_node_expr(body, &format!("{owner} via <{iri}>"), sink, flight);
+                    }
+                    // Removed whether or not a body was there. Leaving it in on the
+                    // `None` arm would quietly turn this stack into a visited set for
+                    // that one IRI, so a second, unrelated call to the same function
+                    // later in the graph would be skipped and its body go unreported.
+                    flight.fns.remove(&key);
                 }
-                // Removed whether or not a body was there. Leaving it in on the
-                // `None` arm would quietly turn this stack into a visited set for
-                // that one IRI, so a second, unrelated call to the same function
-                // later in the graph would be skipped and its body go unreported.
-                flight.fns.remove(&iri);
             }
+        }
+        NodeExpr::Owned { expr, owner: model } => {
+            let previous = flight.model.replace(Arc::clone(model));
+            walk_node_expr(expr, owner, sink, flight);
+            flight.model = previous;
         }
         // Leaves: no nested node expression, so nothing to walk. Spelled out rather
         // than wildcarded so a variant added later lands here as a compile error --

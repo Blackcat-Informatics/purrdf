@@ -481,6 +481,7 @@ impl PreparedTargets {
                         &shape.id,
                         expr,
                         binding.conformance_disallows(),
+                        shape.owner.as_ref(),
                     )? {
                         prepared.insert_explicit(data.core_view(), candidate);
                     }
@@ -1166,6 +1167,7 @@ pub(crate) fn resolve_focus_nodes(
     targets: &[Target],
     binding: &DatasetBinding,
     classes: &ClassCatalog,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<FocusNode>, ShapesError> {
     let ds = data.core_view();
     let mut seen_ids: IdSet = IdSet::default();
@@ -1212,6 +1214,7 @@ pub(crate) fn resolve_focus_nodes(
                 shape,
                 expr,
                 binding.conformance_disallows(),
+                model,
             )?,
             Target::Class(_)
             | Target::SubjectsOf(_)
@@ -1480,6 +1483,7 @@ where
             &shape.targets,
             bound.binding(),
             bound.classes(),
+            shape.owner.as_ref(),
         )?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
@@ -5155,6 +5159,7 @@ mod tests {
                 &declared.targets,
                 validator.bound.binding(),
                 validator.bound.classes(),
+                declared.owner.as_ref(),
             )
             .expect("fixture targets resolve")
             .iter()

@@ -134,7 +134,6 @@
 //! [`stage_id`]: ShapesProductView::stage_id
 //! [`rebuild`]: ShapesProductView::rebuild
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactError, ArtifactSpec, ArtifactView, Identity};
@@ -221,8 +220,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x31, 0x02, 0x47, 0x33, 0xbe, 0x4b, 0x99, 0xd1, 0xbf, 0xf1, 0x6a, 0x7e, 0x16, 0x7c, 0xcd, 0xf1,
-    0x57, 0x42, 0xf8, 0x15, 0x83, 0x3a, 0x71, 0x72, 0xd9, 0x41, 0xb0, 0x12, 0x07, 0xcb, 0x95, 0x75,
+    0x16, 0x06, 0x73, 0xe2, 0xcb, 0x39, 0x7c, 0x2f, 0xbb, 0x4d, 0xf5, 0x3a, 0x41, 0xe7, 0xf5, 0x62,
+    0x2b, 0x4e, 0xfe, 0xa5, 0xaa, 0x22, 0x44, 0xd9, 0x7f, 0x62, 0x85, 0x85, 0xda, 0xb5, 0x72, 0x47,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -1020,6 +1019,7 @@ impl PreparedShapes {
             host.parser_options(),
             implementation_identity,
             &classes,
+            &ast_bytes,
         )?;
 
         let mut builder = ArtifactBuilder::new(SPEC);
@@ -1347,7 +1347,7 @@ impl<'a> ShapesProductView<'a> {
         let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
-            &parts.custom_functions,
+            &parts.owner.functions,
             &parts.node_shapes,
             &mut functions,
             options.shacl_profile,
@@ -1363,15 +1363,8 @@ impl<'a> ShapesProductView<'a> {
             ))
             .into()
         })?;
-        link::link_shapes(
-            &parts.node_shapes,
-            &parts.shape_index,
-            &parts.custom_functions,
-            &native_list,
-            BTreeMap::new(),
-            &mut functions,
-        )?;
-        link::link_global_rules(&parts.rules.global_rules, &parts.shape_index)?;
+        let owner = parts.owner;
+        link::register_model_functions(&owner, &native_list, &mut functions);
 
         // The two carriers of the parse configuration must agree. Both are
         // authenticated, so a disagreement is not tampering — it is a product whose
@@ -1394,9 +1387,12 @@ impl<'a> ShapesProductView<'a> {
             .into());
         }
 
+        let node_shapes = parts.node_shapes;
+        let rules = parts.rules;
         let shapes = Shapes {
-            node_shapes: parts.node_shapes,
-            rules: parts.rules,
+            owner: Arc::clone(&owner),
+            node_shapes,
+            rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::default()),
@@ -1412,8 +1408,14 @@ impl<'a> ShapesProductView<'a> {
             parse_provenance: self.provenance.clone(),
         };
 
-        CertifiedParts::from_admitted(self.declared_identity(), shapes, host, parts.classes)
-            .map(CertifiedParts::into_prepared)
+        CertifiedParts::from_admitted(
+            self.declared_identity(),
+            shapes,
+            host,
+            parts.classes,
+            self.section(SECTION_AST)?,
+        )
+        .map(CertifiedParts::into_prepared)
     }
 
     /// **The forward-compatibility path.** Ignore the memo and re-derive the

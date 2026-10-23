@@ -1990,7 +1990,10 @@ impl Parser<'_> {
                 self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(object))?,
             ));
         }
-        Ok(Some(NodeExpr::CustomCall { func, args: bound }))
+        Ok(Some(NodeExpr::CustomCall {
+            func: func.iri.clone(),
+            args: bound,
+        }))
     }
 
     /// Parse the RDF list at `(node, predicate)` into a vector of node expressions.
@@ -2169,7 +2172,7 @@ impl Parser<'_> {
                 bound.push((ArgKey::Index(key), arg));
             }
             return Ok(NodeExpr::CustomCall {
-                func: Arc::clone(func),
+                func: func.iri.clone(),
                 args: bound,
             });
         }

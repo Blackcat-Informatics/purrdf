@@ -205,7 +205,7 @@ impl Configuration {
         let result = operation();
         match take_cause() {
             Some(cause) => Err(RunError::Cause {
-                cause,
+                cause: Box::new(cause),
                 execution: result.err().map(Box::new),
             }),
             None => result.map_err(RunError::Execution),
@@ -237,7 +237,7 @@ impl Cause {
 #[derive(Debug)]
 pub(crate) enum RunError<E> {
     Cause {
-        cause: Cause,
+        cause: Box<Cause>,
         // The paired caller payload is allocated only on this error path.
         execution: Option<Box<E>>,
     },
@@ -248,7 +248,7 @@ impl<E> RunError<E> {
     /// Let the caller resolve its actual typed payload and associated native cause.
     pub(crate) fn into_parts(self) -> (Option<Cause>, Option<E>) {
         match self {
-            Self::Cause { cause, execution } => (Some(cause), execution.map(|error| *error)),
+            Self::Cause { cause, execution } => (Some(*cause), execution.map(|error| *error)),
             Self::Execution(error) => (None, Some(error)),
         }
     }

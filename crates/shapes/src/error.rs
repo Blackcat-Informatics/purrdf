@@ -236,12 +236,12 @@ impl ShapesError {
             Self::Invalid(_) => FailureClass::Evaluation,
             Self::Storage(_) | Self::Processor(_) | Self::Preparation(_) => FailureClass::Processor,
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
-            | Self::SparqlTargetDisagreement(_)
-            | Self::Recursion(_) => FailureClass::Refusal,
+            | Self::SparqlTargetDisagreement(_) => FailureClass::Refusal,
         }
     }
 
@@ -467,6 +467,20 @@ impl std::error::Error for ShapesError {
 /// A preparation refusal, distinct from malformed shapes and nonconformance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreparationRefusal {
+    /// The original native workspace admission or allocation refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// A custom call has no declaration in its retained model domain.
+    UnknownFunction(crate::term::NamedNode),
+    /// A function IRI has distinct declarations in one model or preparation.
+    DuplicateFunction(crate::term::NamedNode),
+    /// A retained declaration has no installed body.
+    MissingFunctionBody(crate::term::NamedNode),
+    /// A computed shape reference has no retained model domain.
+    UnboundModel,
+    /// A computed shape reference outlived its retained definition table.
+    ExpiredIndex,
+    /// A computed shape reference names another model's definition table.
+    ForeignIndex,
     /// A recursive lowering or model-codec frame would enter the stack margin.
     StackMargin,
     /// Two catalog definitions declare the same identity.
@@ -482,16 +496,30 @@ pub enum PreparationRefusal {
 impl fmt::Display for PreparationRefusal {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(out),
+            Self::UnknownFunction(iri) => write!(out, "custom function {iri} has no declaration in the retained model; keep the exported model owner with its expression"),
+            Self::DuplicateFunction(iri) => write!(out, "custom function {iri} has distinct declarations; retain one original declaration per function IRI"),
+            Self::MissingFunctionBody(iri) => write!(out, "custom function {iri} has no installed body; link its declaration before preparation"),
+            Self::UnboundModel => out.write_str("computed shape reference has no retained model; keep its exported owning root"),
+            Self::ExpiredIndex => out.write_str("computed shape reference outlived its definition table; keep its exported owning root"),
+            Self::ForeignIndex => out.write_str("computed shape reference names a different model's definition table"),
             Self::StackMargin => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
             Self::DuplicateDefinition(id) => write!(out, "duplicate shape definition {id}; provide one definition per RDF identity"),
             Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
-            Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ShapeCatalog::root"),
+            Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ModelOwner::root"),
             Self::UnknownReference(id) => write!(out, "shape reference {id} has no catalog definition; provide its definition"),
         }
     }
 }
 
-impl std::error::Error for PreparationRefusal {}
+impl std::error::Error for PreparationRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
 

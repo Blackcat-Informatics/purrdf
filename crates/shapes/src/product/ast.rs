@@ -7,29 +7,17 @@
 //! the `sh:SPARQLTargetType` declarations, the box-role vocabulary, and the
 //! custom node-expression function declarations — as one self-contained byte
 //! string, and [`decode_ast`] reads that string back into [`AstParts`].
-//! `AstParts` is deliberately NOT a `Shapes`: assembling one, re-establishing the
-//! shared shape index and reattaching the retained dataset are a later stage's
-//! work, and a codec that returned a half-built `Shapes` would be handing out a
-//! value whose invariants it had not established.
+//! `AstParts` carries admitted model domains, not an assembled `Shapes`: the
+//! retained dataset, provenance and executing registries are attached later.
 //!
 //! # Why hand-rolled, and what the rejected alternative cost
 //!
-//! The obvious alternative is a derived serializer — `serde` plus a
-//! self-describing container such as CBOR. It was rejected, and not for
-//! dependency hygiene. A derived codec is *total by construction*: it encodes
-//! whatever the type happens to hold, which is exactly wrong for this model,
-//! because four of its fields must NOT be carried. `Constraint::Pattern`'s
-//! `compiled` is a lazy cache; `Constraint::NodeByExpression`'s and
-//! `ShapeArg::Computed`'s `shapes` is one handle SHARED by every constraint of a
-//! shapes graph; `CustomFunction`'s body graph is **cyclic by design** (§6.1/§6.2
-//! hold a body by reference precisely so it can call its own function). A derived
-//! tree walk over that last one does not terminate — it is not a slow encode, it
-//! is a stack exhaustion — and a derived walk over the first three either invents
-//! a per-value default where a shared handle belongs or serializes a compiled
-//! regex nobody asked for. Every one of those decisions is a judgement about
-//! MEANING, and the only place to state a judgement is code that was written to
-//! state it. So each field is written by hand, and the table below records what
-//! happens to every one of them.
+//! Function calls name IRIs and computed references hold weak indexes. Their
+//! complete declaration domains are encoded separately, preserving sharing
+//! without recursively following logical cycles. Lazy compiled regex caches are
+//! reconstructed from their original pattern and flags. Strong owner edges are
+//! checked before any pending function body or index definition is installed;
+//! a cycle in those edges is refused before allocating a leaking graph.
 //!
 //! # The canonical form, and the equality the types lack
 //!
@@ -95,24 +83,37 @@
 //!
 //! | # | Field | Form | Meaning |
 //! |---|-------|------|---------|
-//! | 1 | `fn_decls` | `seq<decl>` | the custom node-expression function declarations, **sorted by IRI** |
-//! | 2 | `fn_bodies` | `opt<node_expr>` × `fn_decls` count | each declaration's `sh:bodyExpression`, in the same order |
-//! | 3 | `node_shapes` | `seq<shape>` | the shapes graph's top-level node shapes |
-//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool`, `seq<iri>` | the global rules, the rule sets, whether `sh:RulesEntailment` is declared, and the rule sets declared as `sh:entailment` values, **sorted by IRI** |
-//! | 5 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
-//! | 6 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
-//! | 7 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
-//! | 8 | `class_catalog` | `seq<(str, uint)>` | the REUSABLE ANALYSIS: every planned class IRI and its binding-row position, **sorted by IRI** |
+//! | 1 | `index_count` | `uint` | predeclared computed-reference cells |
+//! | 2 | `fn_decls` | `seq<decl>` | declaration identities in model encounter order |
+//! | 3 | `owner` | `model_owner` | global declaration/reference domain |
+//! | 4 | `fn_bodies` | `opt<node_expr>` × header count | pending bodies |
+//! | 5 | `indexes` | flag and sorted definitions × index count | uninitialized differs from initialized empty |
+//! | 6 | `node_shapes` | `seq<shape>` | exported top-level roots |
+//! | 7 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool`, `seq<iri>` | rules and entailment declarations |
+//! | 8 | `box_role_vocab` | `opt<box_role_vocab>` | absent means inactive |
+//! | 9 | `target_types` | `seq<(str, sparql_target_type)>` | key-sorted declarations |
+//! | 10 | `shapes_graph` | `opt<str>` | named shapes graph |
+//! | 11 | `class_catalog` | `seq<(str, uint)>` | sorted reusable class analysis |
 //!
-//! Any byte after field 8 is [`Malformed`]: trailing bytes are a structure the
+//! Any byte after field 11 is [`Malformed`]: trailing bytes are a structure the
 //! writer did not produce, and skipping them is how a silent truncation passes
 //! for a successful load.
 //!
-//! The declaration table is split from the bodies because the function graph is
-//! cyclic. Reading it is two passes for the same reason writing it is: every
-//! declaration is materialized first, so a body that calls its own function — or
-//! any other — resolves to an ALREADY EXISTING handle by index rather than
-//! recursing into a definition that reaches back.
+//! All index cells and function headers precede their definitions. Model owners
+//! encode tag 0 for absence, tag 1 and an existing owner ordinal, or tag 2 and a
+//! new sequential owner ordinal, an index ordinal and function-header ordinals.
+//! Computed references encode the original index ordinal. Allocation addresses
+//! are never written. Installation follows complete decoding and admission of
+//! the strong ownership graph; logical IRI calls may remain cyclic.
+//!
+//! ## Shared shape catalogs
+//!
+//! Every `shape` starts with its model owner. Definitions name logical
+//! dependencies through `Constraint::Reference` terms and calls name function
+//! IRIs within that owner. Distinct owners may carry different declarations of
+//! the same IRI; the declaration table preserves those identities separately.
+//! The owner constructor refuses duplicate function IRIs within one domain,
+//! duplicate definition identities and owning handles on definitions.
 //!
 //! ## `decl`
 //!
@@ -125,22 +126,22 @@
 //!
 //! ## Tag spaces
 //!
-//! Each tagged type's tags are `0..n` in the type's own DECLARATION order, so the
-//! census's record of variant order is load-bearing: reordering arms in the model
-//! remaps the bytes, and that is what moves the stage id. The counts are pinned
-//! as `TAGS_*` constants next to the decoders that honour them.
+//! Each tagged type uses the contiguous range `0..n`, with its mapping spelled
+//! by the paired encoder and decoder. The census records the model's variants
+//! and their order in the stage identity. Counts are pinned as `TAGS_*` constants
+//! next to the decoders; a shared shape identity uses constraint tag 40.
 //!
 //! | Type | Tags |
 //! |------|------|
 //! | [`Term`] | `NamedNode` `BlankNode` `Literal` `Triple` |
-//! | [`Severity`] | `Violation` `Warning` `Info` `Other` |
-//! | [`NodeKindValue`] | `Iri` `BlankNode` `Literal` `BlankNodeOrIri` `BlankNodeOrLiteral` `IriOrLiteral` |
+//! | [`Severity`] | `Violation` `Warning` `Info` `Debug` `Trace` `Other` |
+//! | [`NodeKindValue`] | `Iri` `BlankNode` `Literal` `BlankNodeOrIri` `BlankNodeOrLiteral` `IriOrLiteral` `TripleTerm` |
 //! | [`Path`] | `Predicate` `Inverse` `Sequence` `Alternative` `ZeroOrMore` `OneOrMore` `ZeroOrOne` |
-//! | [`Target`] | `Class` `SubjectsOf` `ObjectsOf` `Node` `ImplicitClass` `Sparql` |
+//! | [`Target`] | `Class` `SubjectsOf` `ObjectsOf` `Node` `ImplicitClass` `Sparql` `Where` `NodeExpression` |
 //! | [`ComponentValidator`] | `Ask` `Select` |
-//! | [`Constraint`] | 40 arms, `Class` … `Component` |
+//! | [`Constraint`] | 41 arms, tags 0–39 for the existing constraints, 40 for `Reference` |
 //! | [`ClosedMode`] | `Declared` `ByTypes` |
-//! | [`NodeExpr`] | 32 arms, `Constant` … `Select` |
+//! | [`NodeExpr`] | 33 arms, `Constant` … `Select`, then `Owned` at tag 32 |
 //! | [`ShapeArg`] | `Named` `Computed` |
 //! | [`ArgKey`] | `Index` `Named` |
 //! | [`CustomFnKind`] | `ListParameter` `NamedParameter` |
@@ -158,12 +159,9 @@
 //! * `Constraint::Pattern::compiled` — a pure lazy cache of `regex` + `flags`,
 //!   both of which ARE written. Carrying a compiled automaton would pin one
 //!   regex-engine version into a cached artifact for no gain.
-//! * `Constraint::NodeByExpression::shapes`, `ShapeArg::Computed::shapes` — ONE
-//!   `Arc<OnceLock<..>>` shared by every such constraint of a shapes graph.
-//!   [`decode_ast`] mints a single empty handle and clones it into every site
-//!   ([`AstParts::shape_index`] hands it to the stage that fills it). Defaulting
-//!   it per constraint would type-check and would quietly give each constraint a
-//!   private, permanently empty index.
+//! * In-memory addresses are not written. Index
+//!   ordinals preserve each weak reference's original domain; the checked owner
+//!   constructor derives its lookup from the carried declaration list.
 //! * `FnCall::Sparql::expr` — re-lowered at decode from the call's own
 //!   `sparql:<NAME>` local name through [`crate::expression::sparql_ns_lowering`],
 //!   which is the seam over `purrdf_sparql_algebra::builtin_function_keyword`.
@@ -177,7 +175,7 @@
 //! * `Shapes::shapes_dataset`, `Shapes::parse_provenance` — the retained RDF and
 //!   the recorded parse inputs. Both belong to other sections of the product.
 //!
-//! # Why field 7 is here and not in a section of its own
+//! # Why the class catalog is here and not in a section of its own
 //!
 //! The class catalog is ANALYSIS, not model, so a fourth container section would
 //! describe it better. It cannot have one. The section directory is TOTAL — the
@@ -218,15 +216,17 @@ use crate::model::{BoxRoleVocab, sparql_ns};
 use crate::plan::ClassCatalog;
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
-use crate::shapes::link::{ModelWalk, ShapeIndex};
+use crate::shapes::link::{ModelWalk, ShapeIndex, ShapeIndexRef};
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
-    ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
-    Target, TargetTypeParam,
+    ConstraintAnnotation, ModelOwner, NodeKindValue, Path, PropertyShape, Shape, Shapes,
+    SparqlTargetType, Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
 use super::error::{ProductDimension, ShapesProductError, malformed};
+
+mod ownership;
 
 // ---------------------------------------------------------------------------
 // Limits and tag spaces
@@ -319,11 +319,11 @@ const TAGS_TARGET: u8 = 8;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 40;
+const TAGS_CONSTRAINT: u8 = 41;
 /// The number of [`ClosedMode`] tags.
 const TAGS_CLOSED_MODE: u8 = 2;
 /// The number of [`NodeExpr`] tags.
-const TAGS_NODE_EXPR: u8 = 32;
+const TAGS_NODE_EXPR: u8 = 33;
 /// The number of [`ShapeArg`] tags.
 const TAGS_SHAPE_ARG: u8 = 2;
 /// The number of [`ArgKey`] tags.
@@ -427,14 +427,13 @@ pub(crate) fn from_pack(error: PackBitsError) -> ShapesProductError {
 
 /// The declarative pieces [`decode_ast`] recovers from a product's AST section.
 ///
-/// Not a [`Shapes`]: the retained dataset, the parse provenance and the
-/// caller-supplied registries are carried by other sections, and the shared shape
-/// index is still empty. [`Self::shape_index`] is the handle every
-/// `sh:nodeByExpression` constraint and every computed [`ShapeArg`] in
-/// [`Self::node_shapes`] already holds, so the stage that assembles a `Shapes`
-/// fills it ONCE and every site sees the result.
+/// The original model domains and initialized reference cells are restored here.
+/// The retained dataset, provenance and executing registries are attached by the
+/// product admission boundary after the identity has been checked.
 #[derive(Debug)]
 pub(crate) struct AstParts {
+    /// The complete original declaration and computed-reference domain.
+    pub(crate) owner: Arc<ModelOwner>,
     /// The shapes graph's top-level node shapes, in their encoded order.
     pub(crate) node_shapes: Vec<Shape>,
     /// The global rules, rule sets and rules entailment declaration.
@@ -446,14 +445,10 @@ pub(crate) struct AstParts {
     pub(crate) target_types: BTreeMap<String, SparqlTargetType>,
     /// The named-graph IRI the shapes dataset is exposed under, when recorded.
     pub(crate) shapes_graph: Option<String>,
-    /// The custom node-expression function declarations, sorted by IRI. Every
-    /// [`NodeExpr::CustomCall`] in [`Self::node_shapes`] holds one of THESE
-    /// handles, so installing a body here reaches every call site.
+    /// The physical header table, exposed only to codec round-trip controls.
+    /// Calls resolve their IRI through the original retained model owner.
+    #[cfg(test)]
     pub(crate) custom_functions: Vec<Arc<CustomFunction>>,
-    /// The single shared shape index every `sh:nodeByExpression` constraint and
-    /// computed [`ShapeArg`] in [`Self::node_shapes`] was decoded against, left
-    /// empty for the assembling stage to fill.
-    pub(crate) shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
     /// The REUSABLE ANALYSIS: the cycle-aware class walk's result, carried rather
     /// than recomputed.
     ///
@@ -468,15 +463,19 @@ pub(crate) struct AstParts {
 // Writer
 // ---------------------------------------------------------------------------
 
-/// The encoding cursor: an output buffer, the live nesting depth, and the
-/// custom-function index every [`NodeExpr::CustomCall`] is written against.
+/// The encoding cursor: an output buffer, live nesting depth and declaration
+/// identities retained by model owners.
 struct AstWriter {
     /// The bytes written so far.
     out: Vec<u8>,
     /// How many recursive structures are currently open.
     depth: u32,
-    /// Function IRI → index into the key-sorted declaration table.
-    fn_index: BTreeMap<String, u64>,
+    /// Declaration identity → deterministic encounter ordinal.
+    fn_index: BTreeMap<usize, u64>,
+    /// Retained index identities; only their deterministic ordinals reach bytes.
+    index_ids: BTreeMap<usize, u64>,
+    /// Shared model owners, defined before use.
+    owners: BTreeMap<usize, u64>,
 }
 
 impl AstWriter {
@@ -486,11 +485,13 @@ impl AstWriter {
     /// limit and not a format fact: the writer appends exactly the same bytes in
     /// exactly the same order whatever capacity it began with, which is why the
     /// determinism fixture's pinned artifact length is unmoved by it.
-    fn new(fn_index: BTreeMap<String, u64>) -> Self {
+    fn new(fn_index: BTreeMap<usize, u64>) -> Self {
         Self {
             out: Vec::with_capacity(WRITE_BUFFER_HINT),
             depth: 0,
             fn_index,
+            index_ids: BTreeMap::new(),
+            owners: BTreeMap::new(),
         }
     }
 
@@ -868,6 +869,49 @@ impl AstWriter {
         });
     }
 
+    fn index(&mut self, index: &ShapeIndex) -> Result<(), ShapesProductError> {
+        let id = *self
+            .index_ids
+            .get(&Arc::as_ptr(index).addr())
+            .ok_or_else(|| malformed("retained definition domain was not inventoried"))?;
+        self.uint(id);
+        Ok(())
+    }
+
+    fn weak_index(&mut self, index: &ShapeIndexRef) -> Result<(), ShapesProductError> {
+        let retained = index
+            .upgrade()
+            .ok_or_else(|| malformed("computed reference outlived its definition domain"))?;
+        self.index(&retained)
+    }
+
+    fn owner(&mut self, owner: Option<&Arc<ModelOwner>>) -> Result<(), ShapesProductError> {
+        let Some(owner) = owner else {
+            self.tag(0);
+            return Ok(());
+        };
+        let address = Arc::as_ptr(owner).addr();
+        if let Some(&id) = self.owners.get(&address) {
+            self.tag(1);
+            self.uint(id);
+            return Ok(());
+        }
+        let id = self.owners.len() as u64;
+        self.owners.insert(address, id);
+        self.tag(2);
+        self.uint(id);
+        self.index(&owner.index)?;
+        self.count(owner.functions.len());
+        for function in &owner.functions {
+            let id = *self
+                .fn_index
+                .get(&Arc::as_ptr(function).addr())
+                .ok_or_else(|| malformed("retained function was not inventoried"))?;
+            self.uint(id);
+        }
+        Ok(())
+    }
+
     /// Write the shape argument of `shnex:conformsToShape`.
     fn shape_arg(&mut self, arg: &ShapeArg) -> Result<(), ShapesProductError> {
         self.enter()?;
@@ -877,9 +921,10 @@ impl AstWriter {
                 self.shape(shape)?;
             }
             // `shapes` is the SHARED index; see this module's coverage table.
-            ShapeArg::Computed { expr, shapes: _ } => {
+            ShapeArg::Computed { expr, shapes } => {
                 self.tag(1);
                 self.node_expr(expr)?;
+                self.weak_index(shapes)?;
             }
         }
         self.leave();
@@ -1019,20 +1064,17 @@ impl AstWriter {
             }
             NodeExpr::CustomCall { func, args } => {
                 self.tag(18);
-                let index = *self.fn_index.get(func.iri.as_str()).ok_or_else(|| {
-                    malformed(format!(
-                        "this shapes graph calls the custom node-expression function <{}> but does \
-                         not declare it; re-parse the shapes graph, because a call whose \
-                         declaration is missing has no body to evaluate",
-                        func.iri.as_str()
-                    ))
-                })?;
-                self.uint(index);
+                self.text(func.as_str());
                 self.count(args.len());
                 for (key, arg) in args {
                     self.arg_key(key);
                     self.node_expr(arg)?;
                 }
+            }
+            NodeExpr::Owned { expr, owner } => {
+                self.tag(32);
+                self.owner(Some(owner))?;
+                self.node_expr(expr)?;
             }
             NodeExpr::Empty => self.tag(19),
             NodeExpr::Var(name) => {
@@ -1118,11 +1160,9 @@ impl AstWriter {
     fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
         self.enter()?;
         match constraint {
-            Constraint::Reference(_) => {
-                return Err(ShapesProductError::new(
-                    ProductDimension::UnsupportedCapability,
-                    "a shared shape reference requires the catalog section of the prepared product",
-                ));
+            Constraint::Reference(target) => {
+                self.tag(40);
+                self.term(target)?;
             }
             Constraint::Class(classes) => {
                 self.tag(0);
@@ -1292,12 +1332,13 @@ impl AstWriter {
             // `shapes` is the SHARED index; see the coverage table.
             Constraint::NodeByExpression {
                 expr,
-                shapes: _,
+                shapes,
                 messages,
                 severity,
             } => {
                 self.tag(29);
                 self.node_expr(expr)?;
+                self.weak_index(shapes)?;
                 self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
@@ -1412,12 +1453,7 @@ impl AstWriter {
     /// Write a node shape.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
-        if shape.catalog.is_some() {
-            return Err(ShapesProductError::new(
-                ProductDimension::UnsupportedCapability,
-                "a shared shape catalog requires a catalog-aware prepared product",
-            ));
-        }
+        self.owner(shape.owner.as_ref())?;
         self.term(&shape.id)?;
         self.count(shape.targets.len());
         for target in &shape.targets {
@@ -1611,11 +1647,13 @@ struct AstReader<'a> {
     /// The declaration table, materialized before any body or shape is read.
     functions: Vec<Arc<CustomFunction>>,
     /// The ONE shape-index handle every decoded site is given a clone of.
-    shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
     /// The `sh:closed sh:ByTypes` index decoded first, which every later
     /// constraint carrying an equal one shares — as the parse that wrote them
     /// shared one.
     closed_type_index: Option<Arc<ClosedTypeIndex>>,
+    /// Predeclared index cells; filled only after strong ownership is admitted.
+    indexes: Vec<ShapeIndex>,
+    owners: Vec<Arc<ModelOwner>>,
 }
 
 impl<'a> AstReader<'a> {
@@ -1626,8 +1664,9 @@ impl<'a> AstReader<'a> {
             pos: 0,
             depth: 0,
             functions: Vec::new(),
-            shape_index: Arc::new(OnceLock::new()),
             closed_type_index: None,
+            indexes: Vec::new(),
+            owners: Vec::new(),
         }
     }
 
@@ -2094,6 +2133,50 @@ impl<'a> AstReader<'a> {
         })
     }
 
+    fn index(&mut self) -> Result<ShapeIndex, ShapesProductError> {
+        let id = self.uint()?;
+        usize::try_from(id)
+            .ok()
+            .and_then(|position| self.indexes.get(position))
+            .cloned()
+            .ok_or_else(|| malformed(format!("unknown retained definition domain {id}")))
+    }
+
+    fn weak_index(&mut self) -> Result<ShapeIndexRef, ShapesProductError> {
+        self.index().map(|index| Arc::downgrade(&index))
+    }
+
+    fn owner(&mut self) -> Result<Option<Arc<ModelOwner>>, ShapesProductError> {
+        match self.tag("ModelOwner", 3)? {
+            0 => Ok(None),
+            1 => {
+                let id = self.uint()?;
+                usize::try_from(id)
+                    .ok()
+                    .and_then(|position| self.owners.get(position))
+                    .cloned()
+                    .map(Some)
+                    .ok_or_else(|| malformed(format!("unknown retained model owner {id}")))
+            }
+            _ => {
+                let id = self.uint()?;
+                if id != self.owners.len() as u64 {
+                    return Err(malformed(
+                        "retained model owners must be declared once in encounter order",
+                    ));
+                }
+                let index = self.index()?;
+                let functions = self.seq(|reader| {
+                    let id = reader.uint()?;
+                    reader.custom_function(id)
+                })?;
+                let owner = ModelOwner::from_declarations(index, functions)?;
+                self.owners.push(Arc::clone(&owner));
+                Ok(Some(owner))
+            }
+        }
+    }
+
     /// Read the shape argument of `shnex:conformsToShape`.
     fn shape_arg(&mut self) -> Result<ShapeArg, ShapesProductError> {
         self.enter()?;
@@ -2101,7 +2184,7 @@ impl<'a> AstReader<'a> {
             0 => ShapeArg::Named(Box::new(self.shape()?)),
             _ => ShapeArg::Computed {
                 expr: Box::new(self.node_expr()?),
-                shapes: Arc::clone(&self.shape_index),
+                shapes: self.weak_index()?,
             },
         };
         self.leave();
@@ -2183,8 +2266,7 @@ impl<'a> AstReader<'a> {
             16 => NodeExpr::Call(self.fn_call()?),
             17 => NodeExpr::Arg(self.arg_key()?),
             18 => {
-                let index = self.uint()?;
-                let func = self.custom_function(index)?;
+                let func = self.named_node()?;
                 let args = self.seq(|reader| {
                     let key = reader.arg_key()?;
                     let arg = reader.node_expr()?;
@@ -2222,7 +2304,7 @@ impl<'a> AstReader<'a> {
                 node: Box::new(self.node_expr()?),
                 shape: self.shape_arg()?,
             },
-            _ => {
+            31 => {
                 let query = self.text()?;
                 let variable = self.text()?;
                 let key = match self.tag("NodeExpr::Select::key", TAGS_SELECT_KEY)? {
@@ -2235,6 +2317,12 @@ impl<'a> AstReader<'a> {
                     key,
                 }
             }
+            _ => NodeExpr::Owned {
+                owner: self
+                    .owner()?
+                    .ok_or_else(|| malformed("owned expression has no retained model"))?,
+                expr: Box::new(self.node_expr()?),
+            },
         };
         self.leave();
         Ok(expr)
@@ -2316,7 +2404,7 @@ impl<'a> AstReader<'a> {
             },
             29 => Constraint::NodeByExpression {
                 expr: self.node_expr()?,
-                shapes: Arc::clone(&self.shape_index),
+                shapes: self.weak_index()?,
                 messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
@@ -2341,11 +2429,12 @@ impl<'a> AstReader<'a> {
             36 => Constraint::RootClass(self.seq(Self::named_node)?),
             37 => Constraint::SomeValue(Box::new(self.shape()?)),
             38 => Constraint::SubsetOf(self.path()?),
-            _ => Constraint::UniqueValuesFor {
+            39 => Constraint::UniqueValuesFor {
                 properties: self.seq(Self::named_node)?,
                 shape: self.term()?,
                 targets: self.seq(Self::target)?,
             },
+            _ => Constraint::Reference(self.term()?),
         };
         self.leave();
         Ok(constraint)
@@ -2382,11 +2471,12 @@ impl<'a> AstReader<'a> {
     /// Read a node shape.
     fn shape(&mut self) -> Result<Shape, ShapesProductError> {
         self.enter()?;
+        let owner = self.owner()?;
         let id = self.term()?;
         let targets = self.seq(Self::target)?;
         let constraints = self.seq(Self::constraint)?;
         let shape = Shape {
-            catalog: None,
+            owner,
             id,
             targets,
             property_shapes: self.seq(Self::property_shape)?,
@@ -2548,43 +2638,57 @@ fn lower_sparql_call(iri: &NamedNode, arity: usize) -> Result<String, ShapesProd
 
 /// Collect every custom node-expression function a shapes graph can call.
 ///
-/// Keyed by IRI and inserted BEFORE its body is walked, so a function whose body
-/// calls itself terminates. Two distinct handles sharing one IRI are refused
-/// rather than unified: the parser interns one handle per declaration precisely
-/// so every call site shares it, and quietly picking one of two would give half
-/// the call sites a body they were never written against.
+/// Retains declaration identity in deterministic encounter order. The same IRI
+/// can name different declarations in different original model domains.
 struct FnTable {
-    /// IRI → declaration handle, in the key order the table is written in.
-    by_iri: BTreeMap<String, Arc<CustomFunction>>,
+    declarations: Vec<Arc<CustomFunction>>,
+    function_ids: BTreeMap<usize, u64>,
     /// The live walk depth, bounded exactly as encoding is.
     depth: u32,
     catalogs: BTreeSet<usize>,
+    indexes: Vec<ShapeIndex>,
+}
+
+struct ModelTables {
+    functions: Vec<Arc<CustomFunction>>,
+    function_ids: BTreeMap<usize, u64>,
+    indexes: Vec<ShapeIndex>,
 }
 
 impl FnTable {
-    /// Collect the table reachable from `shapes`.
-    fn collect(shapes: &Shapes) -> Result<Vec<Arc<CustomFunction>>, ShapesProductError> {
+    fn collect_model(shapes: &Shapes) -> Result<ModelTables, ShapesProductError> {
         let mut table = Self {
-            by_iri: BTreeMap::new(),
+            declarations: Vec::new(),
+            function_ids: BTreeMap::new(),
             depth: 0,
             catalogs: BTreeSet::new(),
+            indexes: Vec::new(),
         };
+        table.model(&shapes.owner)?;
         for shape in &shapes.node_shapes {
             table.shape(shape)?;
         }
         for rule in &shapes.rules.global_rules {
             table.rule(rule)?;
         }
-        Ok(table.by_iri.into_values().collect())
+        Ok(ModelTables {
+            functions: table.declarations,
+            function_ids: table.function_ids,
+            indexes: table.indexes,
+        })
+    }
+
+    fn retain_index(&mut self, index: &ShapeIndex) {
+        if !self.indexes.iter().any(|found| Arc::ptr_eq(found, index)) {
+            self.indexes.push(Arc::clone(index));
+        }
     }
 }
 
 impl ModelWalk<'_> for FnTable {
-    fn first_catalog(
-        &mut self,
-        catalog: &Arc<crate::shapes::ShapeCatalog>,
-    ) -> Result<bool, ShapesProductError> {
-        Ok(self.catalogs.insert(Arc::as_ptr(catalog).addr()))
+    fn first_owner(&mut self, owner: &Arc<ModelOwner>) -> Result<bool, ShapesProductError> {
+        self.retain_index(&owner.index);
+        Ok(self.catalogs.insert(Arc::as_ptr(owner).addr()))
     }
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
@@ -2594,24 +2698,21 @@ impl ModelWalk<'_> for FnTable {
         &mut self,
         func: &Arc<CustomFunction>,
     ) -> Result<bool, ShapesProductError> {
-        if let Some(existing) = self.by_iri.get(func.iri.as_str()) {
-            if Arc::ptr_eq(existing, func) {
-                return Ok(false);
+        match self.function_ids.entry(Arc::as_ptr(func).addr()) {
+            std::collections::btree_map::Entry::Occupied(_) => return Ok(false),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(self.declarations.len() as u64);
             }
-            return Err(malformed(format!(
-                "this shapes graph declares the custom node-expression function <{}> twice, as two \
-                 separate declarations; re-parse the shapes graph so every call site shares ONE \
-                 declaration, because a product can record only one body per name",
-                func.iri.as_str()
-            )));
         }
-        self.by_iri
-            .insert(func.iri.as_str().to_owned(), Arc::clone(func));
+        self.declarations.push(Arc::clone(func));
         Ok(true)
     }
 
-    /// The table records declarations only; a shape-index handle carries none.
-    fn shape_index(&mut self, _found: &ShapeIndex) -> Result<(), ShapesProductError> {
+    fn shape_index(&mut self, found: &ShapeIndexRef) -> Result<(), ShapesProductError> {
+        let index = found
+            .upgrade()
+            .ok_or_else(|| malformed("computed reference outlived its definition domain"))?;
+        self.retain_index(&index);
         Ok(())
     }
 }
@@ -2619,26 +2720,6 @@ impl ModelWalk<'_> for FnTable {
 // ---------------------------------------------------------------------------
 // The public codec
 // ---------------------------------------------------------------------------
-
-/// Every custom node-expression function declaration reachable from `shapes`,
-/// keyed and ordered by IRI — the same table [`encode_ast`] writes.
-///
-/// Exposed because the restore path has to assemble a
-/// [`UserFunctionRegistry`](purrdf_sparql_eval::UserFunctionRegistry) from a
-/// shapes graph it did NOT decode from this codec (the rebuild seam re-derives
-/// its shapes from the carried dataset), and the registration it must reproduce
-/// is a function of exactly this table. Sharing the walk is what keeps the two
-/// paths from disagreeing about which declarations a shapes graph has.
-///
-/// # Errors
-///
-/// [`ProductDimension::DepthLimit`] when the walk nests past [`MAX_DEPTH`];
-/// [`ProductDimension::Malformed`] when one IRI names two separate declarations.
-pub(crate) fn custom_functions(
-    shapes: &Shapes,
-) -> Result<Vec<Arc<CustomFunction>>, ShapesProductError> {
-    FnTable::collect(shapes)
-}
 
 /// Encode the declarative half of a parsed shapes graph.
 ///
@@ -2653,18 +2734,33 @@ pub(crate) fn encode_ast(
     shapes: &Shapes,
     classes: &ClassCatalog,
 ) -> Result<Vec<u8>, ShapesProductError> {
-    let functions = custom_functions(shapes)?;
-    let fn_index: BTreeMap<String, u64> = functions
+    let tables = FnTable::collect_model(shapes)?;
+    let functions = &tables.functions;
+    let mut ownership = ownership::Ownership::new(functions, &tables.indexes);
+    for function in functions {
+        if let Some(body) = function.body.get() {
+            ownership.body(function, body)?;
+        }
+    }
+    for index in &tables.indexes {
+        if let Some(definitions) = index.get() {
+            ownership.definitions(index, definitions.values())?;
+        }
+    }
+    ownership.finish()?;
+    let mut writer = AstWriter::new(tables.function_ids);
+    writer.index_ids = tables
+        .indexes
         .iter()
         .enumerate()
-        .map(|(index, func)| (func.iri.as_str().to_owned(), index as u64))
+        .map(|(id, index)| (Arc::as_ptr(index).addr(), id as u64))
         .collect();
+    // Allocate identities before reading any body or definition that names one.
+    writer.count(tables.indexes.len());
 
-    let mut writer = AstWriter::new(fn_index);
-
-    // 1. Declarations, key-sorted (a `BTreeMap`'s own order).
+    // 1. Declarations, in deterministic model encounter order.
     writer.count(functions.len());
-    for func in &functions {
+    for func in functions {
         writer.text(func.iri.as_str());
         writer.custom_fn_kind(func.kind);
         writer.count(func.params.len());
@@ -2673,14 +2769,33 @@ pub(crate) fn encode_ast(
         }
         writer.count(func.required);
     }
+    writer.owner(Some(&shapes.owner))?;
     // 2. Bodies, in the same order — a separate pass, because a body may call any
     //    declaration including its own.
-    for func in &functions {
+    for func in functions {
         match func.body.get() {
             None => writer.flag(false),
             Some(body) => {
                 writer.flag(true);
                 writer.node_expr(body)?;
+            }
+        }
+    }
+    // Retained definitions are independent of the exported root list.
+    for index in &tables.indexes {
+        writer.flag(index.get().is_some());
+        if let Some(definitions) = index.get() {
+            let mut ordered: Vec<_> = definitions.iter().collect();
+            ordered
+                .sort_unstable_by(|(left, _), (right, _)| crate::term::canonical_cmp(left, right));
+            writer.count(ordered.len());
+            for (id, definition) in ordered {
+                if id != &definition.id {
+                    return Err(malformed(
+                        "definition index key disagrees with its shape identity",
+                    ));
+                }
+                writer.shape(definition)?;
             }
         }
     }
@@ -2843,6 +2958,8 @@ pub(crate) fn encode_ast_derived(shapes: &Shapes) -> Result<Vec<u8>, ShapesProdu
 /// inconsistency, trailing bytes included.
 pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
     let mut reader = AstReader::new(bytes);
+    let indexes = reader.count()?;
+    reader.indexes = (0..indexes).map(|_| Arc::new(OnceLock::new())).collect();
 
     // 1. Materialize every declaration BEFORE any body or shape is read, so a
     //    call — including a body's call to its own function — resolves to an
@@ -2864,20 +2981,26 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
         }));
     }
     reader.functions = functions;
+    let owner = reader
+        .owner()?
+        .ok_or_else(|| malformed("shapes product has no retained model domain"))?;
 
-    // 2. Bodies, installed into the handles minted above.
-    for index in 0..declarations {
-        if reader.flag()? {
-            let body = reader.node_expr()?;
-            let func = Arc::clone(&reader.functions[index]);
-            func.body.set(body).map_err(|_| {
-                malformed(format!(
-                    "this product installs two bodies for the custom node-expression function <{}>; \
-                     re-prepare the product from its shapes graph",
-                    func.iri.as_str()
-                ))
-            })?;
-        }
+    // Keep all cells empty until the complete strong-ownership graph is admitted.
+    let mut bodies = Vec::with_capacity(speculative_capacity(declarations));
+    for _ in 0..declarations {
+        bodies.push(if reader.flag()? {
+            Some(reader.node_expr()?)
+        } else {
+            None
+        });
+    }
+    let mut definitions = Vec::with_capacity(speculative_capacity(indexes));
+    for _ in 0..indexes {
+        definitions.push(if reader.flag()? {
+            Some(reader.seq(AstReader::shape)?)
+        } else {
+            None
+        });
     }
 
     // 3..7. The shapes-level fields, in stream order.
@@ -2916,14 +3039,48 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
         )));
     }
 
+    let mut ownership = ownership::Ownership::new(&reader.functions, &reader.indexes);
+    for (function, body) in reader.functions.iter().zip(&bodies) {
+        if let Some(body) = body {
+            ownership.body(function, body)?;
+        }
+    }
+    for (index, rows) in reader.indexes.iter().zip(&definitions) {
+        if let Some(rows) = rows {
+            ownership.definitions(index, rows)?;
+        }
+    }
+    ownership.finish()?;
+    for (index, rows) in reader.indexes.iter().zip(definitions) {
+        if let Some(rows) = rows {
+            let mut map = FastMap::default();
+            for shape in rows {
+                if map.insert(shape.id.clone(), shape).is_some() {
+                    return Err(malformed("duplicate retained shape definition"));
+                }
+            }
+            index
+                .set(map)
+                .map_err(|_| malformed("retained definition domain was filled twice"))?;
+        }
+    }
+    for (function, body) in reader.functions.iter().zip(bodies) {
+        if let Some(body) = body {
+            function
+                .body
+                .set(body)
+                .map_err(|_| malformed("retained function body was filled twice"))?;
+        }
+    }
     Ok(AstParts {
+        owner,
         node_shapes,
         rules,
         box_role_vocab,
         target_types,
         shapes_graph,
+        #[cfg(test)]
         custom_functions: reader.functions,
-        shape_index: reader.shape_index,
         classes,
     })
 }

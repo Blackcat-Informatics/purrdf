@@ -96,7 +96,10 @@ pub fn expression_of(prefixes: &str, shapes_ttl: &str) -> NodeExpr {
         1,
         "the fixture must declare exactly one sh:expression"
     );
-    found.remove(0)
+    NodeExpr::Owned {
+        expr: Box::new(found.remove(0)),
+        owner: Arc::clone(&shapes.owner),
+    }
 }
 
 /// The rendered error the shapes graph `prefixes` + `shapes_ttl` is refused

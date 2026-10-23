@@ -89,7 +89,7 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 /// its `sh:entailment` (`entailment_rule_sets`, after the `sh:RulesEntailment`
 /// flag): the fixture declares none, so the section gains one count byte, the
 /// empty set's, and the container's zero padding turns that byte into eight (+8).
-const GOLDEN_LEN: usize = 4_744;
+const GOLDEN_LEN: usize = 4_792;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See

@@ -1827,8 +1827,14 @@ pub(crate) fn expected_derived_triples(
         }
         let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
-        let focus_nodes =
-            resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
+        let focus_nodes = resolve_focus_nodes(
+            data,
+            &shape.id,
+            &shape.targets,
+            &binding,
+            lowered.classes(),
+            shape.owner.as_ref(),
+        )?;
         let plan = lowered.untargeted_plan(shape, 0, &binding)?;
         for (ps, property_plan) in plan.properties()? {
             if !derives_expected(ps, expected) {
@@ -1914,6 +1920,7 @@ impl<'a> RulePlan<'a> {
             &self.shape.targets,
             &self.binding,
             self.lowered.classes(),
+            self.shape.owner.as_ref(),
         )
         .map(|nodes| {
             // The rules engine drives the owned-term SHACL-AF surfaces, so this is one of
@@ -1958,7 +1965,7 @@ struct ExprPlan<'a> {
 impl<'a> ExprPlan<'a> {
     /// Lower `expr` standalone and resolve every identity it names against `data`.
     fn of(data: &ShaclData, expr: &'a NodeExpr) -> Result<Self, crate::error::ShapesError> {
-        let lowering = crate::plan::lower_standalone_expression(expr)?;
+        let lowering = crate::plan::lower_standalone_expression(expr, None)?;
         let binding = lowering.bind(data.core_view());
         Ok(Self {
             expr,

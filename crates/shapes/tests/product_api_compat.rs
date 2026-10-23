@@ -73,7 +73,7 @@ fn iri(s: &str) -> NamedNode {
 #[test]
 fn shape_is_still_a_bare_literal() {
     let shape = Shape {
-        catalog: None,
+        owner: None,
         id: iri("https://example.org/PersonShape").into_term(),
         targets: vec![Target::Class(iri("https://example.org/Person"))],
         constraints: vec![Constraint::MinCount(1)],
@@ -138,7 +138,7 @@ fn property_shape_is_still_a_bare_literal() {
 #[test]
 fn shapes_still_builds_via_default_then_field_assignment() {
     let shape = Shape {
-        catalog: None,
+        owner: None,
         id: iri("https://example.org/PersonShape").into_term(),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -233,6 +233,7 @@ fn constraint_match_is_exhaustive_and_reachable() {
 /// expression form stops this function compiling.
 fn node_expr_name(expr: &NodeExpr) -> &'static str {
     match expr {
+        NodeExpr::Owned { expr, .. } => node_expr_name(expr),
         NodeExpr::Constant(_) => "constant",
         NodeExpr::This => "this",
         NodeExpr::Path(_) => "path",
@@ -302,6 +303,8 @@ const fn dimension_ordinal(dimension: ProductDimension) -> u8 {
         ProductDimension::UnsupportedCapability => 19,
         ProductDimension::DepthLimit => 20,
         ProductDimension::Malformed => 21,
+        ProductDimension::Resource => 22,
+        ProductDimension::Model => 23,
     }
 }
 

@@ -33,8 +33,8 @@
 //!
 //! Evaluation carries a [`Scope`]: the `scope` argument of the specification's
 //! `evalExpr(expr, focusGraph, focusNode, scope)`. It is a borrowed linked list of
-//! [`Binding`] frames, so the empty case (the overwhelming majority of the tree)
-//! costs one word and no allocation. `sh:expression` binds `value` to the value
+//! [`Binding`] frames with borrowed arguments, so the empty case allocates nothing.
+//! `sh:expression` binds `value` to the value
 //! node under test (§7.1); `sh:nodeByExpression` evaluates in the empty scope
 //! (§7.2); `shnex:flatMap` and `shnex:orderBy` rebind the FOCUS NODE per element
 //! and thread the caller's scope through unchanged.
@@ -233,13 +233,22 @@ pub enum NodeExpr {
     /// itself is legal (and bounded at evaluation by [`MAX_RECURSION_DEPTH`]),
     /// whereas inlining it at parse time would not terminate.
     CustomCall {
-        /// The declared function.
-        func: Arc<CustomFunction>,
+        /// The function IRI, resolved in the retained model at preparation.
+        func: NamedNode,
         /// The arguments as authored, keyed the way the function's kind keys them:
         /// by zero-based index for a list-parameter function, by parameter `sh:path`
         /// IRI for a named-parameter one. They are node EXPRESSIONS, not values —
         /// §6.3 evaluates them where `shnex:arg` reads them.
         args: Vec<(ArgKey, Self)>,
+    },
+
+    /// An exported expression retaining its declaration and resolution domain.
+    /// This carries ownership only; the wrapped expression keeps its semantics.
+    Owned {
+        /// The semantic expression.
+        expr: Box<Self>,
+        /// The original model owner, absent from its own definitions.
+        owner: Arc<crate::shapes::ModelOwner>,
     },
 
     // ── SHACL 1.2 Node Expressions (W3C WD, `shnex:` namespace) ─────────────────
@@ -397,11 +406,23 @@ pub enum SequenceContract {
 }
 
 impl NodeExpr {
+    /// The semantic root and its innermost explicit model domain.
+    pub(crate) fn in_model(&self) -> (&Self, Option<&Arc<crate::shapes::ModelOwner>>) {
+        let mut expression = self;
+        let mut model = None;
+        while let Self::Owned { expr, owner } = expression {
+            expression = expr;
+            model = Some(owner);
+        }
+        (expression, model)
+    }
+
     /// This arm's [`SequenceContract`], as its specification clause defines it
     /// (see [`Self::spec_clause`]).
     #[must_use]
     pub const fn sequence_contract(&self) -> SequenceContract {
         match self {
+            Self::Owned { expr, .. } => expr.sequence_contract(),
             // SHACL-AF §6.5 / Node Expressions §4.1.4: the VALUE NODES of a path,
             // which SHACL Core defines as a set.
             Self::Path(_) | Self::PathValues { .. }
@@ -459,6 +480,7 @@ impl NodeExpr {
     #[must_use]
     pub const fn spec_clause(&self) -> &'static str {
         match self {
+            Self::Owned { expr, .. } => expr.spec_clause(),
             Self::Constant(_) => {
                 "SHACL 1.2 Node Expressions §3.1.1-§3.1.3: \"The output nodes of an IRI \
                  expression are the list consisting of exactly the node expression itself\" \
@@ -642,7 +664,7 @@ pub enum ShapeArg {
         /// The same handle `Constraint::NodeByExpression` carries, for the same
         /// reason: a shape that names another shape cannot resolve it while it is
         /// itself still being parsed.
-        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
+        shapes: std::sync::Weak<OnceLock<FastMap<Term, Shape>>>,
     },
 }
 
@@ -1055,14 +1077,35 @@ pub struct Scope<'a> {
     /// call REPLACES the argument environment outright — `evalExpr(expr, focusGraph,
     /// focusNode, scope) -> evalExpr(body, focusGraph, focusNode, argScope)` — so
     /// there is never an outer frame to chain to.
-    args: &'a [(ArgKey, NodeExpr)],
+    args: Arguments<'a>,
+}
+
+/// An argument supplied as an expression, or already evaluated by SPARQL.
+#[derive(Debug, Clone, Copy)]
+pub enum ArgValue<'a> {
+    /// Evaluate this authored expression where its argument is read.
+    Expression(&'a NodeExpr),
+    /// The caller already evaluated this argument.
+    Value(&'a Term),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Arguments<'a> {
+    Expressions(&'a [(ArgKey, NodeExpr)]),
+    Values(&'a [Option<Term>]),
+}
+
+impl Default for Arguments<'_> {
+    fn default() -> Self {
+        Self::Expressions(&[])
+    }
 }
 
 impl<'a> Scope<'a> {
     /// The empty scope — no variable and no argument is bound.
     pub const EMPTY: Self = Self {
         frame: None,
-        args: &[],
+        args: Arguments::Expressions(&[]),
     };
 
     /// The scope whose innermost frame is `binding`, inheriting `binding`'s
@@ -1083,14 +1126,39 @@ impl<'a> Scope<'a> {
     /// extended by it, so a `shnex:var` inside a body sees nothing the caller had.
     #[must_use]
     pub const fn with_args(args: &'a [(ArgKey, NodeExpr)]) -> Self {
-        Self { frame: None, args }
+        Self {
+            frame: None,
+            args: Arguments::Expressions(args),
+        }
     }
 
-    /// The node expression bound to argument key `key`, or `None` when the key is
+    /// Borrow evaluated LIST parameter values by their original argument index.
+    /// A missing value remains unbound; later indices keep their positions.
+    #[must_use]
+    pub const fn with_values(args: &'a [Option<Term>]) -> Self {
+        Self {
+            frame: None,
+            args: Arguments::Values(args),
+        }
+    }
+
+    /// The expression or evaluated value bound to `key`, or `None` when the key is
     /// not in the argument scope (§6.3's second case).
     #[must_use]
-    pub fn lookup_arg(&self, key: &ArgKey) -> Option<&'a NodeExpr> {
-        purrdf_lex::assoc::get(self.args, key)
+    pub fn lookup_arg(&self, key: &ArgKey) -> Option<ArgValue<'a>> {
+        match self.args {
+            Arguments::Expressions(args) => {
+                purrdf_lex::assoc::get(args, key).map(ArgValue::Expression)
+            }
+            Arguments::Values(args) => match key {
+                ArgKey::Index(index) => usize::try_from(*index)
+                    .ok()
+                    .and_then(|index| args.get(index))
+                    .and_then(Option::as_ref)
+                    .map(ArgValue::Value),
+                ArgKey::Named(_) => None,
+            },
+        }
     }
 
     /// Every argument binding in force, in call order.
@@ -1099,9 +1167,19 @@ impl<'a> Scope<'a> {
     /// SHACL 1.2 SPARQL Extensions §7.2 writes a `sh:select` body that references
     /// `$arg0` directly. Ordinary evaluation never calls this: `shnex:arg` resolves
     /// one key through [`lookup_arg`](Self::lookup_arg).
-    #[must_use]
-    pub const fn args(&self) -> &'a [(ArgKey, NodeExpr)] {
-        self.args
+    pub fn args(&self) -> impl Iterator<Item = (Cow<'a, ArgKey>, ArgValue<'a>)> + use<'a> {
+        let (expressions, values) = match self.args {
+            Arguments::Expressions(args) => (args, &[][..]),
+            Arguments::Values(args) => (&[][..], args),
+        };
+        expressions
+            .iter()
+            .map(|(key, value)| (Cow::Borrowed(key), ArgValue::Expression(value)))
+            .chain((0_u64..).zip(values).filter_map(|(index, value)| {
+                value
+                    .as_ref()
+                    .map(|value| (Cow::Owned(ArgKey::Index(index)), ArgValue::Value(value)))
+            }))
     }
 
     /// The node bound to `name`, innermost binding first, or `None` when the name
@@ -1647,18 +1725,10 @@ pub(crate) fn eval_planned_node_expr_in_scope(
 
 /// Evaluate a node expression that has NO stage-0 lowering, lowering it here.
 ///
-/// Two expressions are genuinely of that kind, and both are dynamic BY
-/// CONSTRUCTION rather than by omission:
-///
-/// * a `shnex:arg` argument, which travels in the evaluation [`Scope`] — a frozen
-///   public type carrying an argument's DECLARATION, with nowhere to put a
-///   lowering; and
-/// * the synthetic call [`call_custom_function`] builds at SPARQL query-evaluation
-///   time, out of argument values the engine has just computed.
-///
-/// Neither exists before evaluation begins, so neither can have been lowered
-/// before it. This is also what the PUBLIC entry points use, because a caller
-/// holding only a parsed `NodeExpr` has no preparation to have lowered it against.
+/// Public expression callers and authored argument expressions prepare their
+/// retained model here. Callers with a shared preparation use the planned entry.
+/// The direct SPARQL value boundary prepares only the declared function body and
+/// borrows its evaluated values through [`Scope::with_values`].
 ///
 /// `disallows` is the conformance-disallow set of the run this evaluation belongs
 /// to, so a shape-bearing expression reached through an argument or a dynamic body
@@ -1671,8 +1741,9 @@ fn eval_unlowered(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
     disallows: &crate::report::ConformanceDisallows,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let lowering = crate::plan::lower_standalone_expression(expr)?;
+    let lowering = crate::plan::lower_standalone_expression(expr, model)?;
     let mut binding = lowering.bind(store.core_view());
     binding.set_conformance_disallows(disallows);
     eval_planned_node_expr_in_scope(
@@ -1710,6 +1781,7 @@ pub fn eval_node_expr_in_scope(
         guard,
         scope,
         &crate::report::ConformanceDisallows::default(),
+        None,
     )
 }
 
@@ -1727,6 +1799,7 @@ pub(crate) fn eval_node_expr_in_run(
     focus: &Term,
     expr: &NodeExpr,
     disallows: &crate::report::ConformanceDisallows,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_unlowered(
         store,
@@ -1735,6 +1808,7 @@ pub(crate) fn eval_node_expr_in_run(
         &mut RecursionGuard::default(),
         Scope::EMPTY,
         disallows,
+        model,
     )
 }
 
@@ -2326,7 +2400,7 @@ fn eval_node_expr_at_depth(
                             lowered.shape(plan, 0, shape)?,
                             guard,
                         )?)]),
-                        ShapeArg::Computed { expr, shapes } => {
+                        ShapeArg::Computed { expr, .. } => {
                             let produced = descend!(expr, 1)?;
                             let [shape_iri] = produced.as_slice() else {
                                 return Err(format!(
@@ -2336,20 +2410,13 @@ fn eval_node_expr_at_depth(
                                 )
                                 .into());
                             };
-                            let resolved = shapes.get().ok_or_else(|| {
-                                crate::error::ShapesError::internal(
-                                    "shnex:conformsToShape: the shapes graph's shape index was \
-                                     never filled",
-                                )
-                            })?;
-                            let shape_plan = plan
-                                .indexed(lowered.index()?, shape_iri, resolved)?
-                                .ok_or_else(|| {
-                                format!(
-                                    "shnex:conformsToShape shape argument produced \
+                            let shape_plan =
+                                plan.indexed(lowered.index()?, shape_iri)?.ok_or_else(|| {
+                                    format!(
+                                        "shnex:conformsToShape shape argument produced \
                                          {shape_iri}, which is not a shape of this shapes graph"
-                                )
-                            })?;
+                                    )
+                                })?;
                             Ok(vec![bool_literal(conforms_guarded(
                                 store, only, shape_plan, guard,
                             )?)])
@@ -2409,11 +2476,18 @@ fn eval_node_expr_at_depth(
             // that produces several is a hard refusal naming the variable — binding
             // an arbitrary member, or dropping the binding silently, would both hand
             // the query a different answer than the author wrote.
-            for (arg_key, arg_expr) in scope.args() {
+            for (arg_key, argument) in scope.args() {
                 let name = arg_key.variable_name();
                 if let Some(potential) = &mut potential {
                     potential.push(name.clone());
                 }
+                let arg_expr = match argument {
+                    ArgValue::Expression(expression) => expression,
+                    ArgValue::Value(value) => {
+                        bindings.push((name, value.clone()));
+                        continue;
+                    }
+                };
                 let values = eval_unlowered(
                     store,
                     focus,
@@ -2421,6 +2495,7 @@ fn eval_node_expr_at_depth(
                     guard,
                     Scope::EMPTY,
                     plan.binding().conformance_disallows(),
+                    plan.model(),
                 )?;
                 match values.as_slice() {
                     [] => {}
@@ -2450,7 +2525,7 @@ fn eval_node_expr_at_depth(
             // bindings and the call's argument names.
             let declared: Vec<String> = std::iter::once("this".to_owned())
                 .chain(scope.bindings().iter().map(|(name, _)| (*name).to_owned()))
-                .chain(scope.args().iter().map(|(key, _)| key.variable_name()))
+                .chain(scope.args().map(|(key, _)| key.variable_name()))
                 .collect();
             let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
             crate::sparql::eval_select_nodes_view(
@@ -2469,7 +2544,8 @@ fn eval_node_expr_at_depth(
         // own second case and yields the empty list.
         NodeExpr::Arg(key) => match scope.lookup_arg(key) {
             None => Ok(Vec::new()),
-            Some(arg) => {
+            Some(ArgValue::Value(value)) => Ok(vec![value.clone()]),
+            Some(ArgValue::Expression(arg)) => {
                 let out = eval_unlowered(
                     store,
                     focus,
@@ -2477,6 +2553,7 @@ fn eval_node_expr_at_depth(
                     guard,
                     Scope::EMPTY,
                     plan.binding().conformance_disallows(),
+                    plan.model(),
                 )?;
                 // §6.2 says of a custom LIST parameter function that "each argument
                 // produces at most one output node", and that "an evaluation failure
@@ -2503,8 +2580,18 @@ fn eval_node_expr_at_depth(
         // The focus node and the focus graph both carry through unchanged; only the
         // scope is replaced. The re-entry counter is charged and released on EVERY
         // path, so an erroring body never leaves the guard permanently raised.
-        NodeExpr::CustomCall { func, args } => {
-            let out = eval_custom_call(store, focus, func, args, lowered, plan, guard)?;
+        NodeExpr::CustomCall { args, .. } => {
+            let function = plan.function(lowered.body_key()?)?;
+            let func = &function.declaration;
+            let out = eval_custom_call(
+                store,
+                focus,
+                func,
+                Scope::with_args(args),
+                &function.body,
+                plan,
+                guard,
+            )?;
             // §6.2: a custom LIST parameter expression evaluates its body "where an
             // evaluation failure is reported when there is more than 1 output node"
             // — a list parameter function produces at most one node. A NAMED
@@ -2516,6 +2603,15 @@ fn eval_node_expr_at_depth(
             }
             Ok(out)
         }
+        NodeExpr::Owned { expr, owner } => eval_node_expr_at_depth(
+            store,
+            focus,
+            expr,
+            lowered,
+            plan.with_model(owner),
+            guard,
+            scope,
+        ),
         NodeExpr::Min(of) => aggregate(
             store,
             focus,
@@ -2612,9 +2708,9 @@ fn more_than_one_output_node(func: &CustomFunction, count: usize) -> crate::erro
 fn eval_custom_call(
     store: &ShaclData,
     focus: &Term,
-    func: &Arc<CustomFunction>,
-    args: &[(ArgKey, NodeExpr)],
-    lowered: &LoweredExpr,
+    func: &CustomFunction,
+    scope: Scope<'_>,
+    body_lowered: &LoweredExpr,
     plan: ShapePlan<'_>,
     guard: &mut RecursionGuard,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
@@ -2630,25 +2726,7 @@ fn eval_custom_call(
         // may call the function it belongs to, so it cannot be a subtree
         // of any one call site. A body this walk never reached has none,
         // which is the dynamic case `eval_unlowered` exists for.
-        match plan.body(lowered.body_iri()?) {
-            Some(body_lowered) => eval_planned_node_expr_in_scope(
-                store,
-                focus,
-                body,
-                body_lowered,
-                plan,
-                guard,
-                Scope::with_args(args),
-            ),
-            None => eval_unlowered(
-                store,
-                focus,
-                body,
-                guard,
-                Scope::with_args(args),
-                plan.binding().conformance_disallows(),
-            ),
-        }
+        eval_planned_node_expr_in_scope(store, focus, body, body_lowered, plan, guard, scope)
     };
     guard.exit_call();
     result
@@ -2684,45 +2762,36 @@ fn eval_custom_call(
 /// evaluation failure is the call's SPARQL error.
 pub fn eval_custom_function_call(
     store: &ShaclData,
+    owner: &Arc<crate::shapes::ModelOwner>,
     func: &Arc<CustomFunction>,
     args: &[Option<Term>],
     guard: &mut RecursionGuard,
 ) -> Result<Option<Term>, crate::error::ShapesError> {
-    let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
-    for (index, value) in args.iter().enumerate() {
-        let key = u64::try_from(index)
-            .map_err(|e| format!("argument index {index} is not representable: {e}"))?;
-        if let Some(value) = value {
-            bound.push((ArgKey::Index(key), NodeExpr::Constant(value.clone())));
-        }
+    if !owner
+        .function(&func.iri)
+        .is_some_and(|declared| Arc::ptr_eq(declared, func))
+    {
+        return Err(crate::PreparationRefusal::UnknownFunction(func.iri.clone()).into());
     }
-    let call = NodeExpr::CustomCall {
-        func: Arc::clone(func),
-        args: bound,
-    };
-    let focus = Term::NamedNode(func.iri.clone());
-    // The synthetic call has no preparation to have been lowered against: it is
-    // made of values the SPARQL engine has just computed (see `eval_unlowered`).
-    let lowering = crate::plan::lower_standalone_expression(&call)?;
+    // Preserve the direct-call boundary's original typed missing-body failure.
+    let body = func.body()?;
+    let lowering = crate::plan::lower_standalone_expression(body, Some(owner))?;
     let binding = lowering.bind(store.core_view());
-    let NodeExpr::CustomCall { args: bound, .. } = &call else {
-        unreachable!("the synthetic call retains its original arguments")
-    };
+    let focus = Term::NamedNode(func.iri.clone());
+    let plan = lowering.plan(&binding);
     guard.enter_node_expr()?;
     let out = eval_custom_call(
         store,
         &focus,
         func,
-        bound,
+        Scope::with_values(args),
         lowering.expr(),
-        lowering.plan(&binding),
+        plan,
         guard,
     );
     guard.exit_node_expr();
-    match out?.as_slice() {
-        [only] => Ok(Some(only.clone())),
-        _ => Ok(None),
-    }
+    let mut out = out?;
+    Ok(if out.len() == 1 { out.pop() } else { None })
 }
 
 /// Conformance-check `node` against `shape`, under the shared recursion guard.
@@ -2897,7 +2966,7 @@ mod tests {
         // output is exactly its candidate LIST — §4.2.5 "preserving the order in
         // the list", duplicates included.
         let shape = Shape {
-            catalog: None,
+            owner: None,
             id: ex("leaf"),
             targets: vec![],
             constraints: vec![],
@@ -3881,7 +3950,7 @@ mod tests {
             let data = load_data(DATA);
 
             let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
-                catalog: None,
+                owner: None,
                 id,
                 targets: vec![],
                 constraints,

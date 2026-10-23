@@ -54,6 +54,9 @@ use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
     NodeKindValue, Path, PropertyShape, Shape, Target,
 };
+
+/// Live original domain and declaration identities; never serialized.
+type FunctionKey = (usize, usize);
 use crate::term::{NamedNode, Term};
 use crate::unique_values::{UniqueGroups, UniqueSpec};
 
@@ -253,13 +256,13 @@ pub(crate) struct LoweredShapes {
     /// The `sh:nodeByExpression` / `shnex:conformsToShape` shape indexes, lowered.
     indexes: Box<[LoweredIndex]>,
     /// The lowered body of every custom node-expression function the walk reached,
-    /// by function IRI.
+    /// by its original domain and declaration identity.
     ///
     /// A map rather than a subtree because SHACL 1.2 Node Expressions §6.1/§6.2
     /// hold a function body BY REFERENCE precisely so a body may call the function
     /// it belongs to. That cycle has no finite tree, so the body is lowered once
-    /// under its own IRI and every call site resolves it by name.
-    bodies: FastMap<String, LoweredExpr>,
+    /// in its original domain and every call site retains that key.
+    bodies: FastMap<FunctionKey, LoweredFunction>,
     /// The empty target index every shape reached through a CONSTRAINT carries.
     ///
     /// One shared value rather than one per nested plan: `sh:not`, `sh:and`,
@@ -417,6 +420,7 @@ impl LoweredShapes {
             ))
         })?;
         Ok(ShapePlan {
+            owner: shape.owner.as_ref(),
             shape,
             lowered,
             graph: self,
@@ -741,9 +745,9 @@ pub(crate) struct LoweredExpr {
     /// The position of the shape index this expression resolves shape IRIs against
     /// (`shnex:conformsToShape` with a computed shape argument); `None` otherwise.
     index: Option<u32>,
-    /// The IRI of the custom node-expression function this expression calls, whose
+    /// The original-domain identity of the function this expression calls, whose
     /// lowered body lives in [`LoweredShapes::bodies`]; `None` otherwise.
-    body: Option<String>,
+    body: Option<FunctionKey>,
     /// The rendered single-row SELECT that evaluates a FUNCTION CALL expression
     /// (`sh:expression` with a builtin, `sh:SPARQLFunction` or `sparql:NAME`
     /// callee); `None` for every other kind.
@@ -765,6 +769,14 @@ pub(crate) struct LoweredExpr {
     shapes: Box<[LoweredShape]>,
     /// The lowering of each SUB-EXPRESSION, in declaration order.
     operands: Box<[Self]>,
+}
+
+/// One retained declaration and body per original function domain, rather than
+/// a declaration pointer in every expression and argument record.
+#[derive(Debug)]
+pub(crate) struct LoweredFunction {
+    pub(crate) declaration: Arc<crate::expression::CustomFunction>,
+    pub(crate) body: LoweredExpr,
 }
 
 // ── Stage 1: the dataset binding ────────────────────────────────────────────────
@@ -958,6 +970,7 @@ pub(crate) fn lowering_defect(
 /// this whole exercise removes.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShapePlan<'a> {
+    owner: Option<&'a Arc<crate::shapes::ModelOwner>>,
     /// The shape this plan lowered, paired with its lowering by construction.
     shape: &'a Shape,
     /// This shape's stage-0 lowering.
@@ -975,6 +988,18 @@ pub(crate) struct ShapePlan<'a> {
 }
 
 impl<'a> ShapePlan<'a> {
+    pub(crate) const fn model(&self) -> Option<&'a Arc<crate::shapes::ModelOwner>> {
+        self.owner
+    }
+
+    pub(crate) fn with_model<'model>(
+        &'model self,
+        owner: &'model Arc<crate::shapes::ModelOwner>,
+    ) -> ShapePlan<'model> {
+        let mut plan: ShapePlan<'model> = *self;
+        plan.owner = Some(owner);
+        plan
+    }
     /// The shape this plan describes.
     #[inline]
     pub(crate) fn shape(&self) -> &'a Shape {
@@ -1183,6 +1208,7 @@ impl<'a> ShapePlan<'a> {
     #[inline]
     pub(crate) fn nested(&self, shape: &'a Shape, lowered: &'a LoweredShape) -> Self {
         Self {
+            owner: shape.owner.as_ref().or(self.owner),
             shape,
             lowered,
             graph: self.graph,
@@ -1211,13 +1237,15 @@ impl<'a> ShapePlan<'a> {
         &self,
         index: u32,
         id: &Term,
-        shapes: &'a FastMap<Term, Shape>,
     ) -> Result<Option<Self>, crate::error::ShapesError> {
         let lowered = self
             .graph
             .indexes
             .get(index as usize)
             .ok_or_else(|| slot_defect("shape-index", index))?;
+        let shapes = lowered.cell.get().ok_or_else(|| {
+            crate::error::ShapesError::internal("the shapes graph's shape index was never filled")
+        })?;
         let (Some(shape), Some(lowered)) = (shapes.get(id), lowered.shapes.get(id)) else {
             return Ok(None);
         };
@@ -1226,8 +1254,15 @@ impl<'a> ShapePlan<'a> {
 
     /// The lowered body of the custom node-expression function named `iri`.
     #[inline]
-    pub(crate) fn body(&self, iri: &str) -> Option<&'a LoweredExpr> {
-        self.graph.bodies.get(iri)
+    pub(crate) fn function(
+        &self,
+        key: FunctionKey,
+    ) -> Result<&'a LoweredFunction, crate::error::ShapesError> {
+        self.graph.bodies.get(&key).ok_or_else(|| {
+            crate::error::ShapesError::internal(
+                "a custom call has no original lowered function record",
+            )
+        })
     }
 }
 
@@ -1636,8 +1671,6 @@ pub(crate) enum PlannedConstraint<'a> {
         expr: &'a NodeExpr,
         /// Its lowering.
         lowered: &'a LoweredExpr,
-        /// The shapes graph's IRI-named shape index.
-        shapes: &'a Arc<OnceLock<FastMap<Term, Shape>>>,
         /// The position of that index's lowering.
         index: u32,
         /// The per-constraint message overrides (empty for none).
@@ -1712,21 +1745,9 @@ impl<'a> ShapePlan<'a> {
     ) -> Result<PlannedConstraint<'a>, crate::error::ShapesError> {
         Ok(match (constraint, lowered) {
             (Constraint::Reference(target), LoweredConstraint::Reference { catalog }) => {
-                let index = self
-                    .graph
-                    .indexes
-                    .get(*catalog as usize)
-                    .ok_or_else(|| slot_defect("shape-index", *catalog))?;
-                let definitions = index
-                    .cell
-                    .get()
-                    .ok_or("shape reference catalog is uninitialized")?;
-                PlannedConstraint::Reference(
-                    self.indexed(*catalog, target, definitions)?
-                        .ok_or_else(|| {
-                            format!("shape reference {target} is absent from its catalog")
-                        })?,
-                )
+                PlannedConstraint::Reference(self.indexed(*catalog, target)?.ok_or_else(|| {
+                    format!("shape reference {target} is absent from its catalog")
+                })?)
             }
             (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::One(slot))) => {
                 PlannedConstraint::Class(PlannedClasses::One(self.binding.term(*slot)?))
@@ -1926,22 +1947,33 @@ impl<'a> ShapePlan<'a> {
             (
                 Constraint::NodeByExpression {
                     expr,
-                    shapes,
                     messages,
                     severity,
+                    ..
                 },
                 LoweredConstraint::NodeByExpression {
                     expr: lowered,
                     index,
                 },
-            ) => PlannedConstraint::NodeByExpression {
-                expr,
-                lowered,
-                shapes,
-                index: *index,
-                messages,
-                severity,
-            },
+            ) => {
+                let retained = self
+                    .graph
+                    .indexes
+                    .get(*index as usize)
+                    .ok_or_else(|| slot_defect("shape-index", *index))?;
+                if retained.cell.get().is_none() {
+                    return Err(crate::error::ShapesError::internal(
+                        "the shapes graph's shape index was never filled",
+                    ));
+                }
+                PlannedConstraint::NodeByExpression {
+                    expr,
+                    lowered,
+                    index: *index,
+                    messages,
+                    severity,
+                }
+            }
             (
                 Constraint::Component {
                     component,
@@ -2139,13 +2171,13 @@ impl LoweredExpr {
         })
     }
 
-    /// The IRI of the custom node-expression function this expression calls.
+    /// The original-domain identity of the function this expression calls.
     ///
     /// # Errors
     /// Returns an error when the lowering records none.
     #[inline]
-    pub(crate) fn body_iri(&self) -> Result<&str, crate::error::ShapesError> {
-        self.body.as_deref().ok_or_else(|| {
+    pub(crate) fn body_key(&self) -> Result<FunctionKey, crate::error::ShapesError> {
+        self.body.ok_or_else(|| {
             crate::error::ShapesError::internal(
                 "internal validation-plan defect: a custom node-expression call was evaluated against \
              a lowering that records no function IRI, so its body was never lowered",
@@ -2294,6 +2326,7 @@ pub(crate) struct PreparedTargets {
 /// stack was exhausted — an ABORT, not an error any caller could handle.
 #[derive(Default)]
 struct ShapeWalk {
+    owner: Option<Arc<crate::shapes::ModelOwner>>,
     /// The catalog whose bare definitions are currently being lowered.
     current_catalog: Option<u32>,
     /// Every class IRI the walk has reached.
@@ -2311,13 +2344,13 @@ struct ShapeWalk {
     /// would not terminate, so it is entered once per walk and every later
     /// constraint is handed the position of the entry already made.
     indexes: Vec<LoweredIndex>,
-    /// The custom node-expression function bodies already lowered, by IRI. A body
+    /// The custom node-expression function bodies already lowered, by domain and declaration. A body
     /// names the same classes and resolves the same terms at every call site, so
     /// once is enough — and once is also all a cyclic body can be given.
-    bodies: FastMap<String, LoweredExpr>,
-    /// The function IRIs whose bodies are currently being lowered, so a body that
+    bodies: FastMap<FunctionKey, LoweredFunction>,
+    /// The function identities whose bodies are currently being lowered, so a body that
     /// calls its own function records the call and stops rather than recursing.
-    in_flight: Vec<String>,
+    in_flight: Vec<FunctionKey>,
     /// The dependency footprint accumulating alongside the lowering. It drives no
     /// recursion of its own: every visit below hands it what the lowering walk
     /// just reached, at the node the lowering walk is standing on.
@@ -2339,6 +2372,22 @@ struct ShapeWalk {
 }
 
 impl ShapeWalk {
+    fn reference_index(
+        &mut self,
+        reference: &crate::shapes::link::ShapeIndexRef,
+    ) -> LoweringResult<u32> {
+        let model = self
+            .owner
+            .as_ref()
+            .ok_or(PreparationRefusal::UnboundModel)?;
+        let index = reference
+            .upgrade()
+            .ok_or(PreparationRefusal::ExpiredIndex)?;
+        if !Arc::ptr_eq(&model.index, &index) {
+            return Err(PreparationRefusal::ForeignIndex);
+        }
+        self.index_position(&index, false)
+    }
     /// Record `term` and hand back the slot its dataset identity will occupy.
     fn slot(&mut self, term: Term) -> TermSlot {
         let slot = self.terms.len();
@@ -2470,9 +2519,10 @@ impl ShapeWalk {
         index: &Arc<OnceLock<FastMap<Term, Shape>>>,
         definitions: bool,
     ) -> LoweringResult<u32> {
-        // Whichever shape of the index a value node resolves to is chosen at
-        // evaluation, so no shape lowered inline here describes it.
-        self.opaque_references += 1;
+        if !definitions {
+            // A computed reference chooses its destination at evaluation.
+            self.opaque_references += 1;
+        }
         let cell = Arc::as_ptr(index).addr();
         if let Some(position) = self
             .indexes
@@ -2494,9 +2544,9 @@ impl ShapeWalk {
         // whose classes could go unplanned.
         if let Some(shapes) = index.get() {
             let previous_catalog = self.current_catalog;
-            if definitions {
-                self.current_catalog = Some(position);
-            }
+            // References inside definitions belong to this exact domain, even
+            // when a computed expression first reached it from another catalog.
+            self.current_catalog = Some(position);
             // The index is entered once, from wherever the walk first reached it,
             // but the shapes inside are resolved PER VALUE NODE against data — so
             // the node their reads start from is not the node this walk happens to
@@ -2543,25 +2593,25 @@ pub(crate) fn lower_shapes<'a>(
     })
 }
 
-/// THE STANDALONE WALK: lower ONE node expression that has no place in a shapes
-/// graph, for the evaluation-time expressions that cannot have been lowered before
-/// they existed.
-///
-/// Two expressions are genuinely of that kind, and both are dynamic by
-/// construction rather than by omission: a `shnex:arg` argument, which travels in
-/// the evaluation SCOPE (a frozen public type that carries an argument's
-/// DECLARATION and not its lowering), and the synthetic call a SPARQL-invoked
-/// custom function is built from at query-evaluation time out of values the engine
-/// has just computed. Lowering them where they are built is the only placement
-/// there is.
-pub(crate) fn lower_standalone_expression(expr: &NodeExpr) -> LoweringResult<StandaloneLowering> {
+/// Lower one expression for a caller holding its original model without a shared
+/// preparation. Authored argument expressions use this entry when read. The
+/// direct SPARQL value boundary lowers its declared body here and borrows the
+/// already evaluated arguments separately.
+pub(crate) fn lower_standalone_expression(
+    expr: &NodeExpr,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
+) -> LoweringResult<StandaloneLowering> {
     scoped_lowering(|| {
         let mut walk = ShapeWalk::default();
+        let (expr, owner) = expr.in_model();
+        walk.owner = owner.or(model).cloned();
         let lowered = lower_expression(expr, &mut walk)?;
+        let mut root = standalone_root();
+        root.owner.clone_from(&walk.owner);
         Ok(StandaloneLowering {
             graph: walk.finish(Vec::new())?,
             expr: lowered,
-            root: standalone_root(),
+            root,
             root_lowered: LoweredShape {
                 deactivated_when: Box::new([]),
                 annotation_deactivations: Box::new([]),
@@ -2608,6 +2658,7 @@ impl StandaloneLowering {
     #[inline]
     pub(crate) fn plan<'a>(&'a self, binding: &'a DatasetBinding) -> ShapePlan<'a> {
         ShapePlan {
+            owner: self.root.owner.as_ref(),
             shape: &self.root,
             lowered: &self.root_lowered,
             graph: &self.graph,
@@ -2665,7 +2716,7 @@ impl StandalonePath {
 /// [`StandaloneLowering::root`].
 fn standalone_root() -> Shape {
     Shape {
-        catalog: None,
+        owner: None,
         id: Term::BlankNode("standalone-node-expression".to_owned()),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -2686,9 +2737,13 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
     admit_lowering()?;
     let deactivations = walk.deactivations;
     let opaque_references = walk.opaque_references;
+    let previous_owner = walk.owner.clone();
+    if let Some(owner) = &shape.owner {
+        walk.owner = Some(Arc::clone(owner));
+    }
     let previous_catalog = walk.current_catalog;
-    if let Some(catalog) = &shape.catalog {
-        walk.current_catalog = Some(walk.index_position(&catalog.index, true)?);
+    if let Some(owner) = &shape.owner {
+        walk.current_catalog = Some(walk.index_position(&owner.index, true)?);
     }
     let scope = walk.footprint.enter_shape();
     for target in &shape.targets {
@@ -2706,7 +2761,7 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
             | Target::NodeExpression(_) => {}
         }
     }
-    // Deactivation reads belong to the original focus node, before constraints.
+    // Deactivation expressions read from the shape's own focus node.
     let deactivated_when = lower_expressions(&shape.deactivated_when, walk)?;
     let annotation_deactivations =
         lower_annotation_deactivations(&shape.constraint_annotations, walk)?;
@@ -2731,8 +2786,9 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
         properties,
     };
     walk.footprint.leave(scope);
-    // Rules have their own shape/condition plan and stay outside this walk.
+    // Rules have their own shape/condition plans and stay outside this walk.
     walk.current_catalog = previous_catalog;
+    walk.owner = previous_owner;
     Ok(lowered)
 }
 
@@ -2758,7 +2814,7 @@ fn lower_property(
         .as_ref()
         .map(|expr| lower_expression(expr, walk))
         .transpose()?;
-    // `sh:deactivated` is evaluated at the same focus node.
+    // Property deactivation also evaluates at its declaring focus node.
     let deactivated_when = lower_expressions(&property.deactivated_when, walk)?;
     let annotation_deactivations =
         lower_annotation_deactivations(&property.constraint_annotations, walk)?;
@@ -2920,9 +2976,16 @@ fn lower_constraint(
     walk.footprint.record_constraint(constraint);
     Ok(match constraint {
         Constraint::Reference(target) => {
-            let catalog = walk
-                .current_catalog
-                .ok_or(PreparationRefusal::UnboundReference)?;
+            let catalog = if let Some(position) = walk.current_catalog {
+                position
+            } else {
+                let index = walk
+                    .owner
+                    .as_ref()
+                    .map(|owner| Arc::clone(&owner.index))
+                    .ok_or(PreparationRefusal::UnboundReference)?;
+                walk.index_position(&index, true)?
+            };
             let definitions = walk.indexes[catalog as usize]
                 .cell
                 .get()
@@ -3048,7 +3111,7 @@ fn lower_constraint(
             let expr = Box::new(lower_expression(expr, walk)?);
             LoweredConstraint::NodeByExpression {
                 expr,
-                index: walk.index_position(shapes, false)?,
+                index: walk.reference_index(shapes)?,
             }
         }
         Constraint::MinListLength(_) => LoweredConstraint::MinListLength,
@@ -3095,6 +3158,7 @@ fn lower_constraint(
                 .collect();
             let slot = walk.unique_values.len();
             walk.unique_values.push(UniqueSpec {
+                owner: walk.owner.clone(),
                 shape: shape.clone(),
                 targets: targets.clone().into_boxed_slice(),
                 properties,
@@ -3241,7 +3305,7 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweringResult<Low
                 ShapeArg::Computed { expr, shapes } => {
                     let expr = lower_expression(expr, walk)?;
                     LoweredExpr {
-                        index: Some(walk.index_position(shapes, false)?),
+                        index: Some(walk.reference_index(shapes)?),
                         operands: Box::new([node, expr]),
                         ..LoweredExpr::default()
                     }
@@ -3266,24 +3330,29 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweringResult<Low
         // actually evaluates. The arguments are lowered for the same reason every
         // other operand is.
         NodeExpr::CustomCall { func, args } => {
+            let owner = walk.owner.as_ref()
+                .ok_or_else(|| PreparationRefusal::UnknownFunction(func.clone()))?;
+            let function = owner.function(func)
+                .cloned()
+                .ok_or_else(|| PreparationRefusal::UnknownFunction(func.clone()))?;
+            let key = (Arc::as_ptr(owner).addr(), Arc::as_ptr(&function).addr());
+            let body = function.body.get()
+                .ok_or_else(|| PreparationRefusal::MissingFunctionBody(func.clone()))?;
             let operands: Box<[LoweredExpr]> = args
                 .iter()
                 .map(|(_, arg)| lower_expression(arg, walk))
                 .collect::<LoweringResult<_>>()?;
-            let iri = func.iri.as_str().to_owned();
-            // The body is lowered once, at the first call site met; every call
-            // site reaches whatever shapes it holds.
+            // A shared function body can reach shapes not lowered at this call site.
             walk.opaque_references += 1;
             // The body is lowered ONCE per function: it is shared by `Arc` and
             // names the same terms at every call site, and it may call this very
             // function, so re-entering it would not terminate. The in-flight list
             // is what stops that re-entry; the map alone could not, because the
             // entry is only made once the body has finished lowering.
-            if !walk.bodies.contains_key(&iri)
-                && !walk.in_flight.contains(&iri)
-                && let Some(body) = func.body.get()
+            if !walk.bodies.contains_key(&key)
+                && !walk.in_flight.contains(&key)
             {
-                walk.in_flight.push(iri.clone());
+                walk.in_flight.push(key);
                 // A body evaluates in its own argument scope, with the function's
                 // IRI as its focus node — not with the focus node of whatever shape
                 // called it. Nothing this walk can name reaches it, so its reads
@@ -3292,13 +3361,19 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweringResult<Low
                 let lowered = lower_expression(body, walk)?;
                 walk.footprint.leave(scope);
                 walk.in_flight.pop();
-                walk.bodies.insert(iri.clone(), lowered);
+                walk.bodies.insert(key, LoweredFunction { declaration: Arc::clone(&function), body: lowered });
             }
             LoweredExpr {
-                body: Some(iri),
+                body: Some(key),
                 operands,
                 ..LoweredExpr::default()
             }
+        }
+        NodeExpr::Owned { expr, owner } => {
+            let previous = walk.owner.replace(Arc::clone(owner));
+            let lowered = lower_expression(expr, walk)?;
+            walk.owner = previous;
+            lowered
         }
         NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             LoweredExpr {
@@ -3375,6 +3450,55 @@ mod tests {
 @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
 @prefix ex: <http://example.org/ns#> .
 ";
+
+    #[test]
+    fn function_preparation_checks_original_declarations_and_keeps_distinct_domains() {
+        use crate::PreparationRefusal;
+        use crate::expression::{CustomFnKind, CustomFunction};
+        use crate::shapes::ModelOwner;
+        use std::sync::OnceLock;
+
+        let iri = NamedNode::new_unchecked("http://example.org/function");
+        let declaration = |body: Option<NodeExpr>| {
+            Arc::new(CustomFunction {
+                iri: iri.clone(),
+                kind: CustomFnKind::ListParameter,
+                params: Vec::new(),
+                required: 0,
+                body: body.map_or_else(OnceLock::new, OnceLock::from),
+            })
+        };
+        let call = || NodeExpr::CustomCall {
+            func: iri.clone(),
+            args: Vec::new(),
+        };
+        assert!(matches!(
+            lower_standalone_expression(&call(), None),
+            Err(PreparationRefusal::UnknownFunction(found)) if found == iri
+        ));
+        let missing =
+            ModelOwner::from_declarations(Arc::default(), vec![declaration(None)]).unwrap();
+        assert!(matches!(
+            lower_standalone_expression(&call(), Some(&missing)),
+            Err(PreparationRefusal::MissingFunctionBody(found)) if found == iri
+        ));
+        let first = declaration(Some(NodeExpr::This));
+        let second = declaration(Some(NodeExpr::Empty));
+        assert!(matches!(
+            ModelOwner::from_declarations(Arc::default(), vec![Arc::clone(&first), Arc::clone(&second)]),
+            Err(PreparationRefusal::DuplicateFunction(found)) if found == iri
+        ));
+        let domain = |function| NodeExpr::Owned {
+            expr: Box::new(call()),
+            owner: ModelOwner::from_declarations(Arc::default(), vec![function]).unwrap(),
+        };
+        let shared = NodeExpr::Union(vec![domain(Arc::clone(&first)), domain(Arc::clone(&first))]);
+        lower_standalone_expression(&shared, None)
+            .expect("shared declarations keep their original body");
+        let distinct = NodeExpr::Union(vec![domain(first), domain(second)]);
+        lower_standalone_expression(&distinct, None)
+            .expect("separate explicit domains may use the same function IRI");
+    }
 
     /// A shapes graph reaching a class by every route the walk has to cover: a
     /// `sh:targetClass`, an `sh:class` on a property shape, a class inside a
@@ -3762,11 +3886,13 @@ ex:FlagShape a sh:NodeShape ;
     /// here rather than one of them being a refusal.
     #[test]
     fn a_constant_instances_of_carries_its_class_and_a_computed_one_does_not() {
-        let constant =
-            lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(
-                Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#Selected")),
-            ))))
-            .unwrap();
+        let constant = lower_standalone_expression(
+            &NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(Term::NamedNode(
+                NamedNode::new_unchecked("http://example.org/ns#Selected"),
+            )))),
+            None,
+        )
+        .unwrap();
         let data = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
              <http://example.org/ns#Selected> .",
@@ -3786,9 +3912,10 @@ ex:FlagShape a sh:NodeShape ;
 
         // A computed class operand records no constant slot; the class it will
         // produce is not known until evaluation.
-        let computed = lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(
-            NodeExpr::Var("class".to_owned()),
-        )))
+        let computed = lower_standalone_expression(
+            &NodeExpr::InstancesOf(Box::new(NodeExpr::Var("class".to_owned()))),
+            None,
+        )
         .unwrap();
         let computed_binding = computed.bind(data.as_ref());
         assert!(
