@@ -1942,8 +1942,8 @@ fn stage_id_changes_when_the_class_reachability_rule_changes() {
             ".map(|reifier| lower_shape(reifier, &mut ShapeWalk::default()))",
         ),
         (
-            "if let Some(shapes) = index.get() {",
-            "if let Some(shapes) = index.get().filter(|_| false) {",
+            "for target in shapes.keys() {",
+            "for target in shapes.keys().take(0) {",
         ),
     ] {
         let patched = real.replacen(original, replacement, 1);
