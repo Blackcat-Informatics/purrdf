@@ -1317,11 +1317,12 @@ fn walk_shape<S: ResultSink>(
             {
                 continue;
             }
+            let planned = plan.planned(constraint, lowered)?;
             if let PlannedConstraint::PropertyReference {
                 definition,
                 edge,
                 deactivated_when,
-            } = plan.planned(constraint, lowered)?
+            } = planned
             {
                 if eval_property_reference(
                     context,
@@ -1346,7 +1347,7 @@ fn walk_shape<S: ResultSink>(
                 context,
                 focus,
                 &node_value_nodes,
-                plan.planned(constraint, lowered)?,
+                planned,
                 None,
                 ConstraintSource::of_shape(shape, index, context.report_profile()),
                 &mut node_sink,
@@ -1843,11 +1844,12 @@ fn eval_property_shape<'a, S: ResultSink>(
         {
             continue;
         }
+        let planned = context.plan.planned(constraint, lowered)?;
         if let PlannedConstraint::PropertyReference {
             definition,
             edge,
             deactivated_when,
-        } = context.plan.planned(constraint, lowered)?
+        } = planned
         {
             for value in &value_nodes {
                 let roles = if S::RECORDS_RESULTS {
@@ -1883,7 +1885,7 @@ fn eval_property_shape<'a, S: ResultSink>(
             context,
             focus,
             &value_nodes,
-            context.plan.planned(constraint, lowered)?,
+            planned,
             Some(&ps.path),
             ConstraintSource::of_property(
                 ps,

@@ -141,6 +141,12 @@ impl Parser<'_> {
         if unreached.is_empty() {
             return Ok(());
         }
+        self.component_registry = crate::components::ComponentRegistry::parse_collecting(
+            self.data,
+            &self.prefix_resolver,
+            self.profile,
+        )?;
+        self.target_types = self.parse_sparql_target_types()?;
         let index = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&index)?;
         // These bodies belong to this parser's declarations. Retain their entire
@@ -923,7 +929,14 @@ mod tests {
             ex:conforms a sh:ListParameterExpressionFunction ;
               sh:parameter [ sh:path shnex:arg0 ], [ sh:path shnex:arg1 ] ;
               sh:bodyExpression [ shnex:conformsToShape ( [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] .
-            ex:Hidden sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:MarkerComponent a sh:ConstraintComponent ;
+              sh:parameter [ sh:path ex:requiresMarker ] ;
+              sh:validator [ a sh:SPARQLAskValidator ;
+                sh:ask "ASK { $this <http://example.org/required> ?marker }" ] .
+            ex:Hidden a sh:NodeShape ; ex:requiresMarker true .
+            ex:NoTargets a sh:SPARQLTargetType ;
+              sh:select "SELECT ?this WHERE { FILTER(false) }" .
+            ex:Aux a sh:NodeShape ; sh:target [ a ex:NoTargets ] .
             ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
               sh:sparql [ sh:select "SELECT $this WHERE { FILTER (!ex:conforms($this, ex:Hidden)) }" ] .
             "#,

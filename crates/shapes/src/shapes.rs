@@ -3995,6 +3995,28 @@ mod tests {
         from_dataset(dataset).map_err(|error| error.to_string())
     }
 
+    fn body_of<'a>(shapes: &'a Shapes, shape: &'a Shape) -> &'a Shape {
+        match shape.constraints.as_slice() {
+            [Constraint::Reference(target)] => shapes
+                .owner
+                .definition(target)
+                .expect("the parsed reference has its original definition"),
+            _ => shape,
+        }
+    }
+
+    fn properties_of<'a>(
+        shapes: &'a Shapes,
+        shape: &'a Shape,
+    ) -> impl Iterator<Item = &'a PropertyShape> {
+        body_of(shapes, shape)
+            .properties_in(Some(&shapes.owner))
+            .map(|view| {
+                view.expect("the parsed property reference resolves")
+                    .property
+            })
+    }
+
     const PREFIXES: &str = r"
         @prefix sh:   <http://www.w3.org/ns/shacl#> .
         @prefix ex:   <http://example.org/ns#> .
@@ -4250,7 +4272,7 @@ mod tests {
         let shapes = from_store(&store).expect("parse must succeed");
 
         assert_eq!(shapes.node_shapes.len(), 1, "expected exactly 1 node shape");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
 
         // Must have one Class target pointing at ex:Person
         assert_eq!(shape.targets.len(), 1);
@@ -4262,8 +4284,10 @@ mod tests {
         }
 
         // Must have one property shape
-        assert_eq!(shape.property_shapes.len(), 1);
-        let ps = &shape.property_shapes[0];
+        assert_eq!(properties_of(&shapes, shape).count(), 1);
+        let ps = properties_of(&shapes, shape)
+            .next()
+            .expect("one property shape");
 
         // Path must be Predicate(ex:name)
         match &ps.path {
@@ -4303,7 +4327,7 @@ mod tests {
         let shapes = from_store(&store).expect("parse must succeed");
 
         assert_eq!(shapes.node_shapes.len(), 1);
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
 
         // Must have exactly one Or constraint
         let or_constraints: Vec<&Vec<Shape>> = shape
@@ -4322,11 +4346,13 @@ mod tests {
         // Each member should be an inline property shape with one property_shape entry
         for (i, member) in members.iter().enumerate() {
             assert_eq!(
-                member.property_shapes.len(),
+                properties_of(&shapes, member).count(),
                 1,
                 "member {i} should have one property shape"
             );
-            let ps = &member.property_shapes[0];
+            let ps = properties_of(&shapes, member)
+                .next()
+                .expect("one member property");
             let has_min = ps
                 .constraints
                 .iter()
@@ -4353,9 +4379,11 @@ mod tests {
         let shapes = from_store(&store).expect("parse must succeed");
 
         assert_eq!(shapes.node_shapes.len(), 1);
-        let shape = &shapes.node_shapes[0];
-        assert_eq!(shape.property_shapes.len(), 1);
-        let ps = &shape.property_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
+        assert_eq!(properties_of(&shapes, shape).count(), 1);
+        let ps = properties_of(&shapes, shape)
+            .next()
+            .expect("one property shape");
 
         match &ps.path {
             Path::Inverse(inner) => match inner.as_ref() {
@@ -4387,7 +4415,7 @@ mod tests {
         let shapes = from_store(&store).expect("sh:sparql with a valid query must parse");
 
         assert_eq!(shapes.node_shapes.len(), 1, "expected exactly 1 node shape");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
 
         let sparql_c = shape.constraints.iter().find_map(|c| match c {
             Constraint::Sparql { select, .. } => Some(select.as_str()),
@@ -4422,7 +4450,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("IRI-valued sh:namespace must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let select = shape
             .constraints
             .iter()
@@ -4465,10 +4493,13 @@ mod tests {
             .iter()
             .find(|s| s.id.to_string().contains("SpanImportProofShape"))
             .and_then(|s| {
-                s.constraints.iter().find_map(|c| match c {
-                    Constraint::Sparql { select, .. } => Some(select.clone()),
-                    _ => None,
-                })
+                body_of(&shapes, s)
+                    .constraints
+                    .iter()
+                    .find_map(|c| match c {
+                        Constraint::Sparql { select, .. } => Some(select.clone()),
+                        _ => None,
+                    })
             })
             .expect("expected a Constraint::Sparql on the proof shape");
 
@@ -4581,7 +4612,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:qualifiedValueShape must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let qvs = ps.constraints.iter().find_map(|c| match c {
             Constraint::QualifiedValueShape {
                 shape,
@@ -4594,6 +4627,7 @@ mod tests {
         });
         let (shape, siblings, min_count, max_count, disjoint) =
             qvs.expect("expected QualifiedValueShape constraint");
+        let shape = body_of(&shapes, shape);
         assert_eq!(*min_count, Some(1));
         assert_eq!(*max_count, Some(3));
         assert!(!disjoint, "no sh:qualifiedValueShapesDisjoint declared");
@@ -4629,9 +4663,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("disjoint qualified shapes must parse");
-        let shape = &shapes.node_shapes[0];
-        assert_eq!(shape.property_shapes.len(), 2);
-        for ps in &shape.property_shapes {
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
+        assert_eq!(properties_of(&shapes, shape).count(), 2);
+        for ps in properties_of(&shapes, shape) {
             let (siblings, disjoint) = ps
                 .constraints
                 .iter()
@@ -4687,10 +4721,8 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("property-pair constraints must parse");
-        let shape = &shapes.node_shapes[0];
-        let all: Vec<&Constraint> = shape
-            .property_shapes
-            .iter()
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
+        let all: Vec<&Constraint> = properties_of(&shapes, shape)
             .flat_map(|ps| ps.constraints.iter())
             .collect();
         assert!(all.iter().any(
@@ -4742,7 +4774,7 @@ mod tests {
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
         assert_eq!(shapes.node_shapes.len(), 1);
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         assert_eq!(shape.severity, Severity::Warning);
         assert_eq!(
             shape.messages.first().map(Literal::value),
@@ -4773,6 +4805,7 @@ mod tests {
             .iter()
             .find(|s| s.id.to_string().contains("TestShape1"))
             .expect("TestShape1 present");
+        let test_shape1 = body_of(&shapes, test_shape1);
         let (component, bindings, validator) = test_shape1
             .constraints
             .iter()
@@ -4820,7 +4853,9 @@ mod tests {
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
         assert_eq!(shapes.node_shapes.len(), 1);
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let in_constraint = ps.constraints.iter().find_map(|c| match c {
             Constraint::In(items) => Some(items),
             _ => None,
@@ -4833,7 +4868,7 @@ mod tests {
     fn in_members(body: &str) -> Result<Vec<Term>, String> {
         let store = load_store(&format!("{PREFIXES}\n{body}"));
         let shapes = from_store(&store)?;
-        Ok(shapes.node_shapes[0]
+        Ok(body_of(&shapes, &shapes.node_shapes[0])
             .constraints
             .iter()
             .find_map(|c| match c {
@@ -4884,7 +4919,7 @@ mod tests {
         ));
         let shapes = from_store(&store).expect("an empty sh:and list parses");
         assert!(
-            shapes.node_shapes[0]
+            body_of(&shapes, &shapes.node_shapes[0])
                 .constraints
                 .iter()
                 .any(|c| matches!(c, Constraint::And(members) if members.is_empty()))
@@ -4929,7 +4964,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let has_nk = shape
             .constraints
             .iter()
@@ -4954,7 +4989,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let pat = ps.constraints.iter().find_map(|c| match c {
             Constraint::Pattern { regex, flags, .. } => Some((regex, flags)),
             _ => None,
@@ -4981,7 +5018,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let and_c = shape.constraints.iter().find_map(|c| match c {
             Constraint::And(members) => Some(members),
             _ => None,
@@ -5006,7 +5043,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:zeroOrMorePath must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         match &ps.path {
             Path::ZeroOrMore(inner) => match inner.as_ref() {
                 Path::Predicate(nn) => assert_eq!(nn.as_str(), "http://example.org/ns#link"),
@@ -5033,7 +5072,7 @@ mod tests {
         let mut saw_plus = false;
         let mut saw_opt = false;
         for shape in &shapes.node_shapes {
-            for ps in &shape.property_shapes {
+            for ps in properties_of(&shapes, shape) {
                 match &ps.path {
                     Path::OneOrMore(_) => saw_plus = true,
                     Path::ZeroOrOne(_) => saw_opt = true,
@@ -5059,7 +5098,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sequence path must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         match &ps.path {
             Path::Sequence(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -5084,7 +5125,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("alternative path must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         match &ps.path {
             Path::Alternative(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -5114,7 +5157,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("nested path combination must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let Path::Alternative(parts) = &ps.path else {
             panic!("expected Path::Alternative, got {:?}", ps.path);
         };
@@ -5186,7 +5231,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:maxLength must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let has_max = ps
             .constraints
             .iter()
@@ -5210,7 +5257,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:languageIn must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let tags = ps.constraints.iter().find_map(|c| match c {
             Constraint::LanguageIn(tags) => Some(tags),
             _ => None,
@@ -5239,13 +5288,13 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:not must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let not_c = shape.constraints.iter().find_map(|c| match c {
             Constraint::Not(inner) => Some(inner),
             _ => None,
         });
         assert!(not_c.is_some(), "expected Not, got {:?}", shape.constraints);
-        let inner = not_c.unwrap();
+        let inner = body_of(&shapes, not_c.unwrap());
         assert!(
             inner
                 .constraints
@@ -5270,7 +5319,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:closed must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let ignored = shape.constraints.iter().find_map(|c| match c {
             Constraint::Closed {
                 ignored,
@@ -5327,7 +5376,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:closed false must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         assert!(
             !shape
                 .constraints
@@ -5543,15 +5592,30 @@ mod tests {
 
     #[test]
     fn node_expr_filter_shape() {
-        let expr = parse_expr(&expr_ttl(
+        let dataset = load_store(&expr_ttl(
             "ex:root ex:expr [ sh:filterShape [ sh:nodeKind sh:IRI ] ; sh:nodes sh:this ] .",
-        ))
-        .expect("parse");
-        match expr {
+        ));
+        let roots = objects_of(
+            &dataset,
+            &Term::NamedNode(NamedNode::from("http://example.org/ns#root")),
+            "http://example.org/ns#expr",
+        );
+        let (shapes, mut expressions) = from_dataset_with_node_expressions(
+            &dataset,
+            &[],
+            None,
+            &roots,
+            &ShapesImports::default(),
+        )
+        .expect("parse and retain the expression's original definitions");
+        let NodeExpr::Owned { expr, .. } = expressions.pop().expect("one expression") else {
+            panic!("the production expression retains its original domain");
+        };
+        match *expr {
             NodeExpr::Filter { nodes, shape } => {
                 assert!(matches!(*nodes, NodeExpr::This));
                 assert!(
-                    shape
+                    body_of(&shapes, &shape)
                         .constraints
                         .iter()
                         .any(|c| matches!(c, Constraint::NodeKind(kinds) if kinds.as_slice() == [NodeKindValue::Iri]))

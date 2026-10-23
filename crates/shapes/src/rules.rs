@@ -1845,7 +1845,7 @@ pub(crate) fn expected_derived_triples(
             &shape.targets,
             &binding,
             lowered.classes(),
-            shape.owner.as_ref(),
+            Some(model),
         )?;
         let plan = lowered.untargeted_plan(definition, 0, &binding)?;
         for property in plan
@@ -2480,6 +2480,34 @@ mod tests {
     }
 
     // ── Parsing ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn derived_values_use_the_graph_owner_for_bare_shape_targets() {
+        let mut shapes = parse_shapes(
+            "ex:Selection sh:node ex:Named .
+             ex:Named sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape; sh:targetWhere ex:Selection;
+               sh:property [ sh:path ex:derived; sh:values ex:value ] .",
+        );
+        let root = shapes
+            .node_shapes
+            .iter_mut()
+            .find(|shape| shape.id.to_string() == ex("S"))
+            .unwrap();
+        *root = shapes.owner.definition(&root.id).unwrap().clone();
+        assert!(root.owner.is_none());
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}ex:a ex:source 1 ."),
+            None,
+        )
+        .unwrap();
+        let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+        let expected = FastSet::from_iter(["http://example.org/ns#derived"]);
+        let triples = expected_derived_triples(&data, &shapes, &expected).unwrap();
+        assert!(triples.iter().any(|[s, p, o]| s.to_string() == ex("a")
+            && p.to_string() == ex("derived")
+            && o.to_string() == ex("value")));
+    }
 
     #[test]
     fn parses_triple_rule() {

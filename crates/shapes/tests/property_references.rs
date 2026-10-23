@@ -9,6 +9,10 @@ use std::sync::Arc;
 #[path = "../examples/support/metaschemas.rs"]
 mod metaschemas;
 
+#[path = "support/terms.rs"]
+mod terms;
+use terms::example_org as id;
+
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 
 use purrdf_shapes::constraints::{conforms, validate_shape, validate_shape_with};
@@ -21,12 +25,6 @@ use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
-
-fn id(local: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(format!(
-        "http://example.org/{local}"
-    )))
-}
 
 fn definition(shapes: &Shapes, local: &str) -> Shape {
     shapes.owner.definition(&id(local)).unwrap().clone()
