@@ -78,7 +78,7 @@ use crate::report::CompleteValidationError;
 use crate::shapes::{Shapes, link};
 
 use super::error::{ProductDimension, ShapesProductError};
-use super::{HostBindings, ast, identity};
+use super::{HostBindings, identity};
 
 /// A restored preparation that has passed its seam's complete final check.
 ///
@@ -119,6 +119,7 @@ impl CertifiedParts {
         mut shapes: Shapes,
         host: &HostBindings<'_>,
         classes: ClassCatalog,
+        model: &[u8],
     ) -> Result<Self, CompleteValidationError> {
         install(&mut shapes, host)?;
 
@@ -131,6 +132,7 @@ impl CertifiedParts {
             host.parser_options(),
             host.implementation_identity(),
             &classes,
+            model,
         )?;
         Ok(Self {
             prepared: PreparedShapes::with_carried_analysis(
@@ -139,7 +141,7 @@ impl CertifiedParts {
                     identity: declared.clone(),
                     restore: ProductRestore::Admitted,
                 },
-                classes,
+                Ok(classes),
             ),
         })
     }
@@ -267,13 +269,11 @@ fn assemble_functions_request(
     shapes: &Shapes,
     host: &HostBindings<'_>,
 ) -> Result<UserFunctionRegistry, CompleteValidationError> {
-    let declarations = ast::custom_functions(shapes)?;
     let mut registry = host.functions().clone();
     let native_list = crate::shapes::register_declared_sparql_functions(
         shapes.dataset(),
         shapes.provenance(),
-        &declarations,
-        &shapes.node_shapes,
+        &shapes.owner.functions,
         &mut registry,
         shapes.validation_options.shacl_profile,
     )
@@ -294,15 +294,9 @@ fn assemble_functions_request(
     })?;
     // The built-in list-parameter functions the graph declares, registered with
     // their native implementations exactly as the linking pass registers them. A
-    // `shnex:conformsToShape` registration resolves shapes against an index of this
-    // model's own shapes; nothing else reads one, so it is built only then.
-    let shape_index = if native_list.contains(crate::model::shnex::CONFORMS_TO_SHAPE) {
-        link::standalone_shape_index(&shapes.node_shapes)
-    } else {
-        Arc::default()
-    };
-    link::register_native_list_functions(&native_list, &shape_index, &mut registry);
-    link::register_expression_bodied_functions(&declarations, &mut registry);
+    // `shnex:conformsToShape` registration resolves shapes against this model's
+    // retained original index, including definitions omitted from exported roots.
+    link::register_model_functions(&shapes.owner, &native_list, &mut registry);
     Ok(registry)
 }
 

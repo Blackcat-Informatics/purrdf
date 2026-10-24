@@ -58,7 +58,7 @@ pub(super) fn emit(
         .map(|(key, info)| (key.clone(), info.name.clone()))
         .collect();
 
-    let mut renderer = Renderer::new(config, &elements);
+    let mut renderer = Renderer::new(config, &elements, definitions, compiled.schema_json.len());
     for (key, definition) in definitions {
         renderer.audit_schema(definition, &definition_path(key))?;
     }
@@ -211,7 +211,12 @@ fn resolve_element_kind(
         .expect("resolve_element_kind receives an existing key");
     let kind = match definition {
         Value::Object(object) if is_enum_definition(object) => ElementKind::Enum,
-        Value::Object(object) if is_object_schema(object) => ElementKind::Class,
+        Value::Object(object)
+            if is_object_schema(object)
+                || is_object_choice(object, definitions, resolved, visiting)? =>
+        {
+            ElementKind::Class
+        }
         Value::Object(object) if is_alias_only(object) => {
             let reference = object
                 .get("$ref")
@@ -263,6 +268,53 @@ fn is_object_schema(object: &Object) -> bool {
         ]
         .iter()
         .any(|keyword| object.contains_key(keyword))
+}
+
+/// A shared definition of object alternatives needs the same class-expression
+/// carrier as its inline form. A scalar TypeDefinition would discard its fields.
+fn is_object_choice(
+    object: &Object,
+    definitions: &Object,
+    resolved: &mut BTreeMap<String, ElementKind>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<bool, LinkmlError> {
+    for keyword in ["anyOf", "oneOf"] {
+        if !object
+            .keys()
+            .all(|key| key == keyword || is_annotation_keyword(key))
+        {
+            continue;
+        }
+        let Some(branches) = object.get(keyword).and_then(Value::as_array) else {
+            continue;
+        };
+        if branches.is_empty() {
+            return Ok(false);
+        }
+        for branch in branches {
+            let Some(branch) = branch.as_object() else {
+                return Ok(false);
+            };
+            if is_object_schema(branch) {
+                continue;
+            }
+            if !is_alias_only(branch) {
+                return Ok(false);
+            }
+            let reference = branch["$ref"]
+                .as_str()
+                .expect("is_alias_only requires a string reference");
+            let target = reference_key(reference).ok_or_else(|| {
+                LinkmlError::new(format!("non-local choice reference {reference:?}"))
+            })?;
+            if resolve_element_kind(&target, definitions, resolved, visiting)? != ElementKind::Class
+            {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn is_alias_only(object: &Object) -> bool {
@@ -637,6 +689,9 @@ fn is_linkml_continue(character: char) -> bool {
 struct Renderer<'a> {
     config: &'a LinkmlConfig,
     elements: &'a BTreeMap<String, ElementInfo>,
+    definitions: &'a Object,
+    slot_references: purrdf_core::SmallVec<[&'a Value; 4]>,
+    slot_expressions_left: usize,
     classes: Map<String, Value>,
     enums: Map<String, Value>,
     types: Map<String, Value>,
@@ -656,7 +711,12 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(config: &'a LinkmlConfig, elements: &'a BTreeMap<String, ElementInfo>) -> Self {
+    fn new(
+        config: &'a LinkmlConfig,
+        elements: &'a BTreeMap<String, ElementInfo>,
+        definitions: &'a Object,
+        slot_expressions_left: usize,
+    ) -> Self {
         let mut used_names = BTreeMap::new();
         for (key, info) in elements {
             used_names.insert(info.name.clone(), definition_path(key));
@@ -667,6 +727,9 @@ impl<'a> Renderer<'a> {
         Self {
             config,
             elements,
+            definitions,
+            slot_references: purrdf_core::SmallVec::new(),
+            slot_expressions_left,
             classes: Map::new(),
             enums: Map::new(),
             types: Map::new(),
@@ -728,7 +791,7 @@ impl<'a> Renderer<'a> {
     }
 }
 
-impl Renderer<'_> {
+impl<'a> Renderer<'a> {
     fn render_enum(
         &self,
         name: &str,
@@ -849,11 +912,9 @@ impl Renderer<'_> {
 
     fn type_definition_base(&mut self, object: &Object, path: &str) -> Result<String, LinkmlError> {
         if let Some(reference) = object.get("$ref") {
-            let target = self
-                .reference_info(reference, &format!("{path}/$ref"))?
-                .clone();
+            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
             if target.kind == ElementKind::Type {
-                return Ok(target.name);
+                return Ok(target.name.clone());
             }
             self.record(
                 "keyword-validation-dropped",
@@ -1133,7 +1194,7 @@ impl Renderer<'_> {
         self.copy_element_annotations(object, &mut class, path)?;
 
         if let Some(reference) = object.get("$ref") {
-            let target = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
             if target.kind == ElementKind::Class {
                 class.insert("is_a".to_owned(), Value::String(target.name.clone()));
             } else {
@@ -1262,7 +1323,7 @@ impl Renderer<'_> {
         };
 
         if let Some(reference) = object.get("$ref") {
-            let target = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
             if target.kind == ElementKind::Class {
                 let mut expression = Map::new();
                 expression.insert("is_a".to_owned(), Value::String(target.name.clone()));
@@ -1566,7 +1627,11 @@ impl Renderer<'_> {
         Ok(name)
     }
 
-    fn reference_info(&self, value: &Value, path: &str) -> Result<&ElementInfo, LinkmlError> {
+    fn reference_info(
+        &self,
+        value: &Value,
+        path: &str,
+    ) -> Result<(&'a str, &'a ElementInfo, &'a Value), LinkmlError> {
         let reference = value
             .as_str()
             .ok_or_else(|| LinkmlError::new(format!("{path} must be a string")))?;
@@ -1575,9 +1640,15 @@ impl Renderer<'_> {
                 "{path} is not a direct local #/$defs reference: {reference:?}"
             ))
         })?;
-        self.elements
-            .get(&key)
-            .ok_or_else(|| LinkmlError::new(format!("{path} targets missing $defs key {key:?}")))
+        let (key, info) = self
+            .elements
+            .get_key_value(&key)
+            .ok_or_else(|| LinkmlError::new(format!("{path} targets missing $defs key {key:?}")))?;
+        let definition = self
+            .definitions
+            .get(key)
+            .expect("element_infos covers exactly the catalog definitions");
+        Ok((key, info, definition))
     }
 
     fn render_slot_expression(
@@ -1585,6 +1656,15 @@ impl Renderer<'_> {
         schema: &Value,
         path: &str,
     ) -> Result<Map<String, Value>, LinkmlError> {
+        // Reference diamonds can require exponentially many anonymous LinkML
+        // expressions. Bound that work by the input byte budget, as the catalog
+        // does for decoded nodes, rather than allocating the expanded graph.
+        self.slot_expressions_left =
+            self.slot_expressions_left.checked_sub(1).ok_or_else(|| {
+                LinkmlError::new(format!(
+                    "{path} exceeds the source-sized slot expression budget"
+                ))
+            })?;
         let Value::Object(object) = schema else {
             self.record(
                 "keyword-validation-dropped",
@@ -1604,12 +1684,58 @@ impl Renderer<'_> {
         let mut slot = Map::new();
         self.copy_element_annotations(object, &mut slot, path)?;
         let mut has_carrier = if let Some(reference) = object.get("$ref") {
-            let target = self
-                .reference_info(reference, &format!("{path}/$ref"))?
-                .clone();
-            slot.insert("range".to_owned(), Value::String(target.name));
-            if target.kind == ElementKind::Class {
-                slot.insert("inlined".to_owned(), Value::Bool(true));
+            let (key, target, definition) =
+                self.reference_info(reference, &format!("{path}/$ref"))?;
+            // TypeDefinition cannot carry mixed ranges, and the 1.11 generator
+            // closes a named choice class over its own (empty) attribute set.
+            // Reuse the original slot expressions at their reference boundary.
+            if target.kind != ElementKind::Enum
+                && definition.as_object().is_some_and(|body| {
+                    is_alias_only(body)
+                        || (target.kind == ElementKind::Type
+                            && ["anyOf", "oneOf", "allOf", "not", "enum", "const"]
+                                .iter()
+                                .any(|keyword| body.contains_key(keyword)))
+                        || (target.kind == ElementKind::Class
+                            && !is_object_schema(body)
+                            && ["anyOf", "oneOf"]
+                                .iter()
+                                .any(|keyword| body.contains_key(keyword)))
+                })
+            {
+                if self
+                    .slot_references
+                    .iter()
+                    .any(|active| std::ptr::eq(*active, definition))
+                {
+                    return Err(LinkmlError::new(format!(
+                        "{path} contains a cyclic compound slot reference to {key:?}"
+                    )));
+                }
+                if purrdf_stack::is_low() {
+                    return Err(LinkmlError::new(format!(
+                        "{path} exhausted the stack margin resolving slot reference {key:?}"
+                    )));
+                }
+                self.slot_references.push(definition);
+                let expanded = self.render_slot_expression(definition, &definition_path(key));
+                self.slot_references.pop();
+                let mut expanded = expanded?;
+                if is_alias_only(object) {
+                    expanded.extend(slot);
+                    slot = expanded;
+                } else {
+                    conjoin_expression(
+                        &mut slot,
+                        "all_of",
+                        vec![crate::json_model::object(expanded)],
+                    );
+                }
+            } else {
+                slot.insert("range".to_owned(), Value::String(target.name.clone()));
+                if target.kind == ElementKind::Class {
+                    slot.insert("inlined".to_owned(), Value::Bool(true));
+                }
             }
             true
         } else {
@@ -2750,6 +2876,126 @@ mod tests {
     }
 
     #[test]
+    fn annotated_object_choices_preserve_inline_and_referenced_classes() {
+        for keyword in ["anyOf", "oneOf"] {
+            let mut choice = json!({
+                "title": "Choice",
+                "description": "An annotated object choice."
+            });
+            choice.as_object_mut().unwrap().insert(
+                keyword.to_owned(),
+                json!([
+                    {"type": "object", "properties": {"ex:name": {"type": "string"}}},
+                    {"$ref": "#/$defs/Alias", "description": "A class reference."}
+                ]),
+            );
+            let schema = json!({"$defs": {
+                "Choice": choice,
+                "Alias": {"$ref": "#/$defs/Person"},
+                "Person": {"type": "object"}
+            }});
+            let emitted = emit(&compiled(&schema), &config()).expect("emit class choices");
+            assert!(
+                emitted.losses.is_empty(),
+                "{}",
+                emitted.losses.render_json()
+            );
+            let root = emitted.document.as_value();
+            let choice = &root["classes"]["Choice"];
+            assert_eq!(choice["description"], "An annotated object choice.");
+            let target = if keyword == "anyOf" {
+                "any_of"
+            } else {
+                "exactly_one_of"
+            };
+            let branches = choice[target].as_array().expect("class expressions");
+            assert_eq!(branches.len(), 2);
+            let inline = branches[0]["is_a"]
+                .as_str()
+                .expect("inline class reference");
+            assert_eq!(
+                root["classes"][inline]["attributes"]["ex:name"]["range"],
+                "string"
+            );
+            assert_eq!(branches[1]["is_a"], "Alias");
+            assert_eq!(root["classes"]["Alias"]["is_a"], "Person");
+        }
+    }
+
+    #[test]
+    fn object_choices_do_not_promote_scalar_or_enum_references_to_classes() {
+        let schema = json!({"$defs": {
+            "Scalar": {"type": "string"},
+            "Enum": {"enum": ["red", "blue"]},
+            "ScalarChoice": {"anyOf": [{"type": "object"}, {"$ref": "#/$defs/Scalar"}]},
+            "EnumChoice": {"oneOf": [{"type": "object"}, {"$ref": "#/$defs/Enum"}]}
+        }});
+        let elements = element_infos(schema["$defs"].as_object().unwrap()).expect("element kinds");
+        assert_eq!(elements["ScalarChoice"].kind, ElementKind::Type);
+        assert_eq!(elements["EnumChoice"].kind, ElementKind::Type);
+    }
+
+    #[test]
+    fn referenced_compound_members_keep_scalar_and_object_alternatives() {
+        let schema = json!({"$defs": {
+            "Member": {"anyOf": [
+                {"type": "integer"},
+                {"type": "object", "properties": {"@value": {"type": "integer"}}}
+            ]},
+            "Holder": {"type": "object", "properties": {
+                "ex:items": {"type": "array", "contains": {"$ref": "#/$defs/Member"}}
+            }}
+        }});
+        let output = emit(&compiled(&schema), &config()).expect("compound member emits");
+        let root = output.document.as_value();
+        let member = &root["classes"]["Holder"]["attributes"]["ex:items"]["has_member"];
+        let alternatives = member["any_of"]
+            .as_array()
+            .expect("both member alternatives");
+        assert_eq!(alternatives.len(), 2);
+        assert_eq!(alternatives[0]["range"], "integer");
+        let object = alternatives[1]["range"].as_str().expect("object range");
+        assert_eq!(
+            root["classes"][object]["attributes"]["@value"]["range"],
+            "integer"
+        );
+    }
+
+    #[test]
+    fn cyclic_compound_slot_references_fail_instead_of_expanding() {
+        let schema = json!({"$defs": {
+            "Member": {"anyOf": [{"type": "integer"}, {"$ref": "#/$defs/Member"}]},
+            "Holder": {"type": "object", "properties": {"ex:value": {"$ref": "#/$defs/Member"}}}
+        }});
+        let error = emit(&compiled(&schema), &config()).expect_err("cyclic member refuses");
+        assert!(error.detail().contains("cyclic compound slot reference"));
+    }
+
+    #[test]
+    fn compound_reference_diamonds_refuse_before_unbounded_output_growth() {
+        let mut definitions = Map::new();
+        definitions.insert("Member0".to_owned(), json!({"type": "integer"}));
+        for index in 1..=16 {
+            let reference = format!("#/$defs/Member{}", index - 1);
+            definitions.insert(
+                format!("Member{index}"),
+                json!({"anyOf": [
+                    {"$ref": reference}, {"$ref": reference}
+                ]}),
+            );
+        }
+        definitions.insert(
+            "Holder".to_owned(),
+            json!({"type": "object", "properties": {
+                "ex:value": {"$ref": "#/$defs/Member16"}
+            }}),
+        );
+        let schema = json!({"$defs": crate::json_model::object(definitions)});
+        let error = emit(&compiled(&schema), &config()).expect_err("diamond output is bounded");
+        assert!(error.detail().contains("slot expression budget"));
+    }
+
+    #[test]
     fn exact_projection_is_deterministic_reversible_and_lossless() {
         let compiled = compiled(&exact_schema());
         let first = emit(&compiled, &config()).expect("emit");
@@ -3376,7 +3622,8 @@ mod tests {
 
         let config = config();
         let elements = BTreeMap::new();
-        let renderer = Renderer::new(&config, &elements);
+        let definitions = Object::new();
+        let renderer = Renderer::new(&config, &elements, &definitions, 0);
         let mut seed = slot_name_seed(&config, "ex:a/b").expect("unsafe seed");
         let mut used_names =
             BTreeMap::from([(seed.direct_name.clone(), "safe direct owner".to_owned())]);

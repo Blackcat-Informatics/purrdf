@@ -100,9 +100,7 @@ use crate::error::{PrebindingViolation, ShapesError};
 use crate::function_resolution::FunctionResolution;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
 use crate::model::{BoxRoleVocab, rdf, sh};
-use crate::shapes::{
-    Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset_with_unexecuted,
-};
+use crate::shapes::{Shapes, alternative_validators, from_resolved_dataset_with_unexecuted};
 use crate::term::{Term, term_value_to_native};
 use crate::validator_alternatives::AlternativeValidator;
 
@@ -576,7 +574,7 @@ impl LintReport {
 /// Certify the shapes graph `dataset`: load it exactly as validation would, validate it
 /// as data against `shacl-shacl.ttl`, and report which implementation every function
 /// call binds to. `doc_prefixes`, `box_role_vocab` and `shapes_graph` are the loader's
-/// own configuration — see [`from_dataset_with_base`]; `imports` is the shapes graph's
+/// own configuration — see [`crate::shapes::from_dataset_with_base`]; `imports` is the shapes graph's
 /// `owl:imports` table, with the IRIs the shapes document was read under declared loaded.
 ///
 /// A malformed shapes graph is not an `Err`: its refusal is the report's `load` section.
@@ -671,13 +669,15 @@ pub fn lint(
         Ok((shapes, unexecuted)) => {
             // The load that just succeeded parsed the same registry, so this cannot
             // refuse; were it to, the report says so rather than listing nothing.
-            match alternative_validators(dataset, &resolved.prefixes) {
-                Ok(alternatives) => (
-                    None,
-                    Some(shapes.function_resolution()),
-                    Some(alternatives),
-                    Some(unexecuted),
-                ),
+            match alternative_validators(dataset, &resolved.prefixes).and_then(|alternatives| {
+                shapes
+                    .function_resolution()
+                    .map(|functions| (alternatives, functions))
+                    .map_err(|error| error.to_string())
+            }) {
+                Ok((alternatives, functions)) => {
+                    (None, Some(functions), Some(alternatives), Some(unexecuted))
+                }
                 Err(error) => (Some(error), None, None, None),
             }
         }
@@ -770,14 +770,18 @@ fn shacl_shacl() -> Result<Shapes, String> {
     imports
         .insert_turtle(sh::NS, SHACL_VOCABULARY)
         .map_err(|e| format!("shacl.ttl does not load as shacl-shacl.ttl's import: {e}"))?;
-    from_dataset_with_base(
-        &document.dataset,
+    let resolved = resolve_shapes_imports(&document.dataset, &document.prefixes, &[], &imports)
+        .map_err(|e| format!("shacl-shacl.ttl imports do not resolve: {e}"))?;
+    crate::shapes::Parser::new(
+        &resolved.dataset,
         None,
-        &document.prefixes,
+        &resolved.prefixes,
         None,
+        Arc::clone(&resolved.dataset),
         None,
-        &imports,
+        crate::profile::ShaclProfile::LEGACY,
     )
+    .parse_structural_meta_schema()
     .map_err(|e| format!("shacl-shacl.ttl does not load as a shapes graph: {e}"))
 }
 

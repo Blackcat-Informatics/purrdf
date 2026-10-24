@@ -77,7 +77,7 @@ fn bench_pattern_lookup(c: &mut Bench) {
     let predicate = Path::Predicate(NamedNode::new_unchecked(iri("p")));
     group.bench_function("predicate_fanout", |bencher| {
         bencher.iter(|| {
-            let values = eval(black_box(ds), black_box(&hub), black_box(&predicate));
+            let values = eval(black_box(ds), black_box(&hub), black_box(&predicate)).unwrap();
             black_box(values);
         });
     });
@@ -89,7 +89,7 @@ fn bench_pattern_lookup(c: &mut Bench) {
     )))));
     group.bench_function("closure_chain", |bencher| {
         bencher.iter(|| {
-            let values = eval(black_box(ds), black_box(&head), black_box(&closure));
+            let values = eval(black_box(ds), black_box(&head), black_box(&closure)).unwrap();
             black_box(values);
         });
     });

@@ -1003,6 +1003,14 @@ impl Parser<'_> {
         ps_id: &Term,
         own_qvs: &Term,
     ) -> Result<Vec<Shape>, String> {
+        self.sibling_qualified_shape_nodes(ps_id, own_qvs)
+            .into_iter()
+            .map(|node| self.parse_inline_shape(node))
+            .collect()
+    }
+
+    /// The shared sibling identity lookup for parsing and dependency analysis.
+    pub(crate) fn sibling_qualified_shape_nodes(&self, ps_id: &Term, own_qvs: &Term) -> Vec<Term> {
         let property = Term::NamedNode(NamedNode::from(sh::PROPERTY));
         let mut sibling_nodes: Vec<Term> = Vec::new();
         let mut seen: FastSet<Term> = FastSet::default();
@@ -1032,11 +1040,7 @@ impl Parser<'_> {
                 }
             }
         }
-        let mut siblings = Vec::with_capacity(sibling_nodes.len());
-        for node in sibling_nodes {
-            siblings.push(self.parse_inline_shape(node)?);
-        }
-        Ok(siblings)
+        sibling_nodes
     }
 
     // ── SHACL-AF node expressions (spec §5) ─────────────────────────────────────
@@ -1067,14 +1071,9 @@ impl Parser<'_> {
         // the inner operand is this very node parsed with the paging keys
         // ignored, NOT a separate `sh:nodes` operand. A node carrying only paging
         // keys (no core expression) therefore hard-fails in `parse_node_expr_core`.
-        let guard_key = InFlight::NodeExpr(node.clone());
-        if self.in_flight.contains(&guard_key) {
-            return Err(format!("cyclic node expression on {node}"));
-        }
-        self.in_flight.insert(guard_key.clone());
-        let result = self.parse_node_expr_wrapped(node);
-        self.in_flight.remove(&guard_key);
-        result
+        self.with_expansion(InFlight::NodeExpr(node.clone()), |parser| {
+            parser.parse_node_expr_wrapped(node)
+        })
     }
 
     /// Apply the paging/ordering wrappers on top of the core expression.
@@ -1991,7 +1990,10 @@ impl Parser<'_> {
                 self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(object))?,
             ));
         }
-        Ok(Some(NodeExpr::CustomCall { func, args: bound }))
+        Ok(Some(NodeExpr::CustomCall {
+            func: func.iri.clone(),
+            args: bound,
+        }))
     }
 
     /// Parse the RDF list at `(node, predicate)` into a vector of node expressions.
@@ -2170,7 +2172,7 @@ impl Parser<'_> {
                 bound.push((ArgKey::Index(key), arg));
             }
             return Ok(NodeExpr::CustomCall {
-                func: Arc::clone(func),
+                func: func.iri.clone(),
                 args: bound,
             });
         }

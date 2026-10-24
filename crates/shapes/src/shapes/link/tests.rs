@@ -40,6 +40,7 @@ fn ex(local: &str) -> NamedNode {
 /// A node shape with nothing on it but an identity.
 fn leaf_shape(id: &str) -> Shape {
     Shape {
+        owner: None,
         id: Term::NamedNode(ex(id)),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -58,7 +59,7 @@ fn leaf_shape(id: &str) -> Shape {
 fn node_by_expression(index: &ShapeIndex) -> Constraint {
     Constraint::NodeByExpression {
         expr: NodeExpr::This,
-        shapes: Arc::clone(index),
+        shapes: Arc::downgrade(index),
         messages: vec![],
         severity: None,
     }
@@ -71,7 +72,7 @@ fn conforms_to_computed(index: &ShapeIndex) -> Constraint {
             node: Box::new(NodeExpr::This),
             shape: ShapeArg::Computed {
                 expr: Box::new(NodeExpr::This),
-                shapes: Arc::clone(index),
+                shapes: Arc::downgrade(index),
             },
         },
         messages: vec![],
@@ -90,13 +91,21 @@ fn declaration() -> Arc<CustomFunction> {
     })
 }
 
-/// Every shape-index handle a parsed shapes graph's top-level constraints carry.
+/// Every shape-index handle the original top-level definitions carry.
 fn handles_of(shapes: &crate::shapes::Shapes) -> Vec<ShapeIndex> {
     let mut found = Vec::new();
     for shape in &shapes.node_shapes {
-        for constraint in &shape.constraints {
+        let definition = shapes
+            .owner
+            .definition(&shape.id)
+            .expect("original parsed definition");
+        for constraint in &definition.constraints {
             if let Constraint::NodeByExpression { shapes, .. } = constraint {
-                found.push(Arc::clone(shapes));
+                found.push(
+                    shapes
+                        .upgrade()
+                        .expect("the parsed model retains its index"),
+                );
             }
         }
     }
@@ -162,7 +171,7 @@ fn link_refuses_unshared_index() {
 
     let mut registry = UserFunctionRegistry::default();
     let error = link_shapes(
-        &[shape],
+        vec![shape],
         &index,
         &[],
         &BTreeSet::new(),
@@ -196,7 +205,7 @@ fn link_accepts_correctly_shared_index() {
 
     let mut registry = UserFunctionRegistry::default();
     link_shapes(
-        std::slice::from_ref(&shape),
+        vec![shape],
         &index,
         &[],
         &BTreeSet::new(),
@@ -210,13 +219,18 @@ fn link_accepts_correctly_shared_index() {
 }
 
 /// VALID NEIGHBOUR: a graph with NO shape-index site at all still links, and the
-/// index is left unbuilt because nothing will ever read it.
+/// index retains no cloned shapes because no computed reader needs them.
 #[test]
-fn link_accepts_a_graph_with_no_shape_index_site() {
+fn linking_moves_unreferenced_definition_bodies_into_the_complete_catalog() {
     let index: ShapeIndex = Arc::new(OnceLock::new());
     let mut registry = UserFunctionRegistry::default();
-    link_shapes(
-        &[leaf_shape("A")],
+    let mut shape = leaf_shape("A");
+    shape.constraints = vec![Constraint::NodeKind(vec![
+        crate::shapes::NodeKindValue::Iri,
+    ])];
+    let original_body = shape.constraints.as_ptr();
+    let owner = link_shapes(
+        vec![shape],
         &index,
         &[],
         &BTreeSet::new(),
@@ -225,10 +239,31 @@ fn link_accepts_a_graph_with_no_shape_index_site() {
     )
     .expect("a graph with no sh:nodeByExpression must link");
 
-    assert!(
-        index.get().is_none(),
-        "nothing holds the handle, so the shape clones are never built",
+    let definition = owner.definition(&Term::NamedNode(ex("A"))).unwrap();
+    assert_eq!(
+        definition.constraints.as_ptr(),
+        original_body,
+        "move the original body rather than cloning it for the index"
     );
+}
+
+#[test]
+fn a_declared_native_shape_reader_retains_the_index_without_weak_sites() {
+    let index: ShapeIndex = Arc::new(OnceLock::new());
+    let mut registry = UserFunctionRegistry::default();
+    let iri = crate::model::shnex::CONFORMS_TO_SHAPE;
+    let owner = link_shapes(
+        vec![leaf_shape("A")],
+        &index,
+        &[],
+        &BTreeSet::from([iri.to_owned()]),
+        BTreeMap::new(),
+        &mut registry,
+    )
+    .unwrap();
+    assert_eq!(Arc::weak_count(&index), 0);
+    assert!(owner.definition(&Term::NamedNode(ex("A"))).is_some());
+    assert!(registry.resolve_expr(iri).is_some());
 }
 
 // ── The unfilled-body refusal, and its valid neighbour ─────────────────────────
@@ -241,7 +276,7 @@ fn link_refuses_unfilled_custom_function_body() {
     let mut registry = UserFunctionRegistry::default();
 
     let error = link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
         &BTreeSet::new(),
@@ -274,7 +309,7 @@ fn link_accepts_a_supplied_custom_function_body() {
     let mut registry = UserFunctionRegistry::default();
 
     link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
         &BTreeSet::new(),
@@ -299,14 +334,14 @@ fn link_accepts_a_body_installed_before_linking() {
     let func = declaration();
     func.body
         .set(NodeExpr::CustomCall {
-            func: Arc::clone(&func),
+            func: func.iri.clone(),
             args: vec![(ArgKey::Index(0), NodeExpr::Arg(ArgKey::Index(0)))],
         })
         .expect("the fixture installs once");
 
     let mut registry = UserFunctionRegistry::default();
     link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
         &BTreeSet::new(),
@@ -330,7 +365,7 @@ fn link_refuses_a_body_with_no_declaration() {
     let mut registry = UserFunctionRegistry::default();
 
     let error = link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         &[],
         &BTreeSet::new(),
@@ -442,7 +477,10 @@ fn a_native_registration_is_not_redefined() {
         Volatility::Stable,
         Arc::new(|_| Ok(None)),
     );
-    super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
+    let declarations = [list_function("f")];
+    let owner = crate::shapes::ModelOwner::from_declarations(Arc::default(), declarations.to_vec())
+        .unwrap();
+    super::register_expression_bodied_functions(&declarations, &owner, &mut registry);
     assert!(registry.resolve_native(ex("f").as_str()).is_some());
     assert!(registry.resolve_expr(ex("f").as_str()).is_none());
 }
@@ -466,7 +504,10 @@ fn a_custom_sparql_function_is_redefined() {
             },
         },
     );
-    super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
+    let declarations = [list_function("f")];
+    let owner = crate::shapes::ModelOwner::from_declarations(Arc::default(), declarations.to_vec())
+        .unwrap();
+    super::register_expression_bodied_functions(&declarations, &owner, &mut registry);
     assert!(registry.resolve(ex("f").as_str()).is_none());
     assert!(registry.resolve_expr(ex("f").as_str()).is_some());
 }
@@ -475,6 +516,9 @@ fn a_custom_sparql_function_is_redefined() {
 #[test]
 fn an_unregistered_declaration_registers() {
     let mut registry = UserFunctionRegistry::default();
-    super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
+    let declarations = [list_function("f")];
+    let owner = crate::shapes::ModelOwner::from_declarations(Arc::default(), declarations.to_vec())
+        .unwrap();
+    super::register_expression_bodied_functions(&declarations, &owner, &mut registry);
     assert!(registry.resolve_expr(ex("f").as_str()).is_some());
 }

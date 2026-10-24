@@ -28,6 +28,7 @@
 //! calls and are not listed; the functions inside them are.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::model::{sh, shnex};
@@ -106,13 +107,18 @@ impl FunctionResolution {
 impl Shapes {
     /// Which implementation every node-expression function call in this shapes
     /// graph binds to. See the [module docs](crate::function_resolution).
-    #[must_use]
-    pub fn function_resolution(&self) -> FunctionResolution {
+    ///
+    /// # Errors
+    /// Returns the original model refusal for an unresolved reference or body,
+    /// or when the traversal would enter the physical stack margin.
+    pub fn function_resolution(&self) -> Result<FunctionResolution, crate::PreparationRefusal> {
         let mut walk = Walk {
             shapes: self,
             out: FunctionResolution::default(),
             seen_shapes: BTreeSet::new(),
+            refusal: None,
             fns_in_flight: BTreeSet::new(),
+            model: Arc::clone(&self.owner),
         };
         for shape in &self.node_shapes {
             walk.shape(shape);
@@ -120,7 +126,10 @@ impl Shapes {
         for rule in &self.rules.global_rules {
             walk.rule(rule, &format!("global rule {}", rule.id));
         }
-        walk.out
+        match walk.refusal {
+            Some(error) => Err(error),
+            None => Ok(walk.out),
+        }
     }
 }
 
@@ -128,10 +137,12 @@ impl Shapes {
 /// visited set (a shape's calls are recorded under its own id), custom-function
 /// bodies are a stack (the owner label embeds the caller).
 struct Walk<'a> {
+    model: Arc<crate::shapes::ModelOwner>,
     shapes: &'a Shapes,
     out: FunctionResolution,
-    seen_shapes: BTreeSet<String>,
-    fns_in_flight: BTreeSet<String>,
+    seen_shapes: BTreeSet<(usize, usize)>,
+    refusal: Option<crate::PreparationRefusal>,
+    fns_in_flight: BTreeSet<(usize, usize)>,
 }
 
 impl Walk<'_> {
@@ -161,10 +172,23 @@ impl Walk<'_> {
     }
 
     fn shape(&mut self, shape: &Shape) {
-        let id = shape.id.to_string();
-        if !self.seen_shapes.insert(id.clone()) {
+        if !crate::PreparationRefusal::admit_walk(&mut self.refusal) {
             return;
         }
+        let previous_model = Arc::clone(&self.model);
+        if let Some(model) = &shape.owner {
+            self.model = Arc::clone(model);
+        }
+        let owner = Arc::as_ptr(&self.model).addr();
+        if !self
+            .seen_shapes
+            .insert((owner, std::ptr::from_ref(shape).addr()))
+        {
+            self.model = previous_model;
+            return;
+        }
+        let id = shape.id.to_string();
+        self.exprs(&shape.deactivated_when, &id);
         for rule in &shape.rules {
             self.rule(rule, &format!("sh:rule on {id}"));
         }
@@ -173,10 +197,15 @@ impl Walk<'_> {
         for property in &shape.property_shapes {
             self.property(property);
         }
+        self.model = previous_model;
     }
 
     fn property(&mut self, property: &PropertyShape) {
+        if !crate::PreparationRefusal::admit_walk(&mut self.refusal) {
+            return;
+        }
         let id = property.id.to_string();
+        self.exprs(&property.deactivated_when, &id);
         if let Some(expr) = &property.values {
             self.node_expr(expr, &format!("sh:values on {id}"));
         }
@@ -195,6 +224,11 @@ impl Walk<'_> {
     fn constraints(&mut self, constraints: &[Constraint], owner: &str) {
         for constraint in constraints {
             match constraint {
+                Constraint::Reference(target) => self.reference(target, false),
+                Constraint::PropertyReference(edge) => {
+                    self.exprs(&edge.deactivated_when, owner);
+                    self.reference(&edge.target, true);
+                }
                 Constraint::Expression { expr, .. } => {
                     self.node_expr(expr, &format!("sh:expression on {owner}"));
                 }
@@ -291,6 +325,9 @@ impl Walk<'_> {
     }
 
     fn node_expr(&mut self, expr: &NodeExpr, owner: &str) {
+        if !crate::PreparationRefusal::admit_walk(&mut self.refusal) {
+            return;
+        }
         match expr {
             NodeExpr::Call(FnCall::Sparql { iri, args, .. }) => {
                 self.record(owner, iri.as_str(), FunctionBinding::Native);
@@ -302,17 +339,37 @@ impl Walk<'_> {
                 self.exprs(args, owner);
             }
             NodeExpr::CustomCall { func, args } => {
-                let iri = func.iri.as_str().to_owned();
-                self.record(owner, &iri, FunctionBinding::Custom);
+                let iri = func.as_str();
+                let function = self.model.function(func).cloned();
+                self.record(owner, iri, FunctionBinding::Custom);
                 for (_, arg) in args {
                     self.node_expr(arg, owner);
                 }
-                if self.fns_in_flight.insert(iri.clone()) {
-                    if let Some(body) = func.body.get() {
-                        self.node_expr(body, &format!("{owner} via <{iri}>"));
+                if let Some(function) = function {
+                    let key = (
+                        Arc::as_ptr(&self.model).addr(),
+                        Arc::as_ptr(&function).addr(),
+                    );
+                    if self.fns_in_flight.insert(key) {
+                        if let Some(body) = function.body.get() {
+                            self.node_expr(body, &format!("{owner} via <{iri}>"));
+                        } else {
+                            self.refusal.get_or_insert_with(|| {
+                                crate::PreparationRefusal::MissingFunctionBody(func.clone())
+                            });
+                        }
+                        self.fns_in_flight.remove(&key);
                     }
-                    self.fns_in_flight.remove(&iri);
+                } else {
+                    self.refusal.get_or_insert_with(|| {
+                        crate::PreparationRefusal::UnknownFunction(func.clone())
+                    });
                 }
+            }
+            NodeExpr::Owned { expr, owner: model } => {
+                let previous = std::mem::replace(&mut self.model, Arc::clone(model));
+                self.node_expr(expr, owner);
+                self.model = previous;
             }
             NodeExpr::ConformsToShape { node, shape } => {
                 self.record(owner, shnex::CONFORMS_TO_SHAPE, FunctionBinding::Native);
@@ -381,6 +438,24 @@ impl Walk<'_> {
     fn exprs(&mut self, exprs: &[NodeExpr], owner: &str) {
         for expr in exprs {
             self.node_expr(expr, owner);
+        }
+    }
+
+    fn reference(&mut self, target: &crate::term::Term, property: bool) {
+        let model = Arc::clone(&self.model);
+        let definition = if property {
+            model
+                .property_definition(target)
+                .map(|_| ())
+                .and_then(|()| model.definition_required(target))
+        } else {
+            model.definition_required(target)
+        };
+        match definition {
+            Ok(definition) => self.shape(definition),
+            Err(error) => {
+                self.refusal.get_or_insert(error);
+            }
         }
     }
 }

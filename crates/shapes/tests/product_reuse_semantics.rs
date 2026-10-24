@@ -70,6 +70,9 @@
 mod report;
 
 use report::report_nt;
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
 use purrdf_rdf::RdfDataset;
@@ -168,7 +171,11 @@ fn pattern_cells(
 > {
     let mut cells = Vec::new();
     for shape in &shapes.node_shapes {
-        for property in &shape.property_shapes {
+        let shape = shapes
+            .owner
+            .definition(&shape.id)
+            .expect("original definition");
+        for property in turtle::properties(shapes, shape) {
             for constraint in &property.constraints {
                 if let Constraint::Pattern { compiled, .. } = constraint {
                     cells.push(compiled);

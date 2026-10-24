@@ -116,7 +116,7 @@ impl NodeKindValue {
 }
 
 /// A SHACL property path (spec §2.3.1 — all six path forms are modelled).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Path {
     /// A plain IRI predicate path (`ex:name`).
     Predicate(NamedNode),
@@ -391,9 +391,55 @@ impl ClosedTypeIndex {
     }
 }
 
+/// One `sh:property` edge to an original property-shape definition.
+/// Overrides belong to this edge; the shared definition stays unchanged.
+#[derive(Debug, Clone)]
+pub struct PropertyReference {
+    /// The original property shape's RDF identity.
+    pub target: Term,
+    /// Whether this edge is statically deactivated.
+    pub deactivated: bool,
+    /// Additional deactivation expressions declared on the edge.
+    pub deactivated_when: Vec<NodeExpr>,
+    /// Edge severity, below the property's own constraint-statement annotations.
+    pub severity: Option<Severity>,
+    /// Edge messages, below the property's own constraint-statement annotations.
+    pub messages: Vec<Literal>,
+}
+
+/// A shared definition under the metadata of its particular incoming edge.
+#[derive(Clone, Copy)]
+pub(crate) struct PropertyView<'a> {
+    pub(crate) property: &'a PropertyShape,
+    pub(crate) edge: Option<&'a PropertyReference>,
+}
+
+impl<'a> PropertyView<'a> {
+    pub(crate) fn deactivated(self) -> bool {
+        self.property.deactivated || self.edge.is_some_and(|edge| edge.deactivated)
+    }
+
+    pub(crate) fn severity(self) -> &'a Severity {
+        self.edge
+            .and_then(|edge| edge.severity.as_ref())
+            .unwrap_or(&self.property.severity)
+    }
+
+    pub(crate) fn messages(self) -> &'a [Literal] {
+        self.edge
+            .map(|edge| edge.messages.as_slice())
+            .filter(|messages| !messages.is_empty())
+            .unwrap_or(&self.property.messages)
+    }
+}
+
 /// A single SHACL constraint on a shape or property shape.
 #[derive(Debug, Clone)]
 pub enum Constraint {
+    /// A shape's definition in its shared catalog, without recursive unfolding.
+    Reference(Term),
+    /// A `sh:property` edge, evaluated without stamping its parent's path or focus.
+    PropertyReference(PropertyReference),
     /// One `sh:class` value: a single class IRI (`sh:class ex:C`, one member) or a
     /// SHACL list of class IRIs (`sh:class ( ex:C ex:D )`).
     ///
@@ -581,7 +627,7 @@ pub enum Constraint {
         /// and cloning the shapes per constraint would be pure waste. The
         /// `OnceLock` is filled once, at the end of the shapes-graph parse, so a
         /// shape carrying this constraint can itself appear in the table.
-        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
+        shapes: std::sync::Weak<OnceLock<FastMap<Term, Shape>>>,
         /// Optional per-constraint message override (from `sh:message` on the
         /// expression node).
         messages: Vec<Literal>,
@@ -787,6 +833,9 @@ pub struct PropertyShape {
 /// A node shape.
 #[derive(Debug, Clone)]
 pub struct Shape {
+    /// The complete declaration and resolution domain retained by an exported
+    /// root. Definitions inside that domain have no owning backreference.
+    pub owner: Option<Arc<ModelOwner>>,
     /// The shape node identity (IRI or blank node).
     pub id: Term,
     /// Target declarations for this shape.
@@ -832,6 +881,246 @@ pub struct Shape {
     pub rules: Vec<crate::rules::Rule>,
 }
 
+impl Shape {
+    pub(crate) fn as_property(&self) -> Option<&PropertyShape> {
+        match self.property_shapes.as_slice() {
+            [property] if self.constraints.is_empty() && property.id == self.id => Some(property),
+            _ => None,
+        }
+    }
+
+    /// Resolve an identity handle once; a definition keeps its own constraints.
+    pub(crate) fn resolved_in<'a>(
+        &'a self,
+        model: Option<&'a ModelOwner>,
+    ) -> Result<&'a Self, crate::PreparationRefusal> {
+        if let [Constraint::Reference(target)] = self.constraints.as_slice()
+            && self.property_shapes.is_empty()
+            && self.owner.is_some()
+            && *target == self.id
+        {
+            self.owner
+                .as_deref()
+                .or(model)
+                .ok_or(crate::PreparationRefusal::UnboundReference)?
+                .definition_required(target)
+        } else {
+            Ok(self)
+        }
+    }
+
+    pub(crate) fn properties_in<'a>(
+        &'a self,
+        model: Option<&'a ModelOwner>,
+    ) -> impl Iterator<Item = Result<PropertyView<'a>, crate::PreparationRefusal>> + use<'a> {
+        let domain = self.owner.as_deref().or(model);
+        self.property_shapes
+            .iter()
+            .map(|property| {
+                Ok(PropertyView {
+                    property,
+                    edge: None,
+                })
+            })
+            .chain(
+                self.constraints
+                    .iter()
+                    .filter_map(|constraint| match constraint {
+                        Constraint::PropertyReference(edge) => Some(edge),
+                        _ => None,
+                    })
+                    .map(move |edge| {
+                        let property = domain
+                            .ok_or(crate::PreparationRefusal::UnboundReference)?
+                            .property_definition(&edge.target)?;
+                        Ok(PropertyView {
+                            property,
+                            edge: Some(edge),
+                        })
+                    }),
+            )
+    }
+}
+
+/// The declaration and resolution domain retained by exported model roots.
+/// Logical calls name declarations by IRI, keeping recursive calls non-owning.
+pub struct ModelOwner {
+    pub(crate) index: link::ShapeIndex,
+    pub(crate) functions: Box<[Arc<crate::expression::CustomFunction>]>,
+}
+
+purrdf_hash::debug_non_exhaustive!(ModelOwner {});
+
+impl ModelOwner {
+    /// Retain authored functions with an initialized empty shape domain.
+    ///
+    /// # Errors
+    /// Refuses duplicate function identities.
+    pub fn from_functions(
+        functions: Vec<Arc<crate::expression::CustomFunction>>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        Self::from_model(Vec::new(), functions)
+    }
+
+    /// An initialized empty declaration and shape domain.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            index: Arc::new(OnceLock::from(FastMap::default())),
+            functions: Box::new([]),
+        }
+    }
+
+    pub(crate) fn from_declarations(
+        index: link::ShapeIndex,
+        mut functions: Vec<Arc<crate::expression::CustomFunction>>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        functions.sort_unstable_by(|left, right| left.iri.as_str().cmp(right.iri.as_str()));
+        if let Some(pair) = functions.windows(2).find(|pair| pair[0].iri == pair[1].iri) {
+            return Err(crate::PreparationRefusal::DuplicateFunction(
+                pair[0].iri.clone(),
+            ));
+        }
+        Ok(Arc::new(Self {
+            index,
+            functions: functions.into_boxed_slice(),
+        }))
+    }
+
+    /// The declaration with this identity in the original model domain.
+    #[must_use]
+    pub fn function(&self, iri: &NamedNode) -> Option<&Arc<crate::expression::CustomFunction>> {
+        self.functions
+            .binary_search_by(|function| function.iri.as_str().cmp(iri.as_str()))
+            .ok()
+            .map(|position| &self.functions[position])
+    }
+}
+
+// The empty domain has an initialized index, unlike a derived empty OnceLock.
+purrdf_hash::default_from_new!(ModelOwner => empty);
+
+impl ModelOwner {
+    /// Borrow every original bare definition without exporting or cloning it.
+    /// Iteration order is not a canonical identity order; consumers that emit an
+    /// ordered artifact must select and sort the identities they actually use.
+    pub fn definitions(&self) -> impl Iterator<Item = &Shape> {
+        self.index
+            .get()
+            .expect("admitted model has an initialized definition index")
+            .values()
+    }
+
+    /// Admit a complete definition table. Ownership stays on exported roots.
+    ///
+    /// # Errors
+    /// Refuses repeated identities and definitions that already own a catalog.
+    pub fn from_definitions(
+        definitions: Vec<Shape>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        Self::from_model(definitions, Vec::new())
+    }
+
+    /// Retain complete authored shape definitions and function declarations.
+    ///
+    /// # Errors
+    /// Refuses repeated identities and definitions that already own a domain.
+    pub fn from_model(
+        definitions: Vec<Shape>,
+        functions: Vec<Arc<crate::expression::CustomFunction>>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        let entries = Self::definition_map(definitions)?;
+        Self::from_declarations(Arc::new(OnceLock::from(entries)), functions)
+    }
+
+    fn definition_map(
+        definitions: Vec<Shape>,
+    ) -> Result<FastMap<Term, Shape>, crate::PreparationRefusal> {
+        let mut entries = FastMap::with_capacity_and_hasher(
+            definitions.len(),
+            purrdf_hash::fixed::FixedState::default(),
+        );
+        for definition in definitions {
+            if definition.owner.is_some() {
+                return Err(crate::PreparationRefusal::OwningDefinition(Arc::new(
+                    definition.id,
+                )));
+            }
+            match entries.entry(definition.id.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(definition);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(crate::PreparationRefusal::DuplicateDefinition(Arc::new(
+                        definition.id,
+                    )));
+                }
+            }
+        }
+        Ok(entries)
+    }
+
+    pub(crate) fn install_definitions(
+        index: &link::ShapeIndex,
+        definitions: Vec<Shape>,
+    ) -> Result<(), crate::PreparationRefusal> {
+        if index.get().is_some() {
+            return Err(crate::PreparationRefusal::InitializedIndex);
+        }
+        index
+            .set(Self::definition_map(definitions)?)
+            .map_err(|_| crate::PreparationRefusal::InitializedIndex)
+    }
+
+    /// Borrow the original definition with this RDF identity.
+    #[must_use]
+    pub fn definition(&self, id: &Term) -> Option<&Shape> {
+        self.index.get().and_then(|entries| entries.get(id))
+    }
+
+    pub(crate) fn definition_required(
+        &self,
+        id: &Term,
+    ) -> Result<&Shape, crate::PreparationRefusal> {
+        self.definition(id)
+            .ok_or_else(|| crate::PreparationRefusal::UnknownReference(Arc::new(id.clone())))
+    }
+
+    pub(crate) fn property_definition(
+        &self,
+        id: &Term,
+    ) -> Result<&PropertyShape, crate::PreparationRefusal> {
+        let definition = self.definition_required(id)?;
+        definition
+            .as_property()
+            .ok_or_else(|| crate::PreparationRefusal::ExpectedProperty(Arc::new(id.clone())))
+    }
+
+    /// Export a target/rule root that retains its validation body by identity.
+    ///
+    /// Constraint trees and their reporting/deactivation metadata stay in the
+    /// original [`Self::definition`]; exporting and cloning roots do not copy
+    /// those bodies. Targets and rules remain on the root for their drivers.
+    #[must_use]
+    pub fn root(self: &Arc<Self>, id: &Term) -> Option<Shape> {
+        let definition = self.definition(id)?;
+        Some(Shape {
+            owner: Some(Arc::clone(self)),
+            id: definition.id.clone(),
+            targets: definition.targets.clone(),
+            constraints: vec![Constraint::Reference(definition.id.clone())],
+            property_shapes: Vec::new(),
+            severity: definition.severity.clone(),
+            messages: Vec::new(),
+            constraint_annotations: Vec::new(),
+            deactivated: definition.deactivated,
+            deactivated_when: Vec::new(),
+            box_roles: Vec::new(),
+            rules: definition.rules.clone(),
+        })
+    }
+}
+
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
 #[allow(
     clippy::struct_field_names,
@@ -839,6 +1128,8 @@ pub struct Shape {
 )]
 #[derive(Debug, Clone)]
 pub struct Shapes {
+    /// The original declarations retained even when the graph has no shape roots.
+    pub owner: Arc<ModelOwner>,
     /// The TOP-LEVEL shapes of the shapes graph: every shape validation starts
     /// from. That is every node shape, every property shape with targets of its
     /// own (wrapped as a single-property [`Shape`]), and every other shape an
@@ -1061,6 +1352,7 @@ impl Shapes {
 impl Default for Shapes {
     fn default() -> Self {
         Self {
+            owner: Arc::default(),
             node_shapes: Vec::new(),
             rules: crate::rules::RuleGraph::default(),
             box_role_vocab: None,
@@ -1626,6 +1918,9 @@ pub(crate) fn from_dataset_with_scoped_node_expressions(
 enum Preparation {
     LinkedModel,
     SourceOccurrences,
+    /// The bundled path meta-schema recurses over the input RDF path structure.
+    /// Evaluation still refuses exhausted depth/stack; it assumes no fixed point.
+    StructuralMetaSchema,
 }
 
 /// A parse currently on the parser's stack.
@@ -1639,7 +1934,9 @@ enum Preparation {
 pub(crate) enum InFlight {
     /// A shape node being parsed, keyed by its rendered node id (the parser
     /// already carries that rendering for its error messages).
-    Shape(String),
+    Shape(Term),
+    /// A property shape, including its constraints, currently being expanded.
+    PropertyShape(Term),
     /// A SHACL-AF node expression being parsed, keyed by its node term.
     NodeExpr(Term),
 }
@@ -1678,6 +1975,11 @@ pub(crate) struct Parser<'s> {
     /// The unsupported-custom-target refusal of the parse, when it raised one, so
     /// [`Self::load_error`] returns it typed ([`ShapesError::UnsupportedTarget`]).
     unsupported_target: std::cell::RefCell<Option<crate::error::UnsupportedTargetRefusal>>,
+    /// The original static-analysis refusal, retained across textual parser context.
+    recursion_refusal: std::cell::RefCell<Option<ShapesError>>,
+    /// Compatibility restrictions apply to reached constraints, although the
+    /// complete catalog retains declarations that exported roots never execute.
+    constraint_refusals: std::cell::RefCell<std::collections::BTreeMap<String, QueryRefusal>>,
     /// The pre-binding violation of every well-formed `sh:SPARQLFunction` body that
     /// has one, by IRI. Filled by `check_sparql_function_declarations`; a call a shape
     /// reaches refuses the load, and the rest are unexecuted (see
@@ -1698,6 +2000,9 @@ pub(crate) struct Parser<'s> {
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
     in_flight: FastSet<InFlight>,
+    /// Each definition is admitted once; dependencies remain native identity edges.
+    catalog_seen: FastSet<Term>,
+    catalog_pending: purrdf_lex::walk::WorkList<Term, 16>,
     /// The variables the node expression being parsed can find bound by its context
     /// when it runs, beyond `$this` and the shape context: `value` inside an
     /// `sh:expression` constraint, a custom function's argument names inside its
@@ -1760,18 +2065,6 @@ pub(crate) struct Parser<'s> {
     /// adds nothing to the custom index, and is recorded only so SHACL 1.2 SPARQL
     /// Extensions §7.3 registration can give it its native implementation.
     native_list_fns: std::collections::BTreeSet<String>,
-    /// Whether `sh:rule` is parsed on the shape currently being read.
-    ///
-    /// It is switched OFF for the duration of a `sh:condition`'s own shape parse,
-    /// and for exactly one reason: a condition is evaluated by
-    /// [`crate::constraints::conforms`], which reads a shape's CONSTRAINTS and
-    /// never its rules, so a condition shape's rules are dead weight — and
-    /// carrying them would make condition resolution non-terminating, because a
-    /// shape whose rule names that same shape as its condition (the W3C
-    /// `square-triple` case does exactly this) would re-enter its own rule parse
-    /// without bound. Dropping the one thing a condition cannot use is what makes
-    /// resolving conditions at LOAD time finite.
-    parse_rules_enabled: bool,
     /// Every CONSTANT shape IRI a `sh:nodeByExpression` names, with the shape that
     /// named it, checked against [`Self::node_shape_index`] once that index is
     /// filled (SHACL 1.2 Node Expressions §7.2).
@@ -1860,7 +2153,7 @@ fn shacl_js_or_invalid(
 }
 
 impl<'s> Parser<'s> {
-    fn new(
+    pub(crate) fn new(
         data: &'s RdfDataset,
         base: Option<String>,
         doc_prefixes: &[(String, String)],
@@ -1877,10 +2170,14 @@ impl<'s> Parser<'s> {
             ill_formed: std::cell::RefCell::new(None),
             prebinding_refusal: std::cell::RefCell::new(None),
             unsupported_target: std::cell::RefCell::new(None),
+            recursion_refusal: std::cell::RefCell::new(None),
+            constraint_refusals: std::cell::RefCell::default(),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
             in_flight: FastSet::default(),
+            catalog_seen: FastSet::default(),
+            catalog_pending: purrdf_lex::walk::WorkList::new(),
             base,
             prefix_resolver: prefixes::PrefixResolver::new(doc_prefixes),
             box_role_vocab,
@@ -1892,7 +2189,6 @@ impl<'s> Parser<'s> {
             node_shape_index: Arc::new(OnceLock::new()),
             custom_fns: parser::custom_fn::CustomFnIndex::default(),
             native_list_fns: std::collections::BTreeSet::new(),
-            parse_rules_enabled: true,
             node_by_expr_constants: Vec::new(),
             current_shape: None,
             node_expr_scope: Vec::new(),
@@ -1905,6 +2201,14 @@ impl<'s> Parser<'s> {
 
     fn parse(&mut self) -> Result<Shapes, ShapesError> {
         self.parse_with_expressions(&[], &[])
+            .map(|(shapes, _)| shapes)
+            .map_err(|message| self.load_error(message))
+    }
+
+    /// Preserve the bundled structural meta-schema's existing bounded evaluation.
+    /// This is private to lint; caller-authored recursive schemas remain refused.
+    pub(crate) fn parse_structural_meta_schema(&mut self) -> Result<Shapes, ShapesError> {
+        self.prepare_with_expressions(&[], &[], Preparation::StructuralMetaSchema)
             .map(|(shapes, _)| shapes)
             .map_err(|message| self.load_error(message))
     }
@@ -1939,6 +2243,9 @@ impl<'s> Parser<'s> {
     /// parse recorded, [`ShapesError::ShaclJs`] when it carries the recorded SHACL-JS
     /// refusal (a caller may prefix context to it), [`ShapesError::Invalid`] otherwise.
     fn load_error(&self, message: String) -> ShapesError {
+        if let Some(refusal) = self.recursion_refusal.borrow_mut().take() {
+            return refusal;
+        }
         if let Some(refusal) = self.ill_formed.borrow_mut().take()
             && message == refusal.to_string()
         {
@@ -2112,6 +2419,13 @@ impl<'s> Parser<'s> {
         // value, is a load error rather than a silent no-op.
         self.check_well_formed()?;
         self.refuse_rec_declarations()?;
+        if preparation != Preparation::StructuralMetaSchema
+            && let Err(refusal) = self.check_shape_recursion()
+        {
+            let message = refusal.to_string();
+            *self.recursion_refusal.borrow_mut() = Some(refusal);
+            return Err(message);
+        }
 
         // SHACL-AF parameterized target types are parsed up-front so that
         // `sh:target` blank nodes can be instantiated during shape target parsing.
@@ -2125,20 +2439,17 @@ impl<'s> Parser<'s> {
         self.custom_fns = linked.custom;
         self.native_list_fns = linked.native_list;
 
-        // Parse each top-level shape in stable (sorted) order. A node with
-        // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
-        // are wrapped in a single-property Shape carrying the node's targets.
-        let mut node_shapes: Vec<Shape> = Vec::new();
+        // Retain every original definition, independently of the exported target
+        // roots. Dependencies enqueue identities rather than unfolding bodies.
         let mut ids: Vec<Term> = shape_ids.into_iter().collect();
         crate::term::sort_terms_canonical(&mut ids);
-        for term in ids {
-            let shape = if self.first_object_of(&term, sh::PATH).is_some() {
-                self.parse_standalone_property_shape(term)?
-            } else {
-                self.parse_node_shape(term)?
-            };
-            node_shapes.push(shape);
+        let catalog_ids = self.spec_shapes();
+        self.catalog_seen.reserve(catalog_ids.len());
+        for id in catalog_ids.iter().rev().chain(ids.iter().rev()) {
+            self.request_shape(id);
         }
+        let mut definitions = Vec::with_capacity(self.catalog_seen.len());
+        self.parse_pending_definitions(&mut definitions)?;
 
         // The caller's free-standing node expressions, read by the same parser so
         // the linking pass below reaches their call sites too.
@@ -2159,23 +2470,24 @@ impl<'s> Parser<'s> {
         // The global rules, rule sets and the rules entailment regime (SHACL 1.2
         // Inference Rules), parsed after every shape so a global rule's conditions and
         // node expressions resolve exactly as a shape rule's do.
-        let rules = self.parse_rule_graph()?;
+        let mut rules = self.parse_rule_graph()?;
 
         let custom_fns = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
         let mut functions = UserFunctionRegistry::default();
         self.parse_sparql_functions(&mut functions)?;
+        self.parse_pending_definitions(&mut definitions)?;
 
-        // The post-tree linking pass: install the bodies, fill the one shared
+        // The model linking pass: install the bodies, fill the one shared
         // `sh:nodeByExpression` resolution table (§7.2), register the
         // expression-bodied functions — and PROVE the sharing topology, which is
         // the part no downstream test could observe. See `shapes::link`.
-        if preparation == Preparation::LinkedModel {
-            let declarations: Vec<Arc<crate::expression::CustomFunction>> =
-                custom_fns.iter().map(Arc::clone).collect();
-            link::link_shapes(
-                &node_shapes,
+        let declarations: Vec<Arc<crate::expression::CustomFunction>> =
+            custom_fns.iter().map(Arc::clone).collect();
+        let owner = if preparation != Preparation::SourceOccurrences {
+            let owner = link::link_shapes(
+                definitions,
                 &self.node_shape_index,
                 &declarations,
                 &self.native_list_fns,
@@ -2187,7 +2499,30 @@ impl<'s> Parser<'s> {
                 .map_err(|error| error.to_string())?;
 
             self.check_node_by_expression_constants()?;
-        }
+            owner
+        } else {
+            link::install_bodies(&declarations, bodies).map_err(|error| error.to_string())?;
+            ModelOwner::install_definitions(&self.node_shape_index, definitions)
+                .map_err(|error| error.to_string())?;
+            ModelOwner::from_declarations(Arc::clone(&self.node_shape_index), declarations)
+                .map_err(|error| error.to_string())?
+        };
+        let mut node_shapes = ids
+            .iter()
+            .map(|id| {
+                owner.root(id).ok_or_else(|| {
+                    format!("exported shape {id} has no admitted original definition")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        link::retain_roots(&mut node_shapes, &mut rules, &owner);
+        let expressions: Vec<_> = expressions
+            .into_iter()
+            .map(|expr| NodeExpr::Owned {
+                expr: Box::new(expr),
+                owner: Arc::clone(&owner),
+            })
+            .collect();
 
         let provenance = ParseProvenance::new(
             self.base.clone(),
@@ -2195,7 +2530,7 @@ impl<'s> Parser<'s> {
             self.box_role_vocab.clone(),
             self.shapes_graph.clone(),
         );
-        let sources = if preparation == Preparation::LinkedModel {
+        let sources = if preparation != Preparation::SourceOccurrences {
             if self.profile != crate::profile::ShaclProfile::LEGACY {
                 self.sparql_sources.get_mut().admission = Some(SourceAdmission {
                     profile: self.profile,
@@ -2209,6 +2544,7 @@ impl<'s> Parser<'s> {
         };
 
         let shapes = Shapes {
+            owner,
             node_shapes,
             rules,
             box_role_vocab: self.box_role_vocab.clone(),
@@ -2232,6 +2568,14 @@ impl<'s> Parser<'s> {
         };
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;
+        if let Some((site, refusal)) = crate::extension_usage::reachable_constraint_refusal(
+            &shapes,
+            &self.constraint_refusals.borrow(),
+        )
+        .map_err(|error| error.to_string())?
+        {
+            return Err(self.refuse_query(site, refusal));
+        }
         if let Some((site, violation)) =
             crate::extension_usage::reachable_select_expression_violation(
                 &shapes,
@@ -2239,6 +2583,7 @@ impl<'s> Parser<'s> {
                 &self.select_prebound.borrow(),
                 self.profile,
             )
+            .map_err(|error| error.to_string())?
             && violation.requires_parse_failure()
         {
             return Err(self.refuse_query(format!("the {site}"), violation));
@@ -2266,6 +2611,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         let Some((site, function)) = crate::extension_usage::reachable_call_to(shapes, &javascript)
+            .map_err(|error| error.to_string())?
         else {
             return Ok(());
         };
@@ -2296,6 +2642,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         let Some((site, function)) = crate::extension_usage::reachable_call_to(shapes, &violating)
+            .map_err(|error| error.to_string())?
         else {
             return Ok(());
         };
@@ -2403,8 +2750,8 @@ impl<'s> Parser<'s> {
     /// Taking a handle is also what tells [`Self::parse`] the index is wanted: a
     /// shapes graph with no such constraint never calls this, so the index is never
     /// built.
-    pub(crate) fn share_node_shape_index(&self) -> Arc<OnceLock<FastMap<Term, Shape>>> {
-        Arc::clone(&self.node_shape_index)
+    pub(crate) fn share_node_shape_index(&self) -> link::ShapeIndexRef {
+        Arc::downgrade(&self.node_shape_index)
     }
 
     /// The first object of `(subject, predicate, ?)` as a string literal value.
@@ -2454,8 +2801,8 @@ impl<'s> Parser<'s> {
         let rules = self.parse_rules(&id)?;
         let ps = self.parse_property_shape(&id)?;
         let deactivated = ps.deactivated;
-        let deactivated_when = ps.deactivated_when.clone();
         Ok(Shape {
+            owner: None,
             id,
             targets,
             constraints: vec![],
@@ -2464,7 +2811,7 @@ impl<'s> Parser<'s> {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated,
-            deactivated_when,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules,
         })
@@ -2735,33 +3082,33 @@ impl<'s> Parser<'s> {
             && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
     }
 
-    /// Parse a top-level node shape.
-    fn parse_node_shape(&mut self, id: Term) -> Result<Shape, String> {
-        let id_str = id.to_string();
-
-        // Guard against recursive `sh:node` cycles
-        let key = InFlight::Shape(id_str);
-        if self.in_flight.contains(&key) {
-            // Return a minimal stand-in to break the cycle; cyclic shapes are
-            // unusual but not forbidden.
-            return Ok(Shape {
-                id,
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![],
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                deactivated_when: Vec::new(),
-                box_roles: vec![],
-                rules: vec![],
+    /// Admit one parser expansion and release its in-flight key on every result.
+    fn with_expansion<T>(
+        &mut self,
+        key: InFlight,
+        parse: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if purrdf_stack::is_low() {
+            return Err("SHACL parsing exhausted its stack margin".to_owned());
+        }
+        if !self.in_flight.insert(key.clone()) {
+            return Err(match key {
+                InFlight::Shape(id) | InFlight::PropertyShape(id) => format!(
+                    "cyclic SHACL shape reference on {id}; recursive shapes are not supported"
+                ),
+                InFlight::NodeExpr(node) => format!("cyclic node expression on {node}"),
             });
         }
-        self.in_flight.insert(key.clone());
-        let result = self.parse_shape_inner(&id);
+        let result = parse(self);
         self.in_flight.remove(&key);
         result
+    }
+
+    /// Parse a top-level node shape.
+    fn parse_node_shape(&mut self, id: &Term) -> Result<Shape, String> {
+        self.with_expansion(InFlight::Shape(id.clone()), |parser| {
+            parser.parse_shape_inner(id)
+        })
     }
 
     /// Inner parse logic shared between top-level and anonymous/inline shapes.
@@ -2780,27 +3127,24 @@ impl<'s> Parser<'s> {
         let targets = self.parse_targets(id)?;
 
         // -- Property shapes (via sh:property) --
-        let mut property_shape_nodes: Vec<Term> = self.objects_of(id, sh::PROPERTY);
-        crate::term::sort_terms_canonical(&mut property_shape_nodes);
-        let mut property_shapes = Vec::new();
-        for ps_node in property_shape_nodes {
-            let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &ps_node)])?;
-            let ps = self.parse_property_shape(&ps_node)?;
-            property_shapes.push(annotate_property_edge(ps, annotated));
-        }
+        let properties = self.parse_property_references(id)?;
 
         // -- Node-level constraints --
-        let parsed = self.parse_constraints(id, false)?;
+        let mut parsed = self.parse_constraints(id, false)?;
+        parsed
+            .constraints
+            .extend(properties.into_iter().map(Constraint::PropertyReference));
         let box_roles = self.box_roles_of(id)?;
         // -- SHACL-AF rules (sh:rule) --
         let rules = self.parse_rules(id)?;
         self.check_annotations_applied(id)?;
 
         Ok(Shape {
+            owner: None,
             id: id.clone(),
             targets,
             constraints: parsed.constraints,
-            property_shapes,
+            property_shapes: Vec::new(),
             severity,
             messages,
             constraint_annotations: parsed.annotations,
@@ -3199,7 +3543,13 @@ impl<'s> Parser<'s> {
 
     /// Parse a property shape node.
     fn parse_property_shape(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
-        let ps_str = ps_node.to_string();
+        self.with_expansion(InFlight::PropertyShape(ps_node.clone()), |parser| {
+            parser.parse_property_shape_inner(ps_node)
+        })
+    }
+
+    fn parse_property_shape_inner(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
+        let ps_str = ps_node;
 
         // sh:path is required
         let path_node = self
@@ -3224,45 +3574,16 @@ impl<'s> Parser<'s> {
             self.deactivation_of(ps_node, ps_node, DeactivationSite::Shape)?;
 
         // constraints on the property shape
-        let parsed = self.parse_constraints(ps_node, true)?;
+        let mut parsed = self.parse_constraints(ps_node, true)?;
         let mut constraint_annotations = parsed.annotations;
 
-        // Nested sh:property on a property shape (spec §2.1: sh:property may
-        // appear on ANY shape) — each nested property shape applies to THIS
-        // shape's value nodes. `in_flight` breaks sh:property cycles by
-        // skipping a shape already being parsed (mirrors parse_node_shape's
-        // cycle stub).
-        let mut nested_nodes: Vec<Term> = self.objects_of(ps_node, sh::PROPERTY);
-        crate::term::sort_terms_canonical(&mut nested_nodes);
-        let mut property_shapes: Vec<PropertyShape> = Vec::new();
-        if !nested_nodes.is_empty() {
-            let key = InFlight::Shape(ps_str.clone());
-            self.in_flight.insert(key.clone());
-            for nested in nested_nodes {
-                let annotated =
-                    match self.constraint_annotation(ps_node, &[(sh::PROPERTY, &nested)]) {
-                        Ok(annotated) => annotated,
-                        Err(e) => {
-                            self.in_flight.remove(&key);
-                            return Err(e);
-                        }
-                    };
-                if self
-                    .in_flight
-                    .contains(&InFlight::Shape(nested.to_string()))
-                {
-                    continue;
-                }
-                match self.parse_property_shape(&nested) {
-                    Ok(parsed) => property_shapes.push(annotate_property_edge(parsed, annotated)),
-                    Err(e) => {
-                        self.in_flight.remove(&key);
-                        return Err(e);
-                    }
-                }
-            }
-            self.in_flight.remove(&key);
-        }
+        // Each nested property shape applies to this shape's value nodes.
+        // The entry guard covers constraints and nested properties alike.
+        parsed.constraints.extend(
+            self.parse_property_references(ps_node)?
+                .into_iter()
+                .map(Constraint::PropertyReference),
+        );
 
         let box_roles = self.box_roles_of(ps_node)?;
         let reification_required_term = self.first_object_of(ps_node, sh::REIFICATION_REQUIRED);
@@ -3342,7 +3663,7 @@ impl<'s> Parser<'s> {
             values,
             default_value,
             constraints: parsed.constraints,
-            property_shapes,
+            property_shapes: Vec::new(),
             reifier_shapes,
             reification_required,
             severity,
@@ -3427,6 +3748,11 @@ impl<'s> Parser<'s> {
         shape_id: &Term,
         in_flight: &mut FastSet<String>,
     ) -> Result<Path, String> {
+        if purrdf_stack::is_low() {
+            return Err(format!(
+                "SHACL path parsing exhausted its stack margin on {shape_id}"
+            ));
+        }
         match path_node {
             Term::NamedNode(nn) => Ok(Path::Predicate(nn.clone())),
             Term::BlankNode(label) => {
@@ -3594,97 +3920,75 @@ impl<'s> Parser<'s> {
     /// the path+constraints are wrapped into a single `PropertyShape` entry and
     /// the resulting `Shape` has empty node-level constraints.
     fn parse_inline_shape(&mut self, id: Term) -> Result<Shape, String> {
-        let id_str = id.to_string();
+        self.request_shape(&id);
+        Ok(Shape {
+            owner: None,
+            id: id.clone(),
+            targets: Vec::new(),
+            constraints: vec![Constraint::Reference(id)],
+            property_shapes: Vec::new(),
+            severity: Severity::Violation,
+            messages: Vec::new(),
+            constraint_annotations: Vec::new(),
+            deactivated: false,
+            deactivated_when: Vec::new(),
+            box_roles: Vec::new(),
+            rules: Vec::new(),
+        })
+    }
 
-        // Guard against cycles
-        let key = InFlight::Shape(id_str);
-        if self.in_flight.contains(&key) {
-            return Ok(Shape {
-                id,
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![],
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                deactivated_when: Vec::new(),
-                box_roles: vec![],
-                rules: vec![],
+    fn request_shape(&mut self, id: &Term) {
+        if self.catalog_seen.insert(id.clone()) {
+            self.catalog_pending.push(id.clone());
+        }
+    }
+
+    fn parse_pending_definitions(&mut self, definitions: &mut Vec<Shape>) -> Result<(), String> {
+        while let Some(id) = self.catalog_pending.pop() {
+            let definition = self.with_empty_node_expr_scope(|parser| {
+                if parser.first_object_of(&id, sh::PATH).is_some() {
+                    parser.parse_standalone_property_shape(id)
+                } else {
+                    parser.parse_node_shape(&id)
+                }
+            })?;
+            definitions.push(definition);
+        }
+        Ok(())
+    }
+
+    fn parse_property_references(&mut self, id: &Term) -> Result<Vec<PropertyReference>, String> {
+        let mut nodes = self.objects_of(id, sh::PROPERTY);
+        crate::term::sort_terms_canonical(&mut nodes);
+        let mut properties = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            if self.first_object_of(&node, sh::PATH).is_none() {
+                return Err(format!("property shape {node} missing sh:path"));
+            }
+            self.request_shape(&node);
+            let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &node)])?;
+            let (deactivated, deactivated_when, severity, messages) = match annotated {
+                Annotated::Plain => (false, Vec::new(), None, Vec::new()),
+                Annotated::Deactivated => (true, Vec::new(), None, Vec::new()),
+                Annotated::Override {
+                    severity,
+                    messages,
+                    deactivated_when,
+                } => (false, deactivated_when, severity, messages),
+            };
+            properties.push(PropertyReference {
+                target: node,
+                deactivated,
+                deactivated_when,
+                severity,
+                messages,
             });
         }
-
-        if self.first_object_of(&id, sh::PATH).is_some() {
-            // Treat as an inline property shape
-            self.in_flight.insert(key.clone());
-            let ps = self.parse_property_shape(&id);
-            self.in_flight.remove(&key);
-            let ps = ps?;
-            Ok(Shape {
-                id,
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![ps],
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                deactivated_when: Vec::new(),
-                box_roles: vec![],
-                rules: vec![],
-            })
-        } else {
-            self.parse_node_shape(id)
-        }
+        Ok(properties)
     }
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
-
-/// A property shape as the `sh:property` statement that reaches it is annotated.
-///
-/// `sh:property` is a constraint parameter (`sh:PropertyConstraintComponent`),
-/// and "the validation results are the results of validating v as focus node
-/// against the property shape $property" — the results that constraint causes
-/// are the property shape's. So a reifier on the `sh:property` statement
-/// annotates exactly those results: `sh:deactivated true` deactivates this reach of
-/// the property shape (the same shape reached through another, unannotated
-/// statement still validates, and the reach keeps its path in `sh:closed`'s
-/// permitted set), and `sh:severity` / `sh:message` take the place of
-/// the property shape's own for this reach, below any reifier annotation on the
-/// property shape's own constraint statements, which names the constraint that
-/// caused the result more narrowly still. A node-expression `sh:deactivated` joins
-/// the property shape's own, so this reach is deactivated where any of them produces
-/// `true`.
-fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> PropertyShape {
-    match annotated {
-        // The edge stays: `sh:closed`'s permitted set P is syntactic, "the set of IRI
-        // properties that can be reached from the current shape via the SPARQL path
-        // sh:property/sh:path", and `sh:property` is no parameter of the closed
-        // constraint, so a deactivated reach must not shrink it. Marked deactivated, the
-        // property shape validates nothing here — exactly as its own `sh:deactivated
-        // true` does — and the always-true expression spelling already keeps it.
-        Annotated::Deactivated => {
-            ps.deactivated = true;
-            ps
-        }
-        Annotated::Plain => ps,
-        Annotated::Override {
-            severity,
-            messages,
-            deactivated_when,
-        } => {
-            if let Some(severity) = severity {
-                ps.severity = severity;
-            }
-            if !messages.is_empty() {
-                ps.messages = messages;
-            }
-            ps.deactivated_when.extend(deactivated_when);
-            ps
-        }
-    }
-}
 
 /// Parse an `xsd:integer` literal into a `u64`; `None` for any other term.
 pub(crate) fn parse_u64(term: &Term) -> Option<u64> {
@@ -3714,6 +4018,28 @@ mod tests {
     /// Parse shapes from a test dataset (shim over [`from_dataset`]).
     fn from_store(dataset: &Arc<RdfDataset>) -> Result<Shapes, String> {
         from_dataset(dataset).map_err(|error| error.to_string())
+    }
+
+    fn body_of<'a>(shapes: &'a Shapes, shape: &'a Shape) -> &'a Shape {
+        match shape.constraints.as_slice() {
+            [Constraint::Reference(target)] => shapes
+                .owner
+                .definition(target)
+                .expect("the parsed reference has its original definition"),
+            _ => shape,
+        }
+    }
+
+    fn properties_of<'a>(
+        shapes: &'a Shapes,
+        shape: &'a Shape,
+    ) -> impl Iterator<Item = &'a PropertyShape> {
+        body_of(shapes, shape)
+            .properties_in(Some(&shapes.owner))
+            .map(|view| {
+                view.expect("the parsed property reference resolves")
+                    .property
+            })
     }
 
     const PREFIXES: &str = r"
@@ -3971,7 +4297,7 @@ mod tests {
         let shapes = from_store(&store).expect("parse must succeed");
 
         assert_eq!(shapes.node_shapes.len(), 1, "expected exactly 1 node shape");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
 
         // Must have one Class target pointing at ex:Person
         assert_eq!(shape.targets.len(), 1);
@@ -3983,8 +4309,10 @@ mod tests {
         }
 
         // Must have one property shape
-        assert_eq!(shape.property_shapes.len(), 1);
-        let ps = &shape.property_shapes[0];
+        assert_eq!(properties_of(&shapes, shape).count(), 1);
+        let ps = properties_of(&shapes, shape)
+            .next()
+            .expect("one property shape");
 
         // Path must be Predicate(ex:name)
         match &ps.path {
@@ -4024,7 +4352,7 @@ mod tests {
         let shapes = from_store(&store).expect("parse must succeed");
 
         assert_eq!(shapes.node_shapes.len(), 1);
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
 
         // Must have exactly one Or constraint
         let or_constraints: Vec<&Vec<Shape>> = shape
@@ -4043,11 +4371,13 @@ mod tests {
         // Each member should be an inline property shape with one property_shape entry
         for (i, member) in members.iter().enumerate() {
             assert_eq!(
-                member.property_shapes.len(),
+                properties_of(&shapes, member).count(),
                 1,
                 "member {i} should have one property shape"
             );
-            let ps = &member.property_shapes[0];
+            let ps = properties_of(&shapes, member)
+                .next()
+                .expect("one member property");
             let has_min = ps
                 .constraints
                 .iter()
@@ -4074,9 +4404,11 @@ mod tests {
         let shapes = from_store(&store).expect("parse must succeed");
 
         assert_eq!(shapes.node_shapes.len(), 1);
-        let shape = &shapes.node_shapes[0];
-        assert_eq!(shape.property_shapes.len(), 1);
-        let ps = &shape.property_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
+        assert_eq!(properties_of(&shapes, shape).count(), 1);
+        let ps = properties_of(&shapes, shape)
+            .next()
+            .expect("one property shape");
 
         match &ps.path {
             Path::Inverse(inner) => match inner.as_ref() {
@@ -4108,7 +4440,7 @@ mod tests {
         let shapes = from_store(&store).expect("sh:sparql with a valid query must parse");
 
         assert_eq!(shapes.node_shapes.len(), 1, "expected exactly 1 node shape");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
 
         let sparql_c = shape.constraints.iter().find_map(|c| match c {
             Constraint::Sparql { select, .. } => Some(select.as_str()),
@@ -4143,7 +4475,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("IRI-valued sh:namespace must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let select = shape
             .constraints
             .iter()
@@ -4186,10 +4518,13 @@ mod tests {
             .iter()
             .find(|s| s.id.to_string().contains("SpanImportProofShape"))
             .and_then(|s| {
-                s.constraints.iter().find_map(|c| match c {
-                    Constraint::Sparql { select, .. } => Some(select.clone()),
-                    _ => None,
-                })
+                body_of(&shapes, s)
+                    .constraints
+                    .iter()
+                    .find_map(|c| match c {
+                        Constraint::Sparql { select, .. } => Some(select.clone()),
+                        _ => None,
+                    })
             })
             .expect("expected a Constraint::Sparql on the proof shape");
 
@@ -4302,7 +4637,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:qualifiedValueShape must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let qvs = ps.constraints.iter().find_map(|c| match c {
             Constraint::QualifiedValueShape {
                 shape,
@@ -4315,6 +4652,7 @@ mod tests {
         });
         let (shape, siblings, min_count, max_count, disjoint) =
             qvs.expect("expected QualifiedValueShape constraint");
+        let shape = body_of(&shapes, shape);
         assert_eq!(*min_count, Some(1));
         assert_eq!(*max_count, Some(3));
         assert!(!disjoint, "no sh:qualifiedValueShapesDisjoint declared");
@@ -4350,9 +4688,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("disjoint qualified shapes must parse");
-        let shape = &shapes.node_shapes[0];
-        assert_eq!(shape.property_shapes.len(), 2);
-        for ps in &shape.property_shapes {
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
+        assert_eq!(properties_of(&shapes, shape).count(), 2);
+        for ps in properties_of(&shapes, shape) {
             let (siblings, disjoint) = ps
                 .constraints
                 .iter()
@@ -4408,10 +4746,8 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("property-pair constraints must parse");
-        let shape = &shapes.node_shapes[0];
-        let all: Vec<&Constraint> = shape
-            .property_shapes
-            .iter()
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
+        let all: Vec<&Constraint> = properties_of(&shapes, shape)
             .flat_map(|ps| ps.constraints.iter())
             .collect();
         assert!(all.iter().any(
@@ -4463,7 +4799,7 @@ mod tests {
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
         assert_eq!(shapes.node_shapes.len(), 1);
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         assert_eq!(shape.severity, Severity::Warning);
         assert_eq!(
             shape.messages.first().map(Literal::value),
@@ -4494,6 +4830,7 @@ mod tests {
             .iter()
             .find(|s| s.id.to_string().contains("TestShape1"))
             .expect("TestShape1 present");
+        let test_shape1 = body_of(&shapes, test_shape1);
         let (component, bindings, validator) = test_shape1
             .constraints
             .iter()
@@ -4541,7 +4878,9 @@ mod tests {
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
         assert_eq!(shapes.node_shapes.len(), 1);
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let in_constraint = ps.constraints.iter().find_map(|c| match c {
             Constraint::In(items) => Some(items),
             _ => None,
@@ -4554,7 +4893,7 @@ mod tests {
     fn in_members(body: &str) -> Result<Vec<Term>, String> {
         let store = load_store(&format!("{PREFIXES}\n{body}"));
         let shapes = from_store(&store)?;
-        Ok(shapes.node_shapes[0]
+        Ok(body_of(&shapes, &shapes.node_shapes[0])
             .constraints
             .iter()
             .find_map(|c| match c {
@@ -4605,7 +4944,7 @@ mod tests {
         ));
         let shapes = from_store(&store).expect("an empty sh:and list parses");
         assert!(
-            shapes.node_shapes[0]
+            body_of(&shapes, &shapes.node_shapes[0])
                 .constraints
                 .iter()
                 .any(|c| matches!(c, Constraint::And(members) if members.is_empty()))
@@ -4650,7 +4989,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let has_nk = shape
             .constraints
             .iter()
@@ -4675,7 +5014,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let pat = ps.constraints.iter().find_map(|c| match c {
             Constraint::Pattern { regex, flags, .. } => Some((regex, flags)),
             _ => None,
@@ -4702,7 +5043,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let and_c = shape.constraints.iter().find_map(|c| match c {
             Constraint::And(members) => Some(members),
             _ => None,
@@ -4727,7 +5068,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:zeroOrMorePath must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         match &ps.path {
             Path::ZeroOrMore(inner) => match inner.as_ref() {
                 Path::Predicate(nn) => assert_eq!(nn.as_str(), "http://example.org/ns#link"),
@@ -4754,7 +5097,7 @@ mod tests {
         let mut saw_plus = false;
         let mut saw_opt = false;
         for shape in &shapes.node_shapes {
-            for ps in &shape.property_shapes {
+            for ps in properties_of(&shapes, shape) {
                 match &ps.path {
                     Path::OneOrMore(_) => saw_plus = true,
                     Path::ZeroOrOne(_) => saw_opt = true,
@@ -4780,7 +5123,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sequence path must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         match &ps.path {
             Path::Sequence(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -4805,7 +5150,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("alternative path must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         match &ps.path {
             Path::Alternative(parts) => {
                 assert_eq!(parts.len(), 2);
@@ -4835,7 +5182,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("nested path combination must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let Path::Alternative(parts) = &ps.path else {
             panic!("expected Path::Alternative, got {:?}", ps.path);
         };
@@ -4907,7 +5256,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:maxLength must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let has_max = ps
             .constraints
             .iter()
@@ -4931,7 +5282,9 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:languageIn must parse");
-        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let ps = properties_of(&shapes, &shapes.node_shapes[0])
+            .next()
+            .expect("one property shape");
         let tags = ps.constraints.iter().find_map(|c| match c {
             Constraint::LanguageIn(tags) => Some(tags),
             _ => None,
@@ -4960,13 +5313,13 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:not must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let not_c = shape.constraints.iter().find_map(|c| match c {
             Constraint::Not(inner) => Some(inner),
             _ => None,
         });
         assert!(not_c.is_some(), "expected Not, got {:?}", shape.constraints);
-        let inner = not_c.unwrap();
+        let inner = body_of(&shapes, not_c.unwrap());
         assert!(
             inner
                 .constraints
@@ -4991,7 +5344,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:closed must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         let ignored = shape.constraints.iter().find_map(|c| match c {
             Constraint::Closed {
                 ignored,
@@ -5048,7 +5401,7 @@ mod tests {
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:closed false must parse");
-        let shape = &shapes.node_shapes[0];
+        let shape = body_of(&shapes, &shapes.node_shapes[0]);
         assert!(
             !shape
                 .constraints
@@ -5131,7 +5484,7 @@ mod tests {
     #[test]
     fn node_expr_path() {
         let expr = parse_expr(&expr_ttl("ex:root ex:expr [ sh:path ex:knows ] .")).expect("parse");
-        match expr {
+        match &expr {
             NodeExpr::Path(Path::Predicate(n)) => {
                 assert_eq!(n.as_str(), "http://example.org/ns#knows");
             }
@@ -5264,15 +5617,30 @@ mod tests {
 
     #[test]
     fn node_expr_filter_shape() {
-        let expr = parse_expr(&expr_ttl(
+        let dataset = load_store(&expr_ttl(
             "ex:root ex:expr [ sh:filterShape [ sh:nodeKind sh:IRI ] ; sh:nodes sh:this ] .",
-        ))
-        .expect("parse");
-        match expr {
+        ));
+        let roots = objects_of(
+            &dataset,
+            &Term::NamedNode(NamedNode::from("http://example.org/ns#root")),
+            "http://example.org/ns#expr",
+        );
+        let (shapes, mut expressions) = from_dataset_with_node_expressions(
+            &dataset,
+            &[],
+            None,
+            &roots,
+            &ShapesImports::default(),
+        )
+        .expect("parse and retain the expression's original definitions");
+        let NodeExpr::Owned { expr, .. } = expressions.pop().expect("one expression") else {
+            panic!("the production expression retains its original domain");
+        };
+        match *expr {
             NodeExpr::Filter { nodes, shape } => {
                 assert!(matches!(*nodes, NodeExpr::This));
                 assert!(
-                    shape
+                    body_of(&shapes, &shape)
                         .constraints
                         .iter()
                         .any(|c| matches!(c, Constraint::NodeKind(kinds) if kinds.as_slice() == [NodeKindValue::Iri]))

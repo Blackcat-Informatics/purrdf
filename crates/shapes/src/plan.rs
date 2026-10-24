@@ -46,15 +46,35 @@ use ::purrdf_rdf::{FastMap, FastSet, IdSet, TermId};
 
 use crate::data::{ShaclData, resolve_id};
 use crate::data_view::ShaclRead;
+use crate::error::PreparationRefusal;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
-use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
+use crate::footprint::{Footprint, FootprintWalk, applies_to_current_node};
 use crate::report::ConformanceDisallows;
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
     NodeKindValue, Path, PropertyShape, Shape, Target,
 };
+
+/// Live original domain and declaration identities; never serialized.
+type FunctionKey = (usize, usize);
 use crate::term::{NamedNode, Term};
 use crate::unique_values::{UniqueGroups, UniqueSpec};
+
+type LoweringResult<T> = Result<T, PreparationRefusal>;
+
+/// Admit every recursive lowering frame before entering its computation.
+fn admit_lowering() -> LoweringResult<()> {
+    if purrdf_stack::is_low() {
+        Err(PreparationRefusal::StackMargin)
+    } else {
+        Ok(())
+    }
+}
+
+/// Infallible footprint callbacks latch refusal in the same native walk scope.
+fn scoped_lowering<T>(body: impl FnOnce() -> LoweringResult<T>) -> LoweringResult<T> {
+    purrdf_stack::walk(body).map_err(|_| PreparationRefusal::StackMargin)?
+}
 
 // ── Slots ───────────────────────────────────────────────────────────────────────
 
@@ -236,13 +256,13 @@ pub(crate) struct LoweredShapes {
     /// The `sh:nodeByExpression` / `shnex:conformsToShape` shape indexes, lowered.
     indexes: Box<[LoweredIndex]>,
     /// The lowered body of every custom node-expression function the walk reached,
-    /// by function IRI.
+    /// by its original domain and declaration identity.
     ///
     /// A map rather than a subtree because SHACL 1.2 Node Expressions §6.1/§6.2
     /// hold a function body BY REFERENCE precisely so a body may call the function
     /// it belongs to. That cycle has no finite tree, so the body is lowered once
-    /// under its own IRI and every call site resolves it by name.
-    bodies: FastMap<String, LoweredExpr>,
+    /// in its original domain and every call site retains that key.
+    bodies: FastMap<FunctionKey, LoweredFunction>,
     /// The empty target index every shape reached through a CONSTRAINT carries.
     ///
     /// One shared value rather than one per nested plan: `sh:not`, `sh:and`,
@@ -327,10 +347,20 @@ impl LoweredShapes {
         // asked about it — once per value node. A shape node the data graph does
         // not intern simply has no entry: it can never be the answer to a
         // data-derived production, and the term-keyed lookup still reaches it.
-        let indexes: Box<[FastMap<TermId, Term>]> = self
+        // Static references already carry their model term and never probe this
+        // data-id row. Retain positions up to the last computed domain only;
+        // a static-only model therefore needs no binding allocation here.
+        let indexed = self
             .indexes
             .iter()
+            .rposition(|index| index.complete)
+            .map_or(0, |position| position + 1);
+        let indexes: Box<[FastMap<TermId, Term>]> = self.indexes[..indexed]
+            .iter()
             .map(|index| {
+                if !index.complete {
+                    return FastMap::default();
+                }
                 index
                     .shapes
                     .keys()
@@ -400,6 +430,7 @@ impl LoweredShapes {
             ))
         })?;
         Ok(ShapePlan {
+            owner: shape.owner.as_ref(),
             shape,
             lowered,
             graph: self,
@@ -447,6 +478,13 @@ struct LoweredIndex {
     /// alive. Holding the `Arc` is what makes the key stable for as long as the
     /// lowering that uses it.
     cell: Arc<OnceLock<FastMap<Term, Shape>>>,
+    /// Original function domain of these bare definitions.
+    owner: Arc<crate::shapes::ModelOwner>,
+    /// Native body identities already queued; no RDF key copies on cache hits.
+    requested: FastMap<usize, usize>,
+    footprint: usize,
+    /// A computed reference has requested the complete resolution domain.
+    complete: bool,
     /// The lowering of every shape the index can resolve to, keyed — like the
     /// cell beside it — by the shape's own identity term.
     shapes: FastMap<Term, LoweredShape>,
@@ -505,6 +543,10 @@ pub(crate) struct LoweredProperty {
 /// step never re-hashes its predicate IRI per focus node.
 #[derive(Debug)]
 pub(crate) enum LoweredPath {
+    /// A shared path in the footprint's sealed, acyclic path arena.
+    Reference(usize),
+    /// A path-arena entry with multiple incoming edges; evaluate each data pair once.
+    SharedReference(usize),
     /// A predicate step, as the slot holding the predicate's dataset identity.
     Predicate(TermSlot),
     /// `sh:inversePath` over a plain predicate — the one inverse form that needs no
@@ -578,6 +620,13 @@ pub(crate) type BoundParse = Option<purrdf_xsd::XsdValue>;
 /// constraint it is evaluating.
 #[derive(Debug)]
 pub(crate) enum LoweredConstraint {
+    Reference {
+        catalog: u32,
+    },
+    PropertyReference {
+        catalog: u32,
+        deactivated_when: Box<[LoweredExpr]>,
+    },
     /// `sh:class` — where the dataset identities of the value's classes are
     /// resolved: one term slot for a single class, one set slot for a list of them.
     ///
@@ -721,9 +770,9 @@ pub(crate) struct LoweredExpr {
     /// The position of the shape index this expression resolves shape IRIs against
     /// (`shnex:conformsToShape` with a computed shape argument); `None` otherwise.
     index: Option<u32>,
-    /// The IRI of the custom node-expression function this expression calls, whose
+    /// The original-domain identity of the function this expression calls, whose
     /// lowered body lives in [`LoweredShapes::bodies`]; `None` otherwise.
-    body: Option<String>,
+    body: Option<FunctionKey>,
     /// The rendered single-row SELECT that evaluates a FUNCTION CALL expression
     /// (`sh:expression` with a builtin, `sh:SPARQLFunction` or `sparql:NAME`
     /// callee); `None` for every other kind.
@@ -745,6 +794,14 @@ pub(crate) struct LoweredExpr {
     shapes: Box<[LoweredShape]>,
     /// The lowering of each SUB-EXPRESSION, in declaration order.
     operands: Box<[Self]>,
+}
+
+/// One retained declaration and body per original function domain, rather than
+/// a declaration pointer in every expression and argument record.
+#[derive(Debug)]
+pub(crate) struct LoweredFunction {
+    pub(crate) declaration: Arc<crate::expression::CustomFunction>,
+    pub(crate) body: LoweredExpr,
 }
 
 // ── Stage 1: the dataset binding ────────────────────────────────────────────────
@@ -938,6 +995,7 @@ pub(crate) fn lowering_defect(
 /// this whole exercise removes.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShapePlan<'a> {
+    owner: Option<&'a Arc<crate::shapes::ModelOwner>>,
     /// The shape this plan lowered, paired with its lowering by construction.
     shape: &'a Shape,
     /// This shape's stage-0 lowering.
@@ -955,10 +1013,42 @@ pub(crate) struct ShapePlan<'a> {
 }
 
 impl<'a> ShapePlan<'a> {
+    pub(crate) const fn model(&self) -> Option<&'a Arc<crate::shapes::ModelOwner>> {
+        self.owner
+    }
+
+    pub(crate) fn with_model<'model>(
+        &'model self,
+        owner: &'model Arc<crate::shapes::ModelOwner>,
+    ) -> ShapePlan<'model> {
+        let mut plan: ShapePlan<'model> = *self;
+        plan.owner = Some(owner);
+        plan
+    }
     /// The shape this plan describes.
     #[inline]
     pub(crate) fn shape(&self) -> &'a Shape {
         self.shape
+    }
+
+    /// The original body of an exported owning handle, without copying it.
+    pub(crate) fn definition(self) -> Result<Self, crate::error::ShapesError> {
+        if self.shape.owner.is_some()
+            && let [Constraint::Reference(target)] = self.shape.constraints.as_slice()
+            && *target == self.shape.id
+            && self.shape.property_shapes.is_empty()
+        {
+            let (constraint, lowered) = self.constraints()?.next().ok_or_else(|| {
+                crate::error::ShapesError::internal("owning shape handle has no prepared reference")
+            })?;
+            if let PlannedConstraint::Reference(definition) = self.planned(constraint, lowered)? {
+                return Ok(definition);
+            }
+            return Err(crate::error::ShapesError::internal(
+                "owning shape handle was not lowered as a reference",
+            ));
+        }
+        Ok(self)
     }
 
     /// The `sh:deactivated` expressions of the shape, each paired with its
@@ -1140,7 +1230,47 @@ impl<'a> ShapePlan<'a> {
             &self.lowered.properties,
             "shape",
         )?
-        .map(move |(property, lowered)| (property, PropertyPlan { plan, lowered })))
+        .map(move |(property, lowered)| {
+            (
+                property,
+                PropertyPlan {
+                    plan,
+                    lowered,
+                    edge: None,
+                },
+            )
+        }))
+    }
+
+    /// Direct identity property edges, in source order, with borrowed bodies.
+    pub(crate) fn referenced_properties(
+        &self,
+    ) -> Result<
+        impl Iterator<Item = Result<(&'a PropertyShape, PropertyPlan<'a>), crate::error::ShapesError>>,
+        crate::error::ShapesError,
+    > {
+        let plan = *self;
+        Ok(self
+            .constraints()?
+            .filter_map(move |(constraint, lowered)| {
+                if !matches!(constraint, Constraint::PropertyReference(_)) {
+                    return None;
+                }
+                Some(plan.planned(constraint, lowered).and_then(|planned| {
+                    if let PlannedConstraint::PropertyReference {
+                        definition,
+                        edge,
+                        deactivated_when,
+                    } = planned
+                    {
+                        PropertyPlan::from_reference(definition, edge, deactivated_when)
+                    } else {
+                        Err(crate::error::ShapesError::internal(
+                            "property identity edge has a different prepared constraint",
+                        ))
+                    }
+                }))
+            }))
     }
 
     /// The compared side of a property-pair constraint: an IRI path keeps the
@@ -1163,6 +1293,7 @@ impl<'a> ShapePlan<'a> {
     #[inline]
     pub(crate) fn nested(&self, shape: &'a Shape, lowered: &'a LoweredShape) -> Self {
         Self {
+            owner: shape.owner.as_ref().or(self.owner),
             shape,
             lowered,
             graph: self.graph,
@@ -1191,13 +1322,15 @@ impl<'a> ShapePlan<'a> {
         &self,
         index: u32,
         id: &Term,
-        shapes: &'a FastMap<Term, Shape>,
     ) -> Result<Option<Self>, crate::error::ShapesError> {
         let lowered = self
             .graph
             .indexes
             .get(index as usize)
             .ok_or_else(|| slot_defect("shape-index", index))?;
+        let shapes = lowered.cell.get().ok_or_else(|| {
+            crate::error::ShapesError::internal("the shapes graph's shape index was never filled")
+        })?;
         let (Some(shape), Some(lowered)) = (shapes.get(id), lowered.shapes.get(id)) else {
             return Ok(None);
         };
@@ -1206,8 +1339,15 @@ impl<'a> ShapePlan<'a> {
 
     /// The lowered body of the custom node-expression function named `iri`.
     #[inline]
-    pub(crate) fn body(&self, iri: &str) -> Option<&'a LoweredExpr> {
-        self.graph.bodies.get(iri)
+    pub(crate) fn function(
+        &self,
+        key: FunctionKey,
+    ) -> Result<&'a LoweredFunction, crate::error::ShapesError> {
+        self.graph.bodies.get(&key).ok_or_else(|| {
+            crate::error::ShapesError::internal(
+                "a custom call has no original lowered function record",
+            )
+        })
     }
 }
 
@@ -1215,11 +1355,49 @@ impl<'a> ShapePlan<'a> {
 /// its own lowering.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PropertyPlan<'a> {
+    edge: Option<(&'a crate::shapes::PropertyReference, &'a [LoweredExpr])>,
     plan: ShapePlan<'a>,
     lowered: &'a LoweredProperty,
 }
 
 impl<'a> PropertyPlan<'a> {
+    /// The one prepared property body an identity edge names.
+    pub(crate) fn from_reference(
+        definition: ShapePlan<'a>,
+        edge: &'a crate::shapes::PropertyReference,
+        deactivated_when: &'a [LoweredExpr],
+    ) -> Result<(&'a PropertyShape, Self), crate::error::ShapesError> {
+        let (property, plan) = definition.properties()?.next().ok_or_else(|| {
+            crate::error::ShapesError::internal(format!(
+                "property reference {} has no prepared property definition",
+                edge.target
+            ))
+        })?;
+        Ok((property, plan.with_edge(edge, deactivated_when)))
+    }
+    pub(crate) fn with_edge(
+        mut self,
+        edge: &'a crate::shapes::PropertyReference,
+        deactivated_when: &'a [LoweredExpr],
+    ) -> Self {
+        self.edge = Some((edge, deactivated_when));
+        self
+    }
+
+    pub(crate) const fn edge(&self) -> Option<&'a crate::shapes::PropertyReference> {
+        match self.edge {
+            Some((edge, _)) => Some(edge),
+            None => None,
+        }
+    }
+
+    pub(crate) fn edge_deactivation(
+        &self,
+    ) -> impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a> {
+        self.edge
+            .into_iter()
+            .flat_map(|(edge, lowered)| edge.deactivated_when.iter().zip(lowered))
+    }
     /// This property shape's lowered path.
     #[inline]
     pub(crate) fn path(&self) -> &'a LoweredPath {
@@ -1341,7 +1519,16 @@ impl<'a> PropertyPlan<'a> {
             &self.lowered.properties,
             "property shape",
         )?
-        .map(move |(nested, lowered)| (nested, Self { plan, lowered })))
+        .map(move |(nested, lowered)| {
+            (
+                nested,
+                Self {
+                    plan,
+                    lowered,
+                    edge: None,
+                },
+            )
+        }))
     }
 
     /// The reifier shapes of this property shape, each paired with its lowering.
@@ -1480,6 +1667,13 @@ impl PlannedClasses<'_> {
 /// FROM.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PlannedConstraint<'a> {
+    /// An identity reference into an already lowered shared definition table.
+    Reference(ShapePlan<'a>),
+    PropertyReference {
+        definition: ShapePlan<'a>,
+        edge: &'a crate::shapes::PropertyReference,
+        deactivated_when: &'a [LoweredExpr],
+    },
     /// `sh:class` — the dataset identities of the value's classes, resolved at
     /// bind; a value node conforms when it is an instance of ANY of them.
     ///
@@ -1614,8 +1808,6 @@ pub(crate) enum PlannedConstraint<'a> {
         expr: &'a NodeExpr,
         /// Its lowering.
         lowered: &'a LoweredExpr,
-        /// The shapes graph's IRI-named shape index.
-        shapes: &'a Arc<OnceLock<FastMap<Term, Shape>>>,
         /// The position of that index's lowering.
         index: u32,
         /// The per-constraint message overrides (empty for none).
@@ -1689,6 +1881,27 @@ impl<'a> ShapePlan<'a> {
         lowered: &'a LoweredConstraint,
     ) -> Result<PlannedConstraint<'a>, crate::error::ShapesError> {
         Ok(match (constraint, lowered) {
+            (
+                Constraint::PropertyReference(edge),
+                LoweredConstraint::PropertyReference {
+                    catalog,
+                    deactivated_when,
+                },
+            ) => PlannedConstraint::PropertyReference {
+                definition: self.indexed(*catalog, &edge.target)?.ok_or_else(|| {
+                    format!(
+                        "property reference {} is absent from its catalog",
+                        edge.target
+                    )
+                })?,
+                edge,
+                deactivated_when,
+            },
+            (Constraint::Reference(target), LoweredConstraint::Reference { catalog }) => {
+                PlannedConstraint::Reference(self.indexed(*catalog, target)?.ok_or_else(|| {
+                    format!("shape reference {target} is absent from its catalog")
+                })?)
+            }
             (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::One(slot))) => {
                 PlannedConstraint::Class(PlannedClasses::One(self.binding.term(*slot)?))
             }
@@ -1887,22 +2100,33 @@ impl<'a> ShapePlan<'a> {
             (
                 Constraint::NodeByExpression {
                     expr,
-                    shapes,
                     messages,
                     severity,
+                    ..
                 },
                 LoweredConstraint::NodeByExpression {
                     expr: lowered,
                     index,
                 },
-            ) => PlannedConstraint::NodeByExpression {
-                expr,
-                lowered,
-                shapes,
-                index: *index,
-                messages,
-                severity,
-            },
+            ) => {
+                let retained = self
+                    .graph
+                    .indexes
+                    .get(*index as usize)
+                    .ok_or_else(|| slot_defect("shape-index", *index))?;
+                if retained.cell.get().is_none() {
+                    return Err(crate::error::ShapesError::internal(
+                        "the shapes graph's shape index was never filled",
+                    ));
+                }
+                PlannedConstraint::NodeByExpression {
+                    expr,
+                    lowered,
+                    index: *index,
+                    messages,
+                    severity,
+                }
+            }
             (
                 Constraint::Component {
                     component,
@@ -1953,6 +2177,8 @@ fn shape_list<'a>(
 /// to the shapes graph rather than to the walk.
 fn constraint_kind(constraint: &Constraint) -> &'static str {
     match constraint {
+        Constraint::Reference(_) => "a shape identity reference",
+        Constraint::PropertyReference(_) => "sh:property",
         Constraint::Class(_) => "sh:class",
         Constraint::Datatype(_) => "sh:datatype",
         Constraint::NodeKind(_) => "sh:nodeKind",
@@ -2099,13 +2325,13 @@ impl LoweredExpr {
         })
     }
 
-    /// The IRI of the custom node-expression function this expression calls.
+    /// The original-domain identity of the function this expression calls.
     ///
     /// # Errors
     /// Returns an error when the lowering records none.
     #[inline]
-    pub(crate) fn body_iri(&self) -> Result<&str, crate::error::ShapesError> {
-        self.body.as_deref().ok_or_else(|| {
+    pub(crate) fn body_key(&self) -> Result<FunctionKey, crate::error::ShapesError> {
+        self.body.ok_or_else(|| {
             crate::error::ShapesError::internal(
                 "internal validation-plan defect: a custom node-expression call was evaluated against \
              a lowering that records no function IRI, so its body was never lowered",
@@ -2254,6 +2480,13 @@ pub(crate) struct PreparedTargets {
 /// stack was exhausted — an ABORT, not an error any caller could handle.
 #[derive(Default)]
 struct ShapeWalk {
+    owner: Option<Arc<crate::shapes::ModelOwner>>,
+    /// The catalog whose bare definitions are currently being lowered.
+    current_catalog: Option<u32>,
+    definition_footprints: purrdf_core::SmallVec<[FootprintWalk; 2]>,
+    root_targets: bool,
+    /// Bare definitions waiting to be lowered, without recursive graph descent.
+    pending_definitions: purrdf_lex::walk::WorkList<(u32, Term), 16>,
     /// Every class IRI the walk has reached.
     classes: FastSet<NamedNode>,
     /// Every term whose dataset identity a lowered node will need, in slot order.
@@ -2269,13 +2502,13 @@ struct ShapeWalk {
     /// would not terminate, so it is entered once per walk and every later
     /// constraint is handed the position of the entry already made.
     indexes: Vec<LoweredIndex>,
-    /// The custom node-expression function bodies already lowered, by IRI. A body
+    /// The custom node-expression function bodies already lowered, by domain and declaration. A body
     /// names the same classes and resolves the same terms at every call site, so
     /// once is enough — and once is also all a cyclic body can be given.
-    bodies: FastMap<String, LoweredExpr>,
-    /// The function IRIs whose bodies are currently being lowered, so a body that
+    bodies: FastMap<FunctionKey, LoweredFunction>,
+    /// The function identities whose bodies are currently being lowered, so a body that
     /// calls its own function records the call and stops rather than recursing.
-    in_flight: Vec<String>,
+    in_flight: Vec<FunctionKey>,
     /// The dependency footprint accumulating alongside the lowering. It drives no
     /// recursion of its own: every visit below hands it what the lowering walk
     /// just reached, at the node the lowering walk is standing on.
@@ -2297,6 +2530,22 @@ struct ShapeWalk {
 }
 
 impl ShapeWalk {
+    fn reference_index(
+        &mut self,
+        reference: &crate::shapes::link::ShapeIndexRef,
+    ) -> LoweringResult<u32> {
+        let model = self
+            .owner
+            .as_ref()
+            .ok_or(PreparationRefusal::UnboundModel)?;
+        let index = reference
+            .upgrade()
+            .ok_or(PreparationRefusal::ExpiredIndex)?;
+        if !Arc::ptr_eq(&model.index, &index) {
+            return Err(PreparationRefusal::ForeignIndex);
+        }
+        self.index_position(&index, false)
+    }
     /// Record `term` and hand back the slot its dataset identity will occupy.
     fn slot(&mut self, term: Term) -> TermSlot {
         let slot = self.terms.len();
@@ -2381,7 +2630,11 @@ impl ShapeWalk {
     }
 
     /// Seal the walk into the lowering it produced.
-    fn finish(mut self, shapes: Vec<LoweredShape>) -> LoweredShapes {
+    fn finish(mut self, shapes: Vec<LoweredShape>) -> LoweringResult<LoweredShapes> {
+        self.lower_pending_definitions()?;
+        for index in &mut self.indexes {
+            index.requested = FastMap::default();
+        }
         // Reverse and lower every trigger chain HERE, once per shapes graph.
         //
         // The change expansion runs a trigger backwards, and the reversal is a
@@ -2392,21 +2645,12 @@ impl ShapeWalk {
         // dataset dictionary at every step of every changed row. Reversing into a
         // `LoweredPath` means the expansion reads the same binding-row slots the
         // validation hot path reads, on the same evaluator.
-        let pending = self.footprint.take_triggers();
-        let mut triggers = Vec::with_capacity(pending.len());
-        for trigger in pending {
-            let reversed = trigger
-                .chain
-                .as_ref()
-                .map(|chain| lower_path(&crate::path::invert(chain), &mut self));
-            triggers.push(Trigger {
-                predicate: trigger.predicate,
-                endpoint: trigger.endpoint,
-                reversed,
-            });
-        }
-        let footprint = self.footprint.finish(triggers);
-        LoweredShapes {
+        let mut main = std::mem::take(&mut self.footprint);
+        let mut definitions = std::mem::take(&mut self.definition_footprints);
+        let footprint = crate::footprint::resolve(&mut main, &mut definitions, |chain| {
+            lower_path(&crate::path::invert(chain), &mut self)
+        })?;
+        Ok(LoweredShapes {
             terms: self.terms.into_boxed_slice(),
             sets: self.sets.into_boxed_slice(),
             shapes: shapes.into_boxed_slice(),
@@ -2418,49 +2662,111 @@ impl ShapeWalk {
             unique_values: self.unique_values.into_boxed_slice(),
             closed_types: self.closed_types.into_boxed_slice(),
             any_deactivation: self.deactivations > 0,
-        }
+        })
     }
 
-    /// The position of the lowered form of `index`, entering it exactly once.
-    fn index_position(&mut self, index: &Arc<OnceLock<FastMap<Term, Shape>>>) -> u32 {
-        // Whichever shape of the index a value node resolves to is chosen at
-        // evaluation, so no shape lowered inline here describes it.
-        self.opaque_references += 1;
+    /// Register an original domain. Static references request only their actual
+    /// destination; computed references admit every possible destination once.
+    fn index_position(
+        &mut self,
+        index: &Arc<OnceLock<FastMap<Term, Shape>>>,
+        definitions: bool,
+    ) -> LoweringResult<u32> {
+        if !definitions {
+            // A computed reference chooses its destination at evaluation.
+            self.opaque_references += 1;
+        }
+        let owner = self.owner.clone().ok_or(PreparationRefusal::UnboundModel)?;
+        if !Arc::ptr_eq(&owner.index, index) {
+            return Err(PreparationRefusal::ForeignIndex);
+        }
         let cell = Arc::as_ptr(index).addr();
-        if let Some(position) = self
-            .indexes
-            .iter()
-            .position(|entry| Arc::as_ptr(&entry.cell).addr() == cell)
-        {
-            return position as u32;
+        let position = if let Some(position) = self.indexes.iter().position(|entry| {
+            Arc::as_ptr(&entry.cell).addr() == cell && Arc::ptr_eq(&entry.owner, &owner)
+        }) {
+            position as u32
+        } else {
+            let position = self.indexes.len() as u32;
+            if self.indexes.is_empty() {
+                self.indexes.reserve_exact(1);
+            }
+            let footprint = self.definition_footprints.len();
+            self.definition_footprints.push(FootprintWalk::definition());
+            self.indexes.push(LoweredIndex {
+                cell: Arc::clone(index),
+                owner,
+                requested: FastMap::default(),
+                footprint,
+                complete: false,
+                shapes: FastMap::default(),
+            });
+            position
+        };
+        if !definitions {
+            self.footprint
+                .reference(self.indexes[position as usize].footprint, true);
         }
-        // Claim the position BEFORE lowering the shapes inside, so a shape held by
-        // the index that carries a constraint resolving against the same index
-        // finds the entry already made instead of entering it again.
-        let position = self.indexes.len() as u32;
-        self.indexes.push(LoweredIndex {
-            cell: Arc::clone(index),
-            shapes: FastMap::default(),
-        });
-        // An unfilled index resolves nothing: the constraint refuses loudly at
-        // evaluation rather than silently conforming, so there is no shape here
-        // whose classes could go unplanned.
-        if let Some(shapes) = index.get() {
-            // The index is entered once, from wherever the walk first reached it,
-            // but the shapes inside are resolved PER VALUE NODE against data — so
-            // the node their reads start from is not the node this walk happens to
-            // be standing on. Walking them unrooted makes the footprint say so
-            // instead of describing them from an arbitrary chain, and keeps the
-            // derivation independent of arrival order.
-            let saved = self.footprint.enter_unrooted();
-            let lowered: FastMap<Term, LoweredShape> = shapes
-                .iter()
-                .map(|(id, shape)| (id.clone(), lower_shape(shape, self)))
-                .collect();
-            self.footprint.leave(saved);
-            self.indexes[position as usize].shapes = lowered;
+        if !definitions && !self.indexes[position as usize].complete {
+            self.indexes[position as usize].complete = true;
+            let shapes = index.get().ok_or(PreparationRefusal::UnboundReference)?;
+            for target in shapes.keys() {
+                let member = self.request_definition(position, target, false)?;
+                let catalog = self.indexes[position as usize].footprint;
+                self.definition_footprints[catalog].catalog_member(member);
+            }
         }
-        position
+        Ok(position)
+    }
+
+    fn request_definition(
+        &mut self,
+        catalog: u32,
+        target: &Term,
+        property: bool,
+    ) -> LoweringResult<usize> {
+        let index = &mut self.indexes[catalog as usize];
+        let definition = index
+            .cell
+            .get()
+            .ok_or(PreparationRefusal::UnboundReference)?
+            .get(target)
+            .ok_or_else(|| PreparationRefusal::UnknownReference(Arc::new(target.clone())))?;
+        if property && definition.as_property().is_none() {
+            return Err(PreparationRefusal::ExpectedProperty(Arc::new(
+                target.clone(),
+            )));
+        }
+        let address = std::ptr::from_ref(definition).addr();
+        if let Some(&footprint) = index.requested.get(&address) {
+            return Ok(footprint);
+        }
+        let footprint = self.definition_footprints.len();
+        self.definition_footprints.push(FootprintWalk::definition());
+        index.requested.insert(address, footprint);
+        self.pending_definitions.push((catalog, target.clone()));
+        Ok(footprint)
+    }
+
+    fn lower_pending_definitions(&mut self) -> LoweringResult<()> {
+        while let Some((catalog, target)) = self.pending_definitions.pop() {
+            let owner = Arc::clone(&self.indexes[catalog as usize].owner);
+            let definition = owner.definition_required(&target)?;
+            let previous_owner = self.owner.replace(Arc::clone(&owner));
+            let previous_catalog = self.current_catalog.replace(catalog);
+            let footprint =
+                self.indexes[catalog as usize].requested[&std::ptr::from_ref(definition).addr()];
+            let relative = std::mem::take(&mut self.definition_footprints[footprint]);
+            let previous = std::mem::replace(&mut self.footprint, relative);
+            let lowered = lower_shape(definition, self)?;
+            self.definition_footprints[footprint] =
+                std::mem::replace(&mut self.footprint, previous);
+            self.current_catalog = previous_catalog;
+            self.owner = previous_owner;
+            self.indexes[catalog as usize]
+                .shapes
+                .insert(target, lowered);
+        }
+        Ok(())
     }
 }
 
@@ -2470,50 +2776,68 @@ impl ShapeWalk {
 /// This is the single derivation that used to be a class scan and a per-focus-node
 /// re-resolution. Both answers come out of the same visit to each node, so a class
 /// IRI is reached once and a constraint constant is recorded once.
-pub(crate) fn lower_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> LoweredShapes {
-    let mut walk = ShapeWalk::default();
-    let lowered: Vec<LoweredShape> = shapes
-        .into_iter()
-        .enumerate()
-        .map(|(position, shape)| {
-            walk.footprint.enter_root(position);
-            // Recorded for every top-level shape, deactivated or not, exactly as
-            // its declared targets are: the walk describes the shapes graph, and
-            // validation decides which shapes run.
-            walk.footprint.record_declared_targets();
-            lower_shape(shape, &mut walk)
-        })
-        .collect();
-    walk.finish(lowered)
+pub(crate) fn lower_shapes<'a>(
+    shapes: impl IntoIterator<Item = &'a Shape>,
+) -> LoweringResult<LoweredShapes> {
+    lower_shapes_in_model(shapes, None)
 }
 
-/// THE STANDALONE WALK: lower ONE node expression that has no place in a shapes
-/// graph, for the evaluation-time expressions that cannot have been lowered before
-/// they existed.
-///
-/// Two expressions are genuinely of that kind, and both are dynamic by
-/// construction rather than by omission: a `shnex:arg` argument, which travels in
-/// the evaluation SCOPE (a frozen public type that carries an argument's
-/// DECLARATION and not its lowering), and the synthetic call a SPARQL-invoked
-/// custom function is built from at query-evaluation time out of values the engine
-/// has just computed. Lowering them where they are built is the only placement
-/// there is.
-pub(crate) fn lower_standalone_expression(expr: &NodeExpr) -> StandaloneLowering {
-    let mut walk = ShapeWalk::default();
-    let lowered = lower_expression(expr, &mut walk);
-    StandaloneLowering {
-        graph: walk.finish(Vec::new()),
-        expr: lowered,
-        root: standalone_root(),
-        root_lowered: LoweredShape {
-            deactivated_when: Box::new([]),
-            annotation_deactivations: Box::new([]),
-            deactivates: false,
-            reaches_opaque: false,
-            constraints: Box::new([]),
-            properties: Box::new([]),
-        },
-    }
+/// Lower borrowed roots in the original domain held by their calling driver.
+pub(crate) fn lower_shapes_in_model<'a>(
+    shapes: impl IntoIterator<Item = &'a Shape>,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
+) -> LoweringResult<LoweredShapes> {
+    scoped_lowering(|| {
+        let mut walk = ShapeWalk {
+            owner: model.cloned(),
+            ..ShapeWalk::default()
+        };
+        let lowered: Vec<LoweredShape> = shapes
+            .into_iter()
+            .enumerate()
+            .map(|(position, shape)| {
+                walk.footprint.enter_root(position);
+                walk.root_targets = true;
+                // Recorded for every top-level shape, deactivated or not, exactly as
+                // its declared targets are: the walk describes the shapes graph, and
+                // validation decides which shapes run.
+                walk.footprint.record_declared_targets();
+                lower_shape(shape, &mut walk)
+            })
+            .collect::<LoweringResult<_>>()?;
+        walk.finish(lowered)
+    })
+}
+
+/// Lower one expression for a caller holding its original model without a shared
+/// preparation. Authored argument expressions use this entry when read. The
+/// direct SPARQL value boundary lowers its declared body here and borrows the
+/// already evaluated arguments separately.
+pub(crate) fn lower_standalone_expression(
+    expr: &NodeExpr,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
+) -> LoweringResult<StandaloneLowering> {
+    scoped_lowering(|| {
+        let mut walk = ShapeWalk::default();
+        let (expr, owner) = expr.in_model();
+        walk.owner = owner.or(model).cloned();
+        let lowered = lower_expression(expr, &mut walk)?;
+        let mut root = standalone_root();
+        root.owner.clone_from(&walk.owner);
+        Ok(StandaloneLowering {
+            graph: walk.finish(Vec::new())?,
+            expr: lowered,
+            root,
+            root_lowered: LoweredShape {
+                deactivated_when: Box::new([]),
+                annotation_deactivations: Box::new([]),
+                deactivates: false,
+                reaches_opaque: false,
+                constraints: Box::new([]),
+                properties: Box::new([]),
+            },
+        })
+    })
 }
 
 /// The lowering of one standalone node expression, with the values a
@@ -2550,6 +2874,7 @@ impl StandaloneLowering {
     #[inline]
     pub(crate) fn plan<'a>(&'a self, binding: &'a DatasetBinding) -> ShapePlan<'a> {
         ShapePlan {
+            owner: self.root.owner.as_ref(),
             shape: &self.root,
             lowered: &self.root_lowered,
             graph: &self.graph,
@@ -2568,13 +2893,15 @@ impl StandaloneLowering {
 /// evaluate against and one is made here. Every predicate step gets a slot exactly
 /// as it would inside a shapes graph, so the caller runs the SAME evaluator the
 /// validation hot path runs rather than a second traversal that could drift from it.
-pub(crate) fn lower_standalone_path(path: &Path) -> StandalonePath {
-    let mut walk = ShapeWalk::default();
-    let lowered = lower_path(path, &mut walk);
-    StandalonePath {
-        graph: walk.finish(Vec::new()),
-        path: lowered,
-    }
+pub(crate) fn lower_standalone_path(path: &Path) -> LoweringResult<StandalonePath> {
+    scoped_lowering(|| {
+        let mut walk = ShapeWalk::default();
+        let lowered = lower_path(path, &mut walk)?;
+        Ok(StandalonePath {
+            graph: walk.finish(Vec::new())?,
+            path: lowered,
+        })
+    })
 }
 
 /// The lowering of one standalone property path, with the slot row it indexes.
@@ -2605,6 +2932,7 @@ impl StandalonePath {
 /// [`StandaloneLowering::root`].
 fn standalone_root() -> Shape {
     Shape {
+        owner: None,
         id: Term::BlankNode("standalone-node-expression".to_owned()),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -2621,45 +2949,52 @@ fn standalone_root() -> Shape {
 
 /// Lower one shape: its targets' classes, its own constraints and its property
 /// shapes.
-fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
+fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredShape> {
+    admit_lowering()?;
     let deactivations = walk.deactivations;
     let opaque_references = walk.opaque_references;
+    let previous_owner = walk.owner.clone();
+    if let Some(owner) = &shape.owner {
+        walk.owner = Some(Arc::clone(owner));
+    }
+    let previous_catalog = walk.current_catalog;
+    if let Some(owner) = &shape.owner {
+        walk.current_catalog = Some(walk.index_position(&owner.index, true)?);
+    }
     let scope = walk.footprint.enter_shape();
-    for target in &shape.targets {
-        walk.footprint.record_target(target);
-        match target {
-            Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
-                walk.classes.insert(class.clone());
+    if std::mem::take(&mut walk.root_targets) {
+        for target in &shape.targets {
+            walk.footprint.record_target(target);
+            match target {
+                Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
+                    walk.classes.insert(class.clone());
+                }
+                Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. }
+                | Target::Where(_)
+                | Target::NodeExpression(_) => {}
             }
-            // A where target and a node-expression target are evaluated with a
-            // lowering of their own (see `crate::target_eval`), once per
-            // validation, so what they name is planned there rather than here.
-            Target::SubjectsOf(_)
-            | Target::ObjectsOf(_)
-            | Target::Node(_)
-            | Target::ImplicitClass(_)
-            | Target::Sparql { .. }
-            | Target::Where(_)
-            | Target::NodeExpression(_) => {}
         }
     }
-    // `sh:deactivated` is evaluated at the focus node the shape is validated at, so
-    // its reads are recorded from the node the walk stands on, before the constraints.
-    let deactivated_when = lower_expressions(&shape.deactivated_when, walk);
+    // Deactivation expressions read from the shape's own focus node.
+    let deactivated_when = lower_expressions(&shape.deactivated_when, walk)?;
     let annotation_deactivations =
-        lower_annotation_deactivations(&shape.constraint_annotations, walk);
+        lower_annotation_deactivations(&shape.constraint_annotations, walk)?;
     walk.deactivations += shape.deactivated_when.len()
         + shape
             .constraint_annotations
             .iter()
             .map(|annotation| annotation.deactivated_when.len())
             .sum::<usize>();
-    let constraints = lower_constraints(&shape.constraints, &shape.property_shapes, walk);
+    let constraints = lower_constraints(&shape.constraints, &shape.property_shapes, walk)?;
     let properties = shape
         .property_shapes
         .iter()
         .map(|property| lower_property(property, walk))
-        .collect();
+        .collect::<LoweringResult<_>>()?;
     let lowered = LoweredShape {
         deactivated_when,
         annotation_deactivations,
@@ -2669,17 +3004,20 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
         properties,
     };
     walk.footprint.leave(scope);
-    lowered
-    // `shape.rules` is deliberately NOT descended into. A rule's own shapes are
-    // planned by the rules engine, against a plan it builds for the rule's shape
-    // and conditions together, so reaching them from here would put classes into
-    // the catalog a prepared product's identity does not describe.
+    // Rules have their own shape/condition plans and stay outside this walk.
+    walk.current_catalog = previous_catalog;
+    walk.owner = previous_owner;
+    Ok(lowered)
 }
 
 /// Lower one property shape: its path, its constraints, its nested property shapes
 /// and its reifier shapes.
-fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProperty {
-    let path = lower_path(&property.path, walk);
+fn lower_property(
+    property: &PropertyShape,
+    walk: &mut ShapeWalk,
+) -> LoweringResult<LoweredProperty> {
+    admit_lowering()?;
+    let path = lower_path(&property.path, walk)?;
     // `sh:values` and `sh:defaultValue` are evaluated at the FOCUS node — "the
     // output nodes of evalExpr(e, data graph, focus node, {})" — so they are
     // lowered here, before the walk moves to the value nodes, and their reads are
@@ -2687,15 +3025,17 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
     let values = property
         .values
         .as_ref()
-        .map(|expr| lower_expression(expr, walk));
+        .map(|expr| lower_expression(expr, walk))
+        .transpose()?;
     let default_value = property
         .default_value
         .as_ref()
-        .map(|expr| lower_expression(expr, walk));
-    // `sh:deactivated` is evaluated at the same focus node.
-    let deactivated_when = lower_expressions(&property.deactivated_when, walk);
+        .map(|expr| lower_expression(expr, walk))
+        .transpose()?;
+    // Property deactivation also evaluates at its declaring focus node.
+    let deactivated_when = lower_expressions(&property.deactivated_when, walk)?;
     let annotation_deactivations =
-        lower_annotation_deactivations(&property.constraint_annotations, walk);
+        lower_annotation_deactivations(&property.constraint_annotations, walk)?;
     walk.deactivations += property.deactivated_when.len()
         + property
             .constraint_annotations
@@ -2713,12 +3053,12 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
     // them actually reads a triple at a value node.
     let computed =
         (values.is_some() || default_value.is_some()).then(|| walk.footprint.enter_unrooted());
-    let constraints = lower_constraints(&property.constraints, &property.property_shapes, walk);
+    let constraints = lower_constraints(&property.constraints, &property.property_shapes, walk)?;
     let properties: Box<[LoweredProperty]> = property
         .property_shapes
         .iter()
         .map(|nested| lower_property(nested, walk))
-        .collect();
+        .collect::<LoweringResult<_>>()?;
     // Finding the reifiers of `<<( focus path value )>>` is itself a read, and it is
     // the read both `sh:reifierShape` and `sh:reificationRequired` start from — the
     // same pair the evaluator gates its whole reification arm on. It is recorded
@@ -2738,13 +3078,13 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         .reifier_shapes
         .iter()
         .map(|reifier| lower_shape(reifier, walk))
-        .collect();
+        .collect::<LoweringResult<_>>()?;
     walk.footprint.leave(reified);
     if let Some(computed) = computed {
         walk.footprint.leave(computed);
     }
     walk.footprint.leave(scope);
-    LoweredProperty {
+    Ok(LoweredProperty {
         path,
         values,
         default_value,
@@ -2753,11 +3093,14 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         constraints,
         properties,
         reifiers,
-    }
+    })
 }
 
 /// Lower each of `exprs`, in order.
-fn lower_expressions(exprs: &[NodeExpr], walk: &mut ShapeWalk) -> Box<[LoweredExpr]> {
+fn lower_expressions(
+    exprs: &[NodeExpr],
+    walk: &mut ShapeWalk,
+) -> LoweringResult<Box<[LoweredExpr]>> {
     exprs
         .iter()
         .map(|expr| lower_expression(expr, walk))
@@ -2769,7 +3112,7 @@ fn lower_expressions(exprs: &[NodeExpr], walk: &mut ShapeWalk) -> Box<[LoweredEx
 fn lower_annotation_deactivations(
     annotations: &[ConstraintAnnotation],
     walk: &mut ShapeWalk,
-) -> Box<[Box<[LoweredExpr]>]> {
+) -> LoweringResult<Box<[Box<[LoweredExpr]>]>> {
     annotations
         .iter()
         .map(|annotation| lower_expressions(&annotation.deactivated_when, walk))
@@ -2777,8 +3120,9 @@ fn lower_annotation_deactivations(
 }
 
 /// Lower one SHACL property path, resolving every predicate step to a slot.
-fn lower_path(path: &Path, walk: &mut ShapeWalk) -> LoweredPath {
-    match path {
+fn lower_path(path: &Path, walk: &mut ShapeWalk) -> LoweringResult<LoweredPath> {
+    admit_lowering()?;
+    Ok(match path {
         Path::Predicate(predicate) => {
             LoweredPath::Predicate(walk.slot(Term::NamedNode(predicate.clone())))
         }
@@ -2794,18 +3138,48 @@ fn lower_path(path: &Path, walk: &mut ShapeWalk) -> LoweredPath {
             composite => LoweredPath::InvertedComposite(Box::new(lower_path(
                 &crate::path::invert(composite),
                 walk,
-            ))),
+            )?)),
         },
-        Path::Sequence(parts) => {
-            LoweredPath::Sequence(parts.iter().map(|part| lower_path(part, walk)).collect())
-        }
-        Path::Alternative(parts) => {
-            LoweredPath::Alternative(parts.iter().map(|part| lower_path(part, walk)).collect())
-        }
-        Path::ZeroOrMore(inner) => LoweredPath::ZeroOrMore(Box::new(lower_path(inner, walk))),
-        Path::OneOrMore(inner) => LoweredPath::OneOrMore(Box::new(lower_path(inner, walk))),
-        Path::ZeroOrOne(inner) => LoweredPath::ZeroOrOne(Box::new(lower_path(inner, walk))),
-    }
+        Path::Sequence(parts) => LoweredPath::Sequence(
+            parts
+                .iter()
+                .map(|part| lower_path(part, walk))
+                .collect::<LoweringResult<_>>()?,
+        ),
+        Path::Alternative(parts) => LoweredPath::Alternative(
+            parts
+                .iter()
+                .map(|part| lower_path(part, walk))
+                .collect::<LoweringResult<_>>()?,
+        ),
+        Path::ZeroOrMore(inner) => LoweredPath::ZeroOrMore(Box::new(lower_path(inner, walk)?)),
+        Path::OneOrMore(inner) => LoweredPath::OneOrMore(Box::new(lower_path(inner, walk)?)),
+        Path::ZeroOrOne(inner) => LoweredPath::ZeroOrOne(Box::new(lower_path(inner, walk)?)),
+    })
+}
+
+fn lower_reference(target: &Term, property: bool, walk: &mut ShapeWalk) -> LoweringResult<u32> {
+    let catalog = if let Some(position) = walk.current_catalog
+        && walk
+            .owner
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, &walk.indexes[position as usize].owner))
+    {
+        position
+    } else {
+        let index = walk
+            .owner
+            .as_ref()
+            .map(|owner| Arc::clone(&owner.index))
+            .ok_or(PreparationRefusal::UnboundReference)?;
+        walk.index_position(&index, true)?
+    };
+    let footprint = walk.request_definition(catalog, target, property)?;
+    walk.footprint.reference(footprint, false);
+    // Its body is shared rather than inline. Until that closure is lowered,
+    // preserve the existing exhaustive-deactivation guard for indirect reads.
+    walk.opaque_references += 1;
+    Ok(catalog)
 }
 
 /// Lower a constraint list, in declaration order.
@@ -2818,10 +3192,10 @@ fn lower_constraints(
     constraints: &[Constraint],
     siblings: &[PropertyShape],
     walk: &mut ShapeWalk,
-) -> Box<[LoweredConstraint]> {
+) -> LoweringResult<Box<[LoweredConstraint]>> {
     constraints
         .iter()
-        .map(|constraint| lower_constraint(constraint, siblings, walk))
+        .map(|constraint| lower_constraint(constraint, constraints, siblings, walk))
         .collect()
 }
 
@@ -2834,14 +3208,32 @@ fn lower_constraints(
 /// constraining, with every existing test still green.
 fn lower_constraint(
     constraint: &Constraint,
+    declaring_constraints: &[Constraint],
     siblings: &[PropertyShape],
     walk: &mut ShapeWalk,
-) -> LoweredConstraint {
+) -> LoweringResult<LoweredConstraint> {
+    admit_lowering()?;
     // The footprint's own visit of this constraint, at the node the walk is
     // standing on. It records only what the constraint reads DIRECTLY; everything
     // it reaches is reached again below, by this same walk.
     walk.footprint.record_constraint(constraint);
-    match constraint {
+    Ok(match constraint {
+        Constraint::Reference(target) => LoweredConstraint::Reference {
+            catalog: lower_reference(target, false, walk)?,
+        },
+        Constraint::PropertyReference(edge) => {
+            let catalog = lower_reference(&edge.target, true, walk)?;
+            let deactivated_when = edge
+                .deactivated_when
+                .iter()
+                .map(|expression| lower_expression(expression, walk))
+                .collect::<LoweringResult<_>>()?;
+            walk.deactivations += edge.deactivated_when.len();
+            LoweredConstraint::PropertyReference {
+                catalog,
+                deactivated_when,
+            }
+        }
         Constraint::Class(classes) => LoweredConstraint::Class(walk.class_slots(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
         Constraint::NodeKind(_) => LoweredConstraint::NodeKind,
@@ -2854,7 +3246,7 @@ fn lower_constraint(
         Constraint::MaxLength(_) => LoweredConstraint::MaxLength,
         Constraint::UniqueLang(_) => LoweredConstraint::UniqueLang,
         Constraint::LanguageIn(_) => LoweredConstraint::LanguageIn,
-        Constraint::Not(shape) => LoweredConstraint::Not(Box::new(lower_shape(shape, walk))),
+        Constraint::Not(shape) => LoweredConstraint::Not(Box::new(lower_shape(shape, walk)?)),
         // The permitted-predicate set, unioned once here rather than rebuilt per
         // focus node. The membership rule is the evaluator's, restated nowhere: an
         // INVERSE path constrains incoming triples and therefore permits no
@@ -2864,27 +3256,44 @@ fn lower_constraint(
         Constraint::Closed {
             ignored,
             mode: ClosedMode::Declared,
-        } => LoweredConstraint::Closed {
-            permitted: walk.set_slot(
-                siblings
-                    .iter()
-                    .filter_map(|sibling| match &sibling.path {
-                        Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
-                        Path::Inverse(_)
-                        | Path::Sequence(_)
-                        | Path::Alternative(_)
-                        | Path::ZeroOrMore(_)
-                        | Path::OneOrMore(_)
-                        | Path::ZeroOrOne(_) => None,
-                    })
-                    .chain(
-                        ignored
-                            .iter()
-                            .map(|predicate| Term::NamedNode(predicate.clone())),
-                    ),
-            ),
-            by_types: None,
-        },
+        } => {
+            let domain = walk
+                .current_catalog
+                .map(|position| Arc::clone(&walk.indexes[position as usize].cell))
+                .or_else(|| walk.owner.as_ref().map(|owner| Arc::clone(&owner.index)));
+            let referenced = declaring_constraints.iter().filter_map(|constraint| {
+                let Constraint::PropertyReference(edge) = constraint else {
+                    return None;
+                };
+                let definition = domain.as_ref()?.get()?.get(&edge.target)?;
+                match &definition.property_shapes.first()?.path {
+                    Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
+                    _ => None,
+                }
+            });
+            LoweredConstraint::Closed {
+                permitted: walk.set_slot(
+                    siblings
+                        .iter()
+                        .filter_map(|sibling| match &sibling.path {
+                            Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
+                            Path::Inverse(_)
+                            | Path::Sequence(_)
+                            | Path::Alternative(_)
+                            | Path::ZeroOrMore(_)
+                            | Path::OneOrMore(_)
+                            | Path::ZeroOrOne(_) => None,
+                        })
+                        .chain(referenced)
+                        .chain(
+                            ignored
+                                .iter()
+                                .map(|predicate| Term::NamedNode(predicate.clone())),
+                        ),
+                ),
+                by_types: None,
+            }
+        }
         // SHACL 1.2 Core §7.9.1: under `sh:ByTypes`, "P is the set of IRI
         // properties that can be reached from the value node via the following
         // algorithm, plus rdf:type" — and the shape's OWN `sh:property` paths are
@@ -2922,28 +3331,28 @@ fn lower_constraint(
         Constraint::MaxExclusive(bound) => {
             LoweredConstraint::MaxExclusive(crate::constraints::numeric_value(bound))
         }
-        Constraint::And(shapes) => LoweredConstraint::And(lower_shape_list(shapes, walk)),
-        Constraint::Or(shapes) => LoweredConstraint::Or(lower_shape_list(shapes, walk)),
-        Constraint::Xone(shapes) => LoweredConstraint::Xone(lower_shape_list(shapes, walk)),
-        Constraint::Node(shape) => LoweredConstraint::Node(Box::new(lower_shape(shape, walk))),
+        Constraint::And(shapes) => LoweredConstraint::And(lower_shape_list(shapes, walk)?),
+        Constraint::Or(shapes) => LoweredConstraint::Or(lower_shape_list(shapes, walk)?),
+        Constraint::Xone(shapes) => LoweredConstraint::Xone(lower_shape_list(shapes, walk)?),
+        Constraint::Node(shape) => LoweredConstraint::Node(Box::new(lower_shape(shape, walk)?)),
         Constraint::Sparql { .. } => LoweredConstraint::Sparql,
         // An IRI value lowers to `LoweredPath::Predicate` over one slot for the
         // IRI — the one slot these constraints always took.
-        Constraint::Equals(path) => LoweredConstraint::Equals(lower_path(path, walk)),
-        Constraint::Disjoint(path) => LoweredConstraint::Disjoint(lower_path(path, walk)),
-        Constraint::SubsetOf(path) => LoweredConstraint::SubsetOf(lower_path(path, walk)),
-        Constraint::LessThan(path) => LoweredConstraint::LessThan(lower_path(path, walk)),
+        Constraint::Equals(path) => LoweredConstraint::Equals(lower_path(path, walk)?),
+        Constraint::Disjoint(path) => LoweredConstraint::Disjoint(lower_path(path, walk)?),
+        Constraint::SubsetOf(path) => LoweredConstraint::SubsetOf(lower_path(path, walk)?),
+        Constraint::LessThan(path) => LoweredConstraint::LessThan(lower_path(path, walk)?),
         Constraint::LessThanOrEquals(path) => {
-            LoweredConstraint::LessThanOrEquals(lower_path(path, walk))
+            LoweredConstraint::LessThanOrEquals(lower_path(path, walk)?)
         }
         Constraint::QualifiedValueShape {
             shape, siblings, ..
         } => LoweredConstraint::QualifiedValueShape {
-            shape: Box::new(lower_shape(shape, walk)),
-            siblings: lower_shape_list(siblings, walk),
+            shape: Box::new(lower_shape(shape, walk)?),
+            siblings: lower_shape_list(siblings, walk)?,
         },
         Constraint::Expression { expr, .. } => {
-            LoweredConstraint::Expression(Box::new(lower_expression(expr, walk)))
+            LoweredConstraint::Expression(Box::new(lower_expression(expr, walk)?))
         }
         // `sh:nodeByExpression` (Node Expressions §7.2) judges each value node
         // against shapes the expression NAMES BY IRI, resolved per value node
@@ -2953,10 +3362,10 @@ fn lower_constraint(
         // `conforms` and `conforms_with_depth` build — would leave the resolved
         // shape unlowered.
         Constraint::NodeByExpression { expr, shapes, .. } => {
-            let expr = Box::new(lower_expression(expr, walk));
+            let expr = Box::new(lower_expression(expr, walk)?);
             LoweredConstraint::NodeByExpression {
                 expr,
-                index: walk.index_position(shapes),
+                index: walk.reference_index(shapes)?,
             }
         }
         Constraint::MinListLength(_) => LoweredConstraint::MinListLength,
@@ -2968,7 +3377,7 @@ fn lower_constraint(
             let saved = walk
                 .footprint
                 .enter_values(&crate::footprint::list_member_path());
-            let lowered = lower_shape(shape, walk);
+            let lowered = lower_shape(shape, walk)?;
             walk.footprint.leave(saved);
             LoweredConstraint::MemberShape(Box::new(lowered))
         }
@@ -2981,7 +3390,7 @@ fn lower_constraint(
         ),
         // The shape judges each value node itself, as `sh:node`'s does.
         Constraint::SomeValue(shape) => {
-            LoweredConstraint::SomeValue(Box::new(lower_shape(shape, walk)))
+            LoweredConstraint::SomeValue(Box::new(lower_shape(shape, walk)?))
         }
         // The grouping is built from the declaring shape's OWN target
         // declarations, so their classes are planned exactly as a top-level
@@ -3003,6 +3412,7 @@ fn lower_constraint(
                 .collect();
             let slot = walk.unique_values.len();
             walk.unique_values.push(UniqueSpec {
+                owner: walk.owner.clone(),
                 shape: shape.clone(),
                 targets: targets.clone().into_boxed_slice(),
                 properties,
@@ -3010,7 +3420,7 @@ fn lower_constraint(
             LoweredConstraint::UniqueValuesFor(slot as UniqueSlot)
         }
         Constraint::Component { .. } => LoweredConstraint::Component,
-    }
+    })
 }
 
 /// Lower a shape that judges the nodes `nodes` produces.
@@ -3018,7 +3428,11 @@ fn lower_constraint(
 /// Identical to [`lower_shape`] except in what the FOOTPRINT records: the shape's
 /// reads start at the judged nodes, which are the node the walk stands on only when
 /// `nodes` is `shnex:this`.
-fn lower_shape_at_nodes(shape: &Shape, nodes: &NodeExpr, walk: &mut ShapeWalk) -> LoweredShape {
+fn lower_shape_at_nodes(
+    shape: &Shape,
+    nodes: &NodeExpr,
+    walk: &mut ShapeWalk,
+) -> LoweringResult<LoweredShape> {
     if applies_to_current_node(nodes) {
         return lower_shape(shape, walk);
     }
@@ -3027,7 +3441,7 @@ fn lower_shape_at_nodes(shape: &Shape, nodes: &NodeExpr, walk: &mut ShapeWalk) -
 
 /// Lower a shape whose focus node the footprint cannot reach from a focus node by
 /// any path.
-fn lower_shape_unrooted(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
+fn lower_shape_unrooted(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredShape> {
     let scope = walk.footprint.enter_unrooted();
     let lowered = lower_shape(shape, walk);
     walk.footprint.leave(scope);
@@ -3040,7 +3454,7 @@ fn lower_expression_at_nodes(
     expr: &NodeExpr,
     nodes: &NodeExpr,
     walk: &mut ShapeWalk,
-) -> LoweredExpr {
+) -> LoweringResult<LoweredExpr> {
     if applies_to_current_node(nodes) {
         return lower_expression(expr, walk);
     }
@@ -3051,7 +3465,7 @@ fn lower_expression_at_nodes(
 }
 
 /// Lower a list of shapes reached through one constraint, in declaration order.
-fn lower_shape_list(shapes: &[Shape], walk: &mut ShapeWalk) -> Box<[LoweredShape]> {
+fn lower_shape_list(shapes: &[Shape], walk: &mut ShapeWalk) -> LoweringResult<Box<[LoweredShape]>> {
     shapes
         .iter()
         .map(|shape| lower_shape(shape, walk))
@@ -3065,10 +3479,11 @@ fn lower_shape_list(shapes: &[Shape], walk: &mut ShapeWalk) -> Box<[LoweredShape
 /// other arm exists to reach its operands, and the ones that reach a SHAPE are the
 /// ones that would otherwise leave an `sh:class` inside a `sh:filterShape`
 /// unplanned.
-fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
+fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweringResult<LoweredExpr> {
+    admit_lowering()?;
     // The footprint's own visit, for the same reason [`lower_constraint`] has one.
     walk.footprint.record_expression(expr);
-    match expr {
+    Ok(match expr {
         NodeExpr::Constant(_)
         | NodeExpr::This
         | NodeExpr::Empty
@@ -3083,12 +3498,12 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
         // site, which this walk already visited there.
         | NodeExpr::Arg(_) => LoweredExpr::default(),
         NodeExpr::Path(path) => LoweredExpr {
-            paths: Box::new([lower_path(path, walk)]),
+            paths: Box::new([lower_path(path, walk)?]),
             ..LoweredExpr::default()
         },
         NodeExpr::PathValues { focus, path } => LoweredExpr {
-            paths: Box::new([lower_path(path, walk)]),
-            operands: Box::new([lower_expression(focus, walk)]),
+            paths: Box::new([lower_path(path, walk)?]),
+            operands: Box::new([lower_expression(focus, walk)?]),
             ..LoweredExpr::default()
         },
         // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
@@ -3101,7 +3516,7 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 NodeExpr::Constant(Term::NamedNode(class)) => Some(walk.class_slot(class)),
                 _ => None,
             },
-            operands: Box::new([lower_expression(types, walk)]),
+            operands: Box::new([lower_expression(types, walk)?]),
             ..LoweredExpr::default()
         },
         NodeExpr::Filter { nodes, shape }
@@ -3110,27 +3525,27 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
             // The shape judges the nodes `nodes` produces, so its reads start
             // there — at the current node when `nodes` is `shnex:this`, and at a
             // node the footprint cannot name otherwise.
-            shapes: Box::new([lower_shape_at_nodes(shape, nodes, walk)]),
-            operands: Box::new([lower_expression(nodes, walk)]),
+            shapes: Box::new([lower_shape_at_nodes(shape, nodes, walk)?]),
+            operands: Box::new([lower_expression(nodes, walk)?]),
             ..LoweredExpr::default()
         },
         NodeExpr::NodesMatching(shape) => LoweredExpr {
             // Graph-wide: the shape is matched against every node in the data, so
             // no chain from a focus node describes where it reads.
-            shapes: Box::new([lower_shape_unrooted(shape, walk)]),
+            shapes: Box::new([lower_shape_unrooted(shape, walk)?]),
             ..LoweredExpr::default()
         },
         NodeExpr::ConformsToShape {
             node: node_expr,
             shape,
         } => {
-            let node = lower_expression(node_expr, walk);
+            let node = lower_expression(node_expr, walk)?;
             match shape {
                 // A NAMED shape argument is only reachable through this
                 // expression, so what its constraints mention has to be lowered
                 // here or it would go unresolved in the plan.
                 ShapeArg::Named(shape) => LoweredExpr {
-                    shapes: Box::new([lower_shape_at_nodes(shape, node_expr, walk)]),
+                    shapes: Box::new([lower_shape_at_nodes(shape, node_expr, walk)?]),
                     operands: Box::new([node]),
                     ..LoweredExpr::default()
                 },
@@ -3142,9 +3557,9 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 // ones that would come up short. The expression computing the IRI
                 // is lowered for the same reason every other operand is.
                 ShapeArg::Computed { expr, shapes } => {
-                    let expr = lower_expression(expr, walk);
+                    let expr = lower_expression(expr, walk)?;
                     LoweredExpr {
-                        index: Some(walk.index_position(shapes)),
+                        index: Some(walk.reference_index(shapes)?),
                         operands: Box::new([node, expr]),
                         ..LoweredExpr::default()
                     }
@@ -3152,15 +3567,15 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
             }
         }
         NodeExpr::Remove { nodes, remove } => LoweredExpr {
-            operands: Box::new([lower_expression(nodes, walk), lower_expression(remove, walk)]),
+            operands: Box::new([lower_expression(nodes, walk)?, lower_expression(remove, walk)?]),
             ..LoweredExpr::default()
         },
         NodeExpr::FlatMap { nodes, map } => LoweredExpr {
             // `map` is re-evaluated with each node `nodes` produced as its focus,
             // so its reads start there rather than here.
             operands: Box::new([
-                lower_expression(nodes, walk),
-                lower_expression_at_nodes(map, nodes, walk),
+                lower_expression(nodes, walk)?,
+                lower_expression_at_nodes(map, nodes, walk)?,
             ]),
             ..LoweredExpr::default()
         },
@@ -3169,54 +3584,65 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
         // actually evaluates. The arguments are lowered for the same reason every
         // other operand is.
         NodeExpr::CustomCall { func, args } => {
+            let owner = walk.owner.as_ref()
+                .ok_or_else(|| PreparationRefusal::UnknownFunction(func.clone()))?;
+            let function = owner.function(func)
+                .cloned()
+                .ok_or_else(|| PreparationRefusal::UnknownFunction(func.clone()))?;
+            let key = (Arc::as_ptr(owner).addr(), Arc::as_ptr(&function).addr());
+            let body = function.body.get()
+                .ok_or_else(|| PreparationRefusal::MissingFunctionBody(func.clone()))?;
             let operands: Box<[LoweredExpr]> = args
                 .iter()
                 .map(|(_, arg)| lower_expression(arg, walk))
-                .collect();
-            let iri = func.iri.as_str().to_owned();
-            // The body is lowered once, at the first call site met; every call
-            // site reaches whatever shapes it holds.
+                .collect::<LoweringResult<_>>()?;
+            // A shared function body can reach shapes not lowered at this call site.
             walk.opaque_references += 1;
             // The body is lowered ONCE per function: it is shared by `Arc` and
             // names the same terms at every call site, and it may call this very
             // function, so re-entering it would not terminate. The in-flight list
             // is what stops that re-entry; the map alone could not, because the
             // entry is only made once the body has finished lowering.
-            if !walk.bodies.contains_key(&iri)
-                && !walk.in_flight.contains(&iri)
-                && let Some(body) = func.body.get()
+            if !walk.bodies.contains_key(&key)
+                && !walk.in_flight.contains(&key)
             {
-                walk.in_flight.push(iri.clone());
+                walk.in_flight.push(key);
                 // A body evaluates in its own argument scope, with the function's
                 // IRI as its focus node — not with the focus node of whatever shape
                 // called it. Nothing this walk can name reaches it, so its reads
                 // are recorded unrooted.
                 let scope = walk.footprint.enter_unrooted();
-                let lowered = lower_expression(body, walk);
+                let lowered = lower_expression(body, walk)?;
                 walk.footprint.leave(scope);
                 walk.in_flight.pop();
-                walk.bodies.insert(iri.clone(), lowered);
+                walk.bodies.insert(key, LoweredFunction { declaration: Arc::clone(&function), body: lowered });
             }
             LoweredExpr {
-                body: Some(iri),
+                body: Some(key),
                 operands,
                 ..LoweredExpr::default()
             }
+        }
+        NodeExpr::Owned { expr, owner } => {
+            let previous = walk.owner.replace(Arc::clone(owner));
+            let lowered = lower_expression(expr, walk)?;
+            walk.owner = previous;
+            lowered
         }
         NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             LoweredExpr {
                 operands: items
                     .iter()
                     .map(|item| lower_expression(item, walk))
-                    .collect(),
+                    .collect::<LoweringResult<_>>()?,
                 ..LoweredExpr::default()
             }
         }
         NodeExpr::If { cond, then, els } => LoweredExpr {
             operands: Box::new([
-                lower_expression(cond, walk),
-                lower_expression(then, walk),
-                lower_expression(els, walk),
+                lower_expression(cond, walk)?,
+                lower_expression(then, walk)?,
+                lower_expression(els, walk)?,
             ]),
             ..LoweredExpr::default()
         },
@@ -3228,15 +3654,15 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
         | NodeExpr::Limit { of, .. }
         | NodeExpr::Offset { of, .. }
         | NodeExpr::Exists(of) => LoweredExpr {
-            operands: Box::new([lower_expression(of, walk)]),
+            operands: Box::new([lower_expression(of, walk)?]),
             ..LoweredExpr::default()
         },
         NodeExpr::OrderBy { of, key, .. } => LoweredExpr {
             // The sort key is evaluated once per node `of` produced, with that node
             // as its focus — the same relocation `shnex:flatMap` performs.
             operands: Box::new([
-                lower_expression(of, walk),
-                lower_expression_at_nodes(key, of, walk),
+                lower_expression(of, walk)?,
+                lower_expression_at_nodes(key, of, walk)?,
             ]),
             ..LoweredExpr::default()
         },
@@ -3250,11 +3676,11 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 // The call's query text, rendered here and never again; see
                 // `LoweredExpr::query`.
                 query: Some(crate::expression::scalar_call_query(call).into_boxed_str()),
-                operands: args.iter().map(|arg| lower_expression(arg, walk)).collect(),
+                operands: args.iter().map(|arg| lower_expression(arg, walk)).collect::<LoweringResult<_>>()?,
                 ..LoweredExpr::default()
             }
         }
-    }
+    })
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────────
@@ -3278,6 +3704,55 @@ mod tests {
 @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
 @prefix ex: <http://example.org/ns#> .
 ";
+
+    #[test]
+    fn function_preparation_checks_original_declarations_and_keeps_distinct_domains() {
+        use crate::PreparationRefusal;
+        use crate::expression::{CustomFnKind, CustomFunction};
+        use crate::shapes::ModelOwner;
+        use std::sync::OnceLock;
+
+        let iri = NamedNode::new_unchecked("http://example.org/function");
+        let declaration = |body: Option<NodeExpr>| {
+            Arc::new(CustomFunction {
+                iri: iri.clone(),
+                kind: CustomFnKind::ListParameter,
+                params: Vec::new(),
+                required: 0,
+                body: body.map_or_else(OnceLock::new, OnceLock::from),
+            })
+        };
+        let call = || NodeExpr::CustomCall {
+            func: iri.clone(),
+            args: Vec::new(),
+        };
+        assert!(matches!(
+            lower_standalone_expression(&call(), None),
+            Err(PreparationRefusal::UnknownFunction(found)) if found == iri
+        ));
+        let missing =
+            ModelOwner::from_declarations(Arc::default(), vec![declaration(None)]).unwrap();
+        assert!(matches!(
+            lower_standalone_expression(&call(), Some(&missing)),
+            Err(PreparationRefusal::MissingFunctionBody(found)) if found == iri
+        ));
+        let first = declaration(Some(NodeExpr::This));
+        let second = declaration(Some(NodeExpr::Empty));
+        assert!(matches!(
+            ModelOwner::from_declarations(Arc::default(), vec![Arc::clone(&first), Arc::clone(&second)]),
+            Err(PreparationRefusal::DuplicateFunction(found)) if found == iri
+        ));
+        let domain = |function| NodeExpr::Owned {
+            expr: Box::new(call()),
+            owner: ModelOwner::from_declarations(Arc::default(), vec![function]).unwrap(),
+        };
+        let shared = NodeExpr::Union(vec![domain(Arc::clone(&first)), domain(Arc::clone(&first))]);
+        lower_standalone_expression(&shared, None)
+            .expect("shared declarations keep their original body");
+        let distinct = NodeExpr::Union(vec![domain(first), domain(second)]);
+        lower_standalone_expression(&distinct, None)
+            .expect("separate explicit domains may use the same function IRI");
+    }
 
     /// A shapes graph reaching a class by every route the walk has to cover: a
     /// `sh:targetClass`, an `sh:class` on a property shape, a class inside a
@@ -3330,7 +3805,7 @@ ex:RootShape a sh:NodeShape ;
     #[test]
     fn class_catalog_and_lowered_plan_agree_on_every_class_iri() {
         let shapes = every_route_shapes();
-        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let lowered = lower_shapes(shapes.node_shapes.iter()).unwrap();
 
         // Every route really is exercised, or the agreement below would be an
         // agreement about a much smaller set than the one that matters.
@@ -3439,7 +3914,7 @@ ex:FlagShape a sh:NodeShape ;
         )
         .expect("the fixture parses");
 
-        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let lowered = lower_shapes(shapes.node_shapes.iter()).unwrap();
         let footprint = lowered.footprint();
         assert_eq!(
             footprint.opaque(),
@@ -3472,7 +3947,10 @@ ex:FlagShape a sh:NodeShape ;
         };
         let under_registry = {
             let _scope = crate::sparql::enter_property_function_scope(Arc::new(registry));
-            lower_shapes(shapes.node_shapes.iter()).footprint().opaque()
+            lower_shapes(shapes.node_shapes.iter())
+                .unwrap()
+                .footprint()
+                .opaque()
         };
         assert_eq!(
             under_registry,
@@ -3583,6 +4061,9 @@ ex:FlagShape a sh:NodeShape ;
                     collect_shape_class_slots(lowered, sibling, out);
                 }
             }
+            // Reference catalogs are visited once by collect_class_slots, rather
+            // than recursively following backedges from this constraint.
+            LoweredConstraint::Reference { .. } | LoweredConstraint::PropertyReference { .. } => {}
             // Kinds that name neither a class nor a shape.
             LoweredConstraint::Datatype
             | LoweredConstraint::NodeKind
@@ -3659,10 +4140,13 @@ ex:FlagShape a sh:NodeShape ;
     /// here rather than one of them being a refusal.
     #[test]
     fn a_constant_instances_of_carries_its_class_and_a_computed_one_does_not() {
-        let constant =
-            lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(
-                Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#Selected")),
-            ))));
+        let constant = lower_standalone_expression(
+            &NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(Term::NamedNode(
+                NamedNode::new_unchecked("http://example.org/ns#Selected"),
+            )))),
+            None,
+        )
+        .unwrap();
         let data = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
              <http://example.org/ns#Selected> .",
@@ -3682,9 +4166,11 @@ ex:FlagShape a sh:NodeShape ;
 
         // A computed class operand records no constant slot; the class it will
         // produce is not known until evaluation.
-        let computed = lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(
-            NodeExpr::Var("class".to_owned()),
-        )));
+        let computed = lower_standalone_expression(
+            &NodeExpr::InstancesOf(Box::new(NodeExpr::Var("class".to_owned()))),
+            None,
+        )
+        .unwrap();
         let computed_binding = computed.bind(data.as_ref());
         assert!(
             !computed.expr().has_constant_class(),
@@ -3735,7 +4221,7 @@ ex:Shape a sh:NodeShape ;
             None,
         )
         .expect("the fixture shapes parse");
-        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let lowered = lower_shapes(shapes.node_shapes.iter()).unwrap();
         let data = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://example.org/ns#p> <http://example.org/ns#x> .",
             None,
@@ -3754,13 +4240,15 @@ ex:Shape a sh:NodeShape ;
             .expect("the fixture shape has a lowering");
 
         // The honest pairing resolves.
-        let property = &shapes.node_shapes[0].property_shapes[0];
-        let (constraint, lowering) = plan
-            .properties()
-            .expect("the shape's property shapes pair with their lowerings")
+        let (property, property_plan) = plan
+            .definition()
+            .unwrap()
+            .referenced_properties()
+            .expect("the original shape's property references pair with their lowerings")
             .next()
             .expect("the fixture declares one property shape")
-            .1
+            .unwrap();
+        let (constraint, lowering) = property_plan
             .constraints(property)
             .expect("the property shape's constraints pair with their lowerings")
             .next()
@@ -3769,6 +4257,7 @@ ex:Shape a sh:NodeShape ;
             matches!(constraint, Constraint::In(_)),
             "the fixture's one constraint is an sh:in"
         );
+        let plan = property_plan.parent();
         plan.planned(constraint, lowering)
             .expect("an sh:in beside its own lowering resolves");
 
@@ -3795,7 +4284,7 @@ ex:Shape a sh:NodeShape ;
     #[test]
     fn the_decoder_accepts_the_walks_own_catalog() {
         let shapes = every_route_shapes();
-        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let lowered = lower_shapes(shapes.node_shapes.iter()).unwrap();
         let entries: Vec<(NamedNode, usize)> = lowered
             .classes()
             .entries()
@@ -3812,7 +4301,7 @@ ex:Shape a sh:NodeShape ;
     #[test]
     fn a_shape_past_the_lowering_is_refused_loudly() {
         let shapes = every_route_shapes();
-        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let lowered = lower_shapes(shapes.node_shapes.iter()).unwrap();
         let data = crate::text_ingest::parse_turtle_to_dataset("", None)
             .expect("an empty data graph parses");
         let binding = lowered.bind(data.as_ref(), lowered.classes());
@@ -3852,7 +4341,7 @@ ex:Inner a sh:NodeShape ;
             None,
         )
         .expect("the fixture shapes parse");
-        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let lowered = lower_shapes(shapes.node_shapes.iter()).unwrap();
         assert_eq!(
             lowered.indexes.len(),
             1,
@@ -3925,6 +4414,8 @@ ex:Inner a sh:NodeShape ;
     }
 
     planned_constraint_kind_names! {
+        PlannedConstraint::Reference(_) => "reference",
+        PlannedConstraint::PropertyReference { .. } => "property_reference",
         PlannedConstraint::Class(_) => "class",
         PlannedConstraint::Datatype(_) => "datatype",
         PlannedConstraint::NodeKind(_) => "node_kind",
@@ -4008,7 +4499,9 @@ ex:Inner a sh:NodeShape ;
         "not",
         "or",
         "pattern",
+        "property_reference",
         "qualified_value_shape",
+        "reference",
         "root_class",
         "single_line",
         "some_value",

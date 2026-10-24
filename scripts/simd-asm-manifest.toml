@@ -3340,12 +3340,12 @@ summary = "`FrontierDedup::insert`, the small-frontier dedup: the linear stage (
 
 [[site]]
 id = "shapes.path-eval"
-summary = "`path::eval_planned_ids_from_id`, the planned SHACL path walk; its frontier probe is `shapes.frontier-dedup`, out of line"
+summary = "`path::eval_planned_ids_with_paths`, the planned SHACL path walk including the shared path arena; its frontier probe is `shapes.frontier-dedup`, out of line"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_shapes"
-  symbol = "purrdf_shapes::path::eval_planned_ids_from_id::<purrdf_shapes::data_view::ShaclDatasetView>"
+  symbol = "purrdf_shapes::path::eval_planned_ids_with_paths::<purrdf_shapes::data_view::ShaclDatasetView>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

@@ -508,7 +508,7 @@ fn function_resolution_reports_the_calls_inside_computed_values() {
            sh:values [ sparql:multiply ( [ shnex:pathValues ex:w ] 2 ) ] ;
            sh:defaultValue [ sparql:iri ( \"http://example.org/ns#none\" ) ] .",
     );
-    let report = computed.function_resolution();
+    let report = computed.function_resolution().unwrap();
     let owners = |function: &str| -> Vec<String> {
         report
             .sites()
@@ -529,7 +529,7 @@ fn function_resolution_reports_the_calls_inside_computed_values() {
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:values 2 ; sh:defaultValue ex:none ] .",
     );
-    assert_eq!(constant.function_resolution().sites().count(), 0);
+    assert_eq!(constant.function_resolution().unwrap().sites().count(), 0);
 }
 
 /// `Shapes::extension_usage` reads the SPARQL a `sh:values` carries: a
@@ -543,14 +543,18 @@ fn extension_usage_reads_the_sparql_inside_computed_values() {
            sh:property [ sh:path ex:p ;
              sh:values [ sh:select \"SELECT ?v WHERE { $this <http://example.org/ns#related> ?v }\" ] ] .",
     );
-    let usage = computed.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = computed
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(usage.data().contains(relation), "{usage:?}");
     let path = turtle::loads(
         PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
            sh:property [ sh:path ex:p ; sh:values [ sh:path ex:related ] ] .",
     );
-    let usage = path.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = path
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(!usage.data().contains(relation), "{usage:?}");
 }
 

@@ -151,11 +151,7 @@ impl Parser<'_> {
     /// keyed by built-in node-expression vocabulary (key clash).
     pub(crate) fn discover_custom_functions(&self) -> Result<LinkedFunctions, String> {
         let mut linked = LinkedFunctions::default();
-        for class in [
-            FunctionClass::ListParameter,
-            FunctionClass::NamedParameter,
-            FunctionClass::Plain,
-        ] {
+        for class in FunctionClass::ALL {
             // A graph that never mentions the class IRI declares nothing under it;
             // answering that from the term table costs no allocation, which is what
             // keeps this pass free for the overwhelmingly common graph that declares
@@ -521,6 +517,7 @@ fn render_params(params: &[ArgKey]) -> String {
 fn collect_arg_keys(expr: &crate::expression::NodeExpr, out: &mut Vec<ArgKey>) {
     use crate::expression::{FnCall, NodeExpr};
     match expr {
+        NodeExpr::Owned { expr, .. } => collect_arg_keys(expr, out),
         NodeExpr::Arg(key) => out.push(key.clone()),
         NodeExpr::CustomCall { args, .. } => {
             for (_, arg) in args {

@@ -1049,16 +1049,16 @@ impl RankSelectDir for RankSelectRef<'_> {
 
 /// Append `value` as an unsigned LEB128 varint (7 payload bits per byte, MSB =
 /// continuation flag): 1..=10 bytes.
-pub fn write_varint(out: &mut Vec<u8>, value: u64) {
+pub fn write_varint(out: &mut impl Extend<u8>, value: u64) {
     let mut v = value;
     loop {
         let byte = (v & 0x7f) as u8;
         v >>= 7;
         if v == 0 {
-            out.push(byte);
+            out.extend([byte]);
             return;
         }
-        out.push(byte | 0x80);
+        out.extend([byte | 0x80]);
     }
 }
 
@@ -1502,9 +1502,21 @@ mod tests {
 
     #[test]
     fn varint_round_trip_edge_values() {
-        for &v in &[0u64, 1, 127, 128, 300, u64::from(u32::MAX), u64::MAX] {
+        for (v, expected) in [
+            (0_u64, b"\x00".as_slice()),
+            (1, b"\x01"),
+            (127, b"\x7f"),
+            (128, b"\x80\x01"),
+            (300, b"\xac\x02"),
+            (u64::from(u32::MAX), b"\xff\xff\xff\xff\x0f"),
+            (u64::MAX, b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01"),
+        ] {
             let mut out = Vec::new();
             write_varint(&mut out, v);
+            assert_eq!(out, expected);
+            let mut inline = crate::SmallVec::<[u8; 10]>::new();
+            write_varint(&mut inline, v);
+            assert_eq!(inline.as_slice(), expected);
             let mut pos = 0;
             let decoded = read_varint(&out, &mut pos).expect("decodes");
             assert_eq!(decoded, v);

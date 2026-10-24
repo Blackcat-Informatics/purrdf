@@ -282,7 +282,7 @@ impl Parser<'_> {
 
     /// The shapes of the shapes graph, by SHACL 1.2 Core §2.1's definition, in
     /// canonical term order.
-    fn spec_shapes(&self) -> Vec<Term> {
+    pub(crate) fn spec_shapes(&self) -> Vec<Term> {
         self.shapes_of_graph(None)
     }
 

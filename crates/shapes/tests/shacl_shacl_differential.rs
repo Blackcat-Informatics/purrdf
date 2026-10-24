@@ -44,18 +44,13 @@ use std::sync::Arc;
 
 use purrdf_rdf::{RdfDataset, SerializeGraph, serialize_dataset};
 use purrdf_shapes::ShapesImports;
-use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
 use purrdf_shapes::lint::SHACL_SHACL_SUPERSEDED;
 use purrdf_shapes::model::BoxRoleVocab;
-use purrdf_shapes::report::Severity;
-use purrdf_shapes::shapes::{Shapes, from_dataset_with_base};
+use purrdf_shapes::shapes::from_dataset_with_base;
 use purrdf_shapes::text_ingest::parse_turtle_document;
 
 use shacl_corpora::shacl12::{Body, shacl12_cases};
 use shacl_corpora::{file_iri, first_party_box_role_vocab, first_party_cases, w3c_cases};
-
-/// The W3C shapes graph for shapes graphs.
-const SHACL_SHACL: &str = include_str!("../spec/shacl-shacl.ttl");
 
 use purrdf_iri::vocab::rdf::NS as RDF;
 use purrdf_iri::vocab::sh::NS as SH;
@@ -256,21 +251,29 @@ type Violation = (String, String, String);
 
 /// `shacl-shacl.ttl`'s verdict on `dataset` as data: every `sh:Violation` result,
 /// sorted.
-fn shacl_shacl_violations(oracle: &Shapes, dataset: &RdfDataset) -> Vec<Violation> {
-    let report = validate_dataset_with_shapes_graph(dataset, oracle, None)
-        .unwrap_or_else(|e| panic!("shacl-shacl.ttl failed to validate a shapes graph: {e}"));
+fn shacl_shacl_violations(input: &Input) -> Vec<Violation> {
+    // The production lint entry point owns the bundled structural meta-schema's
+    // bounded admission; caller-authored recursive graphs remain refused.
+    let report = purrdf_shapes::lint::lint(
+        &input.dataset,
+        &input.prefixes,
+        input.box_vocab.clone(),
+        input.graph_iri.clone(),
+        &ShapesImports::new(),
+    )
+    .unwrap_or_else(|e| panic!("shacl-shacl.ttl failed to validate a shapes graph: {e}"));
     let named = |term: &purrdf_shapes::term::Term| match term {
         purrdf_shapes::term::Term::NamedNode(_) => term.to_string(),
         _ => String::new(),
     };
     let mut out: Vec<Violation> = report
-        .results
+        .shacl_shacl()
         .iter()
-        .filter(|result| result.severity == Severity::Violation)
+        .filter(|result| result.severity == purrdf_iri::vocab::sh::VIOLATION)
         .map(|result| {
             (
-                result.source_constraint_component.as_str().to_owned(),
-                result.result_path.as_ref().map_or_else(String::new, named),
+                result.component.clone(),
+                result.path.as_ref().map_or_else(String::new, named),
                 named(&result.source_shape),
             )
         })
@@ -568,26 +571,6 @@ const MUTANT_INPUTS: usize = 799;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
-    let oracle_document = parse_turtle_document(SHACL_SHACL, None).expect("shacl-shacl.ttl parses");
-    let oracle_dataset = oracle_document.dataset;
-    // `shacl-shacl.ttl` imports `sh:`, which the vendored `shacl.ttl` declares.
-    let mut oracle_imports = ShapesImports::new();
-    oracle_imports
-        .insert_turtle(
-            "http://www.w3.org/ns/shacl#",
-            include_str!("../spec/shacl.ttl"),
-        )
-        .expect("shacl.ttl parses");
-    let oracle = from_dataset_with_base(
-        &oracle_dataset,
-        None,
-        &oracle_document.prefixes,
-        None,
-        None,
-        &oracle_imports,
-    )
-    .expect("shacl-shacl.ttl loads as a shapes graph");
-
     let mut unexplained: Vec<String> = Vec::new();
     let mut stricter: BTreeMap<&str, usize> = BTreeMap::new();
     let mut behind: BTreeMap<&str, usize> = BTreeMap::new();
@@ -610,7 +593,7 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     let mut mutants_by_kind: BTreeMap<&str, usize> = BTreeMap::new();
     for input in &bases {
         let refusal = purrdf_refusal(input);
-        let violations = shacl_shacl_violations(&oracle, &input.dataset);
+        let violations = shacl_shacl_violations(input);
         let clean = refusal.is_none() && violations.is_empty();
         tally(judge(&input.id, refusal.as_deref(), &violations));
         if !clean {
@@ -632,7 +615,7 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
             if refusal.is_none() {
                 accepted_mutants.push(mutant.id.clone());
             }
-            let violations = shacl_shacl_violations(&oracle, &mutant.dataset);
+            let violations = shacl_shacl_violations(&mutant);
             tally(judge(&mutant.id, refusal.as_deref(), &violations));
         }
     }

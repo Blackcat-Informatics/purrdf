@@ -429,11 +429,15 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// 32 rows needs no checkpoint, and scalar term hashing needs no pending buffer.
 /// This replaces eleven source allocations from two growing record vectors,
 /// traversal scratch and two resized checkpoint vectors. The measured restore
-/// is therefore 293 for both instance sizes. This is work
-/// on the carried product, not a scan or copy of the instance dataset. The
+/// retains its complete original definition domain once. A graph with no function
+/// class needs no function parser or prefix-map copies, and an edgeless strong
+/// ownership graph needs no SCC scratch. Identity refresh hashes the canonical
+/// framing directly, without serialization buffers. The measured restore is
+/// therefore 230 for both instance sizes. This is work
+/// on the carried product rather than a scan or copy of the instance dataset. The
 /// equality across sizes and the live restored-validator checks below remain
 /// part of the contract.
-const ADMIT_ALLOC_CONST: u64 = 293;
+const ADMIT_ALLOC_CONST: u64 = 230;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
@@ -2701,14 +2705,20 @@ fn all_constraint_kind_names() -> Vec<String> {
 /// would change existing `CASES` entries, which must stay fixed, so the
 /// mapping is recorded instead.
 ///
-/// `sh:qualifiedValueShape` is the one case: `PlannedConstraint::QualifiedValueShape`
+/// `PlannedConstraint::QualifiedValueShape`
 /// carries the shape, its siblings, both counts and the disjointness flag as
 /// ONE constraint, but `CASES` exercises it through two scenarios named for
-/// which count it violates.
-const KIND_NAME_ALIASES: &[(&str, &[&str])] = &[(
-    "qualified_value_shape",
-    &["qualified_min_count", "qualified_max_count"],
-)];
+/// which count it violates. Identity references execute in the `node` fixture's
+/// referenced target body; property references execute in the nested `property`
+/// fixture. Both retain those fixtures' existing allocation ceilings.
+const KIND_NAME_ALIASES: &[(&str, &[&str])] = &[
+    ("reference", &["node"]),
+    ("property_reference", &["property"]),
+    (
+        "qualified_value_shape",
+        &["qualified_min_count", "qualified_max_count"],
+    ),
+];
 
 /// One [`SIBLING_FILE_COVERAGE`] entry: a kind, the sibling file that measures
 /// it (repository-relative to this crate, i.e. relative to `CARGO_MANIFEST_DIR`),

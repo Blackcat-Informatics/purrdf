@@ -8,6 +8,9 @@
 //! determinism.
 
 use std::collections::BTreeMap;
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
 use purrdf_lex::json::Value;
@@ -2114,15 +2117,25 @@ fn public_member_count_shapes_do_not_claim_an_xml_exclusion() {
         let mut typed = shapes(&declaration(legal));
         let root = typed
             .node_shapes
-            .iter_mut()
+            .iter()
             .find(|shape| !shape.targets.is_empty())
             .expect("targeted node shape");
-        let member = match root.property_shapes[0].constraints.first_mut() {
-            Some(Constraint::Node(member)) => member.as_mut(),
-            Some(Constraint::And(members) | Constraint::Or(members)) => &mut members[0],
+        let property = turtle::properties(&typed, root).next().unwrap();
+        let member_id = match property.constraints.first() {
+            Some(Constraint::Node(member)) => member.id.clone(),
+            Some(Constraint::And(members) | Constraint::Or(members)) => members[0].id.clone(),
             other => panic!("expected the actual member constraint: {other:?}"),
         };
+        let mut definitions: Vec<_> = typed.owner.definitions().cloned().collect();
+        let member = definitions
+            .iter_mut()
+            .find(|shape| shape.id == member_id)
+            .unwrap();
         member.constraints.push(Constraint::MaxCount(0));
+        typed.owner = purrdf_shapes::shapes::ModelOwner::from_definitions(definitions).unwrap();
+        for root in &mut typed.node_shapes {
+            root.owner = Some(Arc::clone(&typed.owner));
+        }
         let ontology = parse("ex:C a owl:Class . ex:p a owl:DatatypeProperty .");
         let (compilation, _) = compile_shapes(
             &typed,

@@ -48,9 +48,6 @@ const PREFIXES: &str = r"
 /// The subject every fixture's losses are recorded against.
 const HOLDER: &str = "<https://example.org/HolderShape>";
 
-/// The JSON pointer prefix of the definition each fixture's constructs land in.
-const HOLDER_DEF: &str = "#/$defs/Holder";
-
 /// `sh:minListLength` on a property shape.
 const MIN_LIST_LENGTH: &str = r"
     ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
@@ -343,13 +340,29 @@ fn source_codes(emitted: &Emitted) -> Vec<(String, String)> {
 
 /// `(code, pointer)` of every emitter-stage entry under `Holder`.
 fn holder_losses(ledger: &str) -> Vec<(String, String)> {
+    definition_losses(ledger, "Holder")
+}
+
+fn definition_losses(ledger: &str, key: &str) -> Vec<(String, String)> {
+    let prefix = format!("#/$defs/{key}");
+    let descendants = format!("{prefix}/");
     ledger_rows(ledger)
         .into_iter()
-        .filter(|(_, pointer, _)| {
-            pointer == HOLDER_DEF || pointer.starts_with(&format!("{HOLDER_DEF}/"))
-        })
+        .filter(|(_, pointer, _)| pointer == &prefix || pointer.starts_with(&descendants))
         .map(|(code, pointer, _)| (code, pointer))
         .collect()
+}
+
+/// A fragment pin still judges the whole referenced body. Require an exact
+/// reference object so expanding it cannot discard sibling assertions.
+fn catalog_body<'a>(emitted: &'a Emitted, reference: &Value) -> &'a Value {
+    assert_eq!(reference.as_object().expect("reference object").len(), 1);
+    let pointer = reference["$ref"].as_str().expect("catalog reference");
+    assert!(pointer.starts_with("#/$defs/ShapeRef"));
+    emitted
+        .schema
+        .pointer(pointer.strip_prefix('#').unwrap())
+        .expect("catalog body")
 }
 
 fn owned2(rows: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -903,8 +916,12 @@ fn json_schema_projects_member_shape() {
         ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
+    let mut subject = holder["properties"]["ex:subject"].clone();
+    let item = &subject["anyOf"][1]["properties"]["@list"]["items"];
+    assert_eq!(item["$ref"], "#/$defs/ShapeRef0");
+    subject["anyOf"][1]["properties"]["@list"]["items"] = catalog_body(&emitted, item).clone();
     assert_eq!(
-        holder["properties"]["ex:subject"],
+        subject,
         json(
             r#"{"$comment":"a sh:memberShape constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"items":{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]},"type":"array"}},"required":["@list"],"type":"object"}]}"#
         )
@@ -919,16 +936,17 @@ fn typescript_projects_member_shape() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (({\n                  readonly \"@id\": string;\n                  readonly [key: string]: JsonValue;\n                } | {\n                  readonly \"@list\": readonly [];\n                  readonly [key: string]: JsonValue;\n                }))[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (ShapeRef0)[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
         )
     );
     assert_eq!(
-        holder_losses(&emitted.typescript_losses),
+        definition_losses(&emitted.typescript_losses, "ShapeRef0"),
         owned2(&[(
             "string-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0/properties/@id/pattern"
+            "#/$defs/ShapeRef0/anyOf/0/properties/@id/pattern"
         ),])
     );
+    assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
     assert_eq!(
         source_codes(&emitted),
         owned2(&[("sh:memberShape", HOLDER),])
@@ -977,22 +995,6 @@ fn graphql_projects_member_shape() {
                 "#/$defs/Holder/properties/ex:subject/anyOf/1"
             ),
             (
-                "additional-properties-validation-narrowed",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0"
-            ),
-            (
-                "additional-properties-validation-narrowed",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1"
-            ),
-            (
-                "array-cardinality-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list/maxItems"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list/items"
-            ),
-            (
                 "nullable-presence-validation-widened",
                 "#/$defs/Holder/properties/@annotation"
             ),
@@ -1016,13 +1018,34 @@ fn graphql_projects_member_shape() {
                 "singleton-list-coercion-widened",
                 "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list"
             ),
+        ])
+    );
+    assert_eq!(
+        definition_losses(&emitted.graphql_losses, "ShapeRef0"),
+        owned2(&[
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/ShapeRef0/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/ShapeRef0/anyOf/1"
+            ),
+            (
+                "array-cardinality-validation-dropped",
+                "#/$defs/ShapeRef0/anyOf/1/properties/@list/maxItems"
+            ),
+            (
+                "custom-scalar-validation-delegated",
+                "#/$defs/ShapeRef0/anyOf/1/properties/@list/items"
+            ),
             (
                 "singleton-list-coercion-widened",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list"
+                "#/$defs/ShapeRef0/anyOf/1/properties/@list"
             ),
             (
                 "string-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0/properties/@id/pattern"
+                "#/$defs/ShapeRef0/anyOf/0/properties/@id/pattern"
             ),
         ])
     );
@@ -1083,8 +1106,16 @@ fn json_schema_projects_node_list() {
         ])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
+    let mut all = holder["allOf"].clone();
+    let cell = &mut all[0]["anyOf"][0]["properties"];
+    let head = &cell["rdf:first"]["allOf"][1];
+    let tail = &cell["rdf:rest"]["anyOf"][0]["properties"]["@list"]["items"];
+    assert_eq!(head, tail, "head and tail share one member definition");
+    let body = catalog_body(&emitted, head).clone();
+    cell["rdf:first"]["allOf"][1] = body.clone();
+    cell["rdf:rest"]["anyOf"][0]["properties"]["@list"]["items"] = body;
     assert_eq!(
-        holder["allOf"],
+        all,
         json(
             r#"[{"anyOf":[{"not":{"properties":{"@id":{"const":"http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"}},"required":["@id"]},"properties":{"rdf:first":{"allOf":[{"type":["boolean","number","object","string"]},{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]}]},"rdf:rest":{"anyOf":[{"properties":{"@list":{"items":{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]},"maxItems":2,"type":"array","uniqueItems":true}},"required":["@list"],"type":"object"},{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"}]}},"required":["rdf:first","rdf:rest"],"type":"object"}]}]"#
         )
@@ -1103,7 +1134,7 @@ fn typescript_projects_node_list() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly [key: string]: JsonValue;\n} & {\n      readonly \"rdf:first\": ((boolean | number | string | {\n            readonly [key: string]: JsonValue;\n          }) & ({\n              readonly \"@id\": string;\n              readonly [key: string]: JsonValue;\n            } | {\n              readonly \"@list\": readonly [];\n              readonly [key: string]: JsonValue;\n            }));\n      readonly \"rdf:rest\": ({\n            readonly \"@list\": (readonly (({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    }))[] & { readonly \"0\"?: ({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    }); readonly \"2\"?: never });\n            readonly [key: string]: JsonValue;\n          } | {\n            readonly \"@id\": string;\n            readonly [key: string]: JsonValue;\n          });\n      readonly [key: string]: JsonValue;\n    });\n"
+            "export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly [key: string]: JsonValue;\n} & {\n      readonly \"rdf:first\": ((boolean | number | string | {\n            readonly [key: string]: JsonValue;\n          }) & ShapeRef0);\n      readonly \"rdf:rest\": ({\n            readonly \"@list\": (readonly (ShapeRef0)[] & { readonly \"0\"?: ShapeRef0; readonly \"2\"?: never });\n            readonly [key: string]: JsonValue;\n          } | {\n            readonly \"@id\": string;\n            readonly [key: string]: JsonValue;\n          });\n      readonly [key: string]: JsonValue;\n    });\n"
         )
     );
     assert_eq!(
@@ -1114,18 +1145,17 @@ fn typescript_projects_node_list() {
                 "#/$defs/Holder/allOf/0/anyOf/0/not"
             ),
             (
-                "string-validation-dropped",
-                "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf/1/anyOf/0/properties/@id/pattern"
-            ),
-            (
-                "string-validation-dropped",
-                "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:rest/anyOf/0/properties/@list/items/anyOf/0/properties/@id/pattern"
-            ),
-            (
                 "unique-items-validation-dropped",
                 "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:rest/anyOf/0/properties/@list/uniqueItems"
             ),
         ])
+    );
+    assert_eq!(
+        definition_losses(&emitted.typescript_losses, "ShapeRef0"),
+        owned2(&[(
+            "string-validation-dropped",
+            "#/$defs/ShapeRef0/anyOf/0/properties/@id/pattern"
+        )])
     );
     assert_eq!(
         source_codes(&emitted),
@@ -2189,7 +2219,8 @@ fn json_schema_projects_some_value() {
     let emitted = emit(SOME_VALUE);
     assert_eq!(source_losses(&emitted), owned3(&[]));
     let subject = &emitted.schema["$defs"]["Holder"]["properties"]["ex:subject"];
-    let value = json(IRI_VALUE);
+    let value = json(r##"{"$ref":"#/$defs/ShapeRef0"}"##);
+    assert_eq!(catalog_body(&emitted, &value), &json(IRI_VALUE));
     assert_eq!(subject["anyOf"][0]["allOf"], json(&format!("[{value}]")));
     assert_eq!(subject["anyOf"][1]["contains"], value);
     assert_eq!(subject["anyOf"][1]["minItems"], 1);
@@ -2210,23 +2241,26 @@ fn typescript_projects_some_value() {
     let emitted = emit(SOME_VALUE);
     let declared = ts_type(&emitted.typescript, "Holder").expect("Holder");
     assert!(declared.contains("readonly \"ex:subject\": "), "{declared}");
-    assert!(declared.contains("readonly \"@id\": string;"), "{declared}");
+    assert!(declared.contains("& ShapeRef0"), "{declared}");
+    let member = ts_type(&emitted.typescript, "ShapeRef0").expect("shared IRI value type");
+    assert!(member.contains("readonly \"@id\": string;"), "{member}");
+    assert!(
+        member.contains("readonly \"@list\": readonly [];"),
+        "{member}"
+    );
     assert_eq!(
         holder_losses(&emitted.typescript_losses),
-        owned2(&[
-            (
-                "array-contains-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/contains"
-            ),
-            (
-                "string-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/0/allOf/0/anyOf/0/properties/@id/pattern"
-            ),
-            (
-                "string-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/contains/anyOf/0/properties/@id/pattern"
-            ),
-        ])
+        owned2(&[(
+            "array-contains-validation-dropped",
+            "#/$defs/Holder/properties/ex:subject/anyOf/1/contains"
+        ),])
+    );
+    assert_eq!(
+        definition_losses(&emitted.typescript_losses, "ShapeRef0"),
+        owned2(&[(
+            "string-validation-dropped",
+            "#/$defs/ShapeRef0/anyOf/0/properties/@id/pattern"
+        )])
     );
     assert_eq!(source_codes(&emitted), owned2(&[]));
 }
@@ -2240,14 +2274,14 @@ fn pydantic_projects_some_value() {
     assert!(
         field.contains(&format!(
             "BeforeValidator(_purrdf_requires({{\"allOf\": [{}]}}, _PURRDF_DEFS))",
-            python_json(IRI_VALUE)
+            python_json(r##"{"$ref":"#/$defs/ShapeRef0"}"##)
         )),
         "{field}"
     );
     assert!(
         field.contains(&format!(
             "BeforeValidator(_purrdf_requires({{\"contains\": {}}}, _PURRDF_DEFS))",
-            python_json(IRI_VALUE)
+            python_json(r##"{"$ref":"#/$defs/ShapeRef0"}"##)
         )),
         "{field}"
     );
@@ -2296,23 +2330,28 @@ fn linkml_projects_some_value() {
     assert_eq!(
         member,
         &json(
-            r#"{"any_of":[
-                {"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf0Object"},
-                {"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf1Object"}
-            ]}"#
+            r#"{"any_of":[{"inlined":true,"range":"InlineDefsShapeRef0AnyOf0Object"},{"inlined":true,"range":"InlineDefsShapeRef0AnyOf1Object"}]}"#
         ),
         "{subject}"
     );
     let classes = &emitted.linkml["classes"];
     assert_eq!(
-        classes["InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf0Object"]["attributes"]["@id"],
+        classes["ShapeRef0"]["any_of"],
+        json(
+            r#"[
+        {"is_a":"InlineDefsShapeRef0AnyOf0Object"},
+        {"is_a":"InlineDefsShapeRef0AnyOf1Object"}
+    ]"#
+        )
+    );
+    assert_eq!(
+        classes["InlineDefsShapeRef0AnyOf0Object"]["attributes"]["@id"],
         json(
             r#"{"alias":"@id","pattern":"^(?:[^_]|_(?:[^:]|$))","range":"string","required":true}"#
         )
     );
     assert_eq!(
-        classes["InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf1Object"]["attributes"]["@list"]
-            ["maximum_cardinality"],
+        classes["InlineDefsShapeRef0AnyOf1Object"]["attributes"]["@list"]["maximum_cardinality"],
         0
     );
     assert!(
@@ -3503,16 +3542,27 @@ mod observed {
         assert_eq!(source_codes(&emit(&xone)), owned2(&[("sh:xone", HOLDER)]));
     }
 
-    /// A shape reached again through its own value-position constraints is not
-    /// inlined twice: the inner occurrence accepts any value, recorded — and the
-    /// outer occurrence is still judged.
+    /// Recursive value shapes fail admission before an emitter can silently
+    /// replace a recursive occurrence with an unconstrained schema.
     #[test]
-    fn json_schema_a_recursive_value_shape_is_inlined_once() {
+    fn recursive_value_shapes_are_refused_before_schema_projection() {
         let shapes = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
                 sh:property [ sh:path ex:subject ; sh:node ex:IntShape ] .
             ex:IntShape a sh:NodeShape ; sh:datatype xsd:integer ; sh:or ( ex:IntShape ) .";
-        agree(shapes, &[("1", true), (r#""a""#, false)]);
-        assert_eq!(source_codes(&emit(shapes)), owned2(&[("sh:node", HOLDER)]));
+        let error =
+            parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect_err("recursive schema");
+        let purrdf_shapes::ShapesError::Recursion(refusal) = error else {
+            panic!("expected typed recursion refusal: {error:?}");
+        };
+        assert_eq!(refusal.members, ["<https://example.org/IntShape>"]);
+        assert_eq!(refusal.edges.len(), 1);
+        assert_eq!(refusal.edges[0].parameter, purrdf_shapes::model::sh::OR);
+        let finite = shapes.replace(
+            "sh:or ( ex:IntShape )",
+            "sh:or ( [ sh:datatype xsd:integer ] )",
+        );
+        agree(&finite, &[("1", true), (r#""a""#, false)]);
+        assert!(emit(&finite).compiled.losses.is_empty());
     }
 
     /// The verdicts over each data value (one `ex:subject` value of `ex:h`).
@@ -4292,7 +4342,7 @@ fn json_schema_records_shape_based_property_constraints() {
     purrdf_rdf::loss::assert_ledger_sound(&emitted.compiled.losses, "shacl", "json-schema");
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
-        holder["properties"]["ex:subject"]["anyOf"][0]["allOf"][0]["$comment"],
+        catalog_body(&emitted, &holder["properties"]["ex:subject"]["anyOf"][0])["$comment"],
         "the property shapes of a value shape of ex:subject were dropped"
     );
     assert!(

@@ -2234,7 +2234,7 @@ pub(crate) fn build(
             && left.object == right.object
     });
 
-    let shape_classes = shape_class_info(request.shapes());
+    let shape_classes = shape_class_info(request.shapes())?;
     let mut properties: BTreeMap<String, PropertyFacts> = BTreeMap::new();
     let mut explicit_classes = BTreeSet::new();
     let mut datatypes = BTreeSet::new();
@@ -3210,10 +3210,19 @@ fn coverage_cell_count(
     Ok(observed)
 }
 
-fn shape_class_info(shapes: &crate::shapes::Shapes) -> BTreeMap<String, ShapeClassInfo> {
+fn shape_class_info(
+    shapes: &crate::shapes::Shapes,
+) -> Result<BTreeMap<String, ShapeClassInfo>, SchemaCompileError> {
     let mut classes = BTreeMap::new();
     for shape in &shapes.node_shapes {
         if shape.deactivated {
+            continue;
+        }
+        let model = shape.owner.as_deref().unwrap_or(&shapes.owner);
+        let body = shape
+            .resolved_in(Some(model))
+            .map_err(|error| SchemaCompileError::Materialization(error.into()))?;
+        if body.deactivated {
             continue;
         }
         for target in &shape.targets {
@@ -3223,22 +3232,68 @@ fn shape_class_info(shapes: &crate::shapes::Shapes) -> BTreeMap<String, ShapeCla
                 _ => None,
             };
             if let Some(class) = class {
-                merge_shape_info(classes.entry(class.to_owned()).or_default(), shape, class);
+                merge_shape_info(
+                    classes.entry(class.to_owned()).or_default(),
+                    body,
+                    class,
+                    model,
+                )?;
             }
         }
     }
-    classes
+    Ok(classes)
 }
 
-fn merge_shape_info(info: &mut ShapeClassInfo, shape: &Shape, class: &str) {
-    let direct = direct_shape_properties(shape);
-    info.direct_properties.extend(direct.iter().cloned());
-    for property in &shape.property_shapes {
-        if !property.deactivated
-            && let Path::Predicate(predicate) = &property.path
-            && crate::json_schema::property_excludes_xml(property)
-        {
-            info.xml_excluded.insert(predicate.as_str().to_owned());
+fn merge_shape_info(
+    info: &mut ShapeClassInfo,
+    shape: &Shape,
+    class: &str,
+    model: &crate::shapes::ModelOwner,
+) -> Result<(), SchemaCompileError> {
+    let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
+    let mut seen = purrdf_core::SmallVec::<[(usize, usize); 16]>::new();
+    pending.push((shape, model));
+    while let Some((shape, model)) = pending.pop() {
+        let model = shape.owner.as_deref().unwrap_or(model);
+        let identity = (
+            std::ptr::from_ref(model).addr(),
+            std::ptr::from_ref(shape).addr(),
+        );
+        if shape.deactivated || seen.contains(&identity) {
+            continue;
+        }
+        seen.push(identity);
+        merge_shape_body_info(info, shape, class, model)?;
+        for constraint in shape.constraints.iter().rev() {
+            if let Constraint::Reference(target) = constraint {
+                let definition = model
+                    .definition_required(target)
+                    .map_err(|error| SchemaCompileError::Materialization(error.into()))?;
+                pending.push((definition, model));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn merge_shape_body_info(
+    info: &mut ShapeClassInfo,
+    shape: &Shape,
+    class: &str,
+    model: &crate::shapes::ModelOwner,
+) -> Result<(), SchemaCompileError> {
+    let mut permitted_paths = BTreeSet::new();
+    for view in shape.properties_in(Some(model)) {
+        let view = view.map_err(|error| SchemaCompileError::Materialization(error.into()))?;
+        if let Path::Predicate(predicate) = &view.property.path {
+            // Closedness reads syntactic paths even on deactivated edges.
+            permitted_paths.insert(predicate.as_str().to_owned());
+            if !view.deactivated() {
+                info.direct_properties.insert(predicate.as_str().to_owned());
+                if crate::json_schema::property_excludes_xml(view, Some(model))? {
+                    info.xml_excluded.insert(predicate.as_str().to_owned());
+                }
+            }
         }
     }
     for constraint in &shape.constraints {
@@ -3248,7 +3303,7 @@ fn merge_shape_info(info: &mut ShapeClassInfo, shape: &Shape, class: &str) {
             // `sh:closed sh:ByTypes` (SHACL 1.2 Core §7.9.1) what the instance's
             // type `class` collects, plus `rdf:type`.
             let permitted = match mode {
-                ClosedMode::Declared => direct.clone(),
+                ClosedMode::Declared => permitted_paths.clone(),
                 ClosedMode::ByTypes(index) => index
                     .properties(&Term::NamedNode(NamedNode::new_unchecked(class)))
                     .iter()
@@ -3265,18 +3320,7 @@ fn merge_shape_info(info: &mut ShapeClassInfo, shape: &Shape, class: &str) {
             });
         }
     }
-}
-
-fn direct_shape_properties(shape: &Shape) -> BTreeSet<String> {
-    shape
-        .property_shapes
-        .iter()
-        .filter(|property| !property.deactivated)
-        .filter_map(|property| match &property.path {
-            Path::Predicate(node) => Some(node.as_str().to_owned()),
-            _ => None,
-        })
-        .collect()
+    Ok(())
 }
 
 /// The domain and range nodes of a property expression in the propagation

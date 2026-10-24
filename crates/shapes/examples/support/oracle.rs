@@ -60,3 +60,36 @@ pub(crate) fn has_loss(losses: &LossLedger, code: &str, location: &str) -> bool 
                 == Some(location)
     })
 }
+
+/// Locate a fixture assertion through the emitted, shared schema references.
+/// A sole allOf reference is the value emitter's transparent conjunction.
+pub(crate) fn referenced_location(schema: &Value, pointer: &str) -> Result<String, Box<dyn Error>> {
+    let mut location = pointer.to_owned();
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        if !seen.insert(location.clone()) {
+            return Err(format!("cyclic fixture schema reference at {location}").into());
+        }
+        let body = schema
+            .pointer(
+                location
+                    .strip_prefix('#')
+                    .ok_or("fixture pointer is not local")?,
+            )
+            .ok_or_else(|| format!("missing fixture schema at {location}"))?;
+        let reference = body
+            .get("$ref")
+            .or_else(|| {
+                let object = body.as_object()?;
+                let [only] = object.get("allOf")?.as_array()?.as_slice() else {
+                    return None;
+                };
+                (object.len() == 1).then(|| only.get("$ref")).flatten()
+            })
+            .and_then(Value::as_str);
+        match reference {
+            Some(reference) => reference.clone_into(&mut location),
+            None => return Ok(location),
+        }
+    }
+}

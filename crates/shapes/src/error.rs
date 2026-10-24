@@ -47,6 +47,10 @@ use crate::imports::ShapesImportError;
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesError {
+    /// A recursive shapes catalog requires an explicit recursion semantics.
+    Recursion(RecursionRefusal),
+    /// The shapes model could not be prepared within the native stack margin.
+    Preparation(PreparationRefusal),
     /// Logical capacity or physical storage refused an operation.
     Storage(purrdf_lex::allocation::StorageError),
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table the
@@ -92,6 +96,8 @@ impl ShapesError {
         match self {
             Self::Imports(error) => Some(error),
             Self::ShaclJs(_)
+            | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -108,6 +114,8 @@ impl ShapesError {
         match self {
             Self::ShaclJs(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -124,6 +132,8 @@ impl ShapesError {
         match self {
             Self::IllFormed(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -140,6 +150,8 @@ impl ShapesError {
         match self {
             Self::UnsupportedTarget(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -156,6 +168,8 @@ impl ShapesError {
         match self {
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -172,6 +186,8 @@ impl ShapesError {
         match self {
             Self::Prebinding(violation) => Some(violation),
             Self::Imports(_)
+            | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::UnsupportedTarget(_)
@@ -218,8 +234,9 @@ impl ShapesError {
     pub const fn failure_class(&self) -> FailureClass {
         match self {
             Self::Invalid(_) => FailureClass::Evaluation,
-            Self::Storage(_) | Self::Processor(_) => FailureClass::Processor,
+            Self::Storage(_) | Self::Processor(_) | Self::Preparation(_) => FailureClass::Processor,
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -241,6 +258,8 @@ impl ShapesError {
         match self {
             Self::Processor(failure) => Some(failure),
             Self::Imports(_)
+            | Self::Preparation(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -259,6 +278,23 @@ impl ShapesError {
 /// unbound variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessorFailure {
+    /// Evaluating a node expression would enter the physical stack margin.
+    ExpressionStackMargin,
+    /// Calling an original custom function would enter the physical stack margin.
+    CallStackMargin {
+        /// Original function IRI.
+        iri: String,
+    },
+    /// A shape re-entry would enter the physical stack margin.
+    ReentryStackMargin {
+        /// Original shape identity in RDF term spelling.
+        shape: String,
+    },
+    /// Validating an original shape would enter the physical stack margin.
+    ValidationStackMargin {
+        /// Original native shape identity.
+        shape: Box<crate::term::Term>,
+    },
     /// A SPARQL query exhausted an execution governor (fuel, rows, cells, scratch, UDF
     /// depth, remote requests) or was refused at admission.
     Governor(purrdf_core::governor::TrippedGovernor),
@@ -328,6 +364,21 @@ pub enum ProcessorFailure {
 impl fmt::Display for ProcessorFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ExpressionStackMargin => {
+                f.write_str("node expression evaluation exhausted its stack margin")
+            }
+            Self::CallStackMargin { iri } => write!(
+                f,
+                "custom node-expression function <{iri}> exhausted its stack margin"
+            ),
+            Self::ReentryStackMargin { shape } => write!(
+                f,
+                "SHACL node-expression re-entry exhausted its stack margin at shape {shape}"
+            ),
+            Self::ValidationStackMargin { shape } => write!(
+                f,
+                "SHACL validation exhausted its stack margin at shape {shape}"
+            ),
             Self::Governor(tripped) => write!(
                 f,
                 "validation budget exhausted: {tripped}; a conformance verdict cannot be \
@@ -380,6 +431,8 @@ impl std::error::Error for ProcessorFailure {}
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Preparation(refusal) => refusal.fmt(f),
+            Self::Recursion(refusal) => refusal.fmt(f),
             Self::Storage(error) => error.fmt(f),
             Self::Imports(error) => error.fmt(f),
             Self::ShaclJs(refusal) => refusal.fmt(f),
@@ -396,6 +449,8 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Preparation(refusal) => Some(refusal),
+            Self::Recursion(refusal) => Some(refusal),
             Self::Storage(error) => Some(error),
             Self::Imports(error) => Some(error),
             Self::ShaclJs(refusal) => Some(refusal),
@@ -408,6 +463,132 @@ impl std::error::Error for ShapesError {
         }
     }
 }
+
+/// A preparation refusal, distinct from malformed shapes and nonconformance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparationRefusal {
+    /// The original native workspace admission or allocation refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// A custom call has no declaration in its retained model domain.
+    UnknownFunction(crate::term::NamedNode),
+    /// A function IRI has distinct declarations in one model or preparation.
+    DuplicateFunction(crate::term::NamedNode),
+    /// A retained declaration has no installed body.
+    MissingFunctionBody(crate::term::NamedNode),
+    /// A computed shape reference has no retained model domain.
+    UnboundModel,
+    /// A computed shape reference outlived its retained definition table.
+    ExpiredIndex,
+    /// A computed shape reference names another model's definition table.
+    ForeignIndex,
+    /// A recursive lowering or model-codec frame would enter the stack margin.
+    StackMargin,
+    /// Two catalog definitions declare the same identity.
+    DuplicateDefinition(std::sync::Arc<crate::term::Term>),
+    /// A definition owns a catalog instead of being a bare catalog member.
+    OwningDefinition(std::sync::Arc<crate::term::Term>),
+    /// A reference was used outside an owning catalog root.
+    UnboundReference,
+    /// A catalog reference names no definition in that catalog.
+    UnknownReference(std::sync::Arc<crate::term::Term>),
+    /// A property edge names a catalog definition that is not a property shape.
+    ExpectedProperty(std::sync::Arc<crate::term::Term>),
+    /// A model's definition cell was installed more than once.
+    InitializedIndex,
+}
+
+impl PreparationRefusal {
+    /// Stop a model-inspection walk at its first refusal or physical stack bound.
+    pub(crate) fn admit_walk(refusal: &mut Option<Self>) -> bool {
+        if refusal.is_some() {
+            return false;
+        }
+        if purrdf_stack::is_low() {
+            *refusal = Some(Self::StackMargin);
+            return false;
+        }
+        true
+    }
+}
+
+impl fmt::Display for PreparationRefusal {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(error) => error.fmt(out),
+            Self::UnknownFunction(iri) => write!(out, "custom function {iri} has no declaration in the retained model; keep the exported model owner with its expression"),
+            Self::DuplicateFunction(iri) => write!(out, "custom function {iri} has distinct declarations; retain one original declaration per function IRI"),
+            Self::MissingFunctionBody(iri) => write!(out, "custom function {iri} has no installed body; link its declaration before preparation"),
+            Self::UnboundModel => out.write_str("computed shape reference has no retained model; keep its exported owning root"),
+            Self::ExpiredIndex => out.write_str("computed shape reference outlived its definition table; keep its exported owning root"),
+            Self::ForeignIndex => out.write_str("computed shape reference names a different model's definition table"),
+            Self::StackMargin => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
+            Self::DuplicateDefinition(id) => write!(out, "duplicate shape definition {id}; provide one definition per RDF identity"),
+            Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
+            Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ModelOwner::root"),
+            Self::UnknownReference(id) => write!(out, "shape reference {id} has no catalog definition; provide its definition"),
+            Self::ExpectedProperty(id) => write!(out, "property reference {id} does not name a property-shape definition; provide a shape with its own sh:path"),
+            Self::InitializedIndex => out.write_str("model definitions were already installed; link the original model exactly once"),
+        }
+    }
+}
+
+impl std::error::Error for PreparationRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
+
+/// How a shape reference affects the containing constraint's truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RecursionPolarity {
+    /// Growing the referenced conformance relation preserves satisfaction.
+    Positive,
+    /// Growing the referenced conformance relation can remove satisfaction.
+    Negative,
+    /// The constraint is nonmonotone in the referenced conformance relation.
+    Both,
+    /// A where-target dependency, separate from the conformance formula.
+    Target,
+}
+
+/// One reference inside a recursive strongly connected component.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RecursionDependency {
+    /// Source shape, in native RDF term spelling.
+    pub source: String,
+    /// Referenced shape, in native RDF term spelling.
+    pub target: String,
+    /// IRI of the shape-expecting parameter.
+    pub parameter: String,
+    /// The reference's role in conformance or target selection.
+    pub polarity: RecursionPolarity,
+}
+
+/// A recursive component refused before shapes are recursively expanded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursionRefusal {
+    /// Every shape of the component, in canonical RDF term order.
+    pub members: Vec<String>,
+    /// Every internal reference, sorted and deduplicated.
+    pub edges: Vec<RecursionDependency>,
+}
+
+impl fmt::Display for RecursionRefusal {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            out,
+            "cyclic SHACL shape reference requires explicit recursion semantics: {}",
+            self.members.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for RecursionRefusal {}
 
 purrdf_lex::variant_from!(ShapesError {
     Storage(purrdf_lex::allocation::StorageError),

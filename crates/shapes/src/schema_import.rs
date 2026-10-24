@@ -272,6 +272,29 @@ pub(crate) fn import_schema_value_from(
     validate_references(document, &index, "#", 0)?;
     let generated_envelope = is_generated_envelope(root, definitions, &config.namespaces);
     let mut context = ImportContext::new(source, config, &index, generated_envelope);
+    if generated_envelope {
+        let classes: BTreeSet<_> = definitions
+            .get("Node")
+            .and_then(|node| node.get("allOf"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|branch| branch.get("then")?.get("$ref")?.as_str())
+            .filter_map(reference_key)
+            .collect();
+        for key in definitions.keys() {
+            // Catalog keys are reserved by the native emitter. A caller's class
+            // with the same spelling is distinguished by Node's discriminator.
+            if key.strip_prefix("ShapeRef").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            }) && !classes.contains(key)
+            {
+                context
+                    .catalog
+                    .insert(key.clone(), Term::blank(format!("schema-catalog-{key}")));
+            }
+        }
+    }
     context.audit_root(root, generated_envelope)?;
     let mut model = SchemaImportModel::default();
     let mut shape_identities = BTreeMap::new();
@@ -280,6 +303,18 @@ pub(crate) fn import_schema_value_from(
             continue;
         }
         let path = definition_path(key);
+        if let Some(id) = context.catalog.get(key).cloned() {
+            let shape = if is_value_schema(schema) || list_form(schema).is_some() {
+                context.import_value_shape(id, schema, &path)?
+            } else {
+                let object = schema.as_object().ok_or_else(|| {
+                    SchemaImportError::new(format!("{path} catalog body must be an object"))
+                })?;
+                context.import_object_shape(object, &path, id, Vec::new())?
+            };
+            model.catalog.push(shape);
+            continue;
+        }
         let Some(shape) = context.import_definition(key, schema, &path)? else {
             continue;
         };
@@ -304,6 +339,7 @@ pub(crate) fn import_schema_value_from(
 #[derive(Default)]
 struct SchemaImportModel {
     node_shapes: Vec<Shape>,
+    catalog: Vec<Shape>,
 }
 
 struct ImportContext<'a> {
@@ -314,6 +350,7 @@ struct ImportContext<'a> {
     losses: LossLedger,
     nested_shape_counter: usize,
     generated_envelope: bool,
+    catalog: BTreeMap<String, Term>,
 }
 
 impl<'a> ImportContext<'a> {
@@ -331,15 +368,24 @@ impl<'a> ImportContext<'a> {
             losses: LossLedger::new(),
             nested_shape_counter: 0,
             generated_envelope,
+            catalog: BTreeMap::new(),
         }
     }
 
     fn finish(self, model: SchemaImportModel) -> Result<ImportedShapes, SchemaImportError> {
         check_ledger_sound(&self.losses, self.source, "shacl").map_err(SchemaImportError::new)?;
-        let shapes = Shapes {
+        let mut shapes = Shapes {
             node_shapes: model.node_shapes,
             ..Shapes::default()
         };
+        if !model.catalog.is_empty() {
+            let owner = crate::shapes::ModelOwner::from_definitions(model.catalog)
+                .map_err(|error| SchemaImportError::new(error.to_string()))?;
+            for shape in &mut shapes.node_shapes {
+                shape.owner = Some(Arc::clone(&owner));
+            }
+            shapes.owner = owner;
+        }
         Ok(ImportedShapes {
             shapes,
             losses: self.losses,
@@ -663,6 +709,7 @@ impl ImportContext<'_> {
         self.import_object_logic(object, path, &mut constraints)?;
         self.audit_object_keywords(object, path)?;
         Ok(Shape {
+            owner: None,
             id,
             targets,
             constraints,
@@ -690,6 +737,13 @@ impl ImportContext<'_> {
             let mut members = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
                 let branch_path = format!("{path}/allOf/{index}");
+                if branch.as_object().is_some_and(|object| object.len() == 1)
+                    && let Some(reference) = branch.get("$ref").and_then(Value::as_str)
+                    && reference_key(reference).is_some_and(|key| self.catalog.contains_key(&key))
+                {
+                    self.import_reference(reference, &format!("{branch_path}/$ref"), constraints)?;
+                    continue;
+                }
                 if self.import_node_list(branch, &branch_path, constraints)? {
                     continue;
                 }
@@ -767,6 +821,7 @@ impl ImportContext<'_> {
             None => self.import_scalar_schema(schema, path, &mut constraints)?,
         }
         Ok(Shape {
+            owner: None,
             id,
             targets: Vec::new(),
             constraints,
@@ -786,6 +841,28 @@ impl ImportContext<'_> {
         schema: &Value,
         path: &str,
     ) -> Result<Option<Shape>, SchemaImportError> {
+        if schema.as_object().is_some_and(|object| object.len() == 1)
+            && let Some(id) = schema
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(reference_key)
+                .and_then(|key| self.catalog.get(&key))
+        {
+            return Ok(Some(Shape {
+                owner: None,
+                id: id.clone(),
+                targets: Vec::new(),
+                constraints: vec![Constraint::Reference(id.clone())],
+                property_shapes: Vec::new(),
+                severity: Severity::Violation,
+                messages: Vec::new(),
+                constraint_annotations: Vec::new(),
+                deactivated: false,
+                deactivated_when: Vec::new(),
+                box_roles: Vec::new(),
+                rules: Vec::new(),
+            }));
+        }
         // A value's schema (a list's or a literal's projection, a scalar, an
         // enumeration), which an ontology range or restriction nests beside node
         // references, constrains the value itself, not a node with `@list` or
@@ -1511,6 +1588,10 @@ impl ImportContext<'_> {
                 "{path} must be a direct local #/$defs reference, got {reference:?}"
             ))
         })?;
+        if let Some(id) = self.catalog.get(&key) {
+            constraints.push(Constraint::Reference(id.clone()));
+            return Ok(());
+        }
         let target = self.definitions.get(key.as_str()).copied().ok_or_else(|| {
             SchemaImportError::new(format!("{path} targets missing definition {key:?}"))
         })?;
@@ -1797,6 +1878,7 @@ impl ImportContext<'_> {
         let mut constraints = Vec::new();
         self.import_scalar_schema(schema, path, &mut constraints)?;
         Ok(Shape {
+            owner: None,
             id: self.nested_shape_id(path),
             targets: Vec::new(),
             constraints,
@@ -4245,7 +4327,9 @@ mod tests {
         let mut bounds = Vec::new();
         let mut datatypes = Vec::new();
         for shape in &shapes.node_shapes {
-            for property in &shape.property_shapes {
+            let shape = shapes.owner.definition(&shape.id).unwrap_or(shape);
+            for view in shape.properties_in(Some(&shapes.owner)) {
+                let property = view.expect("original property definition").property;
                 for constraint in &property.constraints {
                     let (facet, term) = match constraint {
                         Constraint::MinInclusive(term) => ("minInclusive", term),

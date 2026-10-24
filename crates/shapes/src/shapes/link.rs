@@ -1,24 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The post-tree LINKING pass: the one place a parsed shapes graph's shared,
-//! cyclic handles are established — and the one place their topology is checked.
+//! The model linking pass: the one place a parsed shapes graph's shared,
+//! logical references are established and their shared topology is checked.
 //!
-//! A [`Shapes`](crate::shapes::Shapes) is not a tree. Three of its handles are
-//! deliberately shared, and two of them close cycles:
+//! A [`Shapes`](crate::shapes::Shapes) is not a tree. Its model domain owns the
+//! declarations and index that exported shapes and expressions retain:
 //!
 //! * `Constraint::NodeByExpression`'s `shapes` and `ShapeArg::Computed`'s `shapes`
-//!   are ONE `Arc<OnceLock<FastMap<Term, Shape>>>` per shapes graph, and the map
-//!   inside contains the very shapes that carry those constraints.
+//!   are weak references to ONE index per shapes graph. Its bare definitions
+//!   contain no owning backreference.
 //! * `CustomFunction`'s `body` is an `OnceLock<NodeExpr>` that may legitimately
-//!   call its own function (SHACL 1.2 Node Expressions §6.1/§6.2), so the value
-//!   graph reaches back into itself.
+//!   call its own IRI (SHACL 1.2 Node Expressions §6.1/§6.2). Calls resolve in
+//!   the original model domain without owning the declaration they name.
 //!
-//! Neither can be built during the tree walk that produces the values: a map built
-//! eagerly while a shape is still being parsed would recurse forever, and a body
-//! inlined at discovery would too. So both are minted EMPTY up front, handed out by
-//! reference, and filled exactly once here — after every shape and every body is in
-//! hand.
+//! Parsing queues identities and produces each bare definition once. The shared
+//! cells are created before parsing and filled here after every definition and
+//! function body is available. Logical dependencies never own another body.
 //!
 //! # Why this is a function and not two copies of a recipe
 //!
@@ -86,6 +84,43 @@ use crate::term::Term;
 /// evaluator — which resolves a produced node once per value node — looks a shape
 /// up with the term it already holds instead of building a string to hash.
 pub(crate) type ShapeIndex = Arc<OnceLock<FastMap<Term, Shape>>>;
+pub(crate) type ShapeIndexRef = std::sync::Weak<OnceLock<FastMap<Term, Shape>>>;
+
+/// Retain the model only on exported roots, after its bare definitions are frozen.
+pub(crate) fn retain_roots(
+    shapes: &mut [Shape],
+    rules: &mut crate::rules::RuleGraph,
+    owner: &Arc<crate::shapes::ModelOwner>,
+) {
+    for shape in shapes {
+        shape.owner = Some(Arc::clone(owner));
+        for rule in &mut shape.rules {
+            retain_rule(rule, owner);
+        }
+    }
+    for rule in &mut rules.global_rules {
+        retain_rule(rule, owner);
+    }
+}
+
+fn retain_rule(rule: &mut Rule, owner: &Arc<crate::shapes::ModelOwner>) {
+    for condition in &mut rule.conditions {
+        condition.owner = Some(Arc::clone(owner));
+    }
+    if let RuleBody::Triple {
+        subject,
+        predicate,
+        object,
+    } = &mut rule.body
+    {
+        for expression in [subject, predicate, object] {
+            *expression = expression.take().map(|expr| NodeExpr::Owned {
+                expr: Box::new(expr),
+                owner: Arc::clone(owner),
+            });
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Refusals
@@ -118,16 +153,13 @@ fn depth_limit() -> ShapesProductError {
 ///    declaration whose body is ALREADY installed keeps it — that is the decoder's
 ///    case, where the byte stream's own two-pass layout has to install bodies
 ///    before the shapes that call them can be read at all. Self- and mutual
-///    recursion need no special handling here precisely because every declaration
-///    was interned before any body was built, so a body's call sites already point
-///    at the final `Arc`s.
+///    recursion need no special handling here because every declaration was
+///    interned before any body was built and calls resolve through that domain.
 /// 2. **The shape index.** Every shape-index handle reachable in the linked model
 ///    is checked against `shape_index`, and the index is then built ONCE from
-///    `node_shapes` and written into that single cell. Building it is skipped when
-///    nothing holds a second reference to the cell: a shapes graph with no
-///    `sh:nodeByExpression` and no computed shape argument never hands the handle
-///    out, so the reference count is exactly the "is anyone going to read this?"
-///    test, and the shape clones are never built in that (normal) case.
+///    `node_shapes` by moving their original bodies into that single cell. The
+///    complete catalog retains definitions even when no exported target uses
+///    them; retaining a definition does not activate its constraints.
 /// 3. **Registration.** Every `sh:ListParameterExpressionFunction` is registered
 ///    into `registry` as a callable SPARQL function (SHACL 1.2 SPARQL Extensions
 ///    §7.3), as an `Arc<dyn Fn>` closure over the declaration handle — a custom
@@ -157,6 +189,7 @@ pub(crate) fn link_global_rules(
         index: shape_index,
         depth: 0,
         seen_fns: Vec::new(),
+        seen_catalogs: Vec::new(),
     };
     for rule in rules {
         walk.rule(rule)?;
@@ -165,21 +198,40 @@ pub(crate) fn link_global_rules(
 }
 
 pub(crate) fn link_shapes(
-    node_shapes: &[Shape],
+    node_shapes: Vec<Shape>,
     shape_index: &ShapeIndex,
     custom_fns: &[Arc<CustomFunction>],
     native_list: &BTreeSet<String>,
     bodies: BTreeMap<String, NodeExpr>,
     registry: &mut UserFunctionRegistry,
-) -> Result<(), ShapesProductError> {
+) -> Result<Arc<crate::shapes::ModelOwner>, ShapesProductError> {
+    let owner = link_definitions(node_shapes, shape_index, custom_fns, bodies)?;
+    register_model_functions(&owner, native_list, registry);
+    Ok(owner)
+}
+
+/// Install and audit one complete original domain before exposing its functions.
+pub(super) fn link_definitions(
+    node_shapes: Vec<Shape>,
+    shape_index: &ShapeIndex,
+    custom_fns: &[Arc<CustomFunction>],
+    bodies: BTreeMap<String, NodeExpr>,
+) -> Result<Arc<crate::shapes::ModelOwner>, ShapesProductError> {
     install_bodies(custom_fns, bodies)?;
-    // Registered BEFORE the shape index is installed: a native
-    // `shnex:conformsToShape` registration holds a handle on the index, and that
-    // handle is what tells the installer somebody will read it.
-    register_native_list_functions(native_list, shape_index, registry);
+    let owner =
+        crate::shapes::ModelOwner::from_declarations(Arc::clone(shape_index), custom_fns.to_vec())?;
     install_shape_index(node_shapes, shape_index, custom_fns)?;
-    register_expression_bodied_functions(custom_fns, registry);
-    Ok(())
+    Ok(owner)
+}
+
+/// Install only this model's original declaration domain in its query registry.
+pub(crate) fn register_model_functions(
+    owner: &Arc<crate::shapes::ModelOwner>,
+    native_list: &BTreeSet<String>,
+    registry: &mut UserFunctionRegistry,
+) {
+    register_native_list_functions(native_list, owner, registry);
+    register_expression_bodied_functions(&owner.functions, owner, registry);
 }
 
 /// Whether §7.3's "already registered" rule leaves `iri` alone: SHACL 1.2 SPARQL
@@ -212,7 +264,7 @@ fn keep_existing_registration(iri: &str, registry: &mut UserFunctionRegistry) ->
 /// registers nothing and pays nothing.
 pub(crate) fn register_native_list_functions(
     native_list: &BTreeSet<String>,
-    shape_index: &ShapeIndex,
+    owner: &Arc<crate::shapes::ModelOwner>,
     registry: &mut UserFunctionRegistry,
 ) {
     for iri in native_list {
@@ -227,28 +279,15 @@ pub(crate) fn register_native_list_functions(
         let name = iri.clone();
         // Resolved here, at load, so a call pays only the arity-dependent render.
         let callee = NativeListCallee::resolve(iri);
-        let index = Arc::clone(shape_index);
+        let owner = Arc::clone(owner);
         registry.register_expr(
             iri.clone(),
             arity,
             Arc::new(move |call: &ExprFnCall<'_>| {
-                invoke_native_list_function(&name, &callee, &index, call)
+                invoke_native_list_function(&name, &callee, &owner, call)
             }),
         );
     }
-}
-
-/// A shape index filled from `node_shapes`, for a restore path that assembles a
-/// function registry without re-running the linking pass.
-pub(crate) fn standalone_shape_index(node_shapes: &[Shape]) -> ShapeIndex {
-    let index: ShapeIndex = Arc::new(OnceLock::new());
-    let map: FastMap<Term, Shape> = node_shapes
-        .iter()
-        .map(|shape| (shape.id.clone(), shape.clone()))
-        .collect();
-    // A freshly minted cell cannot already be full.
-    let _ = index.set(map);
-    index
 }
 
 /// Step 1: fill each declaration's body cell, then prove every one of them is full.
@@ -257,7 +296,7 @@ pub(crate) fn standalone_shape_index(node_shapes: &[Shape]) -> ShapeIndex {
 /// moments: the parser supplies every body in `bodies`, while the decoder has
 /// already installed them from the byte stream and supplies none. Only the
 /// after-the-fact check covers both.
-fn install_bodies(
+pub(crate) fn install_bodies(
     custom_fns: &[Arc<CustomFunction>],
     mut bodies: BTreeMap<String, NodeExpr>,
 ) -> Result<(), ShapesProductError> {
@@ -297,12 +336,10 @@ fn install_bodies(
 
 /// Step 2: prove the shape-index topology, then fill the one cell.
 ///
-/// The walk runs BEFORE the fill and unconditionally — including when the fill is
-/// skipped — because a foreign handle is exactly the case in which the real cell's
-/// reference count stays at one. Skipping the check whenever the fill is skipped
-/// would make the unshared-handle bug invisible in precisely the graph that has it.
+/// The walk runs before moving the bare bodies into the index. A foreign handle
+/// is refused even when no currently exported root reads the definition.
 fn install_shape_index(
-    node_shapes: &[Shape],
+    node_shapes: Vec<Shape>,
     shape_index: &ShapeIndex,
     custom_fns: &[Arc<CustomFunction>],
 ) -> Result<(), ShapesProductError> {
@@ -310,8 +347,9 @@ fn install_shape_index(
         index: shape_index,
         depth: 0,
         seen_fns: Vec::new(),
+        seen_catalogs: Vec::new(),
     };
-    for shape in node_shapes {
+    for shape in &node_shapes {
         walk.shape(shape)?;
     }
     // Bodies are reachable from a shape only through a call site; a declaration
@@ -320,19 +358,7 @@ fn install_shape_index(
         walk.declare(func)?;
     }
 
-    if Arc::strong_count(shape_index) > 1 {
-        let index: FastMap<Term, Shape> = node_shapes
-            .iter()
-            .map(|shape| (shape.id.clone(), shape.clone()))
-            .collect();
-        shape_index.set(index).map_err(|_| {
-            malformed(
-                "this shapes model's sh:nodeByExpression shape index was already filled before \
-                 linking; link a model exactly once, because a second index would be discarded \
-                 and every constraint would keep resolving against the first",
-            )
-        })?;
-    }
+    crate::shapes::ModelOwner::install_definitions(shape_index, node_shapes)?;
     Ok(())
 }
 
@@ -365,6 +391,7 @@ fn install_shape_index(
 /// never re-tests.
 pub(crate) fn register_expression_bodied_functions(
     custom_fns: &[Arc<CustomFunction>],
+    owner: &Arc<crate::shapes::ModelOwner>,
     registry: &mut UserFunctionRegistry,
 ) {
     for func in custom_fns {
@@ -383,11 +410,14 @@ pub(crate) fn register_expression_bodied_functions(
             }
         };
         let declared = Arc::clone(func);
+        let owner = Arc::clone(owner);
         let iri = declared.iri.as_str().to_owned();
         registry.register_expr(
             iri,
             arity,
-            Arc::new(move |call: &ExprFnCall<'_>| invoke_expression_function(&declared, call)),
+            Arc::new(move |call: &ExprFnCall<'_>| {
+                invoke_expression_function(&owner, &declared, call)
+            }),
         );
     }
 }
@@ -410,12 +440,39 @@ pub(crate) fn register_expression_bodied_functions(
 /// without deciding whether the walk has to see it. Each shape, constraint and node
 /// expression opens one nesting level, bounded by [`MAX_DEPTH`], because the walk
 /// recurses on the native stack.
+/// Catalog and declaration-domain callbacks retain their distinct carrier types;
+/// their implementations only admit identity, while this trait owns traversal.
+/// Visited state belongs to each pass: product header discovery visits a catalog
+/// once overall, whereas strong-ownership analysis revisits it for each parent
+/// whose outgoing edges must be recorded. Sharing that mutable state between
+/// passes would omit declarations or ownership edges.
 pub(crate) trait ModelWalk<'model, E = ShapesProductError>
 where
     E: From<ShapesProductError>,
 {
     /// The live nesting depth the walk bounds.
     fn depth(&mut self) -> &mut u32;
+
+    /// Visit the complete retained model domain once.
+    fn first_owner(&mut self, owner: &'model Arc<crate::shapes::ModelOwner>) -> Result<bool, E>;
+
+    fn model(&mut self, owner: &'model Arc<crate::shapes::ModelOwner>) -> Result<(), E> {
+        if self.first_owner(owner)? {
+            for function in &owner.functions {
+                self.declare(function)?;
+            }
+            if let Some(definitions) = owner.index.get() {
+                let mut ordered: Vec<_> = definitions.values().collect();
+                ordered.sort_unstable_by(|left, right| {
+                    crate::term::canonical_cmp(&left.id, &right.id)
+                });
+                for definition in ordered {
+                    self.shape(definition)?;
+                }
+            }
+        }
+        Ok(())
+    }
 
     /// Record `func`; `true` when its body has not been walked yet and must be now.
     /// Recording happens BEFORE the body is walked: a self-recursive body is legal,
@@ -431,12 +488,9 @@ where
     /// # Errors
     ///
     /// Whatever the pass refuses about the handle.
-    fn shape_index(&mut self, found: &'model ShapeIndex) -> Result<(), E>;
+    fn shape_index(&mut self, found: &'model ShapeIndexRef) -> Result<(), E>;
 
-    /// Inspect one declared pattern at its existing model position.
-    ///
-    /// Linker and product passes need no work at a pattern; selected native
-    /// execution uses this hook for its bounded declaration inventory.
+    /// Inspect a declared pattern at its original model position.
     ///
     /// # Errors
     /// Returns the collecting pass's actual refusal.
@@ -501,7 +555,11 @@ where
     /// A hook's refusal, or the depth ceiling.
     fn shape(&mut self, shape: &'model Shape) -> Result<(), E> {
         self.enter()?;
+        if let Some(owner) = &shape.owner {
+            self.model(owner)?;
+        }
         self.targets(&shape.targets)?;
+        self.deactivations(&shape.deactivated_when, &shape.constraint_annotations)?;
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -549,6 +607,7 @@ where
     /// A hook's refusal, or the depth ceiling.
     fn property_shape(&mut self, shape: &'model PropertyShape) -> Result<(), E> {
         self.enter()?;
+        self.deactivations(&shape.deactivated_when, &shape.constraint_annotations)?;
         for expr in shape.values.iter().chain(&shape.default_value) {
             self.node_expr(expr)?;
         }
@@ -565,6 +624,22 @@ where
         Ok(())
     }
 
+    /// Walk focus-local and annotation deactivation expressions in their model.
+    fn deactivations(
+        &mut self,
+        expressions: &'model [NodeExpr],
+        annotations: &'model [crate::shapes::ConstraintAnnotation],
+    ) -> Result<(), E> {
+        for expression in expressions.iter().chain(
+            annotations
+                .iter()
+                .flat_map(|annotation| &annotation.deactivated_when),
+        ) {
+            self.node_expr(expression)?;
+        }
+        Ok(())
+    }
+
     /// Walk a constraint. `Constraint::NodeByExpression` is one of the two sites
     /// that carry a shape-index handle.
     ///
@@ -574,7 +649,13 @@ where
     fn constraint(&mut self, constraint: &'model Constraint) -> Result<(), E> {
         self.enter()?;
         match constraint {
-            Constraint::Class(_)
+            Constraint::PropertyReference(edge) => {
+                for expression in &edge.deactivated_when {
+                    self.node_expr(expression)?;
+                }
+            }
+            Constraint::Reference(_)
+            | Constraint::Class(_)
             | Constraint::Datatype(_)
             | Constraint::NodeKind(_)
             | Constraint::MinCount(_)
@@ -705,11 +786,14 @@ where
                     self.node_expr(arg)?;
                 }
             }
-            NodeExpr::CustomCall { func, args } => {
-                self.declare(func)?;
+            NodeExpr::CustomCall { args, .. } => {
                 for (_, arg) in args {
                     self.node_expr(arg)?;
                 }
+            }
+            NodeExpr::Owned { expr, owner } => {
+                self.model(owner)?;
+                self.node_expr(expr)?;
             }
             NodeExpr::PathValues { focus, .. } => self.node_expr(focus)?,
             NodeExpr::Remove { nodes, remove } => {
@@ -741,9 +825,21 @@ struct ShapeIndexWalk<'a> {
     /// Declarations already walked, by handle identity. A body may call its own
     /// function, so this is what makes the cyclic value graph terminate.
     seen_fns: Vec<Arc<CustomFunction>>,
+    seen_catalogs: Vec<usize>,
 }
 
 impl ModelWalk<'_> for ShapeIndexWalk<'_> {
+    fn first_owner(
+        &mut self,
+        owner: &Arc<crate::shapes::ModelOwner>,
+    ) -> Result<bool, ShapesProductError> {
+        let address = Arc::as_ptr(owner).addr();
+        if self.seen_catalogs.contains(&address) {
+            return Ok(false);
+        }
+        self.seen_catalogs.push(address);
+        Ok(true)
+    }
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }
@@ -759,8 +855,8 @@ impl ModelWalk<'_> for ShapeIndexWalk<'_> {
         Ok(true)
     }
 
-    fn shape_index(&mut self, found: &ShapeIndex) -> Result<(), ShapesProductError> {
-        if Arc::ptr_eq(found, self.index) {
+    fn shape_index(&mut self, found: &ShapeIndexRef) -> Result<(), ShapesProductError> {
+        if found.ptr_eq(&Arc::downgrade(self.index)) {
             return Ok(());
         }
         Err(malformed(

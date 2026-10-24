@@ -67,7 +67,7 @@ use crate::data_view::ShaclRead as _;
 use crate::engine::resolve_focus_nodes;
 use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
 use crate::model::{rdf, sh};
-use crate::shapes::{Path, PropertyShape, Shape, Shapes, Target};
+use crate::shapes::{Path, Shape, Shapes, Target};
 use crate::srl::reads::{Anchor, ReadPattern};
 use crate::srl::{self, Inference};
 use crate::term::canonical_cmp;
@@ -1298,11 +1298,12 @@ fn discover(
     rule: &Rule,
     shape: &Shape,
     gained: &[[Term; 3]],
-) -> Option<Vec<Term>> {
+) -> Result<Option<Vec<Term>>, crate::error::ShapesError> {
     // Which focus nodes a node-expression `sh:deactivated` leaves is decided over the
     // graph as it stands, not from the triples gained.
-    if !rule.conditions.is_empty() || !shape.deactivated_when.is_empty() {
-        return None;
+    let definition = shape.resolved_in(shape.owner.as_deref())?;
+    if !rule.conditions.is_empty() || !definition.deactivated_when.is_empty() {
+        return Ok(None);
     }
     let mut classes: Vec<&str> = Vec::new();
     for target in &shape.targets {
@@ -1311,7 +1312,7 @@ fn discover(
                 classes.push(class.as_str());
             }
             Target::SubjectsOf(_) | Target::ObjectsOf(_) | Target::Node(_) => {}
-            _ => return None,
+            _ => return Ok(None),
         }
     }
     let is = |term: &Term, iri: &str| matches!(term, Term::NamedNode(node) if node.as_str() == iri);
@@ -1319,7 +1320,7 @@ fn discover(
     let mut found = Vec::new();
     for [subject, predicate, object] in gained {
         if is(predicate, crate::model::rdfs::SUB_CLASS_OF) || is(predicate, sh::SHAPE) {
-            return None;
+            return Ok(None);
         }
         for target in &shape.targets {
             match target {
@@ -1341,7 +1342,7 @@ fn discover(
             }
         }
     }
-    Some(found)
+    Ok(Some(found))
 }
 
 impl FocusRecord {
@@ -1361,7 +1362,7 @@ fn eligible_focus_nodes(
     rule: &Rule,
     shape: &Shape,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let plan = RulePlan::of(data, shape, &rule.conditions);
+    let plan = RulePlan::of(data, shape, &rule.conditions)?;
     // Read once per resolution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between the
     // condition checks of successive focus nodes; the ungoverned path pays one branch.
@@ -1479,7 +1480,7 @@ pub(crate) fn execute_rule(
             }
             FocusSelection::Incremental { record, gained, .. } => {
                 let executed = record.slot(index);
-                match discover(data, rule, shape, gained) {
+                match discover(data, rule, shape, gained)? {
                     Some(found) => {
                         let mut focus_nodes: Vec<Term> = found
                             .into_iter()
@@ -1567,8 +1568,12 @@ fn triple_rule_execution(
     // execution rather than once per focus node.
     let plans: Vec<Option<ExprPlan<'_>>> = expressions
         .iter()
-        .map(|expr| expr.as_ref().map(|expr| ExprPlan::of(data, expr)))
-        .collect();
+        .map(|expr| {
+            expr.as_ref()
+                .map(|expr| ExprPlan::of(data, expr))
+                .transpose()
+        })
+        .collect::<Result<_, crate::error::ShapesError>>()?;
     // Read once per execution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between focus
     // nodes of a rule that runs no SPARQL; the ungoverned path pays one branch.
@@ -1615,7 +1620,7 @@ fn global_triple_rule(
     let mut guard = RecursionGuard::default();
     let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
     for expr in [subject, predicate, object] {
-        let mut values = ExprPlan::of(data, expr).eval(data, &absent, &mut guard)?;
+        let mut values = ExprPlan::of(data, expr)?.eval(data, &absent, &mut guard)?;
         values.retain(|value| *value != absent);
         sets.push(values);
     }
@@ -1779,8 +1784,9 @@ fn read_constructed(graph: &RdfDataset, out: &mut Vec<[Term; 3]>) {
 /// Whether property shape `ps` computes derived value nodes for one of
 /// `expected`: it is not deactivated, its path is one of those predicates, and it
 /// declares `sh:values` or `sh:defaultValue`.
-fn derives_expected(ps: &PropertyShape, expected: &FastSet<&str>) -> bool {
-    !ps.deactivated
+fn derives_expected(view: crate::shapes::PropertyView<'_>, expected: &FastSet<&str>) -> bool {
+    let ps = view.property;
+    !view.deactivated()
         && (ps.values.is_some() || ps.default_value.is_some())
         && matches!(&ps.path, Path::Predicate(p) if expected.contains(p.as_str()))
 }
@@ -1813,21 +1819,48 @@ pub(crate) fn expected_derived_triples(
 ) -> Result<Vec<[Term; 3]>, crate::error::ShapesError> {
     let mut out: Vec<[Term; 3]> = Vec::new();
     for shape in &shapes.node_shapes {
-        if shape.deactivated
-            || !shape
-                .property_shapes
-                .iter()
-                .any(|ps| derives_expected(ps, expected))
-        {
+        if shape.deactivated {
             continue;
         }
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let model = shape.owner.as_ref().unwrap_or(&shapes.owner);
+        let definition = shape.resolved_in(Some(model))?;
+        if definition.deactivated {
+            continue;
+        }
+        let mut derives = false;
+        for view in definition.properties_in(Some(model)) {
+            if derives_expected(view?, expected) {
+                derives = true;
+                break;
+            }
+        }
+        if !derives {
+            continue;
+        }
+        let lowered = crate::plan::lower_shapes_in_model(std::iter::once(definition), Some(model))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
-        let focus_nodes =
-            resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
-        let plan = lowered.untargeted_plan(shape, 0, &binding)?;
-        for (ps, property_plan) in plan.properties()? {
-            if !derives_expected(ps, expected) {
+        let focus_nodes = resolve_focus_nodes(
+            data,
+            &shape.id,
+            &shape.targets,
+            &binding,
+            lowered.classes(),
+            Some(model),
+        )?;
+        let plan = lowered.untargeted_plan(definition, 0, &binding)?;
+        for property in plan
+            .properties()?
+            .map(Ok)
+            .chain(plan.referenced_properties()?)
+        {
+            let (ps, property_plan) = property?;
+            if !derives_expected(
+                crate::shapes::PropertyView {
+                    property: ps,
+                    edge: property_plan.edge(),
+                },
+                expected,
+            ) {
                 continue;
             }
             let Path::Predicate(predicate) = &ps.path else {
@@ -1850,11 +1883,18 @@ pub(crate) fn expected_derived_triples(
                     plan.deactivated_when()?,
                 )? || crate::constraints::deactivated_at(
                     data,
-                    plan,
+                    property_plan.parent(),
                     0,
                     &focus_node,
                     &ps.id,
                     property_plan.deactivated_when(ps)?,
+                )? || crate::constraints::deactivated_at(
+                    data,
+                    property_plan.parent(),
+                    0,
+                    &focus_node,
+                    &ps.id,
+                    property_plan.edge_deactivation(),
                 )? {
                     continue;
                 }
@@ -1887,15 +1927,19 @@ impl<'a> RulePlan<'a> {
     /// Lower the rule's shape TOGETHER WITH its conditions and bind the lot to `data`,
     /// once per execution. One lowering rather than several is what fixes the plan
     /// positions the rest of this type relies on.
-    fn of(data: &ShaclData, shape: &'a Shape, conditions: &'a [Shape]) -> Self {
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions));
+    fn of(
+        data: &ShaclData,
+        shape: &'a Shape,
+        conditions: &'a [Shape],
+    ) -> Result<Self, crate::error::ShapesError> {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
-        Self {
+        Ok(Self {
             lowered,
             binding,
             shape,
             conditions,
-        }
+        })
     }
 
     /// Resolve the focus nodes of the rule's shape against the current dataset.
@@ -1906,6 +1950,7 @@ impl<'a> RulePlan<'a> {
             &self.shape.targets,
             &self.binding,
             self.lowered.classes(),
+            self.shape.owner.as_ref(),
         )
         .map(|nodes| {
             // The rules engine drives the owned-term SHACL-AF surfaces, so this is one of
@@ -1928,7 +1973,7 @@ impl<'a> RulePlan<'a> {
 
     /// The plan of the rule's own shape.
     fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
-        self.plan_at(self.shape, 0)
+        self.plan_at(self.shape, 0)?.definition()
     }
 
     /// The plan of the `position`-th `sh:condition` shape.
@@ -1949,14 +1994,14 @@ struct ExprPlan<'a> {
 
 impl<'a> ExprPlan<'a> {
     /// Lower `expr` standalone and resolve every identity it names against `data`.
-    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Self {
-        let lowering = crate::plan::lower_standalone_expression(expr);
+    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Result<Self, crate::error::ShapesError> {
+        let lowering = crate::plan::lower_standalone_expression(expr, None)?;
         let binding = lowering.bind(data.core_view());
-        Self {
+        Ok(Self {
             expr,
             lowering,
             binding,
-        }
+        })
     }
 
     /// Evaluate the expression at `focus`. `guard` is supplied rather than created here
@@ -2437,6 +2482,34 @@ mod tests {
     // ── Parsing ────────────────────────────────────────────────────────────────
 
     #[test]
+    fn derived_values_use_the_graph_owner_for_bare_shape_targets() {
+        let mut shapes = parse_shapes(
+            "ex:Selection sh:node ex:Named .
+             ex:Named sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape; sh:targetWhere ex:Selection;
+               sh:property [ sh:path ex:derived; sh:values ex:value ] .",
+        );
+        let root = shapes
+            .node_shapes
+            .iter_mut()
+            .find(|shape| shape.id.to_string() == ex("S"))
+            .unwrap();
+        *root = shapes.owner.definition(&root.id).unwrap().clone();
+        assert!(root.owner.is_none());
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}ex:a ex:source 1 ."),
+            None,
+        )
+        .unwrap();
+        let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+        let expected = FastSet::from_iter(["http://example.org/ns#derived"]);
+        let triples = expected_derived_triples(&data, &shapes, &expected).unwrap();
+        assert!(triples.iter().any(|[s, p, o]| s.to_string() == ex("a")
+            && p.to_string() == ex("derived")
+            && o.to_string() == ex("value")));
+    }
+
+    #[test]
     fn parses_triple_rule() {
         let shapes = parse_shapes(
             r"
@@ -2548,12 +2621,17 @@ mod tests {
         assert!((rule.order.expect("order").value() - 3.0).abs() < f64::EPSILON);
         assert!(rule.deactivated);
         assert_eq!(rule.conditions.len(), 1);
-        // The condition is a RESOLVED shape, not the node term it was written as:
-        // it carries the property shape `ex:HasName` declares, so the rule holds
-        // everything it needs to evaluate the condition without a later lookup.
+        // The condition retains its original catalog identity and property edge.
         assert_eq!(rule.conditions[0].id.to_string(), ex("HasName"));
         assert_eq!(
-            rule.conditions[0].property_shapes.len(),
+            shapes
+                .owner
+                .definition(&rule.conditions[0].id)
+                .unwrap()
+                .properties_in(Some(&shapes.owner))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("original property definitions")
+                .len(),
             1,
             "the referenced shape's sh:property was parsed into the condition"
         );
@@ -3773,7 +3851,12 @@ mod tests {
                 panic!("expected a sh:TripleRule head for {position}");
             };
             assert!(
-                matches!(subject, Some(NodeExpr::Empty)) || matches!(object, Some(NodeExpr::Empty)),
+                subject
+                    .as_ref()
+                    .is_some_and(|expr| matches!(expr.in_model().0, NodeExpr::Empty))
+                    || object
+                        .as_ref()
+                        .is_some_and(|expr| matches!(expr.in_model().0, NodeExpr::Empty)),
                 "a bare blank head position is an empty expression for {position}"
             );
             let out = entail("ex:alice a ex:Person .", &body);

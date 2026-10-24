@@ -11,7 +11,7 @@ use std::sync::Arc;
 use purrdf_iri::vocab::sh;
 use purrdf_shapes::engine::{PreparedShapes, validate_complete_dataset, validate_dataset};
 use purrdf_shapes::report::CompleteValidationError;
-use purrdf_shapes::shapes::{Constraint, Shapes};
+use purrdf_shapes::shapes::{Constraint, ModelOwner, Shapes};
 use purrdf_shapes::term::Term;
 
 const PREFIXES: &str =
@@ -203,21 +203,21 @@ fn nested_source_refusal_survives_a_later_conforming_some_value() {
         "ex:n ex:p ex:aBad, ex:zGood . ex:zGood a ex:Duck .",
     );
     let mut changed = (*original).clone();
-    let target = changed
-        .node_shapes
+    let mut definitions: Vec<_> = changed.owner.definitions().cloned().collect();
+    let query = definitions
         .iter_mut()
-        .find(|shape| shape.id.to_string() == "<http://example.org/S>")
-        .expect("the actual target shape");
-    let Constraint::SomeValue(candidate) = &mut target.property_shapes[0].constraints[0] else {
-        panic!("the actual SomeValue child")
-    };
-    let Constraint::Or(members) = &mut candidate.constraints[0] else {
-        panic!("the actual candidate alternatives")
-    };
-    let Constraint::Sparql { select, .. } = &mut members[1].constraints[0] else {
+        .find(|shape| shape.id.to_string() == "<http://example.org/Query>")
+        .expect("the original nested query definition");
+    let Constraint::Sparql { select, .. } = &mut query.constraints[0] else {
         panic!("the actual query occurrence")
     };
     select.push_str(" LIMIT 1");
+    changed.owner = ModelOwner::from_definitions(definitions).unwrap();
+    changed.node_shapes = changed
+        .node_shapes
+        .iter()
+        .map(|root| changed.owner.root(&root.id).unwrap())
+        .collect();
     let changed = PreparedShapes::new(Arc::new(changed))
         .bind_complete_shared_dataset(Arc::clone(&data))
         .unwrap();
@@ -247,6 +247,13 @@ fn changed_constraint_cannot_inherit_a_source_occurrence() {
     "#,
     );
     let mut changed = (*original).clone();
+    let mut body = changed
+        .owner
+        .definition(&changed.node_shapes[0].id)
+        .unwrap()
+        .clone();
+    body.owner = Some(Arc::clone(&changed.owner));
+    changed.node_shapes[0] = body;
     let Constraint::Sparql { select, .. } = &mut changed.node_shapes[0].constraints[0] else {
         panic!("SPARQL constraint")
     };
@@ -521,6 +528,13 @@ fn isomorphic_report_only_blanks_do_not_authorize_changed_source_identity() {
     let original =
         shapes("_:original a sh:NodeShape; sh:targetNode ex:n; sh:nodeKind sh:BlankNode .");
     let mut changed = (*original).clone();
+    let mut body = changed
+        .owner
+        .definition(&changed.node_shapes[0].id)
+        .unwrap()
+        .clone();
+    body.owner = Some(Arc::clone(&changed.owner));
+    changed.node_shapes[0] = body;
     changed.node_shapes[0].id = Term::BlankNode("unheld".to_owned());
     let data = turtle::data(PREFIXES, "");
     let legacy = validate_dataset(&data, &changed).unwrap();

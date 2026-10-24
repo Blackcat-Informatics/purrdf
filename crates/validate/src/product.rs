@@ -66,8 +66,7 @@ use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesProductRefusal {
     /// The shapes document did not become a shapes graph. Carries the SHACL
-    /// engine's own error: [`ShapesError::Imports`] when the shapes graph's
-    /// `owl:imports` closure is not in hand, [`ShapesError::Invalid`] otherwise.
+    /// engine's own error, including typed import and recursive-catalog refusals.
     Shapes(ShapesError),
     /// The prepared-product admission boundary refused, on a named dimension.
     Admission(ShapesProductError),
@@ -121,6 +120,8 @@ impl ShapesProductRefusal {
             Self::Shapes(ShapesError::Invalid(message)) => message.as_str().into(),
             Self::Shapes(
                 error @ (ShapesError::Imports(_)
+                | ShapesError::Recursion(_)
+                | ShapesError::Preparation(_)
                 | ShapesError::Storage(_)
                 | ShapesError::Processor(_)
                 | ShapesError::ShaclJs(_)
@@ -1144,6 +1145,26 @@ mod tests {
     use purrdf_shapes::ShapesImportError;
     use purrdf_shapes::product::ProductDimension;
     use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
+
+    #[test]
+    fn recursive_catalog_pack_retains_the_original_structured_failure() {
+        let refusal = pack_shapes_product(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/> .\n\
+             ex:S sh:node ex:S .",
+            None,
+            &[],
+        )
+        .expect_err("packing must not accept a recursive catalog without semantics");
+        assert_eq!(refusal.dimension(), None);
+        assert!(refusal.message().contains("cyclic SHACL shape reference"));
+        let ShapesProductRefusal::Shapes(purrdf_shapes::ShapesError::Recursion(cycle)) = refusal
+        else {
+            panic!("the product boundary must preserve the native recursion refusal");
+        };
+        assert_eq!(cycle.members, ["<http://example.org/S>"]);
+        assert_eq!(cycle.edges.len(), 1);
+    }
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\

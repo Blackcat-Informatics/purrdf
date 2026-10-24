@@ -313,6 +313,7 @@ deps = [
     "purrdf-slice",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
+    "purrdf-stack",
     "purrdf-xsd",
 ]
 

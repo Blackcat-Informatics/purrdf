@@ -268,12 +268,17 @@ fn rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them() {
         &format!("{PREFIXES}ex:S a sh:NodeShape; sh:targetNode ex:n; sh:nodeKind sh:BlankNode; sh:message 'shape' ."),
         None,
     ).unwrap();
-    shapes.node_shapes[0].constraint_annotations = vec![ConstraintAnnotation {
+    let root = &shapes.node_shapes[0];
+    let mut body = shapes.owner.definition(&root.id).unwrap().clone();
+    body.targets.clone_from(&root.targets);
+    body.owner = Some(Arc::clone(&shapes.owner));
+    body.constraint_annotations = vec![ConstraintAnnotation {
         constraint: AnnotatedConstraint::Constraint(0),
         severity: Some(Severity::Info),
         messages: vec![Literal::new_simple_literal("reifier")],
         deactivated_when: Vec::new(),
     }];
+    shapes.node_shapes[0] = body;
     let binding = PreparedShapes::new(Arc::new(shapes))
         .bind_complete_shared_dataset(RdfDatasetBuilder::new().freeze().unwrap())
         .unwrap();

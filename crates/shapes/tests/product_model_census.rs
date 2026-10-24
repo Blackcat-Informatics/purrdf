@@ -91,13 +91,17 @@ use syn::visit::{self, Visit};
 /// The root the model closure is computed from: the whole parsed shapes graph.
 const CENSUS_ROOT: &str = "Shapes";
 
+/// The separate declaration stream precedes shape roots in the AST codec.
+/// Calls store an IRI; the model's private declaration owner retains this table.
+const DECLARATION_ROOT: &str = "CustomFunction";
+
 /// THE CENSUS: every type of the declarative SHACL model a prepared-product codec
 /// must cover.
 ///
 /// Checked for equality against the closure in [`census_closure_is_complete`], so
 /// this list cannot go stale in either direction — a reachable type missing from it
 /// fails, and a row here that the model no longer reaches fails too.
-const CENSUS_TYPES: [&str; 33] = [
+const CENSUS_TYPES: [&str; 35] = [
     "AnnotatedConstraint",
     "ArgKey",
     "BoxRoleVocab",
@@ -110,11 +114,13 @@ const CENSUS_TYPES: [&str; 33] = [
     "CustomFunction",
     "FnCall",
     "Literal",
+    "ModelOwner",
     "NamedNode",
     "NodeExpr",
     "NodeKindValue",
     "OrderKey",
     "Path",
+    "PropertyReference",
     "PropertyShape",
     "ResultAnnotation",
     "Rule",
@@ -1081,13 +1087,23 @@ const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/plan.rs";
 /// `lower_path` is likewise excluded: a path names no class, so it cannot change
 /// which classes a product carries. It is part of the lowering, not of the class
 /// analysis, and the stage id speaks for the analysis.
-const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 7] = [
+// Retained definition discovery decides which class references enter the walk,
+// so its two indexed traversal homes belong to the carried analysis as well.
+const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 15] = [
     ("", "struct", "ShapeWalk"),
+    ("", "struct", "LoweredIndex"),
+    ("ShapeWalk", "fn", "reference_index"),
+    ("ShapeWalk", "fn", "index_position"),
+    ("ShapeWalk", "fn", "request_definition"),
+    ("ShapeWalk", "fn", "lower_pending_definitions"),
+    ("ShapeWalk", "fn", "finish"),
     ("ClassCatalog", "fn", "from_walk"),
     ("", "fn", "lower_shapes"),
+    ("", "fn", "lower_shapes_in_model"),
     ("", "fn", "lower_shape"),
     ("", "fn", "lower_property"),
     ("", "fn", "lower_constraint"),
+    ("", "fn", "lower_reference"),
     ("", "fn", "lower_expression"),
 ];
 
@@ -1130,6 +1146,7 @@ pub fn class_analysis_table_from(source: &str) -> Vec<(String, String)> {
         .into_iter()
         .collect();
     let class_catalog = impl_body(&file, "ClassCatalog");
+    let shape_walk = impl_body(&file, "ShapeWalk");
 
     CLASS_ANALYSIS_SITES
         .iter()
@@ -1137,7 +1154,12 @@ pub fn class_analysis_table_from(source: &str) -> Vec<(String, String)> {
             let (key, tokens) = if scope.is_empty() {
                 (name.to_owned(), &file)
             } else {
-                (format!("{scope}::{name}"), &class_catalog)
+                let body = match scope {
+                    "ClassCatalog" => &class_catalog,
+                    "ShapeWalk" => &shape_walk,
+                    other => panic!("unhandled class-analysis implementation scope {other}"),
+                };
+                (format!("{scope}::{name}"), body)
             };
             let rendered = item_tokens(tokens, keyword, name, &key);
             assert!(
@@ -1358,7 +1380,8 @@ pub fn live_stage_id() -> String {
 #[test]
 fn census_closure_is_complete() {
     let scan = scan_sources(&shapes_sources());
-    let closure = scan.closure(CENSUS_ROOT);
+    let mut closure = scan.closure(CENSUS_ROOT);
+    closure.extend(scan.closure(DECLARATION_ROOT));
     let declared: BTreeSet<String> = CENSUS_TYPES.iter().map(|name| (*name).to_owned()).collect();
     assert_eq!(
         declared.len(),
@@ -1852,8 +1875,9 @@ fn stage_id_changes_when_the_spec_table_changes() {
 
 /// Every `Constraint` variant — the model a prepared product carries — is claimed by
 /// a component row of the spec symbol table, and every variant a row claims exists.
-/// `Constraint::Component` is the one exception: it carries CUSTOM components, which
-/// by definition are not spec rows.
+/// `Constraint::Component` carries custom components, which are not spec rows.
+/// `Constraint::Reference` represents a shared definition's identity rather than
+/// another SHACL component; the referenced definition carries those components.
 #[test]
 fn constraint_variants_are_the_spec_table_component_rows() {
     use purrdf_shapes::spec::Carrier;
@@ -1866,7 +1890,7 @@ fn constraint_variants_are_the_spec_table_component_rows() {
         .variants
         .iter()
         .map(|variant| variant.name.as_str())
-        .filter(|name| *name != "Component")
+        .filter(|name| !matches!(*name, "Component" | "Reference"))
         .collect();
     let mut claimed: BTreeSet<&str> = BTreeSet::new();
     for row in purrdf_shapes::spec::implemented().components() {
@@ -1902,17 +1926,6 @@ fn stage_id_changes_when_the_class_reachability_rule_changes() {
     let real = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 
-    let patched = real.replacen(
-        ".map(|reifier| lower_shape(reifier, walk))",
-        ".map(|reifier| lower_shape(reifier, &mut ShapeWalk::default()))",
-        1,
-    );
-    assert_ne!(
-        patched, real,
-        "the class walk no longer descends into reifier shapes by that spelling; the probe is \
-         patching nothing and would pass vacuously"
-    );
-
     let types = stage_types();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
@@ -1922,19 +1935,33 @@ fn stage_id_changes_when_the_class_reachability_rule_changes() {
         &components,
         &class_analysis_table_from(&real),
     );
-    let after = stage_id(
-        &types,
-        &builtins,
-        &components,
-        &class_analysis_table_from(&patched),
-    );
-
     assert_eq!(before, shipped_stage_id());
-    assert_ne!(
-        before, after,
-        "a changed class-reachability rule left the stage id unchanged, so a product carrying one \
-         build's class analysis would still be admitted by a build that computes a different one"
-    );
+    for (original, replacement) in [
+        (
+            ".map(|reifier| lower_shape(reifier, walk))",
+            ".map(|reifier| lower_shape(reifier, &mut ShapeWalk::default()))",
+        ),
+        (
+            "for target in shapes.keys() {",
+            "for target in shapes.keys().take(0) {",
+        ),
+    ] {
+        let patched = real.replacen(original, replacement, 1);
+        assert_ne!(
+            patched, real,
+            "the class-reachability probe patched nothing: {original}"
+        );
+        let after = stage_id(
+            &types,
+            &builtins,
+            &components,
+            &class_analysis_table_from(&patched),
+        );
+        assert_ne!(
+            before, after,
+            "a changed class-reachability rule left the stage id unchanged: {original}"
+        );
+    }
 }
 
 /// **Reformatting the class walk does NOT move the stage id.**

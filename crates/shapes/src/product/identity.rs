@@ -61,6 +61,13 @@
 //! | 10 | the class catalog's digest | `class-catalog` | [`ClassCatalog`] |
 //! | 11 | the declared parser options: relation lists **sorted**, extension namespaces in **declaration order** | `parse-configuration` | [`ParseConfiguration`] |
 //! | 12 | the IRIs of every graph the shapes graph was assembled from by name, **sorted** | `included-graphs` | [`IncludedGraphs`] |
+//! | 13 | BLAKE3 digest of the complete encoded model, including exported roots and retained domains | `model` | [`Model`](ProductDimension::Model) |
+//!
+//! Row 13 binds the validator actually exported from the retained source. A
+//! caller can select different roots or compose roots retaining distinct domains
+//! without changing the source dataset or class catalog. Those validators must
+//! have different cache identities. Admission hashes the carried AST bytes; it
+//! does not reparse or re-encode the model to establish this binding.
 //!
 //! Row 12 binds what the merged dataset in row 0 cannot say: WHICH documents it was
 //! merged from. A table-supplied document with no ontology header declares no IRI of
@@ -273,7 +280,7 @@ pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 /// One table drives both [`build_identity`] (which pushes in this order) and
 /// [`check_identity`] (which indexes by position), so the labels and the dimensions
 /// cannot drift apart into two hand-maintained lists.
-const COMPONENTS: [(&str, ProductDimension); 13] = [
+const COMPONENTS: [(&str, ProductDimension); 14] = [
     ("source-dataset", ProductDimension::DatasetIdentity),
     ("shapes-graph", ProductDimension::ShapesGraph),
     ("doc-prefixes", ProductDimension::Prefixes),
@@ -296,6 +303,7 @@ const COMPONENTS: [(&str, ProductDimension); 13] = [
     ("class-catalog", ProductDimension::ClassCatalog),
     ("parse-configuration", ProductDimension::ParseConfiguration),
     ("included-graphs", ProductDimension::IncludedGraphs),
+    ("model", ProductDimension::Model),
 ];
 
 /// The positions of the three HOST-supplied rows in [`COMPONENTS`]: the injected
@@ -596,6 +604,7 @@ pub(crate) fn build_identity(
     parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
+    model: &[u8],
 ) -> Result<Identity, ShapesProductError> {
     assemble(
         dataset.as_bytes().as_slice(),
@@ -604,6 +613,7 @@ pub(crate) fn build_identity(
         parser_options,
         implementation_identity,
         classes,
+        model,
     )
 }
 
@@ -680,6 +690,7 @@ pub(crate) fn check_restored_identity(
     parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
+    model: &[u8],
 ) -> Result<(), ShapesProductError> {
     // An identity whose row 0 carries another label has already failed the format's
     // own rules; the empty value below lands as a position-0 disagreement, which
@@ -692,6 +703,7 @@ pub(crate) fn check_restored_identity(
         parser_options,
         implementation_identity,
         classes,
+        model,
     )?;
     check_identity(declared, &actual)
 }
@@ -837,6 +849,7 @@ fn assemble(
     parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
+    model: &[u8],
 ) -> Result<Identity, ShapesProductError> {
     let provenance = shapes.provenance();
     let [injected_functions, aggregates, relations] = host_components(
@@ -866,6 +879,7 @@ fn assemble(
         class_catalog_digest(classes).as_bytes().to_vec(),
         encode_parser_options(parser_options),
         encode_included_graphs(provenance.included_graphs()),
+        ContentDigest::of(model).as_bytes().to_vec(),
     ];
 
     let mut identity = Identity::new();
@@ -1033,6 +1047,10 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
              its shapes graph, because the section and the binding over it no longer describe one \
              analysis"
         }
+        ProductDimension::Model => {
+            "this product carries a different declarative model than its identity records; \
+             re-prepare it from the intended exported roots and retained definitions"
+        }
         ProductDimension::IncludedGraphs => {
             "this product was prepared from a shapes graph assembled from a different set of \
              named graphs than the one supplied for its execution; re-prepare it with the SAME \
@@ -1196,7 +1214,9 @@ mod tests {
     /// The class catalog a preparation derives from `shapes` — identity component
     /// 10, taken through the real analysis rather than rebuilt here.
     fn catalog_of(shapes: &Shapes) -> Arc<ClassCatalog> {
-        PreparedShapes::new(Arc::new(clone_shapes(shapes))).class_catalog()
+        PreparedShapes::new(Arc::new(clone_shapes(shapes)))
+            .class_catalog()
+            .unwrap()
     }
 
     /// Re-parse `shapes` from its own retained dataset and provenance.
@@ -1243,6 +1263,7 @@ mod tests {
             &ParserOptions::default(),
             implementation_identity,
             &catalog_of(shapes),
+            &crate::product::ast::encode_ast(shapes, &catalog_of(shapes)).unwrap(),
         )
         .expect("the fixture environment fingerprints")
     }
@@ -1274,6 +1295,18 @@ mod tests {
             "exactly one component may differ, got: {mismatches:?}",
         );
         super::mismatch_position(&mismatches[0]).expect("a readable mismatch position")
+    }
+
+    /// A carried model field moves both its diagnostic row and the model digest.
+    fn model_divergence(left: &Identity, right: &Identity) -> usize {
+        let positions: Vec<_> = left
+            .mismatches(right)
+            .iter()
+            .map(|mismatch| super::mismatch_position(mismatch).unwrap())
+            .collect();
+        assert_eq!(positions.len(), 2, "unexpected differences: {positions:?}");
+        assert_eq!(positions[1], 13, "the model digest must also change");
+        positions[0]
     }
 
     // ── Registry fixtures ───────────────────────────────────────────────────────
@@ -1441,6 +1474,7 @@ mod tests {
                 "class-catalog",
                 "parse-configuration",
                 "included-graphs",
+                "model",
             ],
             "the component order is part of the format; reordering breaks every product \
              already written",
@@ -1485,7 +1519,7 @@ mod tests {
         ));
 
         assert_ne!(before.digest(), after.digest());
-        assert_eq!(sole_divergence(&before, &after), 1);
+        assert_eq!(model_divergence(&before, &after), 1);
 
         // Absent must not encode like present-and-empty here either: "the caller
         // named no shapes graph" and "the caller named the empty IRI" are two
@@ -1493,7 +1527,7 @@ mod tests {
         let unnamed = identity_of(&shapes_with(PLAIN_SHAPES, &prefixes, None, None));
         let empty = identity_of(&shapes_with(PLAIN_SHAPES, &prefixes, None, Some("")));
         assert_ne!(unnamed.digest(), empty.digest());
-        assert_eq!(sole_divergence(&unnamed, &empty), 1);
+        assert_eq!(model_divergence(&unnamed, &empty), 1);
 
         // …and the absent spelling cannot be forged by naming a graph after it.
         let forged = identity_of(&shapes_with(
@@ -1569,7 +1603,7 @@ mod tests {
         ));
 
         assert_ne!(before.digest(), after.digest());
-        assert_eq!(sole_divergence(&before, &after), 5);
+        assert_eq!(model_divergence(&before, &after), 5);
     }
 
     #[test]
@@ -1785,6 +1819,7 @@ mod tests {
             &ParserOptions::default(),
             &[],
             &stale,
+            &crate::product::ast::encode_ast(&shapes, &catalog_of(&shapes)).unwrap(),
         )
         .expect("the fixture environment fingerprints");
 
@@ -1906,7 +1941,7 @@ mod tests {
             "an INACTIVE box-role feature and an active one over empty IRIs are two different \
              parses and must not share an identity",
         );
-        assert_eq!(sole_divergence(&absent, &present_and_empty), 5);
+        assert_eq!(model_divergence(&absent, &present_and_empty), 5);
 
         let refusal =
             check_identity(&absent, &present_and_empty).expect_err("the two must not open");

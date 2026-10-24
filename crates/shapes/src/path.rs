@@ -67,18 +67,18 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 /// therefore no outgoing/incoming quads: every STEP is empty, and the only value
 /// a path can yield is the focus itself via reflexive inclusion
 /// (`sh:zeroOrMore` / `sh:zeroOrOne`). That case returns the focus term verbatim.
-pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
-    let lowering = lower_standalone_path(path);
+///
+/// # Errors
+/// Returns preparation stack refusal or a broken lowered-path invariant. A failure
+/// is never represented by an empty set of reachable nodes.
+pub fn eval(
+    ds: &impl ShaclRead,
+    focus: &Term,
+    path: &Path,
+) -> Result<Vec<Term>, crate::error::ShapesError> {
+    let lowering = lower_standalone_path(path)?;
     let binding = lowering.bind(ds);
-    // The walk reports exactly one error — a slot the lowering never handed out —
-    // and the two lines above are why it cannot arrive here: the lowering that names
-    // the slots and the row that answers them come from the same `ShapeWalk`, made in
-    // this call, so the row has one entry per slot the lowered path can name. The
-    // empty answer is what a caller would receive from a path that matched nothing,
-    // and this module's own tests drive every path form through this function and
-    // require a non-empty result, so a lowering that ever did come apart would fail
-    // there by name rather than answer short here.
-    eval_planned(ds, focus, lowering.path(), &binding).unwrap_or_else(|_| Vec::new())
+    eval_planned(ds, focus, lowering.path(), &binding)
 }
 
 /// Id-native value-node producer: the deduped set of value nodes reachable from
@@ -94,15 +94,25 @@ pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
 /// drive evaluation from a `sh:this` Constant that never appears in the data). Its
 /// value nodes have no id and must be produced in the owned-[`Term`] model by
 /// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
-pub fn eval_ids(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Option<IdVec> {
-    let focus_id = resolve_id(ds, focus)?;
-    let lowering = lower_standalone_path(path);
+///
+/// # Errors
+/// Returns preparation stack refusal or a broken lowered-path invariant.
+pub fn eval_ids(
+    ds: &impl ShaclRead,
+    focus: &Term,
+    path: &Path,
+) -> Result<Option<IdVec>, crate::error::ShapesError> {
+    let lowering = lower_standalone_path(path)?;
+    let Some(focus_id) = resolve_id(ds, focus) else {
+        return Ok(None);
+    };
     let binding = lowering.bind(ds);
-    // Unreachable for the reason [`eval`] states, and answered the same way.
-    Some(
-        eval_planned_ids_from_id(ds, focus_id, lowering.path(), &binding)
-            .unwrap_or_else(|_| IdVec::new()),
-    )
+    Ok(Some(eval_planned_ids_from_id(
+        ds,
+        focus_id,
+        lowering.path(),
+        &binding,
+    )?))
 }
 
 // ── The evaluator ──────────────────────────────────────────────────────────────
@@ -225,7 +235,19 @@ pub(crate) fn eval_planned_ids_from_id(
     path: &LoweredPath,
     binding: &DatasetBinding,
 ) -> Result<IdVec, crate::error::ShapesError> {
-    let ids = eval_planned_inner_ids(ds, focus_id, path, binding)?;
+    eval_planned_ids_with_paths(ds, focus_id, path, binding, &[])
+}
+
+/// The same path evaluator over a footprint's shared path arena.
+pub(crate) fn eval_planned_ids_with_paths(
+    ds: &impl ShaclRead,
+    focus_id: TermId,
+    path: &LoweredPath,
+    binding: &DatasetBinding,
+    paths: &[LoweredPath],
+) -> Result<IdVec, crate::error::ShapesError> {
+    let mut memo = purrdf_core::FastMap::default();
+    let ids = eval_planned_inner_ids(ds, focus_id, path, binding, paths, &mut memo)?;
     let mut seen = FrontierDedup::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
     for id in ids {
@@ -252,7 +274,7 @@ pub(crate) fn eval_planned(
         // quads, so every predicate/inverse STEP is empty. The only value a path
         // can yield is the focus term itself, via reflexive (zero-length)
         // inclusion.
-        if admits_empty_planned_path(path) {
+        if admits_empty_planned_path(path)? {
             return Ok(vec![focus.clone()]);
         }
         return Ok(Vec::new());
@@ -270,21 +292,30 @@ pub(crate) fn eval_planned(
 /// Stated over the lowering rather than delegated to the AST so a lowered path is
 /// self-sufficient: the evaluator holds no `Path` to consult for the one question
 /// that decides a non-interned focus's whole result.
-fn admits_empty_planned_path(path: &LoweredPath) -> bool {
-    match path {
+fn admits_empty_planned_path(path: &LoweredPath) -> Result<bool, crate::error::ShapesError> {
+    Ok(match path {
+        LoweredPath::Reference(_) | LoweredPath::SharedReference(_) => {
+            return Err(crate::error::ShapesError::internal(
+                "a shared footprint path was used without its path arena",
+            ));
+        }
         // A predicate step is never zero-length.
         LoweredPath::Predicate(_) | LoweredPath::InversePredicate(_) => false,
         // Inversion does not change reflexivity: `^p` admits empty iff `p` does,
         // so the already-inverted lowering answers for the declared `^(…)`.
-        LoweredPath::InvertedComposite(inverted) => admits_empty_planned_path(inverted),
-        LoweredPath::OneOrMore(inner) => admits_empty_planned_path(inner),
+        LoweredPath::InvertedComposite(inverted) => admits_empty_planned_path(inverted)?,
+        LoweredPath::OneOrMore(inner) => admits_empty_planned_path(inner)?,
         // A sequence admits empty only if EVERY step can be taken in zero steps.
-        LoweredPath::Sequence(parts) => parts.iter().all(admits_empty_planned_path),
+        LoweredPath::Sequence(parts) => parts.iter().try_fold(true, |empty, part| {
+            Ok::<_, crate::error::ShapesError>(admits_empty_planned_path(part)? && empty)
+        })?,
         // An alternative admits empty if ANY branch does.
-        LoweredPath::Alternative(parts) => parts.iter().any(admits_empty_planned_path),
+        LoweredPath::Alternative(parts) => parts.iter().try_fold(false, |empty, part| {
+            Ok::<_, crate::error::ShapesError>(admits_empty_planned_path(part)? || empty)
+        })?,
         // The reflexive closures always admit the zero-length path.
         LoweredPath::ZeroOrMore(_) | LoweredPath::ZeroOrOne(_) => true,
-    }
+    })
 }
 
 /// The recursive id-native evaluator for a lowered path and an interned `focus`.
@@ -293,8 +324,41 @@ fn eval_planned_inner_ids(
     focus: TermId,
     path: &LoweredPath,
     binding: &DatasetBinding,
+    paths: &[LoweredPath],
+    memo: &mut purrdf_core::FastMap<(usize, TermId), IdVec>,
 ) -> Result<IdVec, crate::error::ShapesError> {
+    if purrdf_stack::is_low() {
+        return Err(crate::error::ShapesError::Processor(
+            crate::error::ProcessorFailure::ExpressionStackMargin,
+        ));
+    }
     Ok(match path {
+        LoweredPath::Reference(index) | LoweredPath::SharedReference(index) => {
+            let shared = matches!(path, LoweredPath::SharedReference(_));
+            if shared && let Some(ids) = memo.get(&(*index, focus)) {
+                return Ok(ids.clone());
+            }
+            let path = paths.get(*index).ok_or_else(|| {
+                crate::error::ShapesError::internal("a shared path reference has no prepared path")
+            })?;
+            let mut ids = eval_planned_inner_ids(ds, focus, path, binding, paths, memo)?;
+            if shared {
+                // Cache a set, not an alternative's repeated intermediate rows.
+                // Sharing must bound both repeated computation and result storage.
+                let mut seen = FrontierDedup::default();
+                let mut end = 0;
+                for position in 0..ids.len() {
+                    let id = ids[position];
+                    if seen.insert(&ids[..end], id) {
+                        ids[end] = id;
+                        end += 1;
+                    }
+                }
+                ids.truncate(end);
+                memo.insert((*index, focus), ids.clone());
+            }
+            ids
+        }
         LoweredPath::Predicate(slot) => match binding.term(*slot)? {
             Some(p_id) => {
                 quads_for_pattern_ids(ds, Some(focus), Some(p_id), None, GraphFilter::DefaultGraph)
@@ -316,7 +380,7 @@ fn eval_planned_inner_ids(
         // rewrite here and nothing to re-resolve: this is an ordinary recursive
         // step over slots.
         LoweredPath::InvertedComposite(inverted) => {
-            eval_planned_inner_ids(ds, focus, inverted, binding)?
+            eval_planned_inner_ids(ds, focus, inverted, binding, paths, memo)?
         }
         LoweredPath::Sequence(parts) => {
             // Fold the frontier through each step, deduplicating per step
@@ -330,7 +394,7 @@ fn eval_planned_inner_ids(
                 next.clear();
                 seen.clear();
                 for &node in &frontier {
-                    for value in eval_planned_inner_ids(ds, node, part, binding)? {
+                    for value in eval_planned_inner_ids(ds, node, part, binding, paths, memo)? {
                         if seen.insert(&next, value) {
                             next.push(value);
                         }
@@ -343,15 +407,23 @@ fn eval_planned_inner_ids(
         LoweredPath::Alternative(parts) => {
             let mut out: IdVec = IdVec::new();
             for part in parts {
-                out.extend(eval_planned_inner_ids(ds, focus, part, binding)?);
+                out.extend(eval_planned_inner_ids(
+                    ds, focus, part, binding, paths, memo,
+                )?);
             }
             out
         }
-        LoweredPath::ZeroOrMore(inner) => planned_closure_ids(ds, focus, inner, binding, true)?,
-        LoweredPath::OneOrMore(inner) => planned_closure_ids(ds, focus, inner, binding, false)?,
+        LoweredPath::ZeroOrMore(inner) => {
+            planned_closure_ids(ds, focus, inner, binding, true, paths, memo)?
+        }
+        LoweredPath::OneOrMore(inner) => {
+            planned_closure_ids(ds, focus, inner, binding, false, paths, memo)?
+        }
         LoweredPath::ZeroOrOne(inner) => {
             let mut nodes: IdVec = smallvec![focus];
-            nodes.extend(eval_planned_inner_ids(ds, focus, inner, binding)?);
+            nodes.extend(eval_planned_inner_ids(
+                ds, focus, inner, binding, paths, memo,
+            )?);
             nodes
         }
     })
@@ -364,6 +436,8 @@ fn planned_closure_ids(
     inner: &LoweredPath,
     binding: &DatasetBinding,
     reflexive: bool,
+    paths: &[LoweredPath],
+    memo: &mut purrdf_core::FastMap<(usize, TermId), IdVec>,
 ) -> Result<IdVec, crate::error::ShapesError> {
     // `order` IS the visited set: every id the dedup admits is pushed to it, and
     // it is never popped, so the closure's membership question is answered against
@@ -378,7 +452,7 @@ fn planned_closure_ids(
         // — and the dedup reads `order` itself, so pushing IS recording it.
         order.push(focus);
     } else {
-        for value in eval_planned_inner_ids(ds, focus, inner, binding)? {
+        for value in eval_planned_inner_ids(ds, focus, inner, binding, paths, memo)? {
             if seen.insert(&order, value) {
                 order.push(value);
             }
@@ -388,7 +462,7 @@ fn planned_closure_ids(
     while cursor < order.len() {
         let node = order[cursor];
         cursor += 1;
-        for value in eval_planned_inner_ids(ds, node, inner, binding)? {
+        for value in eval_planned_inner_ids(ds, node, inner, binding, paths, memo)? {
             if seen.insert(&order, value) {
                 order.push(value);
             }
@@ -500,14 +574,133 @@ pub fn primary_predicate(path: &Path) -> Option<&NamedNode> {
 /// inverts anything: by the time either of those walks runs, the inversion is
 /// already inside the lowering they are handed.
 pub(crate) fn invert(path: &Path) -> Path {
-    match path {
-        Path::Predicate(_) => Path::Inverse(Box::new(path.clone())),
-        Path::Inverse(inner) => inner.as_ref().clone(),
-        Path::Sequence(parts) => Path::Sequence(parts.iter().rev().map(invert).collect()),
-        Path::Alternative(parts) => Path::Alternative(parts.iter().map(invert).collect()),
-        Path::ZeroOrMore(inner) => Path::ZeroOrMore(Box::new(invert(inner))),
-        Path::OneOrMore(inner) => Path::OneOrMore(Box::new(invert(inner))),
-        Path::ZeroOrOne(inner) => Path::ZeroOrOne(Box::new(invert(inner))),
+    copy_path(path, true)
+}
+
+impl Clone for Path {
+    fn clone(&self) -> Self {
+        copy_path(self, false)
+    }
+}
+
+/// Clone and inversion share this postorder reconstruction over the native work list.
+fn copy_path(path: &Path, inverted: bool) -> Path {
+    use purrdf_lex::walk::WorkList;
+    enum Build {
+        Inverse,
+        Sequence(usize),
+        Alternative(usize),
+        ZeroOrMore,
+        OneOrMore,
+        ZeroOrOne,
+    }
+    enum Task<'a> {
+        Visit(&'a Path, bool),
+        Build(Build),
+    }
+    let mut tasks = WorkList::<_, 16>::with(Task::Visit(path, inverted));
+    let mut values = WorkList::<Path, 16>::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(path, reverse) => match path {
+                Path::Predicate(predicate) => {
+                    let predicate = Path::Predicate(predicate.clone());
+                    values.push(if reverse {
+                        Path::Inverse(Box::new(predicate))
+                    } else {
+                        predicate
+                    });
+                }
+                Path::Inverse(inner) => {
+                    if !reverse {
+                        tasks.push(Task::Build(Build::Inverse));
+                    }
+                    tasks.push(Task::Visit(inner, false));
+                }
+                Path::Sequence(parts) | Path::Alternative(parts) => {
+                    let sequence = matches!(path, Path::Sequence(_));
+                    tasks.push(Task::Build(if sequence {
+                        Build::Sequence(parts.len())
+                    } else {
+                        Build::Alternative(parts.len())
+                    }));
+                    if sequence && reverse {
+                        for part in parts {
+                            tasks.push(Task::Visit(part, reverse));
+                        }
+                    } else {
+                        for part in parts.iter().rev() {
+                            tasks.push(Task::Visit(part, reverse));
+                        }
+                    }
+                }
+                Path::ZeroOrMore(inner) | Path::OneOrMore(inner) | Path::ZeroOrOne(inner) => {
+                    let build = match path {
+                        Path::ZeroOrMore(_) => Build::ZeroOrMore,
+                        Path::OneOrMore(_) => Build::OneOrMore,
+                        _ => Build::ZeroOrOne,
+                    };
+                    tasks.push(Task::Build(build));
+                    tasks.push(Task::Visit(inner, reverse));
+                }
+            },
+            Task::Build(build) => {
+                let value = match build {
+                    Build::Sequence(count) | Build::Alternative(count) => {
+                        let mut children: Vec<_> = (0..count)
+                            .map(|_| values.pop().expect("postorder path child"))
+                            .collect();
+                        children.reverse();
+                        if matches!(build, Build::Sequence(_)) {
+                            Path::Sequence(children)
+                        } else {
+                            Path::Alternative(children)
+                        }
+                    }
+                    Build::Inverse | Build::ZeroOrMore | Build::OneOrMore | Build::ZeroOrOne => {
+                        let child = Box::new(values.pop().expect("postorder unary path child"));
+                        match build {
+                            Build::Inverse => Path::Inverse(child),
+                            Build::ZeroOrMore => Path::ZeroOrMore(child),
+                            Build::OneOrMore => Path::OneOrMore(child),
+                            _ => Path::ZeroOrOne(child),
+                        }
+                    }
+                };
+                values.push(value);
+            }
+        }
+    }
+    values.pop().expect("postorder path root")
+}
+
+impl Drop for Path {
+    fn drop(&mut self) {
+        use purrdf_lex::walk::WorkList;
+        fn detach(path: &mut Path, pending: &mut WorkList<Path, 16>) {
+            match path {
+                Path::Predicate(_) => {}
+                Path::Inverse(child)
+                | Path::ZeroOrMore(child)
+                | Path::OneOrMore(child)
+                | Path::ZeroOrOne(child) => {
+                    pending.push(std::mem::replace(
+                        child.as_mut(),
+                        Path::Sequence(Vec::new()),
+                    ));
+                }
+                Path::Sequence(parts) | Path::Alternative(parts) => {
+                    for child in parts.drain(..) {
+                        pending.push(child);
+                    }
+                }
+            }
+        }
+        let mut pending = WorkList::new();
+        detach(self, &mut pending);
+        while let Some(mut path) = pending.pop() {
+            detach(&mut path, &mut pending);
+        }
     }
 }
 
@@ -521,6 +714,51 @@ mod tests {
 
     use super::*;
     use crate::term::Literal;
+
+    #[test]
+    fn missing_shared_paths_are_processor_failures() {
+        let data = load_data("<http://example.org/a> <http://example.org/p> 1.");
+        let lowering =
+            lower_standalone_path(&Path::Predicate(NamedNode::from("http://example.org/p")))
+                .unwrap();
+        let binding = lowering.bind(&data);
+        let focus = data.term_id_by_iri("http://example.org/a").unwrap();
+        for reference in [LoweredPath::Reference(0), LoweredPath::SharedReference(0)] {
+            let error =
+                eval_planned_ids_with_paths(&data, focus, &reference, &binding, &[]).unwrap_err();
+            assert!(matches!(
+                error,
+                crate::error::ShapesError::Processor(
+                    crate::error::ProcessorFailure::Internal { .. }
+                )
+            ));
+            assert!(admits_empty_planned_path(&reference).is_err());
+        }
+    }
+
+    #[test]
+    fn deep_path_copy_inversion_and_destruction_use_heap_work_lists() {
+        purrdf_stack::on_stack(256 * 1024, || {
+            let mut path = Path::Predicate(NamedNode::new_unchecked("http://example.org/p"));
+            for _ in 0..5000 {
+                path = Path::ZeroOrMore(Box::new(path));
+            }
+            let copied = path.clone();
+            let inverted = invert(&path);
+            let depth = |mut path: &Path| {
+                let mut count = 0;
+                while let Path::ZeroOrMore(inner) = path {
+                    count += 1;
+                    path = inner;
+                }
+                count
+            };
+            assert_eq!(depth(&copied), 5000);
+            assert_eq!(depth(&inverted), 5000);
+            drop((path, copied, inverted));
+        })
+        .unwrap();
+    }
 
     // `NamedNode` is referenced through `super::*` (re-exported into scope by the
     // module's own `use`), so the test helpers below construct terms directly.
@@ -551,7 +789,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = nn("http://example.org/ns#a");
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(result.len(), 2);
         assert!(result.contains(&nn("http://example.org/ns#b")));
@@ -565,7 +803,7 @@ mod tests {
         let path = Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
             "http://example.org/ns#q",
         ))));
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], nn("http://example.org/ns#d"));
     }
@@ -575,7 +813,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = Term::Literal(Literal::new_simple_literal("hello"));
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        assert_eq!(eval(&data, &focus, &path), [] as [_; 0]);
+        assert_eq!(eval(&data, &focus, &path).unwrap(), [] as [_; 0]);
     }
 
     #[test]
@@ -583,7 +821,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = nn("http://example.org/ns#a");
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         // Should be exactly 2 distinct values
         assert_eq!(result.len(), 2);
     }
@@ -600,7 +838,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::Sequence(vec![pred("p"), pred("q")]);
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -619,7 +857,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::Sequence(vec![pred("p"), pred("q")]);
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         assert_eq!(result, vec![nn("http://example.org/ns#d")]);
     }
 
@@ -635,7 +873,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::Alternative(vec![pred("p"), pred("q")]);
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         // ex:c is reachable via both branches but reported once (set semantics).
         assert_eq!(
@@ -657,7 +895,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::ZeroOrMore(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -680,7 +918,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::OneOrMore(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -699,7 +937,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::OneOrMore(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -717,7 +955,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::ZeroOrOne(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         // Focus itself (zero steps) plus one step; c (two steps) excluded.
         assert_eq!(
@@ -743,7 +981,7 @@ mod tests {
             Path::Alternative(vec![pred("p"), pred("q")]),
             Path::ZeroOrMore(Box::new(pred("r"))),
         ]);
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -767,7 +1005,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#d");
         let path = Path::Inverse(Box::new(Path::Sequence(vec![pred("p"), pred("q")])));
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         assert_eq!(result, vec![nn("http://example.org/ns#a")]);
     }
 
@@ -783,7 +1021,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#b");
         let path = Path::Inverse(Box::new(Path::ZeroOrMore(Box::new(pred("next")))));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -814,7 +1052,7 @@ mod tests {
         ];
         for path in &reflexive {
             assert_eq!(
-                eval(&data, &focus, path),
+                eval(&data, &focus, path).unwrap(),
                 vec![focus.clone()],
                 "reflexive path must yield the focus itself: {path:?}"
             );
@@ -829,7 +1067,7 @@ mod tests {
         ];
         for path in &non_reflexive {
             assert!(
-                eval(&data, &focus, path).is_empty(),
+                eval(&data, &focus, path).unwrap().is_empty(),
                 "non-reflexive path must yield nothing: {path:?}"
             );
         }

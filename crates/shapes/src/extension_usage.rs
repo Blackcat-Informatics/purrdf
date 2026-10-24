@@ -36,6 +36,8 @@ use purrdf_sparql_eval::{ExtensionEnv, PredicateUse, predicate_use};
 
 use crate::expression::NodeExpr;
 use crate::rules::RuleBody;
+use std::sync::Arc;
+
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 
 /// Which declaration a SPARQL text came from.
@@ -193,6 +195,10 @@ fn parse(text: &str, env: &ExtensionEnv<'_>) -> Result<Query, String> {
 pub(crate) trait SparqlSink {
     /// One SPARQL text, under the label of the site that carries it.
     fn record(&mut self, site: String, text: &str);
+    /// A constraint text, distinguished from a target or function with the same text.
+    fn constraint(&mut self, site: String, text: &str) {
+        self.record(site, text);
+    }
     /// A node-expression call to the declared function `iri` (`FnCall::UserDefined`),
     /// whose body is not a text this walk reads.
     fn user_function_called(&mut self, _iri: &str) {}
@@ -225,19 +231,52 @@ impl SparqlSink for UsageSink<'_> {
 /// targets, constraints, rules and node expressions, at any depth, and the global rules.
 /// Declarations nothing reaches — a `sh:SPARQLFunction` body, a `sh:SPARQLTargetType`
 /// declaration — are not walked here.
-pub(crate) fn walk_reachable(shapes: &Shapes, sink: &mut dyn SparqlSink) {
-    let mut flight = InFlight::default();
+pub(crate) fn walk_reachable(
+    shapes: &Shapes,
+    sink: &mut dyn SparqlSink,
+) -> Result<(), crate::PreparationRefusal> {
+    let mut flight = InFlight {
+        model: Some(Arc::clone(&shapes.owner)),
+        ..InFlight::default()
+    };
     for shape in &shapes.node_shapes {
         walk_shape(shape, sink, &mut flight);
     }
     for rule in &shapes.rules.global_rules {
-        if let RuleBody::Sparql { construct, .. } = &rule.body {
-            sink.record(format!("global rule {}", rule.id), construct);
-        }
-        for condition in &rule.conditions {
-            walk_shape(condition, sink, &mut flight);
+        walk_rule(rule, &format!("global rule {}", rule.id), sink, &mut flight);
+    }
+    flight.finish()
+}
+
+/// Apply compatibility pre-binding restrictions to the same constraints the
+/// production reference walk reaches, including private function domains.
+pub(crate) fn reachable_constraint_refusal(
+    shapes: &Shapes,
+    refusals: &BTreeMap<String, crate::shapes::QueryRefusal>,
+) -> Result<Option<(String, crate::shapes::QueryRefusal)>, crate::PreparationRefusal> {
+    if refusals.is_empty() {
+        return Ok(None);
+    }
+    struct Refusals<'a> {
+        declarations: &'a BTreeMap<String, crate::shapes::QueryRefusal>,
+        first: Option<(String, crate::shapes::QueryRefusal)>,
+    }
+    impl SparqlSink for Refusals<'_> {
+        fn record(&mut self, _site: String, _text: &str) {}
+        fn constraint(&mut self, site: String, text: &str) {
+            if self.first.is_none()
+                && let Some(refusal) = self.declarations.get(text)
+            {
+                self.first = Some((site, refusal.clone()));
+            }
         }
     }
+    let mut sink = Refusals {
+        declarations: refusals,
+        first: None,
+    };
+    walk_reachable(shapes, &mut sink)?;
+    Ok(sink.first)
 }
 
 /// The first SPARQL-based node expression a shape reaches — at any depth, through the
@@ -258,7 +297,7 @@ pub(crate) fn reachable_select_expression_violation(
     expressions: &[NodeExpr],
     prebound: &BTreeMap<String, std::collections::BTreeSet<String>>,
     profile: crate::profile::ShaclProfile,
-) -> Option<(String, crate::shapes::QueryRefusal)> {
+) -> Result<Option<(String, crate::shapes::QueryRefusal)>, crate::PreparationRefusal> {
     struct Selects<'p> {
         prebound: &'p BTreeMap<String, std::collections::BTreeSet<String>>,
         profile: crate::profile::ShaclProfile,
@@ -295,8 +334,11 @@ pub(crate) fn reachable_select_expression_violation(
         profile,
         first: None,
     };
-    walk_reachable(shapes, &mut sink);
-    let mut flight = InFlight::default();
+    walk_reachable(shapes, &mut sink)?;
+    let mut flight = InFlight {
+        model: Some(Arc::clone(&shapes.owner)),
+        ..InFlight::default()
+    };
     for expression in expressions {
         walk_node_expr(
             expression,
@@ -305,7 +347,8 @@ pub(crate) fn reachable_select_expression_violation(
             &mut flight,
         );
     }
-    sink.first
+    flight.finish()?;
+    Ok(sink.first)
 }
 
 /// The first call, in `(site, function)` order, that a SPARQL text a shape reaches
@@ -317,7 +360,7 @@ pub(crate) fn reachable_select_expression_violation(
 pub(crate) fn reachable_call_to(
     shapes: &Shapes,
     javascript: &std::collections::BTreeSet<String>,
-) -> Option<(String, String)> {
+) -> Result<Option<(String, String)>, crate::PreparationRefusal> {
     /// Every extension-function call of every text, by site.
     #[derive(Default)]
     struct Calls {
@@ -347,8 +390,8 @@ pub(crate) fn reachable_call_to(
     }
 
     let mut sink = Calls::default();
-    walk_reachable(shapes, &mut sink);
-    let bodies: BTreeMap<String, std::sync::Arc<str>> =
+    walk_reachable(shapes, &mut sink)?;
+    let bodies: BTreeMap<String, Arc<str>> =
         shapes.functions.sparql_bodied_texts().into_iter().collect();
     let mut followed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     loop {
@@ -368,9 +411,10 @@ pub(crate) fn reachable_call_to(
             followed.insert(iri);
         }
     }
-    sink.calls
+    Ok(sink
+        .calls
         .into_iter()
-        .find(|(_, iri)| javascript.contains(iri))
+        .find(|(_, iri)| javascript.contains(iri)))
 }
 
 impl Shapes {
@@ -378,8 +422,14 @@ impl Shapes {
     ///
     /// See the [module docs](crate::extension_usage) for why this is the answerable
     /// direction of "will my relations be reached?".
-    #[must_use]
-    pub fn extension_usage(&self, env: &ExtensionEnv<'_>) -> ExtensionUsage {
+    ///
+    /// # Errors
+    /// Returns the original refusal for an unresolved model reference or body,
+    /// or when the walk would enter the physical stack margin.
+    pub fn extension_usage(
+        &self,
+        env: &ExtensionEnv<'_>,
+    ) -> Result<ExtensionUsage, crate::PreparationRefusal> {
         let mut sink = UsageSink {
             usage: ExtensionUsage::default(),
             env,
@@ -397,8 +447,8 @@ impl Shapes {
             sink.record(format!("sh:SPARQLTargetType <{iri}>"), &declaration.select);
         }
 
-        walk_reachable(self, &mut sink);
-        sink.usage
+        walk_reachable(self, &mut sink)?;
+        Ok(sink.usage)
     }
 }
 
@@ -442,17 +492,56 @@ impl Shapes {
 /// re-walks nobody can observe, and a visited set for functions loses sites.
 #[derive(Default)]
 struct InFlight {
-    /// Custom-function IRIs whose `sh:bodyExpression` is currently being walked.
+    model: Option<Arc<crate::shapes::ModelOwner>>,
+    /// Original model/declaration identities whose body is currently being walked.
     /// Removed on the way out — see the type docs.
-    fns: std::collections::BTreeSet<String>,
+    fns: std::collections::BTreeSet<(usize, usize)>,
     /// Shape ids already walked. Never removed — see the type docs.
-    shapes: std::collections::BTreeSet<String>,
+    shapes: std::collections::BTreeSet<(usize, usize)>,
+    refusal: Option<crate::PreparationRefusal>,
+}
+
+impl InFlight {
+    fn finish(self) -> Result<(), crate::PreparationRefusal> {
+        self.refusal.map_or(Ok(()), Err)
+    }
+
+    fn reference(&mut self, target: &crate::term::Term, property: bool, sink: &mut dyn SparqlSink) {
+        let Some(model) = self.model.clone() else {
+            self.refusal
+                .get_or_insert(crate::PreparationRefusal::UnboundReference);
+            return;
+        };
+        let definition = if property {
+            model
+                .property_definition(target)
+                .and_then(|_| model.definition_required(target))
+        } else {
+            model.definition_required(target)
+        };
+        match definition {
+            Ok(shape) => walk_shape(shape, sink, self),
+            Err(error) => {
+                self.refusal.get_or_insert(error);
+            }
+        }
+    }
 }
 
 /// Record every SPARQL text one node shape and its descendants carry.
 fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
-    let id = shape.id.to_string();
-    if !flight.shapes.insert(id.clone()) {
+    if !crate::PreparationRefusal::admit_walk(&mut flight.refusal) {
+        return;
+    }
+    let owner = shape
+        .owner
+        .as_ref()
+        .or(flight.model.as_ref())
+        .map_or(0, |catalog| Arc::as_ptr(catalog).addr());
+    if !flight
+        .shapes
+        .insert((owner, std::ptr::from_ref(shape).addr()))
+    {
         // Already walked. Its constraints are recorded under its own id, so a second
         // visit would merge into the identical entry -- the same report, for the cost
         // of walking the whole subtree again. This also cuts the shape-to-expression
@@ -460,22 +549,60 @@ fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
         return;
     }
 
+    let previous_model = flight.model.clone();
+    if let Some(model) = &shape.owner {
+        flight.model = Some(Arc::clone(model));
+    }
+    let id = shape.id.to_string();
+    for expression in &shape.deactivated_when {
+        walk_node_expr(expression, &id, sink, flight);
+    }
+
     walk_targets(&shape.targets, &id, sink, flight);
     for rule in &shape.rules {
-        if let RuleBody::Sparql { construct, .. } = &rule.body {
-            sink.record(format!("sh:rule on {id}"), construct);
-        }
+        walk_rule(rule, &format!("sh:rule on {id}"), sink, flight);
     }
     walk_constraints(&shape.constraints, &id, sink, flight);
 
     for property in &shape.property_shapes {
         walk_property(property, sink, flight);
     }
+    flight.model = previous_model;
+}
+
+/// Follow the expressions and conditions of an actual rule use.
+fn walk_rule(
+    rule: &crate::rules::Rule,
+    owner: &str,
+    sink: &mut dyn SparqlSink,
+    flight: &mut InFlight,
+) {
+    match &rule.body {
+        RuleBody::Sparql { construct, .. } => sink.record(owner.to_owned(), construct),
+        RuleBody::Triple {
+            subject,
+            predicate,
+            object,
+        } => {
+            for expression in [subject, predicate, object].into_iter().flatten() {
+                walk_node_expr(expression, owner, sink, flight);
+            }
+        }
+    }
+    for condition in &rule.conditions {
+        walk_shape(condition, sink, flight);
+    }
 }
 
 /// Record every SPARQL text one property shape and its descendants carry.
 fn walk_property(property: &PropertyShape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
+    if !crate::PreparationRefusal::admit_walk(&mut flight.refusal) {
+        return;
+    }
     let id = property.id.to_string();
+    for expression in &property.deactivated_when {
+        walk_node_expr(expression, &id, sink, flight);
+    }
     if let Some(expr) = &property.values {
         walk_node_expr(expr, &format!("sh:values on {id}"), sink, flight);
     }
@@ -532,7 +659,7 @@ fn walk_constraints(
     for constraint in constraints {
         match constraint {
             Constraint::Sparql { select, .. } => {
-                sink.record(format!("sh:sparql on {owner}"), select);
+                sink.constraint(format!("sh:sparql on {owner}"), select);
             }
             Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
                 walk_node_expr(expr, owner, sink, flight);
@@ -573,6 +700,13 @@ fn walk_constraints(
                     text,
                 );
             }
+            Constraint::PropertyReference(edge) => {
+                for expression in &edge.deactivated_when {
+                    walk_node_expr(expression, owner, sink, flight);
+                }
+                flight.reference(&edge.target, true, sink);
+            }
+            Constraint::Reference(target) => flight.reference(target, false, sink),
             Constraint::Class(_)
             | Constraint::Datatype(_)
             | Constraint::NodeKind(_)
@@ -609,6 +743,9 @@ fn walk_constraints(
 /// `flight` is the ONE guard for the whole walk; see [`InFlight`] for why it cannot
 /// be scoped to this call.
 fn walk_node_expr(expr: &NodeExpr, owner: &str, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
+    if !crate::PreparationRefusal::admit_walk(&mut flight.refusal) {
+        return;
+    }
     match expr {
         NodeExpr::Select { query, key, .. } => {
             let purpose = if *key == "sh:sparqlExpr" {
@@ -698,20 +835,42 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, sink: &mut dyn SparqlSink, fligh
             // The function's own `sh:bodyExpression`. A `sh:select` inside it is
             // SPARQL this shapes graph carries and this environment will read, so
             // leaving it out made the report answer "reaches nothing" about a graph
-            // whose evaluation invokes the relation. The body is interned once the
-            // whole graph has parsed, so an unfilled cell means the declaration never
-            // linked and there is nothing to read.
-            let iri = func.iri.as_str().to_owned();
-            if flight.fns.insert(iri.clone()) {
-                if let Some(body) = func.body.get() {
-                    walk_node_expr(body, &format!("{owner} via <{iri}>"), sink, flight);
+            // whose evaluation invokes the relation. A missing declaration or an
+            // unfilled body is an original model refusal, not an empty inventory.
+            let iri = func.as_str();
+            let function = flight
+                .model
+                .as_ref()
+                .and_then(|model| model.function(func))
+                .cloned();
+            if let Some(function) = function {
+                let model = flight
+                    .model
+                    .as_ref()
+                    .map_or(0, |model| Arc::as_ptr(model).addr());
+                let key = (model, Arc::as_ptr(&function).addr());
+                if flight.fns.insert(key) {
+                    if let Some(body) = function.body.get() {
+                        walk_node_expr(body, &format!("{owner} via <{iri}>"), sink, flight);
+                    } else {
+                        flight.refusal.get_or_insert_with(|| {
+                            crate::PreparationRefusal::MissingFunctionBody(func.clone())
+                        });
+                    }
+                    // Distinct caller paths have distinct site labels, so this
+                    // guard is removed on return rather than memoized globally.
+                    flight.fns.remove(&key);
                 }
-                // Removed whether or not a body was there. Leaving it in on the
-                // `None` arm would quietly turn this stack into a visited set for
-                // that one IRI, so a second, unrelated call to the same function
-                // later in the graph would be skipped and its body go unreported.
-                flight.fns.remove(&iri);
+            } else {
+                flight.refusal.get_or_insert_with(|| {
+                    crate::PreparationRefusal::UnknownFunction(func.clone())
+                });
             }
+        }
+        NodeExpr::Owned { expr, owner: model } => {
+            let previous = flight.model.replace(Arc::clone(model));
+            walk_node_expr(expr, owner, sink, flight);
+            flight.model = previous;
         }
         // Leaves: no nested node expression, so nothing to walk. Spelled out rather
         // than wildcarded so a variant added later lands here as a compile error --

@@ -7,8 +7,8 @@
 //! Three W3C sections, driven through the production surfaces only —
 //! `engine::parse_shapes` for the shapes graph, `engine::validate_graphs` for
 //! validation, `rules::entail_dataset` for rule entailment, and
-//! `NativeSparqlEngine` for query text. Nothing here hand-builds a
-//! `NodeExpr`.
+//! `NativeSparqlEngine` for query text. Direct-entry controls also construct
+//! original public function bodies to measure resources and processor refusals.
 //!
 //! * **SHACL 1.2 Node Expressions §6.1** — `sh:NamedParameterExpressionFunction`,
 //!   `sh:keyParameter`, and the `[ shnex:arg <iri> ]` argument reference.
@@ -28,7 +28,12 @@ mod turtle;
 #[path = "support/terms.rs"]
 mod terms;
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use std::sync::Arc;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
 use terms::ex_ns as ex_term;
 
 use purrdf_rdf::{RdfDataset, SparqlRequest, SparqlResult};
@@ -806,8 +811,10 @@ fn body_level_processor_failures_are_typed() {
     let args = [Some(ex_term("alice"))];
 
     let with_body = function(Some(NodeExpr::Constant(ex_term("answer"))));
+    let owner =
+        purrdf_shapes::shapes::ModelOwner::from_functions(vec![Arc::clone(&with_body)]).unwrap();
     let mut exhausted = RecursionGuard::with_depth(purrdf_shapes::expression::MAX_RECURSION_DEPTH);
-    let error = eval_custom_function_call(&store, &with_body, &args, &mut exhausted)
+    let error = eval_custom_function_call(&store, &owner, &with_body, &args, &mut exhausted)
         .expect_err("no re-entry depth is left");
     assert!(
         matches!(
@@ -818,15 +825,40 @@ fn body_level_processor_failures_are_typed() {
     );
     assert_eq!(error.failure_class(), FailureClass::Processor);
     // Neighbour: with depth to spare the same function answers.
-    let answer =
-        eval_custom_function_call(&store, &with_body, &args, &mut RecursionGuard::default())
-            .expect("the function evaluates");
+    let answer = eval_custom_function_call(
+        &store,
+        &owner,
+        &with_body,
+        &args,
+        &mut RecursionGuard::default(),
+    )
+    .expect("the function evaluates");
     assert_eq!(answer, Some(ex_term("answer")));
 
+    let reserve = purrdf_stack::reserve(purrdf_stack::remaining());
+    let margin = eval_custom_function_call(
+        &store,
+        &owner,
+        &with_body,
+        &args,
+        &mut RecursionGuard::default(),
+    );
+    drop(reserve);
+    let margin = margin.expect_err("standalone lowering refuses the physical stack margin");
+    assert_eq!(margin.failure_class(), FailureClass::Processor);
+    assert!(margin.to_string().contains("stack margin"));
+
     let uninstalled = function(None);
-    let error =
-        eval_custom_function_call(&store, &uninstalled, &args, &mut RecursionGuard::default())
-            .expect_err("a function without a body is an internal defect");
+    let owner =
+        purrdf_shapes::shapes::ModelOwner::from_functions(vec![Arc::clone(&uninstalled)]).unwrap();
+    let error = eval_custom_function_call(
+        &store,
+        &owner,
+        &uninstalled,
+        &args,
+        &mut RecursionGuard::default(),
+    )
+    .expect_err("a function without a body is an internal defect");
     assert!(
         matches!(
             error.as_processor(),
@@ -835,6 +867,179 @@ fn body_level_processor_failures_are_typed() {
         "{error:?}"
     );
     assert_eq!(error.failure_class(), FailureClass::Processor);
+}
+
+/// Already evaluated values preserve holes in both argument and query lookup.
+#[test]
+fn evaluated_function_arguments_keep_optional_indices_and_query_bindings() {
+    use purrdf_shapes::expression::{ArgKey, CustomFnKind, NodeExpr};
+    let store = store_of(INCOME_DATA);
+    let args = [Some(ex_term("alice")), None, Some(ex_term("answer"))];
+    for (body, expected) in [
+        (NodeExpr::Arg(ArgKey::Index(0)), args[0].clone()),
+        (NodeExpr::Arg(ArgKey::Index(1)), None),
+        (NodeExpr::Arg(ArgKey::Index(2)), args[2].clone()),
+        (
+            NodeExpr::Select {
+                query: "SELECT (IF(BOUND(?arg1), ?arg1, ?arg2) AS ?result) WHERE {}".to_owned(),
+                variable: "result".to_owned(),
+                key: "sh:select",
+            },
+            args[2].clone(),
+        ),
+    ] {
+        let function = Arc::new(CustomFunction {
+            iri: purrdf_shapes::term::NamedNode::new_unchecked("http://example.org/ns#optional"),
+            kind: CustomFnKind::ListParameter,
+            params: (0..3).map(ArgKey::Index).collect(),
+            required: 0,
+            body: std::sync::OnceLock::from(body),
+        });
+        let owner =
+            purrdf_shapes::shapes::ModelOwner::from_functions(vec![Arc::clone(&function)]).unwrap();
+        assert_eq!(
+            eval_custom_function_call(
+                &store,
+                &owner,
+                &function,
+                &args,
+                &mut RecursionGuard::default()
+            )
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+/// Measure the actual public direct-call entry without timing or a query wrapper.
+#[test]
+fn direct_custom_function_calls_bound_argument_allocation_growth() {
+    use purrdf_shapes::expression::{ArgKey, CustomFnKind, NodeExpr};
+
+    let store = store_of(INCOME_DATA);
+    let mut retained = [None; 2];
+    for count in [1_usize, 8, 32, 512] {
+        for (body_index, (body, expected)) in [
+            (
+                NodeExpr::Constant(ex_term("answer")),
+                Some(ex_term("answer")),
+            ),
+            (
+                NodeExpr::Arg(ArgKey::Index(u64::try_from(count - 1).unwrap())),
+                Some(ex_term("alice")),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let function = Arc::new(CustomFunction {
+                iri: purrdf_shapes::term::NamedNode::new_unchecked(
+                    "http://example.org/ns#allocation",
+                ),
+                kind: CustomFnKind::ListParameter,
+                params: (0..count)
+                    .map(|index| ArgKey::Index(u64::try_from(index).unwrap()))
+                    .collect(),
+                required: count,
+                body: std::sync::OnceLock::from(body),
+            });
+            let args = vec![Some(ex_term("alice")); count];
+            let owner =
+                purrdf_shapes::shapes::ModelOwner::from_functions(vec![Arc::clone(&function)])
+                    .unwrap();
+            assert_eq!(
+                eval_custom_function_call(
+                    &store,
+                    &owner,
+                    &function,
+                    &args,
+                    &mut RecursionGuard::default()
+                )
+                .unwrap(),
+                expected
+            );
+            let window = CurrentThreadWindow::open();
+            let answer = eval_custom_function_call(
+                &store,
+                &owner,
+                &function,
+                &args,
+                &mut RecursionGuard::default(),
+            );
+            let measured = window.close();
+            assert_eq!(answer.unwrap(), expected);
+            assert!(measured.allocations <= 5, "arguments={count}: {measured:?}");
+            assert!(
+                measured.requested_bytes <= 214,
+                "arguments={count}: {measured:?}"
+            );
+            assert!(measured.retained_bytes <= 28, "{measured:?}");
+            assert!(measured.peak_working_bytes <= 214, "{measured:?}");
+            if let Some(previous) = retained[body_index] {
+                assert_eq!(
+                    measured.retained_bytes, previous,
+                    "argument buffers must not be retained by the scalar answer"
+                );
+            }
+            retained[body_index] = Some(measured.retained_bytes);
+            eprintln!(
+                "arguments={count}, body={body_index}: allocations={}, requested={}, retained={}, peak={}",
+                measured.allocations,
+                measured.requested_bytes,
+                measured.retained_bytes,
+                measured.peak_working_bytes,
+            );
+        }
+    }
+}
+
+/// Transfer the owned result while bounding traffic to one payload copy.
+#[test]
+fn direct_custom_function_large_result_is_moved_without_a_second_payload_copy() {
+    use purrdf_shapes::expression::{ArgKey, CustomFnKind, NodeExpr};
+    use purrdf_shapes::term::{Literal, NamedNode, Term};
+    let store = store_of(INCOME_DATA);
+    let function = Arc::new(CustomFunction {
+        iri: NamedNode::from("http://example.org/ns#payload"),
+        kind: CustomFnKind::ListParameter,
+        params: vec![ArgKey::Index(0)],
+        required: 1,
+        body: std::sync::OnceLock::from(NodeExpr::Arg(ArgKey::Index(0))),
+    });
+    let owner =
+        purrdf_shapes::shapes::ModelOwner::from_functions(vec![Arc::clone(&function)]).unwrap();
+    for length in [1024_usize, 1024 * 1024] {
+        let args = [Some(Term::Literal(Literal::new_simple_literal(
+            "x".repeat(length),
+        )))];
+        let window = CurrentThreadWindow::open();
+        let result = eval_custom_function_call(
+            &store,
+            &owner,
+            &function,
+            &args,
+            &mut RecursionGuard::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let measured = window.close();
+        eprintln!("payload={length}: {measured:?}");
+        let bound = u64::try_from(length).unwrap() + 1024;
+        let signed_bound = i64::try_from(bound).unwrap();
+        assert!(measured.allocations <= 6, "{measured:?}");
+        assert!(
+            measured.requested_bytes <= bound,
+            "one owned output copy plus fixed call overhead: {measured:?}"
+        );
+        assert!(measured.retained_bytes <= signed_bound, "{measured:?}");
+        assert!(measured.peak_working_bytes <= signed_bound, "{measured:?}");
+        drop(args);
+        let Term::Literal(literal) = result else {
+            panic!("the output remains its original literal")
+        };
+        assert_eq!(literal.value().len(), length);
+        assert!(literal.value().bytes().all(|byte| byte == b'x'));
+    }
 }
 
 /// A declared built-in list function follows the same §7.3 rule as a custom one (the code

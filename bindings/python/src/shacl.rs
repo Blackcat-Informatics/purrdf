@@ -1081,7 +1081,9 @@ impl PyShapes {
                 pyo3::exceptions::PyValueError::new_err(format!("extension usage: {e}"))
             })?;
 
-        let usage = py.detach(|| self.inner.extension_usage(&env));
+        let usage = py
+            .detach(|| self.inner.extension_usage(&env))
+            .map_err(|error| shapes_error(py, purrdf_validate::ShapesError::Preparation(error)))?;
 
         let sites = PyDict::new(py);
         for (site, used) in usage.sites() {
@@ -1937,6 +1939,12 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
         purrdf_validate::ShapesError::Storage(error) => crate::py_store::storage_value_error(error),
         purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
+        purrdf_validate::ShapesError::Recursion(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
+        purrdf_validate::ShapesError::Preparation(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
         purrdf_validate::ShapesError::Invalid(message) => {
             pyo3::exceptions::PyValueError::new_err(message)
         }

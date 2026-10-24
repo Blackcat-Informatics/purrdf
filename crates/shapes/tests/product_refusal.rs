@@ -1776,6 +1776,63 @@ fn refusal_class_catalog() -> ShapesProductError {
         .expect_err("a product whose pinned class analysis is not this build's must not restore")
 }
 
+fn refusal_model() -> ShapesProductError {
+    let bytes = product_of(PLAIN_SHAPES);
+    let donor = product_of(OTHER_SHAPES);
+    let other = ArtifactView::from_bytes(SPEC, &donor).unwrap();
+    let replaced = repack(&bytes, |sections| {
+        sections[2] = other.section(SECTION_AST).unwrap().to_vec();
+    });
+    // Bind the carried class analysis so the model row detects the substitution.
+    let replaced = splice_identity(
+        &replaced,
+        "class-catalog",
+        &identity_component(&donor, "class-catalog"),
+    );
+    admit(&replaced).unwrap_err()
+}
+
+#[test]
+fn refuses_model() {
+    assert_eq!(refusal_model().dimension(), ProductDimension::Model);
+}
+
+#[test]
+fn accepts_model_neighbour() {
+    let bytes = product_of(PLAIN_SHAPES);
+    let unchanged = repack(&bytes, |_| {});
+    admit(&unchanged).expect("an intact model in a reframed envelope remains admissible");
+}
+
+/// Exercise the codec's native preparation-error adapter with a real, refused
+/// allocation layout. This does not attempt to exhaust the host allocator.
+fn refusal_resource() -> ShapesProductError {
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut values = Vec::<u64>::new();
+    let error = Memory::new(&mut Resident)
+        .reserve(&mut values, usize::MAX)
+        .expect_err("the requested allocation layout cannot fit");
+    assert_eq!(values, [] as [u64; 0]);
+    purrdf_shapes::PreparationRefusal::Storage(error).into()
+}
+
+#[test]
+fn refuses_resource() {
+    let error = refusal_resource();
+    assert_eq!(error.dimension(), ProductDimension::Resource);
+    assert!(matches!(
+        error.preparation_refusal(),
+        Some(purrdf_shapes::PreparationRefusal::Storage(
+            purrdf_lex::allocation::StorageError::SizeOverflow
+        ))
+    ));
+}
+
+#[test]
+fn accepts_resource_neighbour() {
+    admit(&product_of(PLAIN_SHAPES)).expect("ordinary storage remains admissible");
+}
+
 #[test]
 fn refuses_class_catalog() {
     assert_eq!(
@@ -1879,19 +1936,19 @@ fn accepts_included_graphs_neighbour() {
 
 /// A product whose model selects a variant tag this build does not implement.
 ///
-/// The mutated byte is the FIRST shape's id term tag, and the assertions pin the
-/// two counted fields ahead of it, so this cannot quietly become a test that
+/// The mutated byte is the first retained definition's id term tag. Assertions
+/// pin the owner/index header ahead of it, so this cannot quietly become a test that
 /// mutates some other field the day the stream's prologue changes.
 fn unknown_tag_product() -> Vec<u8> {
     repack(&product_of(PLAIN_SHAPES), |sections| {
         let ast = &mut sections[2];
-        assert_eq!(ast[0], 0, "the fixture declares no custom functions");
-        assert_eq!(ast[1], 1, "the fixture carries exactly one node shape");
-        assert!(
-            ast[2] < 4,
-            "byte 2 is the shape id's term tag, and every implemented tag is below 4",
+        assert_eq!(
+            &ast[..9],
+            &[1, 0, 2, 0, 0, 0, 1, 2, 0],
+            "one index, no functions, global owner 0/index 0, initialized index with node and property definitions",
         );
-        ast[2] = 4;
+        assert_eq!(ast[9], 0, "the first definition id is a named-node term");
+        ast[9] = 4;
     })
 }
 
@@ -1991,8 +2048,8 @@ fn nested_expression(wraps: usize) -> String {
 /// model stream at which inserting it adds that level.
 ///
 /// Derived by DIFFERENCE rather than transcribed: two products whose shapes graphs
-/// differ by exactly one nesting level differ by exactly one byte, and this asserts
-/// that. A codec change that made the encoding something other than "one tag, then
+/// differ by one tag per retained/exported occurrence, and this asserts that.
+/// A codec change that made the encoding something other than "one tag, then
 /// the child" fails here loudly instead of leaving the nesting cases silently
 /// testing nothing.
 fn nesting_tag() -> (Vec<u8>, usize, u8) {
@@ -2003,27 +2060,40 @@ fn nesting_tag() -> (Vec<u8>, usize, u8) {
     assert_eq!(
         deep.len(),
         shallow.len() + 1,
-        "one more nesting level must cost exactly one byte",
+        "only the retained definition gains a tag; the exported root is an identity reference",
     );
-    let at = shallow
-        .iter()
-        .zip(deep.iter())
-        .position(|(left, right)| left != right)
-        .expect("the two encodings must differ somewhere");
+    let mut source = 0;
+    let mut insertions = Vec::new();
+    for &byte in &deep {
+        if shallow.get(source) == Some(&byte) {
+            source += 1;
+        } else {
+            insertions.push((source, byte));
+        }
+    }
     assert_eq!(
-        shallow[at..],
-        deep[at + 1..],
-        "the deeper encoding must be the shallower one with a single tag inserted",
+        source,
+        shallow.len(),
+        "the original stream must survive intact"
     );
-    (one, at, deep[at])
+    assert_eq!(
+        insertions.len(),
+        1,
+        "only the retained nesting tag may change"
+    );
+    (one, insertions[0].0, insertions[0].1)
 }
 
 /// A product whose model nests `extra` levels deeper than the fixture's.
 fn nested_product(base: &[u8], at: usize, tag: u8, extra: usize) -> Vec<u8> {
-    repack(base, |sections| {
+    let bytes = repack(base, |sections| {
         let insert = vec![tag; extra];
         sections[2].splice(at..at, insert);
-    })
+    });
+    // Keep the model binding intact: this control asks about depth admission,
+    // not the identity refusal exercised separately by refusal_model.
+    let digest = purrdf_core::ContentDigest::of(&section(&bytes, SECTION_AST));
+    splice_identity(&bytes, "model", digest.as_bytes())
 }
 
 /// The smallest number of extra nesting levels this build refuses, together with
@@ -2367,6 +2437,8 @@ fn provoked_dimensions() -> BTreeSet<ProductDimension> {
         refusal_property_function_registry(),
         refusal_implementation_identity(),
         refusal_class_catalog(),
+        refusal_model(),
+        refusal_resource(),
         refusal_parse_configuration(),
         refusal_included_graphs(),
         refusal_unsupported_capability(),
@@ -2380,9 +2452,9 @@ fn provoked_dimensions() -> BTreeSet<ProductDimension> {
 
 /// The dimensions no source file in this crate ever CONSTRUCTS.
 ///
-/// The scan skips two kinds of file: `product/error.rs`, which declares the enum
-/// and therefore names every variant by definition, and any `tests.rs`, whose
-/// mentions are assertions about refusals rather than refusals.
+/// The scan skips `tests.rs`, whose mentions assert rather than emit refusals.
+/// In `product/error.rs` it inspects only the native preparation-error adapter:
+/// the enum declaration's variant names cannot prove that a refusal is emitted.
 fn unemitted_dimensions() -> BTreeSet<ProductDimension> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut sources = Vec::new();
@@ -2423,10 +2495,21 @@ fn collect_sources(dir: &Path, out: &mut Vec<String>) {
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
             .unwrap_or_default();
-        if name == "tests.rs" || name == "error.rs" {
+        if name == "tests.rs" {
             continue;
         }
-        out.push(std::fs::read_to_string(&path).expect("a readable source file"));
+        let source = std::fs::read_to_string(&path).expect("a readable source file");
+        if name == "error.rs" {
+            // Inspect the production adapter, excluding the enum declaration
+            // whose variant names cannot establish that any refusal is emitted.
+            if let Some((_, adapter)) =
+                source.split_once("impl From<crate::error::PreparationRefusal>")
+            {
+                out.push(adapter.to_owned());
+            }
+        } else {
+            out.push(source);
+        }
     }
 }
 

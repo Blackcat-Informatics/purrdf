@@ -1259,7 +1259,7 @@ fn every_call_site_names_what_it_bound_to() {
         "#,
     )
     .expect("shapes load");
-    let report = shapes.function_resolution();
+    let report = shapes.function_resolution().unwrap();
     let expect = [
         (format!("{SPARQL_NS}equals"), FunctionBinding::Native),
         (format!("{SPARQL_NS}abs"), FunctionBinding::Native),
