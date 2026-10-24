@@ -1133,8 +1133,8 @@ impl<H> PipelineBundle<H> {
     /// The canonical [`ContentDigest`] of the named graph `graph` — the subgraph of
     /// the dataset asserted in `<graph>`, canonicalized to N-Quads.
     ///
-    /// Built by [`RdfDataset::project_graph`] and hashed over the projection's
-    /// canonical form. The RDF 1.2 reifier/annotation side-tables are keyed per graph
+    /// Built by [`super::try_graph_digest_view`] over the selected graph without
+    /// constructing a projection. The RDF 1.2 reifier/annotation side-tables are keyed per graph
     /// in this IR (each row carries the graph its declaration or annotation was
     /// asserted in), so the projection admits exactly the rows whose own graph slot is
     /// `<graph>` — a handle over a reified subgraph pins over that graph's statement
@@ -1145,11 +1145,8 @@ impl<H> PipelineBundle<H> {
     /// accidental. This is the value a handle's pinned digest is checked against in
     /// [`pin_handle`](Self::pin_handle).
     ///
-    /// This carrier owns its dataset, so its content is TRUSTED and the panicking
-    /// canonicalization entry point is the right one. The view carrier composes
-    /// caller-supplied sources and therefore returns
-    /// [`PipelineBundleError::Canonicalization`] instead of panicking — same bytes on
-    /// success, different obligation on refusal.
+    /// Both owned and view carriers return
+    /// [`PipelineBundleError::Canonicalization`] on canonicalization refusal.
     pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
         // Memoized: the frozen dataset makes each graph's canonical digest stable, so
         // the second call in the `pinned = graph_digest(g); pin_handle(g, …, pinned)`
@@ -1306,9 +1303,8 @@ struct SoleGraph {
 ///
 /// A composite view holds caller-supplied sources, so every digest on this carrier
 /// runs through the FALLIBLE canonicalization entry points and returns
-/// [`PipelineBundleError::Canonicalization`] rather than panicking. The flat carrier
-/// owns its dataset and keeps the trusted, panicking spelling; the bytes agree on
-/// success.
+/// [`PipelineBundleError::Canonicalization`] on refusal, as does the flat carrier.
+/// The bytes agree on success.
 #[derive(Debug, Clone)]
 pub struct PipelineViewBundle<H> {
     /// The composed, immutable RDF surface. PRIVATE: replacing it after

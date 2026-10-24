@@ -57,7 +57,7 @@ let canonical_value = result.dataset().resolve(output_node);
 assert!(matches!(canonical_value, TermRef::Iri("https://example.org/alice")));
 // Associate source receipts and owner metadata with canonical_value here.
 let canonical_dataset = result.into_dataset();
-assert!(datasets_isomorphic(source.as_ref(), &canonical_dataset));
+assert!(datasets_isomorphic(source.as_ref(), &canonical_dataset)?);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

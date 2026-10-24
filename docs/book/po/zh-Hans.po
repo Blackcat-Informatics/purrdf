@@ -8426,11 +8426,11 @@ msgstr ""
 
 #: src/concepts/canonicalization.md:21
 msgid ""
-"The entry point is `canonicalize` (with a `canonicalize_with` variant for "
+"The entry point is `try_canonicalize` (with a `try_canonicalize_with` variant for "
 "choosing the hash), producing canonical blank-node labels and, one layer up "
 "in `purrdf-rdf`, canonical flat N-Quads over the frozen IR:"
 msgstr ""
-"入口点是 `canonicalize`（另有 `canonicalize_with` 变体用于选择哈希），它产出"
+"入口点是 `try_canonicalize`（另有 `try_canonicalize_with` 变体用于选择哈希），它产出"
 "规范的空节点标签，并在上一层的 `purrdf-rdf` 中，基于冻结的 IR 产出规范的扁平 "
 "N-Quads："
 
@@ -8553,7 +8553,7 @@ msgstr ""
 
 #: src/concepts/canonicalization.md:88
 msgid ""
-"**The `purrdf-rdfc12` v2 profile** — `canonicalize` in `purrdf-core` keeps "
+"**The `purrdf-rdfc12` v2 profile** — `try_canonicalize` in `purrdf-core` keeps "
 "the statement layer and lowers it into a reserved `urn:purrdf:rdfc:` "
 "namespace instead (any input already carrying that namespace is refused, "
 "unless it is written in one of the two shapes the profile itself emits — "
@@ -8565,7 +8565,7 @@ msgid ""
 "[`docs/RDF12-CANON-PROFILE.md`](https://github.com/Blackcat-Informatics/"
 "purrdf/blob/main/docs/RDF12-CANON-PROFILE.md)."
 msgstr ""
-"**`purrdf-rdfc12` v2 profile**——`purrdf-core` 中的 `canonicalize` 保留陈述"
+"**`purrdf-rdfc12` v2 profile**——`purrdf-core` 中的 `try_canonicalize` 保留陈述"
 "层，并改为将其降级到保留的 `urn:purrdf:rdfc:` 命名空间中（任何已经携带该命名"
 "空间的输入都会被拒绝，除非它以该 profile 自身所输出的两种形态之一写成——这些形"
 "态会折叠回陈述层，这正是规范化在其自身输出上具有幂等性的原因）。它仅在 RDF "
@@ -8636,8 +8636,8 @@ msgid "Same _graph_ (up to blank nodes) → same bytes, RDF 1.1 subset"
 msgstr "同一*图*（在空节点意义下）→ 相同字节，RDF 1.1 子集"
 
 #: src/concepts/canonicalization.md:124
-msgid "RDFC-1.0 (`canonicalize` or `canonical_flat_nquads`, identical here)"
-msgstr "RDFC-1.0（`canonicalize` 或 `canonical_flat_nquads`，此处二者相同）"
+msgid "RDFC-1.0 (`try_canonicalize` or `canonical_flat_nquads`, identical here)"
+msgstr "RDFC-1.0（`try_canonicalize` 或 `canonical_flat_nquads`，此处二者相同）"
 
 #: src/concepts/canonicalization.md:125
 msgid "Same _graph_ with reifiers/annotations → same bytes"
@@ -8646,9 +8646,9 @@ msgstr "带具体化节点/注解的同一*图* → 相同字节"
 #: src/concepts/canonicalization.md:125
 msgid ""
 "`canonical_flat_nquads` (RDFC-1.0 over the flattened layer) or "
-"`canonicalize` (`purrdf-rdfc12` profile) — not interchangeable"
+"`try_canonicalize` (`purrdf-rdfc12` profile) — not interchangeable"
 msgstr ""
-"`canonical_flat_nquads`（在扁平化层上运行 RDFC-1.0）或 `canonicalize`"
+"`canonical_flat_nquads`（在扁平化层上运行 RDFC-1.0）或 `try_canonicalize`"
 "（`purrdf-rdfc12` profile）——二者不可互换"
 
 #: src/concepts/canonicalization.md:126
@@ -8678,12 +8678,12 @@ msgstr "[GTS](../gts.md)（BLAKE3 内容 id）"
 #: src/concepts/canonicalization.md:130
 msgid ""
 "API details are on [docs.rs/purrdf-core](https://docs.rs/purrdf-core) (the "
-"`canonicalize`, `datasets_isomorphic`, and `dataset_diff` items) and "
+"`try_canonicalize`, `datasets_isomorphic`, and `dataset_diff` items) and "
 "[docs.rs/purrdf-rdf](https://docs.rs/purrdf-rdf) (describe and "
 "normalization)."
 msgstr ""
 "API 细节见 [docs.rs/purrdf-core](https://docs.rs/purrdf-core)"
-"（`canonicalize`、`datasets_isomorphic` 与 `dataset_diff` 条目）与 [docs.rs/"
+"（`try_canonicalize`、`datasets_isomorphic` 与 `dataset_diff` 条目）与 [docs.rs/"
 "purrdf-rdf](https://docs.rs/purrdf-rdf)（describe 与归一化）。"
 
 #: src/sparql/querying.md:6

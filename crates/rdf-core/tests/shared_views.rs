@@ -1757,31 +1757,7 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
         assert_eq!(empty, "");
     }
 
-    // The fallible per-graph digest agrees with its panicking sibling on the
-    // Ok path …
-    for graph in [GRAPH, OTHER_GRAPH] {
-        for (name, fallible, trusted) in [
-            (
-                "flat",
-                try_graph_digest_view(&*flat, graph),
-                try_graph_digest_view(&*flat, graph).unwrap(),
-            ),
-            (
-                "composite",
-                try_graph_digest_view(&independent, graph),
-                try_graph_digest_view(&independent, graph).unwrap(),
-            ),
-            (
-                "delta",
-                try_graph_digest_view(&delta, graph),
-                try_graph_digest_view(&delta, graph).unwrap(),
-            ),
-        ] {
-            assert_eq!(fallible.unwrap(), trusted, "{name} fallible digest");
-        }
-    }
-
-    // … and refuses exactly the graph carrying reserved vocabulary, without
+    // The digest refuses exactly the graph carrying reserved vocabulary, without
     // the refusal spreading to a neighbouring clean graph.
     let mut poisoned = RdfDatasetBuilder::new();
     let s = poisoned.intern_iri("http://example.org/s").unwrap();
