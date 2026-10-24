@@ -2463,7 +2463,6 @@ def self_test() -> int:
     print("OK: simd-asm self-test -- every refusal fires and every valid neighbour passes")
     return 0
 
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     parser.add_argument("--self-test", action="store_true", help="exercise every refusal and neighbour on fixtures; builds nothing")
@@ -2498,6 +2497,7 @@ def main() -> int:
         print("FAIL: assembly run interrupted", file=sys.stderr)
         return 130
 
-
 if __name__ == "__main__":
+    if (lease := shutil.which("cargo-cache-lease")) and subprocess.run([lease, "--check"], check=False).returncode:
+        os.execv(lease, [lease, "--", sys.executable, *sys.argv])
     sys.exit(main())
