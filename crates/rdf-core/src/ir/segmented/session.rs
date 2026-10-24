@@ -829,6 +829,7 @@ impl SegmentedOperation {
                 summaries: Stream::default(),
                 statistics: [Stream::default(); 4],
                 effective_directory: Stream::default(),
+                source_checkpoints: Stream::default(),
                 flags: 0,
                 source_union: purrdf_hash::multiset::Multiset256::default(),
             },

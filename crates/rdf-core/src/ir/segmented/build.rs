@@ -396,6 +396,7 @@ impl SegmentedImage {
             header.statistics[2],
             header.statistics[3],
             header.effective_directory,
+            header.source_checkpoints,
         ]
         .iter()
         .try_fold(1_u64, |n, stream| {
@@ -646,6 +647,25 @@ fn encode_dataset(
         &mut blocks,
         block_bytes,
     )?;
+    let directory = dataset.predicate_statistics().effective_source_directory();
+    let checkpoint_count = directory.checkpoint_sums().len();
+    let per = (block_bytes - 9) / 32;
+    let source_checkpoints = append_fixed(
+        &mut blocks,
+        (0..checkpoint_count).step_by(per).map(|start| {
+            directory
+                .checkpoint_sums()
+                .skip(start)
+                .take(per)
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>()
+        }),
+        checkpoint_count as u64,
+        format::SOURCE_CHECKPOINTS,
+        32,
+        block_bytes,
+    )?;
     let caps = dataset.capabilities();
     let flags = u8::from(caps.quoted_triples)
         | (u8::from(caps.reifiers) << 1)
@@ -667,6 +687,7 @@ fn encode_dataset(
         summaries,
         statistics,
         effective_directory,
+        source_checkpoints,
         flags,
         source_union: dataset.predicate_statistics().source_union(),
     };
@@ -1326,6 +1347,25 @@ fn validate_source_directory(
         ordinal += count;
     }
     memory.release_vec(expected)?;
+    let mut sums = directory.checkpoint_sums();
+    let per = (header.block_bytes as usize - 9) / 32;
+    for slot in header.source_checkpoints.first
+        ..header.source_checkpoints.first + header.source_checkpoints.blocks
+    {
+        let actual = fixed_records(block(bytes, header, slot)?, format::SOURCE_CHECKPOINTS, 32)?;
+        if actual.len() / 32 != sums.len().min(per) {
+            return Err(SegmentedError::Corrupt(
+                "source checkpoint packing disagrees with RDF rows",
+            ));
+        }
+        for sum in actual.as_chunks::<32>().0 {
+            if Some(sum) != sums.next() {
+                return Err(SegmentedError::Corrupt(
+                    "source checkpoint contents disagree with RDF rows",
+                ));
+            }
+        }
+    }
     Ok(())
 }
 pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8], SegmentedError> {
@@ -1715,7 +1755,7 @@ mod certification_tests {
             let stream = header.effective_directory;
             assert!(stream.rows > 0);
             let start = stream.first as usize * header.block_bytes as usize + 9;
-            for offset in [0, 32, 36, 40, 56] {
+            for offset in [0, 32, 36] {
                 let mut bytes = image.bytes().to_vec();
                 bytes[start + offset] ^= 1;
                 rehash(&mut bytes, image.receipt());
@@ -1724,6 +1764,93 @@ mod certification_tests {
                     SegmentedError::Corrupt("source directory contents disagree with RDF rows")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn sparse_source_prefixes_match_a_full_scan_across_pages_and_checkpoints() {
+        use crate::ir::source_directory::DirectoryRead;
+        use crate::source::SourceDifferenceWork;
+        use purrdf_hash::multiset::Multiset256;
+
+        let image = directory_image(1025);
+        let header = Header::decode(image.bytes()).unwrap();
+        let count = header.effective_directory.rows;
+        let compact = header.effective_directory.blocks + header.source_checkpoints.blocks;
+        let previous = count.div_ceil((u64::from(header.block_bytes) - 9) / 88);
+        assert!(
+            compact * 2 < previous,
+            "directory pages: {compact} vs {previous}"
+        );
+        assert_eq!(image.bytes(), directory_image(1025).bytes());
+        let session = image
+            .open_session(SegmentedReadLimits::new(
+                8_000_000,
+                4,
+                100_000,
+                100_000_000,
+                8,
+            ))
+            .unwrap();
+        let directory = session.source_directory();
+        let mut expected = Multiset256::default();
+        for end in 0..=directory.len().unwrap() {
+            if end != 0 {
+                expected
+                    .insert(directory.record(end - 1).unwrap().digest)
+                    .unwrap();
+            }
+            let mut work = SourceDifferenceWork::default();
+            assert_eq!(
+                directory.prefix(end, &mut work).unwrap(),
+                expected,
+                "prefix {end}"
+            );
+            assert_eq!(work.members, (end % 32) as u64);
+        }
+        assert!(matches!(
+            directory.prefix(1026, &mut SourceDifferenceWork::default()),
+            Err(SegmentedError::Corrupt(_))
+        ));
+    }
+
+    fn directory_image(count: u32) -> SegmentedImage {
+        let mut builder = SegmentedBuilder::new(
+            SegmentedBuildLimits::new(count + 2, 100_000, count, 512, 4).unwrap(),
+        )
+        .unwrap();
+        let values = (0..count + 2)
+            .map(|index| TermValue::iri(format!("urn:directory:{index}")))
+            .collect::<Vec<_>>();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        for &id in &ids[2..] {
+            builder
+                .push_quad(QuadIds {
+                    s: id,
+                    p: ids[0],
+                    o: ids[1],
+                    g: None,
+                })
+                .unwrap();
+        }
+        builder.seal().unwrap()
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_false_sparse_source_checkpoints() {
+        let image = directory_image(1025);
+        let header = Header::decode(image.bytes()).unwrap();
+        let stream = header.source_checkpoints;
+        assert!(stream.blocks > 1);
+        for slot in stream.first..stream.first + stream.blocks {
+            let mut bytes = image.bytes().to_vec();
+            bytes[slot as usize * header.block_bytes as usize + 9] ^= 1;
+            rehash(&mut bytes, image.receipt());
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt("source checkpoint contents disagree with RDF rows")
+            );
         }
     }
 

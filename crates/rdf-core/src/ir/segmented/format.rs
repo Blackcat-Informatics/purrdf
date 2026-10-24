@@ -12,8 +12,8 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG4";
-pub(super) const HEADER_BYTES: usize = 384;
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG5";
+pub(super) const HEADER_BYTES: usize = 408;
 pub(super) const RECORD_HEADER: usize = 13;
 const COMPRESSED_RECORDS: u32 = 1 << 31;
 pub(super) const SUMMARY_BYTES: usize = 88;
@@ -24,6 +24,7 @@ pub(super) const QUADS: u8 = 3;
 pub(super) const GRAPHS: u8 = 4;
 pub(super) const SUMMARIES: u8 = 5;
 pub(super) const SOURCE_DIRECTORY: u8 = 10;
+pub(super) const SOURCE_CHECKPOINTS: u8 = 11;
 
 pub(super) const fn statistics_kind(section: super::super::statistics::StatisticsSection) -> u8 {
     6 + section.index() as u8
@@ -67,6 +68,7 @@ pub(super) struct Header {
     pub summaries: Stream,
     pub statistics: [Stream; 4],
     pub effective_directory: Stream,
+    pub source_checkpoints: Stream,
     pub flags: u8,
     pub source_union: purrdf_hash::multiset::Multiset256,
 }
@@ -75,7 +77,7 @@ impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&4_u32.to_le_bytes());
+        out.extend_from_slice(&5_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -96,6 +98,7 @@ impl Header {
             self.statistics[2],
             self.statistics[3],
             self.effective_directory,
+            self.source_checkpoints,
         ] {
             for value in [stream.first, stream.blocks, stream.rows] {
                 out.extend_from_slice(&value.to_le_bytes());
@@ -107,9 +110,9 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(4) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(5) {
             return Err(SegmentedError::Corrupt(
-                "unsupported segmented format/profile",
+                "unsupported segmented format/profile; regenerate the image from RDF input",
             ));
         }
         let mut input = Reader::at(bytes, 12);
@@ -130,7 +133,7 @@ impl Header {
         first_term_index
             .checked_add(terms)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let mut streams = [Stream::default(); 12];
+        let mut streams = [Stream::default(); 13];
         for stream in &mut streams {
             *stream = Stream {
                 first: input.u64()?,
@@ -162,6 +165,7 @@ impl Header {
             summaries: streams[6],
             statistics: [streams[7], streams[8], streams[9], streams[10]],
             effective_directory: streams[11],
+            source_checkpoints: streams[12],
             source_union: purrdf_hash::multiset::Multiset256::from_parts(
                 source_sum,
                 source_population,
@@ -206,6 +210,16 @@ impl Header {
                 "effective source directory packing mismatch",
             ));
         }
+        let checkpoints = header.effective_directory.rows
+            / super::super::source_directory::CHECKPOINT_ROWS as u64;
+        if header.source_checkpoints.rows != checkpoints
+            || header.source_checkpoints.blocks
+                != checkpoints.div_ceil((u64::from(block_bytes) - 9) / 32)
+        {
+            return Err(SegmentedError::Corrupt(
+                "source checkpoint packing mismatch",
+            ));
+        }
         Ok(header)
     }
 
@@ -224,6 +238,7 @@ impl Header {
             self.statistics[2],
             self.statistics[3],
             self.effective_directory,
+            self.source_checkpoints,
         ] {
             if stream.first != next || (stream.blocks == 0) != (stream.rows == 0) {
                 return Err(SegmentedError::Corrupt("non-contiguous block directory"));

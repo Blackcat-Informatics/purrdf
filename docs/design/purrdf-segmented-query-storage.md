@@ -29,7 +29,7 @@ One encoded record, including its framing, must fit a block or sealing
 returns `ConstructionLimit`. The encoder does not retry the complete image with
 a larger layout. Selective term lookup uses authenticated stored ID ranges;
 opening still loads no dictionary directory or term map. Full-population
-blocks retain their direct first-probe lookup. Data profile 4 refuses older
+blocks retain their direct first-probe lookup. Data profile 5 refuses older
 profiles; regenerate their images from the original RDF input.
 
 Reverse lookup compares the referenced dictionary keys through the same admitted
@@ -88,7 +88,7 @@ ordinary positive LIMIT need not intern every reifier in the image.
 
 ## Statistical metadata
 
-Data profile 4 retains four authenticated statistical sections: predicate/scope
+Data profile 5 retains four authenticated statistical sections: predicate/scope
 records, compressed distinct-ID domains, selected object frequencies and
 object-category/datatype counts. Predicate records carry row and distinct counts
 and ranges into the other sections. Each predicate/scope record also carries
@@ -109,7 +109,7 @@ require regeneration from their RDF input; this reader refuses unsupported
 profiles. The certification receipt's encoding and hash laws remain distinct
 from the data profile.
 
-The 384-byte profile 4 header also retains the exact normalized statement-union
+The 408-byte profile 5 header also retains the exact normalized statement-union
 and reifier multiset: asserted and annotation occurrences of the same value quad
 count once in that union, while a virtual reifier declaration remains a separate
 family. Its 128-bit population and 256-bit sum are reconstructed and compared
@@ -120,17 +120,26 @@ retain original immutable source owners and use the query's own visibility and
 read admission for overlap and removals. A source version's retained grant stays
 charged after the creating query drops.
 
-The final fixed-record stream is the normalized source directory. It collapses asserted/annotation copies
+The normalized source directory collapses asserted/annotation copies
 of a statement and keeps virtual reifiers in their separate identity family;
 its entries retain actual source-local addresses for selective value reads.
-Each 88-byte record contains the canonical record digest, the source-local
-32-bit ordinal and stream tag, three reserved zero bytes, and the inclusive
-prefix's 128-bit population and 256-bit sum. Full certification reconstructs
-all directory bytes from the RDF rows. Selective reads compare digest ranges
+Each 37-byte record contains the canonical record digest, the source-local
+32-bit ordinal and stream tag. A separate authenticated fixed-record stream
+stores one 256-bit cumulative sum per complete group of 32 records. Prefix
+populations are implied by position, and zero is implicit. A selective prefix
+read combines its checkpoint with at most 31 tail digests; actual tail visits
+are counted in `SourceDifferenceWork::members`, while the original read owner
+accounts for checkpoint and directory block reads. Full certification rebuilds
+and compares every record and checkpoint from the RDF rows, including their
+exact packing. Selective reads compare digest ranges
 using those authenticated prefixes through the same algorithm as resident
 directories; only differing records fetch their physical rows. The original
 read operation owns every directory and row read. Replacing a sealed descriptor
 therefore does not itself require enumerating either complete layer.
+
+The directory payload approaches 38 bytes per row, before physical page padding
+and the authentication tree, instead of 88. Old images require regeneration
+from their original RDF input; there is one decoder for the current profile.
 
 Native construction reserves source-record storage from the exact physical row
 count. Sources without annotations reuse their physical directory for normalized
