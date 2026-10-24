@@ -2616,7 +2616,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             candidate.path.push_str(hash.as_str());
             candidate.path.push('>');
             candidate.issuer = frame.issuer;
-            // 5.4.5.4: prune only after the complete child result is appended.
+            // 5.4.5.5: prune only after the complete child result is appended.
             if group.chosen_path.as_ref().is_some_and(|best| {
                 candidate.path.len() >= best.len() && candidate.path.as_str() > best.as_str()
             }) {
