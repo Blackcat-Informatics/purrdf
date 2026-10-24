@@ -429,7 +429,7 @@ struct ValidationContext<'a, 'memo> {
     plan: ShapePlan<'a>,
     depth: u32,
     /// The `(value node, shape)` conformance answers this run already computed.
-    memo: &'memo ConformanceMemo<'a>,
+    memo: &'memo ConformanceMemo,
     capture: Option<&'a crate::report::ReportCapture<'a>>,
     report_run: Option<&'memo ReportRun<'memo>>,
 }
@@ -888,9 +888,9 @@ impl<S: ResultSink> ResultSink for Stamped<'_, S> {
 /// Field ORDER is the comparison order a derived `PartialEq` uses, and the
 /// cheapest discriminator is first: within one value node's member loop the
 /// `node` matches and the `shape` is what differs, but across value nodes — the
-/// far commoner miss — the `node` settles it without touching the IRI.
+/// far commoner miss — the `node` settles it without comparing either shape identity.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct MemoKey<'a> {
+struct MemoKey {
     /// The value node's INTERNED identity. A non-interned value node has none
     /// and never reaches this type — see [`ConformanceMemo`].
     node: TermId,
@@ -899,23 +899,14 @@ struct MemoKey<'a> {
     /// into a hard error instead of a stack overflow: an answer reached with
     /// depth to spare is not an answer to a deeper ask.
     depth: u32,
-    /// The shape's IRI, borrowed out of the shapes graph.
-    ///
-    /// The IRI and not the lowering's address, because a shape reached through
-    /// a constraint is stored INLINE at each constraint site
-    /// (`Constraint::Node(Box<Shape>)`): `sh:node ex:T` written at two sites is
-    /// two `Shape` values at two addresses, and an address key would refuse to
-    /// connect them — which is precisely the overlap this memo exists to
-    /// collapse. In the SHACL data model a shape IS its node in the shapes
-    /// graph, so two constraint sites naming the same IRI name the same shape
-    /// and must reach the same verdict.
-    ///
-    /// Only IRI-identified shapes are keyed. A blank-node-identified shape is
-    /// anonymous and belongs to exactly one constraint site, so it has no
-    /// second site to share an answer with, and excluding it keeps the key clear
-    /// of every question about whether a parser might reuse a blank label
-    /// between a shape and something derived from it.
-    shape: &'a str,
+    /// The original model domain, when the plan has one. Equal names in
+    /// different models need not describe the same constraints.
+    domain: usize,
+    /// The live definition/body evaluated by this question. Plain owning
+    /// handles resolve to their shared original definition; inline bodies and
+    /// handles with local deactivation remain distinct. Addresses are scoped
+    /// to this run and never enter artifacts or returned results.
+    shape: usize,
 }
 
 /// The conformance answers one validation run has already computed.
@@ -941,8 +932,8 @@ struct MemoKey<'a> {
 ///   per top-level validation and dropped with it, which makes it worker-local
 ///   by construction.
 #[derive(Default)]
-struct ConformanceMemo<'a> {
-    answers: RefCell<MemoTable<'a>>,
+struct ConformanceMemo {
+    answers: RefCell<MemoTable>,
 }
 
 /// How many answers the memo keeps inline before it hashes.
@@ -971,16 +962,16 @@ const MEMO_INLINE: usize = 8;
 /// allocated — which is the property the whole small-first arrangement exists
 /// to preserve.
 #[derive(Default)]
-struct MemoTable<'a> {
+struct MemoTable {
     /// The first [`MEMO_INLINE`] answers, scanned linearly.
-    inline: SmallVec<[(MemoKey<'a>, bool); MEMO_INLINE]>,
+    inline: SmallVec<[(MemoKey, bool); MEMO_INLINE]>,
     /// Every answer past the inline block.
-    spilled: FastMap<MemoKey<'a>, bool>,
+    spilled: FastMap<MemoKey, bool>,
 }
 
-impl<'a> ConformanceMemo<'a> {
+impl ConformanceMemo {
     /// The recorded verdict for `key`, if this run has already reached one.
-    fn get(&self, key: MemoKey<'a>) -> Option<bool> {
+    fn get(&self, key: MemoKey) -> Option<bool> {
         let table = self.answers.borrow();
         if let Some(&(_, verdict)) = table.inline.iter().find(|(recorded, _)| *recorded == key) {
             return Some(verdict);
@@ -994,7 +985,7 @@ impl<'a> ConformanceMemo<'a> {
     }
 
     /// Record the verdict for `key`.
-    fn insert(&self, key: MemoKey<'a>, verdict: bool) {
+    fn insert(&self, key: MemoKey, verdict: bool) {
         let mut table = self.answers.borrow_mut();
         if table.inline.len() < MEMO_INLINE {
             table.inline.push((key, verdict));
@@ -1015,16 +1006,31 @@ fn conforms_memoized<'a>(
     plan: ShapePlan<'a>,
     focus: &FocusNode,
 ) -> Result<bool, crate::error::ShapesError> {
-    // Both halves of the key must be present for this question to be memoizable:
-    // a non-interned value node has no identity to key on (two non-interned terms
-    // can be equal), and a blank-node-identified shape has no second site to share
-    // an answer with. Either missing simply means the question is recomputed.
+    // Retain the existing admission policy: interned focuses and named shapes
+    // participate; foreign focuses and anonymous shapes are recomputed. The
+    // model and actual definition distinguish equal names with different bodies.
     let key = match (focus.id(), &plan.shape().id) {
-        (Some(node), Term::NamedNode(iri)) => Some(MemoKey {
-            node,
-            depth: context.depth,
-            shape: iri.as_str(),
-        }),
+        (Some(node), Term::NamedNode(_)) => {
+            // Local deactivation belongs to the actual handle. Only a plain
+            // reference handle may share the original definition's answer.
+            let shape = plan.shape();
+            let identity = if shape.deactivated
+                || !shape.deactivated_when.is_empty()
+                || !shape.constraint_annotations.is_empty()
+            {
+                plan
+            } else {
+                plan.definition()?
+            };
+            Some(MemoKey {
+                node,
+                depth: context.depth,
+                domain: identity
+                    .model()
+                    .map_or(0, |owner| std::sync::Arc::as_ptr(owner).addr()),
+                shape: std::ptr::from_ref(identity.shape()).addr(),
+            })
+        }
         _ => None,
     };
     if let Some(key) = key

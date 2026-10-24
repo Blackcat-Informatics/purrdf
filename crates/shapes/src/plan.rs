@@ -1031,9 +1031,10 @@ impl<'a> ShapePlan<'a> {
         self.shape
     }
 
-    /// The original body of an exported owning handle, without copying it.
+    /// The original body of an owning or context-bound reference handle,
+    /// without copying it.
     pub(crate) fn definition(self) -> Result<Self, crate::error::ShapesError> {
-        if self.shape.owner.is_some()
+        if self.owner.is_some()
             && let [Constraint::Reference(target)] = self.shape.constraints.as_slice()
             && *target == self.shape.id
             && self.shape.property_shapes.is_empty()
