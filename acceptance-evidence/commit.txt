@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 6c9c66fcf379 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/696-retain-and-expose-complete-native-cdt 0803c697b] Preserve native CDT failure fields and source chains
+ 7 files changed, 393 insertions(+), 7 deletions(-)
+ create mode 100644 crates/cdt/tests/structured_errors.rs

@@ -1,0 +1,204 @@
+diff --git crates/cdt/src/error.rs crates/cdt/src/error.rs
+index e75e2f742..1e83a4d68 100644
+--- crates/cdt/src/error.rs
++++ crates/cdt/src/error.rs
+@@ -55,6 +55,8 @@ pub enum CdtError {
+         offset: usize,
+         /// A short, stable explanation.
+         reason: &'static str,
++        /// Original UCHAR decoder refusal, when decoding reached that terminal.
++        cause: Option<purrdf_lex::terminals::UcharError>,
+     },
+     /// An `IRIREF` is syntactically an IRI reference but is not **absolute** (it has
+     /// no scheme), or is not a valid IRI at all. CDT lexical forms carry no base, so
+@@ -73,6 +75,8 @@ pub enum CdtError {
+         offset: usize,
+         /// A short, stable explanation.
+         reason: &'static str,
++        /// Original language parser refusal; direction-suffix refusals have none.
++        cause: Option<purrdf_iri::langtag::LanguageTagError>,
+     },
+     /// A `NumericLiteral` is not a valid `INTEGER`, `DECIMAL` or `DOUBLE`.
+     BadNumericLiteral {
+@@ -111,6 +115,46 @@ pub enum CdtError {
+     },
+ }
+ 
++impl purrdf_hash::error::StructuredError for CdtError {
++    purrdf_hash::error_visit! {
++        InputTooLarge { offset, length } => "cdt-input-too-large" {
++            "offset" => ByteCount(*offset as u128), "length" => ByteCount(*length as u128),
++        },
++        TooManyElements { offset, limit } => "cdt-too-many-elements" {
++            "offset" => ByteCount(*offset as u128), "limit" => Unsigned(*limit as u128),
++        },
++        Unexpected { offset, expected } => "cdt-unexpected" {
++            "offset" => ByteCount(*offset as u128), "expected" => Text(expected),
++        },
++        UnexpectedEnd { offset, expected } => "cdt-unexpected-end" {
++            "offset" => ByteCount(*offset as u128), "expected" => Text(expected),
++        },
++        BadEscape { offset, reason, cause } => "cdt-bad-escape" {
++            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
++            "cause" => Value(cause.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
++        },
++        NotAbsoluteIri { offset, iri, reason } => "cdt-not-absolute-iri" {
++            "offset" => ByteCount(*offset as u128), "iri" => Iri(iri), "reason" => Text(reason),
++        },
++        BadLanguageTag { offset, reason, cause } => "cdt-bad-language-tag" {
++            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
++            "cause" => Value(cause.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
++        },
++        BadNumericLiteral { offset, reason } => "cdt-bad-numeric-literal" {
++            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
++        },
++        BadBlankNodeLabel { offset, reason } => "cdt-bad-blank-node-label" {
++            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
++        },
++        DuplicateMapKey { offset, key } => "cdt-duplicate-map-key" {
++            "offset" => ByteCount(*offset as u128), "key" => Text(key),
++        },
++        TrailingText { offset } => "cdt-trailing-text" {
++            "offset" => ByteCount(*offset as u128),
++        },
++    }
++}
++
+ impl CdtError {
+     /// Native diagnostic payload retained after the parser's scratch is destroyed.
+     /// The original admission keeps these bytes until the diagnostic is dropped.
+@@ -166,7 +210,7 @@ impl fmt::Display for CdtError {
+             Self::UnexpectedEnd { offset, expected } => {
+                 write!(f, "at byte {offset}: input ended, expected {expected}")
+             }
+-            Self::BadEscape { offset, reason } => {
++            Self::BadEscape { offset, reason, .. } => {
+                 write!(f, "at byte {offset}: bad escape sequence: {reason}")
+             }
+             Self::NotAbsoluteIri {
+@@ -176,7 +220,7 @@ impl fmt::Display for CdtError {
+             } => {
+                 write!(f, "at byte {offset}: <{iri}> is not usable here: {reason}")
+             }
+-            Self::BadLanguageTag { offset, reason } => {
++            Self::BadLanguageTag { offset, reason, .. } => {
+                 write!(f, "at byte {offset}: bad language tag: {reason}")
+             }
+             Self::BadNumericLiteral { offset, reason } => {
+@@ -229,6 +273,14 @@ pub enum CdtTypeErrorKind {
+     Undefined,
+ }
+ 
++impl purrdf_hash::error::StructuredError for CdtTypeErrorKind {
++    purrdf_hash::error_visit! {
++        IllTyped => "cdt-type-ill-typed" {},
++        Unmodelled => "cdt-type-unmodelled" {},
++        Undefined => "cdt-type-undefined" {},
++    }
++}
++
+ /// A SPARQL **type error** raised by a value-space comparison.
+ ///
+ /// This is the third outcome of [`crate::list_equal`] / [`crate::list_less_than`]
+@@ -243,6 +295,14 @@ pub struct CdtTypeError {
+     pub reason: &'static str,
+ }
+ 
++impl purrdf_hash::error::StructuredError for CdtTypeError {
++    purrdf_hash::error_visit! {
++        @record self { kind, reason } => "cdt-type" {
++            "kind" => Record(&self.kind), "reason" => Text(self.reason),
++        }
++    }
++}
++
+ impl CdtTypeError {
+     /// A comparison refused because one side is ill-typed — a defect in the data.
+     #[must_use]
+diff --git crates/cdt/src/memory.rs crates/cdt/src/memory.rs
+index 5ce3da0c2..f8afd4eac 100644
+--- crates/cdt/src/memory.rs
++++ crates/cdt/src/memory.rs
+@@ -21,6 +21,13 @@ pub enum ReadError {
+     Storage(StorageError),
+ }
+ 
++impl purrdf_hash::error::StructuredError for ReadError {
++    purrdf_hash::error_visit! {
++        Lexical(cause) => "cdt-read-lexical" { "cause" => Cause(cause) },
++        Storage(cause) => "cdt-read-storage" { "cause" => Cause(cause) },
++    }
++}
++
+ purrdf_lex::variant_from!(ReadError { Lexical(CdtError) });
+ 
+ purrdf_lex::variant_from!(ReadError { Storage(StorageError) });
+diff --git crates/cdt/src/parse.rs crates/cdt/src/parse.rs
+index 53cbbf682..94862d736 100644
+--- crates/cdt/src/parse.rs
++++ crates/cdt/src/parse.rs
+@@ -812,6 +812,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
+                 let decoded = terminals::echar_value(letter).ok_or(CdtError::BadEscape {
+                     offset: start,
+                     reason: "only \\t \\b \\n \\r \\f \\\" \\' \\\\ \\uXXXX and \\UXXXXXXXX are escapes",
++                    cause: None,
+                 })?;
+                 self.position += 2;
+                 Ok(decoded)
+@@ -819,6 +820,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
+             None => Err(CdtError::BadEscape {
+                 offset: start,
+                 reason: "the lexical form ends inside an escape sequence",
++                cause: None,
+             }
+             .into()),
+         }
+@@ -831,6 +833,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
+             terminals::decode_uchar(&self.bytes[start..]).map_err(|defect| {
+                 CdtError::BadEscape {
+                     offset: start,
++                    cause: Some(defect),
+                     reason: match defect {
+                         terminals::UcharError::NotAnEscape => "expected \\uXXXX or \\UXXXXXXXX",
+                         terminals::UcharError::BadHex => {
+@@ -875,9 +878,8 @@ impl<'a, 'm> Scanner<'a, 'm> {
+     /// literal no serialization of it could round-trip.
+     ///
+     /// Each refusal keeps its [`CdtError::BadLanguageTag`] shape and its `offset`;
+-    /// `reason` now carries [`langtag::LanguageTagError::message`], which is a
+-    /// `&'static str` and so fits the field exactly, naming the production that
+-    /// refused instead of restating the terminal.
++    /// `cause` retains the native language parser refusal and `reason` carries
++    /// its static presentation, naming the production that refused.
+     fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), ReadError> {
+         let start = self.position;
+         self.expect(b'@', "`@` opening a language tag")?;
+@@ -898,6 +900,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
+             return Err(CdtError::BadLanguageTag {
+                 offset: start,
+                 reason: error.message(),
++                cause: Some(error),
+             }
+             .into());
+         }
+@@ -929,6 +932,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
+             .ok_or(CdtError::BadLanguageTag {
+                 offset: start,
+                 reason: "a base direction must be `ltr` or `rtl`",
++                cause: None,
+             })
+             .map_err(Into::into)
+     }
+diff --git crates/cdt/tests/grammar_productions.rs crates/cdt/tests/grammar_productions.rs
+index 466832286..c62699c9b 100644
+--- crates/cdt/tests/grammar_productions.rs
++++ crates/cdt/tests/grammar_productions.rs
+@@ -612,7 +612,7 @@ fn tagged_list(tag: &str) -> Result<CdtValue, CdtError> {
+ fn a_subtag_over_the_length_ceiling_is_refused_in_a_cdt_literal() {
+     let error = tagged_list("cantbethislong")
+         .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
+-    let CdtError::BadLanguageTag { offset, reason } = error else {
++    let CdtError::BadLanguageTag { offset, reason, .. } = error else {
+         panic!("the error type is unchanged: {error:?}");
+     };
+     // `["x"@…` — the `@` sits at byte 4, which is where the tag starts, and the

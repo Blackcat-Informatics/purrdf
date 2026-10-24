@@ -1,0 +1,5 @@
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/testkit)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/cdt)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 5.11s

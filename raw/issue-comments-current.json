@@ -1,0 +1,113 @@
+{
+  "projection": "Mechanical HTML/UI blocks omitted; full technical feedback and original metadata retained.",
+  "pages": [
+    [
+      {
+        "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/comments/6379302042",
+        "html_url": "https://github.com/Blackcat-Informatics/purrdf/pull/697#issuecomment-6379302042",
+        "issue_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/697",
+        "id": 6379302042,
+        "node_id": "IC_kwDOTKq-Ms8AAAABfDxsmg",
+        "user": {
+          "login": "coderabbitai[bot]",
+          "id": 136622811,
+          "node_id": "BOT_kgDOCCSy2w",
+          "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+          "html_url": "https://github.com/apps/coderabbitai",
+          "followers_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/followers",
+          "following_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/following{/other_user}",
+          "gists_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/subscriptions",
+          "organizations_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/orgs",
+          "repos_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/repos",
+          "events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/received_events",
+          "type": "Bot",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "created_at": "2026-10-24T03:27:06Z",
+        "updated_at": "2026-10-24T03:33:48Z",
+        "body": "\n\n\n\n\n\nNo actionable comments were generated in the recent review.\n\n<details>\n<summary><strong><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/info.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Recent review info</strong></summary>\n<dl>\n<dd>\n\n<details>\n<summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Run configuration</strong></summary>\n<dl>\n<dd>\n\n- **Source mode**: Auto\n- **Repository**: Unavailable\n- **Branch**: Unavailable\n- **File**: No configuration file from this repository applied\n- **Commit**: Unavailable\n- **Layers**: Organization UI\n- **Review profile**: CHILL\n- **Plan**: Advanced\n- **Run ID**: `d53f9709-f309-4281-9bbe-1ee3af189be6`\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Commits</strong></summary>\n<dl>\n<dd>\n\nReviewing files that changed from the base of the PR and between 6c9c66fcf3790d5fdb9fa62e857c4e6f544aad8f and 0803c697bd21608b250b4925bfb423b86a3fa808.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Files selected for processing: 7</strong></summary>\n<dl>\n<dd>\n\n* `crates/cdt/src/error.rs`\n* `crates/cdt/src/memory.rs`\n* `crates/cdt/src/parse.rs`\n* `crates/cdt/tests/adversarial.rs`\n* `crates/cdt/tests/grammar_productions.rs`\n* `crates/cdt/tests/structured_errors.rs`\n* `crates/lex/src/terminals.rs`\n\n</dd>\n</dl>\n</details>\n\n**Included review availability:** This review used your included allowance. 8 included reviews remain after this review. Your included PR review attempts over the past 7 days set your current allowance at 10 reviews per hour.\n\n</dd>\n</dl>\n</details>\n\n\n\n\n\n\n\n\n<details>\n<summary><strong>\ud83d\udcdd Summary</strong></summary>\n<dl>\n<dd>\n\n\n\n## Summary by CodeRabbit\n\n* **New Features**\n  * Errors now provide structured diagnostic details, including error codes, relevant locations, limits, and underlying causes where available.\n  * Unicode escape errors now include distinct, readable messages for different failure types.\n* **Bug Fixes**\n  * Parser and storage errors now retain more of the original error information, making failures easier to inspect.\n\n\nCDT errors now provide structured records for parser, type, comparison, and reader failures. Escape and language-tag errors retain native causes when available. Tests check error fields, source chains, and allocation-free inspection.\n\n**Changes: CDT Error Reporting**\n\n|Layer / File(s)|Summary|\n|:---|:---|\n|**Structured error contracts** <br> `crates/cdt/src/error.rs`, `crates/cdt/src/memory.rs`, `crates/lex/src/terminals.rs`|CDT parser, type, and reader errors now expose structured records. Parser and reader errors expose applicable causes through error-source chains. `UcharError` now implements `Display` and `Error`.|\n|**Parser cause retention** <br> `crates/cdt/src/parse.rs`|Unicode escape and language-tag failures retain native parser errors. Locally generated escape and direction-suffix failures set no cause.|\n|**Structured error validation** <br> `crates/cdt/tests/structured_errors.rs`, `crates/cdt/tests/adversarial.rs`, `crates/cdt/tests/grammar_productions.rs`|Tests check diagnostic fields, offsets, causes, source chains, and allocation-free inspection. Existing tests accommodate the added language-tag error field.|\n\n\n<strong>Priority: <picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/priority-normal-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Normal</strong>\n\n**Estimated code review effort:** 3 (Moderate) | ~25 minutes\n\n\n**Change:** Feature\n\n\n### Sequence Diagram(s)\n\n```mermaid\nsequenceDiagram\n  participant parse_uchar\n  participant CdtError\n  participant UcharError\n  participant StructuredErrorConsumer\n  parse_uchar->>CdtError: Retain UcharError as cause\n  CdtError->>UcharError: Expose cause through source()\n  StructuredErrorConsumer->>CdtError: Inspect structured error record\n  CdtError-->>StructuredErrorConsumer: Return fields and cause\n```\n\n**Possibly related issues**\n\n- Issue 558 \u2014 This PR implements structured error reporting for the CDT error family; the issue covers structured fields and native causes across the wider workspace.\n\n</dd>\n</dl>\n</details>\n\n\n<details>\n<summary><strong>Merge Risk:</strong> <strong><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/risk-unassessed-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Minimal</strong> \u00b7 up to <code>0803c</code></summary>\n<dl>\n<dd>\n\n\n<!-- final_review_risk_label\n**Merge Risk:** **\u26aa Minimal** \u00b7 up to `0803c`\n-->\n<!-- final_review_risk_coverage:{\"sourceCommitId\":\"0803c697bd21608b250b4925bfb423b86a3fa808\",\"coveredCommitId\":\"0803c697bd21608b250b4925bfb423b86a3fa808\",\"kind\":\"reviewed\"} -->\n\nNo actionable issue is identified in the CDT error-reporting change; it is mergeable after normal checks.\n\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Security architecture risk:</strong> <strong><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/risk-unassessed-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Minimal</strong> \u00b7 up to <code>0803c</code></summary>\n<dl>\n<dd>\n\n\n\n\nThe changes expose diagnostic information without changing input acceptance, resource limits, or failure classification. The retained native causes contain diagnostic classifications rather than additional input text or capabilities. No introduced or worsened security concern was identified.\n\n**Retained concerns**\nNo architecture-level concerns identified.\n\n<details>\n<summary><strong>Security review details</strong></summary>\n<dl>\n<dd>\n\n**Security Blast Radius**\n- _inferred_ \u2014 The assessed exposure is caller-visible diagnostic information from CDT parsing and reading. The new native causes add classifications, not credentials, service identities, executable callbacks, or additional raw input payloads.\n\n**Trust Boundaries and Controls**\n- _observed_ \u2014 Attacker-supplied lexical content continues through the same decoder and language-tag validation calls. Retaining their failures changes diagnostic observation, not acceptance decisions; input-size and canonical-size controls remain in the reader entrypoint.\n\n**Resilience and Maintainability Implications**\n- _observed_ \u2014 Structured records borrow existing diagnostic payloads and nested causes rather than creating replacement strings or boxed cause chains. This preserves diagnostic ownership while avoiding a new allocation requirement for inspection.\n\n</dd>\n</dl>\n</details>\n\n\n</dd>\n</dl>\n</details>\n\n\n<details>\n<summary><strong>Pre-merge checks: <sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Passed\" title=\"Passed\"></picture></sup> 4 \u00b7 <sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-failed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Failed\" title=\"Failed\"></picture></sup> 1</strong></summary>\n<dl>\n<dd>\n\n<strong><sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-failed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Failed\" title=\"Failed\"></picture></sup> Failed checks: 1 warning</strong>\n\n|     Check name     |                                              Status                                              | Explanation                                                                                                                                                                                 | Resolution                                                                         |\n| :---------------- | :----------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------- |\n| Docstring Coverage | ![Warning](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-warning.svg) | Docstring coverage is 35.29% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 17 functions across 7 files. | Write docstrings for the functions missing them to satisfy the coverage threshold. |\n\n<details>\n<summary><strong><sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Passed\" title=\"Passed\"></picture></sup> Passed checks: 4 passed</strong></summary>\n<dl>\n<dd>\n\n|         Check name         |                                             Status                                             | Explanation                                                                                                                                                                                               |\n| :------------------------ | :--------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |\n|         Title check        | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The title \"Preserve native CDT failure fields and source chains\" matches the main change: CDT errors now keep native UCHAR and language-tag decoder causes, expose structured fields, and wire source() \u2026 |\n|      Description check     | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The description explains the problem (discarded UCHAR and language-tag decoder failures, and limited structured inspection), the changes (inline native causes, borrowed structured inspection, standard\u2026 |\n|     Linked Issues check    | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The PR addresses the active coding requirements in `#696`. `CdtError`, `CdtTypeErrorKind`, `CdtTypeError`, and `ReadError` use borrowed structured records with offsets, bounds, text, classifications, re\u2026 |\n| Out of Scope Changes check | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The changed files remain within `#696`. Error records, source-chain wiring, parser construction updates, `UcharError` traits, memory handling, and focused tests directly implement the linked issue. The \u2026 |\n\n<details>\n<summary><strong>Full details: Title check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nThe title \"Preserve native CDT failure fields and source chains\" matches the main change: CDT errors now keep native UCHAR and language-tag decoder causes, expose structured fields, and wire source() chains. It is specific and concise, and it names the CDT crate's error model rather than file lists or vague terms.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Full details: Description check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nThe description explains the problem (discarded UCHAR and language-tag decoder failures, and limited structured inspection), the changes (inline native causes, borrowed structured inspection, standard source() chains, UcharError trait implementations), and the public regression tests. It also lists validation and scope limits. This is directly related to the changeset.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Full details: Linked Issues check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nThe PR addresses the active coding requirements in `#696`. `CdtError`, `CdtTypeErrorKind`, `CdtTypeError`, and `ReadError` use borrowed structured records with offsets, bounds, text, classifications, reasons, and nested causes. `BadEscape` and `BadLanguageTag` retain native decoder causes, while local refusals retain no fabricated cause. `ReadError` preserves lexical and storage failures and exposes both through source chains. Construction sites and `UcharError` standard traits are updated. The new integration tests cover disposed input, parser and storage failures, comparison classifications, accepted neighbours, offsets, bounds, source chains, and allocation behavior. The reported validation covers the CDT suite and strict Clippy checks. Existing display matching remains unchanged.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Full details: Out of Scope Changes check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nThe changed files remain within `#696`. Error records, source-chain wiring, parser construction updates, `UcharError` traits, memory handling, and focused tests directly implement the linked issue. The evidence shows no dependency change, WASM semantic matrix, upstream work, or unrelated crate change. Parent issue `#558` remains context only, as required.\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n\n\n\n\n",
+        "author_association": "NONE",
+        "reactions": {
+          "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/comments/6379302042/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "performed_via_github_app": {
+          "id": 347564,
+          "client_id": "Iv1.6aaafe4fe882736b",
+          "slug": "coderabbitai",
+          "node_id": "A_kwHOB96YWc4ABU2s",
+          "owner": {
+            "login": "coderabbitai",
+            "id": 132028505,
+            "node_id": "O_kgDOB96YWQ",
+            "avatar_url": "https://avatars.githubusercontent.com/u/132028505?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/coderabbitai",
+            "html_url": "https://github.com/coderabbitai",
+            "followers_url": "https://api.github.com/users/coderabbitai/followers",
+            "following_url": "https://api.github.com/users/coderabbitai/following{/other_user}",
+            "gists_url": "https://api.github.com/users/coderabbitai/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/coderabbitai/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/coderabbitai/subscriptions",
+            "organizations_url": "https://api.github.com/users/coderabbitai/orgs",
+            "repos_url": "https://api.github.com/users/coderabbitai/repos",
+            "events_url": "https://api.github.com/users/coderabbitai/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/coderabbitai/received_events",
+            "type": "Organization",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "name": "coderabbitai",
+          "description": "# Transforming Code Reviews with AI\r\n\r\n## Features\r\n\r\n**Automated Reviews**: Continuous reviews of the pull requests including incremental commits. \r\n\r\n**Summarization**: Generates high-level summary and a technical walkthrough of the PR changes.\u00a0\r\n\r\n**Line-by-line review**: Provides line-by-line suggestions committable with one click.\r\n\r\n**Codebase verification**:  Verifies the impact on the overall codebase and identifies missing changes.\r\n\r\n**Insights into your code**:  Ask any questions on your codebase within the pull request \r\n\r\n**Chat about your code** : Chat with the bot around your code.\u00a0The more you chat, the smarter it gets.\r\n\r\n**Issue Validation**:  Validates the PR against the linked issues and identifies other related issues\u00a0\r\n\r\n\r\n\r\n",
+          "external_url": "https://coderabbit.ai?utm_source=cr_app&utm_medium=github",
+          "html_url": "https://github.com/apps/coderabbitai",
+          "created_at": "2023-06-14T15:47:27Z",
+          "updated_at": "2026-10-22T09:20:52Z",
+          "permissions": {
+            "actions": "read",
+            "checks": "write",
+            "contents": "write",
+            "discussions": "read",
+            "issues": "write",
+            "members": "read",
+            "merge_queues": "read",
+            "metadata": "read",
+            "pull_requests": "write",
+            "statuses": "write",
+            "workflows": "write"
+          },
+          "events": [
+            "issues",
+            "issue_comment",
+            "label",
+            "membership",
+            "merge_group",
+            "organization",
+            "pull_request",
+            "pull_request_review",
+            "pull_request_review_comment",
+            "pull_request_review_thread",
+            "release",
+            "repository",
+            "team"
+          ]
+        },
+        "minimized": null
+      }
+    ]
+  ]
+}

@@ -1,0 +1,136 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/rdf-core)
+   Compiling cmov v0.5.4
+   Compiling libc v0.2.186
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling ctutils v0.4.2
+   Compiling crossbeam-epoch v0.9.18
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling cpubits v0.1.1
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/deflate)
+   Compiling crossbeam-deque v0.8.6
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling digest v0.11.3
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/stack)
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling rayon v1.12.0
+   Compiling regex v1.12.4
+   Compiling polyval v0.7.3
+   Compiling structured-zstd v0.0.49
+   Compiling aes v0.9.3
+   Compiling sha2 v0.11.0
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling proc-macro2 v1.0.106
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/xsd)
+   Compiling visual-hashing v1.0.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/ed25519)
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/alloc-probe)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/cdt)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/jsonschema)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/gts)
+   Compiling syn v2.0.118
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/datalog)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/conformance-kit)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/697-integration-qualification/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 4m 41s
+     Running tests/structured_errors.rs (/opt/.cargo/fc/7353998ee0ed4d/debug/build/purrdf-cdt/7106ca762a484bd3/out/structured_errors-7106ca762a484bd3)
+
+running 7 tests
+test duplicate_key_retains_original_offset_and_canonical_lexical_key ... ok
+test comparison_refusal_retains_classification_and_original_reason ... ok
+test inspection_borrows_retained_diagnostic_payload_without_allocating ... ok
+test original_nested_causes_are_inspected_without_allocation ... ok
+test parser_refusals_keep_native_causes_after_lexical_input_destruction ... ok
+test public_comparisons_preserve_ill_typed_and_undefined_classifications ... ok
+test public_grammar_refusals_report_original_positions_and_reasons ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/catalog_references.rs (/opt/.cargo/fc/7353998ee0ed4d/debug/build/purrdf-shapes/297cea21ea357d72/out/catalog_references-297cea21ea357d72)
+
+running 12 tests
+test equal_named_handles_keep_local_deactivation_distinct ... ok
+test catalog_chain_keeps_conformance_reporting_and_owner_after_export ... ok
+test exported_flat_reference_keeps_its_original_model_domain ... ok
+test metadata_returns_native_missing_definition_and_function_body_refusals ... ok
+test computed_targets_and_unique_grouping_retain_their_function_domain ... ok
+test metadata_follows_references_without_activating_unused_catalog_definitions ... ok
+test nested_same_named_domains_keep_both_function_and_relation_inventory ... ok
+test same_named_functions_evaluate_their_original_domain_bodies ... ok
+test parsed_computed_shape_index_releases_its_owner_with_the_model ... ok
+test recursive_expression_declaration_releases_its_owner_with_the_model ... ok
+test standalone_function_keeps_its_model_after_the_factory_is_dropped ... ok
+test logical_members_keep_distinct_original_models_with_equal_shape_names ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/change_path_alloc.rs (/opt/.cargo/fc/7353998ee0ed4d/debug/build/purrdf-shapes/062c75a6ffb1e9eb/out/change_path_alloc-062c75a6ffb1e9eb)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.74s
+
+     Running tests/conformance_memo.rs (/opt/.cargo/fc/7353998ee0ed4d/debug/build/purrdf-shapes/96121c647d5e9e26/out/conformance_memo-96121c647d5e9e26)
+
+running 3 tests
+test a_named_inner_shape_is_evaluated_once_for_a_shared_value_node ... ok
+test an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_is_reachable ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/shape_catalog.rs (/opt/.cargo/fc/7353998ee0ed4d/debug/build/purrdf-shapes/5a531e9ca6986d70/out/shape_catalog-5a531e9ca6986d70)
+
+running 7 tests
+test function_domain_admission_has_no_per_declaration_allocation ... ok
+test missing_catalog_identity_retains_the_original_term_without_clone_allocation ... ok
+test catalog_admission_allocation_growth_and_retained_reference_execution ... ok
+test identity_reference_report_retains_caller_path_role_vocabulary ... ok
+test static_root_preparation_does_not_copy_unreferenced_catalog_bodies ... ok
+test catalog_root_export_and_clone_share_constraint_bodies ... ok
+test shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

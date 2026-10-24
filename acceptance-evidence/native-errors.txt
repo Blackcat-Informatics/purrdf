@@ -1,0 +1,117 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling libc v0.2.186
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/rdf-events)
+   Compiling digest v0.11.3
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/stack)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 26.89s
+     Running tests/byte_determinism.rs (/opt/.cargo/eb/24e75ffbf1e209/debug/build/purrdf-cdt/da110caa05d85f39/out/byte_determinism-da110caa05d85f39)
+
+running 6 tests
+test canonical_bytes_are_pinned ... ok
+test map_rendering_does_not_depend_on_authoring_order ... ok
+test canonical_form_is_a_fixpoint_over_a_hand_written_corpus ... ok
+test rendering_is_a_pure_function_of_the_value ... ok
+test parsing_is_injective_on_canonical_forms ... ok
+test canonical_parse_canonical_is_a_fixpoint ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/grammar_productions.rs (/opt/.cargo/eb/24e75ffbf1e209/debug/build/purrdf-cdt/eb42bdfe3cabd1a4/out/grammar_productions-eb42bdfe3cabd1a4)
+
+running 30 tests
+test a_blank_node_label_opens_at_a_narrower_class_than_it_continues_with ... ok
+test a_programmatic_duplicate_map_key_carries_the_same_diagnostic ... ok
+test a_subtag_over_the_length_ceiling_is_refused_in_a_cdt_literal ... ok
+test blank_node_label_still_admits_every_non_ascii_scalar_pn_chars_names ... ok
+test blank_node_label_stops_at_a_no_break_space_rather_than_absorbing_it ... ok
+test canonical_form_always_spells_shorthands_explicitly ... ok
+test every_tag_the_workspace_writes_still_parses_in_a_cdt_literal ... ok
+test ill_formed_bad_escape ... ok
+test ill_formed_duplicate_map_key ... ok
+test ill_formed_relative_iriref ... ok
+test ill_formed_null_as_a_map_key ... ok
+test ill_formed_trailing_comma ... ok
+test ill_formed_unterminated_list ... ok
+test ill_formed_unterminated_map ... ok
+test production_128s_rdf_literal_covers_all_four_string_forms_and_both_suffixes ... ok
+test production_1_list_is_bracketed_and_may_be_empty ... ok
+test production_2_elements_are_comma_separated_and_ordered ... ok
+test production_4_map_is_braced_and_may_be_empty ... ok
+test production_3_every_list_element_alternative_is_admitted ... ok
+test production_5_entries_are_comma_separated ... ok
+test production_6_entry_pairs_a_key_with_a_value_through_a_colon ... ok
+test production_7_map_keys_admit_exactly_four_alternatives ... ok
+test production_9_null_is_a_first_class_element ... ok
+test production_8_every_map_value_alternative_is_admitted ... ok
+test round_trip_language_tag_with_ltr_direction ... ok
+test round_trip_language_tag_with_no_direction ... ok
+test round_trip_language_tag_with_rtl_direction ... ok
+test superset_directional_literals_are_admitted_in_both_directions ... ok
+test the_langtag_terminals_own_refusals_still_bite_in_a_cdt_literal ... ok
+test superset_triple_term_is_admitted_as_an_element_and_a_value ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/structured_errors.rs (/opt/.cargo/eb/24e75ffbf1e209/debug/build/purrdf-cdt/0283908a094b6e13/out/structured_errors-0283908a094b6e13)
+
+running 5 tests
+test duplicate_key_retains_original_offset_and_canonical_lexical_key ... ok
+test comparison_refusal_retains_classification_and_original_reason ... ok
+test inspection_borrows_retained_diagnostic_payload_without_allocating ... ok
+test parser_refusals_keep_native_causes_after_lexical_input_destruction ... ok
+test public_comparisons_preserve_ill_typed_and_undefined_classifications ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/value_relations.rs (/opt/.cargo/eb/24e75ffbf1e209/debug/build/purrdf-cdt/6a16348a4d95e633/out/value_relations-6a16348a4d95e633)
+
+running 32 tests
+test a_blank_node_at_a_compared_position_has_no_order ... ok
+test a_shorter_list_is_smaller_than_a_list_it_prefixes ... ok
+test an_ill_typed_operand_is_distinguishable_from_an_unmodelled_one ... ok
+test equality_of_two_distinct_blank_nodes_has_no_answer ... ok
+test list_equal_compares_by_value_not_by_lexical_form ... ok
+test elements_of_any_size_compare_by_every_digit ... ok
+test list_equal_is_false_on_a_length_mismatch_and_never_an_error ... ok
+test list_equal_treats_nulls_as_mutually_indistinguishable ... ok
+test list_equal_propagates_a_type_error_but_a_definite_false_dominates_it ... ok
+test list_equal_walks_nested_composites ... ok
+test list_less_than_continues_past_two_nulls ... ok
+test list_less_than_descends_into_nested_lists ... ok
+test list_less_than_propagates_an_equality_error ... ok
+test list_less_than_propagates_the_operators_error_at_the_first_unequal_position ... ok
+test list_less_than_stops_at_the_first_unequal_position ... ok
+test map_equal_requires_identical_key_sets ... ok
+test map_less_than_compares_keys_in_the_syntactic_order ... ok
+test native_box_failure_stays_primary_when_original_refund_also_refuses ... ok
+test map_less_than_walks_in_key_order ... ok
+test native_canonical_render_retains_the_original_output_and_releases_scratch ... ok
+test native_duplicate_diagnostic_preserves_stable_original_value_order ... ok
+test native_clone_retains_only_original_payload_and_refuses_every_growth ... ok
+test native_literal_parser_keeps_original_box_failure_through_child_refund ... ok
+test native_large_index_parse_stays_expression_error_while_physical_refusal_is_hard ... ok
+test native_map_constructor_keeps_last_binding_and_releases_discarded_keys ... ok
+test native_merge_keeps_first_map_and_releases_selection_metadata ... ok
+test the_total_order_is_defined_where_the_operator_raises ... ok
+test the_total_order_sorts_and_is_strict_on_distinct_keys ... ok
+test native_relations_preserve_original_answers_and_price_actual_peak ... ok
+test value_order_with_a_syntactic_tiebreak_is_intransitive_but_the_exported_order_is_not ... ok
+test native_relations_refuse_each_original_growth_without_retained_scratch ... ok
+test native_clone_and_release_do_not_recurse_on_a_small_stack ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

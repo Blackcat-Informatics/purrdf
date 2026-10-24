@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 696,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt",
+  "branch": "paudley/696-retain-and-expose-complete-native-cdt",
+  "slug": "retain-and-expose-complete-native-cdt",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/.stage/retain-and-expose-complete-native-cdt",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "6c9c66fcf3790d5fdb9fa62e857c4e6f544aad8f",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt",
+    "branch:paudley/696-retain-and-expose-complete-native-cdt",
+    "stage:/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/.stage/retain-and-expose-complete-native-cdt",
+    "issue:/home/paudley/Active/purrdf/.worktrees/696-retain-and-expose-complete-native-cdt/.stage/retain-and-expose-complete-native-cdt/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-23T21:13:11-0600"
+}

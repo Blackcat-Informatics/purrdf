@@ -1,0 +1,7 @@
+remote: 
+remote: Create a pull request for 'paudley/696-retain-and-expose-complete-native-cdt' on GitHub by visiting:        
+remote:      https://github.com/Blackcat-Informatics/purrdf/pull/new/paudley/696-retain-and-expose-complete-native-cdt        
+remote: 
+To ssh://ssh.github.com:443/Blackcat-Informatics/purrdf.git
+ * [new branch]          HEAD -> paudley/696-retain-and-expose-complete-native-cdt
+branch 'paudley/696-retain-and-expose-complete-native-cdt' set up to track 'origin/paudley/696-retain-and-expose-complete-native-cdt'.
