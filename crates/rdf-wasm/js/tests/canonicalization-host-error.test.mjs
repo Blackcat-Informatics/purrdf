@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// Why not Rust: this checks JavaScript Error prototypes across the generated
+// wasm-bindgen boundary, which a native Rust test cannot observe.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { ready, Dataset } from "../index.mjs";
+
+await ready();
+
+test("isomorphic refusal crosses the wasm boundary as a JavaScript Error", () => {
+  const dataset = Dataset.parse(
+    "<https://example.org/s> <https://example.org/p> <urn:purrdf:rdfc:bad> .",
+    "turtle",
+  );
+  assert.throws(() => dataset.isomorphic(dataset), (error) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error instanceof WebAssembly.RuntimeError, false);
+    assert.equal(error.name, "Error");
+    assert.equal(typeof error.message, "string");
+    assert.match(error.message, /urn:purrdf:rdfc:bad/);
+    return true;
+  });
+  assert.equal(dataset.size, 1);
+});

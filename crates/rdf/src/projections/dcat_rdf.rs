@@ -689,7 +689,7 @@ mod tests {
             ),
         )
         .expect("mapped RDF");
-        assert!(datasets_isomorphic(&semantic, projected.dataset.as_ref()));
+        assert!(datasets_isomorphic(&semantic, projected.dataset.as_ref()).unwrap());
     }
 
     #[test]
@@ -708,7 +708,7 @@ mod tests {
             );
             let bytes = mapped.package.get(&mapped.artifact_path).expect("artifact");
             let reparsed = parse_dataset(bytes, format.media_type(), None).expect("parse mapped");
-            assert!(datasets_isomorphic(mapped.dataset.as_ref(), &reparsed));
+            assert!(datasets_isomorphic(mapped.dataset.as_ref(), &reparsed).unwrap());
 
             let construct = ConstructViewConfig::new(
                 "CONSTRUCT { <https://example.org/dataset> <https://example.org/title> \"DCAT\" } WHERE {}",
@@ -730,7 +730,7 @@ mod tests {
                 .expect("artifact");
             let reparsed =
                 parse_dataset(bytes, format.media_type(), None).expect("parse construct");
-            assert!(datasets_isomorphic(constructed.dataset.as_ref(), &reparsed));
+            assert!(datasets_isomorphic(constructed.dataset.as_ref(), &reparsed).unwrap());
         }
     }
 

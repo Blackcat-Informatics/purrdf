@@ -2260,7 +2260,7 @@ impl RdfDataset {
     /// of the order the inputs are supplied. Two merges that differ only in input
     /// order (or in the dataset-local term/scope numbering of equivalent inputs)
     /// therefore canonicalize byte-identically (verify with
-    /// [`canonicalize`](super::canon::canonicalize)).
+    /// [`try_canonicalize`](super::canon::try_canonicalize)).
     ///
     /// # Blank-node scope discipline (standardize-apart, C0.2)
     ///
@@ -3736,7 +3736,7 @@ mod tests {
     // ── union ──────────────────────────────────────────────────────────────
 
     use crate::RdfTextDirection;
-    use crate::ir::canon::canonicalize;
+    use crate::ir::canon::try_canonicalize;
 
     /// Two independent datasets with the same predicate but different objects merge
     /// to a dataset holding BOTH quads, and the merge is commutative up to RDF
@@ -3760,8 +3760,8 @@ mod tests {
         let ba = RdfDataset::union(&[&c, &a]).unwrap();
         assert_eq!(ab.quad_count(), 2, "both quads survive the union");
         assert_eq!(
-            canonicalize(&ab).nquads,
-            canonicalize(&ba).nquads,
+            try_canonicalize(&ab).unwrap().nquads,
+            try_canonicalize(&ba).unwrap().nquads,
             "union is order-independent up to isomorphism"
         );
     }
@@ -3882,8 +3882,8 @@ mod tests {
         };
         let u = RdfDataset::union(&[&ds]).unwrap();
         assert_eq!(
-            canonicalize(&ds).nquads,
-            canonicalize(&u).nquads,
+            try_canonicalize(&ds).unwrap().nquads,
+            try_canonicalize(&u).unwrap().nquads,
             "single-input union is isomorphic to the input"
         );
     }

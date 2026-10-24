@@ -778,7 +778,7 @@ impl Dataset {
     pub fn isomorphic(&self, other: &Self) -> Result<bool, JsValue> {
         let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        Ok(datasets_isomorphic(&a, &b))
+        datasets_isomorphic(&a, &b).map_err(|error| JsError::new(&error.to_string()).into())
     }
 
     /// `size` — the number of effective quads.

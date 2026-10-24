@@ -128,7 +128,7 @@ mod tests {
             Some("http://example.org/"),
         )
         .expect("expected RDF");
-        assert!(datasets_isomorphic(&outcome.dataset, &expected));
+        assert!(datasets_isomorphic(&outcome.dataset, &expected).unwrap());
     }
 
     #[test]

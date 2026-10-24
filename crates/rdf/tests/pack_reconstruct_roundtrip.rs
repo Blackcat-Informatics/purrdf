@@ -36,7 +36,7 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
 
     // 1) Direct dataset isomorphism (RDFC-1.0 blank-node canonicalization under the hood).
     assert!(
-        datasets_isomorphic(&rebuilt, &ds), // deref-coerces Arc<RdfDataset> -> &RdfDataset
+        datasets_isomorphic(&rebuilt, &ds).unwrap(), // deref-coerces Arc<RdfDataset> -> &RdfDataset
         "reconstruction must be isomorphic to the source dataset"
     );
 
@@ -78,7 +78,7 @@ fn restore_pack_roundtrips_the_full_fixture() {
     let restored = restore_pack(&bytes).expect("pack restores");
 
     assert!(
-        datasets_isomorphic(&restored, &source),
+        datasets_isomorphic(&restored, &source).unwrap(),
         "restore_pack must preserve the source dataset"
     );
     assert_eq!(restored.reifiers().count(), source.reifiers().count());

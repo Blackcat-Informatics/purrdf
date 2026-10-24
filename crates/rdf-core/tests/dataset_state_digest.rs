@@ -18,8 +18,8 @@ use purrdf_core::{
     DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
     MutableDataset, PagedDataset, PagedQueryLimits, QuadIds, QuadValues, RdfDataset,
     RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef,
-    TermValue, ViewLimits, ViewOperationStatus, WorkspaceReservation, canonicalize,
-    graph_digest_view, try_flat_digest_view,
+    TermValue, ViewLimits, ViewOperationStatus, WorkspaceReservation, try_canonicalize,
+    try_flat_digest_view, try_graph_digest_view,
 };
 use purrdf_iri::vocab::rdf::REIFIES;
 
@@ -327,8 +327,8 @@ fn legacy_canonical_form_omits_an_empty_named_declaration() {
     assert!(!isomorphic(&a, &b));
     assert_ne!(a.digest(), b.digest());
     assert_eq!(
-        canonicalize(&a.materialize()).nquads,
-        canonicalize(&b.materialize()).nquads
+        try_canonicalize(&a.materialize()).unwrap().nquads,
+        try_canonicalize(&b.materialize()).unwrap().nquads
     );
 }
 
@@ -363,8 +363,8 @@ fn per_graph_digests_do_not_enforce_a_global_bijection() {
     assert_ne!(a.digest(), b.digest());
     for graph in [G, H] {
         assert_eq!(
-            graph_digest_view(&*a.materialize(), graph),
-            graph_digest_view(&*b.materialize(), graph)
+            try_graph_digest_view(&*a.materialize(), graph),
+            try_graph_digest_view(&*b.materialize(), graph)
         );
     }
     for kept in 0..2 {
@@ -447,8 +447,8 @@ fn oracle_accepts_global_relabeling_and_insertion_permutations() {
     assert!(isomorphic(&a, &b));
     assert_eq!(a.digest(), b.digest());
     assert_eq!(
-        canonicalize(&a.materialize()).nquads,
-        canonicalize(&b.materialize()).nquads
+        try_canonicalize(&a.materialize()).unwrap().nquads,
+        try_canonicalize(&b.materialize()).unwrap().nquads
     );
 }
 

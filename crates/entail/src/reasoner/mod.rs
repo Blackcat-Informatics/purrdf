@@ -285,10 +285,8 @@ impl Reasoner {
     ///
     /// The failures [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
     /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
-    /// term, or an exhausted n-degree search budget) — `ds` is wholly caller-supplied here,
-    /// so this comes back as a value rather than the panic
-    /// [`purrdf_core::canonicalize`] would raise for the same
-    /// input.
+    /// term, or an exhausted n-degree search budget). `ds` is caller-supplied,
+    /// and the original canonicalization refusal is retained.
     pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
         Self::recorded(ds, SchemaPreparationBudget::default(), None)
     }
@@ -1296,9 +1294,7 @@ mod tests {
     /// The dataset [`Reasoner::with_proofs`] is built from is wholly caller-supplied — a
     /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI
     /// ([`purrdf_core::RESERVED_NAMESPACE`]) must refuse computing its producer-independent
-    /// identity as an [`EntailError::Canonicalization`] VALUE, rather than aborting the
-    /// process through the panicking `purrdf_core::canonicalize`
-    /// [`crate::owl_dl::proof::ontology_identity`] used to reach.
+    /// identity as the original [`EntailError::Canonicalization`] value.
     #[test]
     fn with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value() {
         let mut b = RdfDatasetBuilder::new();

@@ -460,7 +460,10 @@ fn result_image(result: &SparqlResult) -> String {
     match result {
         SparqlResult::Boolean(value) => format!("boolean {value}"),
         SparqlResult::Graph(graph) => {
-            format!("graph\n{}", purrdf_core::canonicalize(graph).nquads)
+            format!(
+                "graph\n{}",
+                purrdf_core::try_canonicalize(graph).unwrap().nquads
+            )
         }
         SparqlResult::Solutions {
             variables,
@@ -468,7 +471,7 @@ fn result_image(result: &SparqlResult) -> String {
             aux,
         } => format!(
             "solutions {variables:?} {rows:?}\naux\n{}",
-            purrdf_core::canonicalize(aux).nquads
+            purrdf_core::try_canonicalize(aux).unwrap().nquads
         ),
     }
 }

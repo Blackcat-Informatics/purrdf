@@ -734,16 +734,24 @@ impl Justification {
     /// A CONTENT digest, never an IRI. Two justifications holding the same axioms have the
     /// same 32 bytes whatever order they were found in, because canonical N-Quads is a
     /// statement about a quad set rather than about an emission sequence.
-    #[must_use]
-    pub fn digest(&self) -> [u8; 32] {
-        *purrdf_hash::blake3::hash(purrdf_core::canonicalize(&self.ontology).nquads.as_bytes())
-            .as_bytes()
+    ///
+    /// # Errors
+    /// Returns the original canonicalization refusal without minting an identity.
+    pub fn digest(&self) -> Result<[u8; 32], purrdf_core::CanonError> {
+        Ok(*purrdf_hash::blake3::hash(
+            purrdf_core::try_canonicalize(&self.ontology)?
+                .nquads
+                .as_bytes(),
+        )
+        .as_bytes())
     }
 
     /// [`Self::digest`] as lowercase hex.
-    #[must_use]
-    pub fn digest_hex(&self) -> String {
-        purrdf_hash::hex::encode(&self.digest())
+    ///
+    /// # Errors
+    /// Returns the original canonicalization refusal from [`Self::digest`].
+    pub fn digest_hex(&self) -> Result<String, purrdf_core::CanonError> {
+        Ok(purrdf_hash::hex::encode(&self.digest()?))
     }
 
     /// SUFFICIENCY, re-decided: does the justification alone still entail the axiom?
@@ -1117,7 +1125,8 @@ mod tests {
         assert!(justification.is_minimal().expect("well formed"));
 
         // Named, not merely counted: the chain, and not the sibling or the instance.
-        let lines: BTreeSet<String> = purrdf_core::canonicalize(justification.ontology())
+        let lines: BTreeSet<String> = purrdf_core::try_canonicalize(justification.ontology())
+            .unwrap()
             .nquads
             .lines()
             .map(ToOwned::to_owned)
@@ -1221,11 +1230,11 @@ mod tests {
     fn the_justification_digest_addresses_its_content() {
         let first = justify(&chain(), &cat_is_an_animal()).expect("entailed");
         let second = justify(&chain(), &cat_is_an_animal()).expect("entailed");
-        assert_eq!(first.digest(), second.digest());
-        assert_eq!(first.digest_hex().len(), 64);
+        assert_eq!(first.digest().unwrap(), second.digest().unwrap());
+        assert_eq!(first.digest_hex().unwrap().len(), 64);
         assert_eq!(
-            purrdf_hash::hex::encode(&first.digest()),
-            first.digest_hex()
+            purrdf_hash::hex::encode(&first.digest().unwrap()),
+            first.digest_hex().unwrap()
         );
 
         // The SAME two axioms reached from a different ontology digest identically: the
@@ -1237,7 +1246,7 @@ mod tests {
             (MAMMAL, SUB, ANIMAL),
         ]);
         let other = justify(&bigger, &cat_is_an_animal()).expect("entailed");
-        assert_eq!(other.digest(), first.digest());
+        assert_eq!(other.digest().unwrap(), first.digest().unwrap());
 
         // A DIFFERENT justification digests differently.
         let assertion = justify(
@@ -1248,7 +1257,28 @@ mod tests {
             },
         )
         .expect("entailed");
-        assert_ne!(assertion.digest(), first.digest());
+        assert_ne!(assertion.digest().unwrap(), first.digest().unwrap());
+    }
+
+    #[test]
+    fn justification_identity_preserves_the_original_canonicalization_refusal() {
+        let ontology = dataset(&[(CAT, SUB, purrdf_core::RESERVED_NAMESPACE)]);
+        let axiom = DlAxiom::SubClassOf {
+            sub: TermValue::iri(CAT),
+            sup: TermValue::iri(purrdf_core::RESERVED_NAMESPACE),
+        };
+        let justification = justify(&ontology, &axiom).expect("the stated axiom is entailed");
+        let original = purrdf_core::try_canonicalize(justification.ontology()).unwrap_err();
+        assert!(matches!(
+            &original,
+            purrdf_core::CanonError::ReservedVocabulary(_)
+        ));
+        let digest_refusal = justification.digest().unwrap_err();
+        let text_refusal = justification.digest_hex().unwrap_err();
+        drop(justification);
+        drop(ontology);
+        assert_eq!(digest_refusal, original);
+        assert_eq!(text_refusal, original);
     }
 
     /// The shrinking cost is REPORTED: one decision per candidate axiom, plus the one that

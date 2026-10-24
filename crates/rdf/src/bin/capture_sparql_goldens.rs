@@ -28,7 +28,7 @@ use purrdf_rdf::capture_support::{
 };
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, SparqlRequest, SparqlResult, TermRef, TermValue,
-    canonicalize, dataset_from_bytes,
+    dataset_from_bytes, try_canonicalize,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -180,7 +180,11 @@ fn capture_corpus(goldens: &Path) -> Tally {
             substitutions: &[],
         };
         match native.query(&dataset, req) {
-            Ok(result) => write_result_golden(&stem, &result, &mut tally),
+            Ok(result) => {
+                if let Err(error) = write_result_golden(&stem, &result, &mut tally) {
+                    tally.unexpected.push((label, error.to_string()));
+                }
+            }
             Err(e) => {
                 let msg = e.to_string();
                 if is_deferred_construct(&e.code) {
@@ -202,10 +206,14 @@ fn capture_corpus(goldens: &Path) -> Tally {
 }
 
 /// Serialize a successful native result into the right golden kind.
-fn write_result_golden(stem: &Path, result: &SparqlResult, tally: &mut Tally) {
+fn write_result_golden(
+    stem: &Path,
+    result: &SparqlResult,
+    tally: &mut Tally,
+) -> Result<(), purrdf_core::CanonError> {
     match result {
         SparqlResult::Graph(graph) => {
-            let nquads = canonicalize(graph).nquads;
+            let nquads = try_canonicalize(graph)?.nquads;
             std::fs::write(with_ext(stem, "nq"), nquads).expect("write .nq golden");
             tally.nq += 1;
         }
@@ -221,6 +229,7 @@ fn write_result_golden(stem: &Path, result: &SparqlResult, tally: &mut Tally) {
             tally.ask += 1;
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

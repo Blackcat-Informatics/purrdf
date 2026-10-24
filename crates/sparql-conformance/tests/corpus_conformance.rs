@@ -13,7 +13,7 @@
 use purrdf::capture_support::solutions_golden;
 use std::path::{Path, PathBuf};
 
-use purrdf::{NativeRdfFormat, canonicalize, parse_dataset};
+use purrdf::{NativeRdfFormat, parse_dataset, try_canonicalize};
 use purrdf_core::{BlankScope, SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -146,7 +146,7 @@ fn canonical_ntriples(text: &str) -> String {
         None,
     )
     .expect("parse expected graph");
-    canonicalize(&dataset).nquads
+    try_canonicalize(&dataset).unwrap().nquads
 }
 
 fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), String> {
@@ -172,7 +172,7 @@ fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), Str
         )),
         (Expected::GraphNTriples(expected), SparqlResult::Graph(native_graph)) => {
             let expected = canonical_ntriples(expected);
-            let native = canonicalize(&native_graph).nquads;
+            let native = try_canonicalize(&native_graph).unwrap().nquads;
             if native == expected {
                 Ok(())
             } else {

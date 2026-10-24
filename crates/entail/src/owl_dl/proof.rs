@@ -114,7 +114,7 @@
 //! and no clause set. It carries two digests:
 //!
 //! * [`DlProof::input`] — BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology
-//!   ([`purrdf_core::canonicalize`]). This is the PRODUCER-INDEPENDENT identity: two engines
+//!   ([`purrdf_core::try_canonicalize`]). This is the PRODUCER-INDEPENDENT identity: two engines
 //!   that read the same graph compute the same 32 bytes, because canonical N-Quads is a
 //!   statement about a quad set rather than about an emission order.
 //! * [`DlProof::contract`] — BLAKE3 over [`CALCULUS_VERSION`] and the canonical encoding of
@@ -138,8 +138,8 @@ use purrdf_hash::frame::{frame_le, frame_le_into};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::TermValue;
 use purrdf_core::ownership::OwnedOrBorrowed;
-use purrdf_core::{RdfDataset, TermValue};
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
@@ -1788,7 +1788,7 @@ pub enum DlProofError<E = std::convert::Infallible> {
     /// against.
     ///
     /// This is the variant that stops a proof from shipping its own evidence: the identity is
-    /// recomputed from the CALLER'S dataset with [`purrdf_core::canonicalize`], never read out
+    /// recomputed from the CALLER'S dataset with [`purrdf_core::try_canonicalize`], never read out
     /// of the proof.
     InputMismatch {
         /// The identity the checker computed from the caller's ontology, as lowercase hex.
@@ -2068,9 +2068,8 @@ pub enum DlProofError<E = std::convert::Infallible> {
     /// computing its producer-independent identity — a reserved-vocabulary term, or an
     /// n-degree search that exhausted its budget.
     ///
-    /// This is the untrusted-input refusal [`purrdf_core::try_canonicalize`] returns as a
-    /// value rather than the panic [`purrdf_core::canonicalize`] would raise for the same
-    /// input: a checking context is built from the CALLER's own dataset (a document parsed
+    /// This retains the original [`purrdf_core::try_canonicalize`] refusal:
+    /// a checking context is built from the CALLER's own dataset (a document parsed
     /// at a wasm/Python/C-ABI boundary), so it can never be assumed benign.
     Canonicalization(purrdf_core::CanonError<E>),
 }
@@ -3008,7 +3007,7 @@ impl CompletionReplay {
 /// What a proof is checked AGAINST: the CALLER's own ontology, clausified by the caller.
 ///
 /// This type exists to make one property structural rather than promised. It is built from a
-/// [`RdfDataset`] the CONSUMER supplies and from nothing else: it holds no state a producer
+/// [`purrdf_core::RdfDataset`] the CONSUMER supplies and from nothing else: it holds no state a producer
 /// shipped, so a proof cannot be verified against the very stores that produced it. It
 /// may own its independently prepared source or borrow it from a consumer reasoner.
 /// Neither form holds a producer's completion graph or search state. Source
@@ -3064,8 +3063,7 @@ impl DlProofContext<'static> {
     /// preparation is physically refused or cancelled;
     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
     /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
-    /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
-    /// [`purrdf_core::canonicalize`] would raise for the same input.
+    /// `ontology` is wholly caller-supplied here, so its original refusal is retained.
     pub fn of_ontology<D: purrdf_core::DatasetView>(
         ontology: &D,
     ) -> Result<Self, DlProofError<D::ReadError>> {
@@ -4807,8 +4805,7 @@ impl DlProof {
 /// [`EntailError::SourceRead`] if the view refuses a preparation read;
 /// [`EntailError::Canonicalization`] if computing its producer-independent identity is
 /// refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
-/// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
-/// [`purrdf_core::canonicalize`] would raise for the same input.
+/// `ontology` is wholly caller-supplied here, so its original refusal is retained.
 pub fn prove_consistency<D: purrdf_core::DatasetView>(
     ontology: &D,
 ) -> Result<(ProofAnswer, DlProof), EntailError<D::ReadError>> {
@@ -5980,13 +5977,6 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 /// that read the same graph, in any order, with any blank-node labelling, compute the same 32
 /// bytes. The same shape [`Justification::digest`](crate::explain::Justification::digest)
 /// already uses.
-fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
-    try_input_digest(ontology, None).unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// The fallible sibling of [`input_digest`] — the untrusted-input entry point, exactly as
-/// [`purrdf_core::try_canonicalize`] is [`purrdf_core::canonicalize`]'s. See
-/// [`try_ontology_identity`].
 fn try_input_digest<D: purrdf_core::DatasetView>(
     ontology: &D,
     stop: Option<&dyn purrdf_core::StopSignal>,
@@ -6012,31 +6002,14 @@ fn try_input_digest<D: purrdf_core::DatasetView>(
     Ok(*hash.finalize().as_bytes())
 }
 
-/// The PRODUCER-INDEPENDENT identity of an ontology, for a consumer to recompute.
-///
-/// The same 32 bytes [`DlProof::input`] carries, exposed so a service proof term can bind the
-/// caller's dataset by exactly the identity a tableau proof term does. Two engines that read
-/// the same graph, in any order and with any blank-node labelling, compute the same value.
-///
-/// # Panics
-/// **Trusted callers only** — hard-`panic!`s on the same two refusals
-/// [`purrdf_core::canonicalize`] does (a reserved-vocabulary term, or an n-degree search that
-/// exhausts [`purrdf_core::RDFC_CALL_LIMIT`]). A caller who cannot vouch for `ontology`'s
-/// provenance wants [`try_ontology_identity`], which returns them as a value.
-#[must_use]
-pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
-    input_digest(ontology)
-}
-
 /// The PRODUCER-INDEPENDENT identity of an ontology, returning a typed
-/// [`purrdf_core::CanonError`] instead of panicking.
+/// [`purrdf_core::CanonError`] on refusal.
 ///
 /// **This is the entry point for UNTRUSTED input** — every reasoning surface reachable
 /// from Python, WASM or the C ABI hands a caller-supplied document to a recording
 /// reasoner or an OWL-DL proof producer, and computing that ontology's identity is the
-/// FIRST canonicalization on that path. Byte-identical `Ok` output to [`ontology_identity`];
-/// only the refusal behavior differs — see [`ontology_identity`] for trusted callers, which
-/// panics instead.
+/// FIRST canonicalization on that path. Two engines reading the same graph, in any order
+/// and with any blank-node labelling, compute the same identity.
 ///
 /// # Errors
 /// [`purrdf_core::CanonError::ReservedVocabulary`] if any term of `ontology` is an IRI in
@@ -6068,7 +6041,7 @@ pub fn try_ontology_identity_with_stop<D: purrdf_core::DatasetView>(
 /// PRODUCER-DERIVED and labelled so wherever it appears. The clause set is the output of this
 /// crate's own absorption and clausification, so this digest answers "which calculus, and which
 /// compilation of the ontology" — it is not a second identity for the ontology, which is what
-/// [`input_digest`] is for. Conflating the two would let a producer's own compilation stand in
+/// [`try_ontology_identity`] is for. Conflating the two would let a producer's own compilation stand in
 /// for the caller's data.
 fn contract_digest(clauses: &ClauseSet, schema: &super::bounds::Preparation) -> [u8; 32] {
     let mut hasher = purrdf_hash::blake3::RecordHasher::new();
@@ -7099,9 +7072,13 @@ mod tests {
     #[test]
     fn the_input_identity_is_the_canonical_ontology_and_not_the_clause_set() {
         let (ontology, proof, ctx) = refutation();
-        let canonical =
-            *purrdf_hash::blake3::hash(purrdf_core::canonicalize(&ontology).nquads.as_bytes())
-                .as_bytes();
+        let canonical = *purrdf_hash::blake3::hash(
+            purrdf_core::try_canonicalize(&ontology)
+                .unwrap()
+                .nquads
+                .as_bytes(),
+        )
+        .as_bytes();
         assert_eq!(proof.input(), canonical, "the input digest is RDFC-1.0's");
         assert_eq!(ctx.input(), canonical, "and the consumer recomputes it");
         assert_ne!(

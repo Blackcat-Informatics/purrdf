@@ -37,7 +37,7 @@ mod turtle;
 
 use std::sync::Arc;
 
-use purrdf_rdf::canonicalize;
+use purrdf_rdf::try_canonicalize;
 use purrdf_shapes::entail_dataset;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::spec::census::{Role, Site, TermClass, classify};
@@ -80,7 +80,7 @@ fn entail(shapes_ttl: &str, data_ttl: &str) -> String {
         &turtle::loads(PREFIXES, shapes_ttl),
     )
     .expect("rules run");
-    canonicalize(entailed.as_ref()).nquads
+    try_canonicalize(entailed.as_ref()).unwrap().nquads
 }
 
 fn ex(local: &str) -> String {
@@ -596,7 +596,7 @@ fn a_prepared_product_carries_computed_values() {
     );
     assert_eq!(fresh_report.to_ntriples(), report(&restored).to_ntriples());
     let entail_with = |prepared: &PreparedShapes| {
-        canonicalize(
+        try_canonicalize(
             entail_dataset(
                 turtle::data(PREFIXES, RECTANGLES).as_ref(),
                 prepared.shapes(),
@@ -604,6 +604,7 @@ fn a_prepared_product_carries_computed_values() {
             .expect("rules run")
             .as_ref(),
         )
+        .unwrap()
         .nquads
     };
     let entailed = entail_with(&fresh);
@@ -700,8 +701,12 @@ fn a_rule_s_own_sh_deactivated_is_a_boolean() {
     };
     let error = run("[ sh:path ex:skip ]").expect_err("a node expression is no boolean literal");
     assert!(error.contains("Inference Rules"), "{error}");
-    let off = canonicalize(run("true").expect("a boolean loads").as_ref()).nquads;
+    let off = try_canonicalize(run("true").expect("a boolean loads").as_ref())
+        .unwrap()
+        .nquads;
     assert!(!off.contains("seen"), "{off}");
-    let on = canonicalize(run("false").expect("a boolean loads").as_ref()).nquads;
+    let on = try_canonicalize(run("false").expect("a boolean loads").as_ref())
+        .unwrap()
+        .nquads;
     assert!(on.contains("seen"), "{on}");
 }

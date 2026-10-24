@@ -35,7 +35,7 @@
 //! ## Implementation: full RDFC-1.0 (no false negatives)
 //!
 //! The verdict is computed by the native full W3C RDFC-1.0 canonicalizer
-//! ([`super::canon::canonicalize`]): two datasets are isomorphic **iff** their
+//! ([`super::canon::try_canonicalize`]): two datasets are isomorphic **iff** their
 //! canonical N-Quads strings are byte-equal. RDFC-1.0 resolves blank-node
 //! automorphisms via hash-partition + permutation backtracking, so — unlike the
 //! simplified FNV signature refinement this comparator used to carry — the
@@ -59,34 +59,39 @@ use crate::dataset_view::DatasetView;
 /// frozen [`RdfDataset`](super::dataset::RdfDataset) are all comparable against each
 /// other, in any combination, without materializing either side: identity is decided
 /// from the canonical bytes, which carry no view-local ids (see
-/// [`canon::canonicalize_view`]). `&RdfDataset` call sites are the `RdfDataset`
-/// instantiation and are unaffected.
+/// [`canon::try_canonicalize_view`]). `&RdfDataset` call sites are the `RdfDataset`
+/// instantiation.
+///
+/// # Errors
+/// Returns the original canonicalization refusal instead of an equality verdict.
 pub fn datasets_isomorphic<
     A: DatasetView<ReadError = core::convert::Infallible>,
     B: DatasetView<ReadError = core::convert::Infallible>,
 >(
     a: &A,
     b: &B,
-) -> bool {
+) -> Result<bool, canon::CanonError> {
     // Cheap structural rejections that do not depend on blank labeling — they avoid
     // running the (poison-guarded) canonicalizer on obviously-different inputs. Each
     // is an EXACT count off the view's own accessors, never `len_hint` (a hint a view
     // is free to approximate or omit would turn a pre-reject into a wrong verdict).
     if a.quads().count() != b.quads().count() {
-        return false;
+        return Ok(false);
     }
     if a.reifier_quads().count() != b.reifier_quads().count() {
-        return false;
+        return Ok(false);
     }
     if a.annotation_quads().count() != b.annotation_quads().count() {
-        return false;
+        return Ok(false);
     }
     if canon::blank_count_view(a) != canon::blank_count_view(b) {
-        return false;
+        return Ok(false);
     }
     // The exact oracle: byte-equal canonical N-Quads ⇔ RDF isomorphism.
-    canon::canonicalize_view(a, canon::CanonHash::Sha256).nquads
-        == canon::canonicalize_view(b, canon::CanonHash::Sha256).nquads
+    Ok(
+        canon::try_canonicalize_view(a, canon::CanonHash::Sha256)?.nquads
+            == canon::try_canonicalize_view(b, canon::CanonHash::Sha256)?.nquads,
+    )
 }
 
 /// A structural diff between two datasets, for test diagnostics. Counts only; the
@@ -107,20 +112,23 @@ pub struct DatasetDiff {
 
 /// A richer diff for test diagnostics: structural counts plus the isomorphism verdict.
 /// View-generic and cross-type on the same terms as [`datasets_isomorphic`].
+///
+/// # Errors
+/// Returns the original canonicalization refusal without publishing a diff.
 pub fn dataset_diff<
     A: DatasetView<ReadError = core::convert::Infallible>,
     B: DatasetView<ReadError = core::convert::Infallible>,
 >(
     a: &A,
     b: &B,
-) -> DatasetDiff {
-    DatasetDiff {
+) -> Result<DatasetDiff, canon::CanonError> {
+    Ok(DatasetDiff {
         quad_counts: (a.quads().count(), b.quads().count()),
         reifier_counts: (a.reifier_quads().count(), b.reifier_quads().count()),
         annotation_counts: (a.annotation_quads().count(), b.annotation_quads().count()),
         blank_counts: (canon::blank_count_view(a), canon::blank_count_view(b)),
-        isomorphic: datasets_isomorphic(a, b),
-    }
+        isomorphic: datasets_isomorphic(a, b)?,
+    })
 }
 
 #[cfg(test)]
@@ -143,11 +151,29 @@ mod tests {
         b.freeze().expect("valid")
     }
 
+    /// Refusal is neither an equality verdict nor a published structural diff.
+    #[test]
+    fn reserved_vocabulary_comparison_returns_the_native_refusal() {
+        let mut builder = RdfDatasetBuilder::new();
+        let node = iri(&mut builder, "node");
+        let reserved = builder.intern_iri(crate::RESERVED_NAMESPACE).unwrap();
+        builder.push_quad(node, reserved, node, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        assert!(matches!(
+            datasets_isomorphic(&dataset, &dataset),
+            Err(canon::CanonError::ReservedVocabulary(_))
+        ));
+        assert!(matches!(
+            dataset_diff(&dataset, &dataset),
+            Err(canon::CanonError::ReservedVocabulary(_))
+        ));
+    }
+
     #[test]
     fn identical_ground_datasets_are_isomorphic() {
         let a = ground_triple();
         let b = ground_triple();
-        assert!(datasets_isomorphic(&a, &b));
+        assert!(datasets_isomorphic(&a, &b).unwrap());
     }
 
     #[test]
@@ -161,7 +187,7 @@ mod tests {
         );
         bb.push_quad(s, p, o, None).unwrap();
         let b = bb.freeze().expect("valid");
-        assert!(!datasets_isomorphic(&a, &b));
+        assert!(!datasets_isomorphic(&a, &b).unwrap());
     }
 
     /// HEADLINE GATE: differing only in reifier COUNT for the same triple →
@@ -182,12 +208,12 @@ mod tests {
         let one = build(&["r1"]);
         let two = build(&["r1", "r2"]);
         assert!(
-            !datasets_isomorphic(&one, &two),
+            !datasets_isomorphic(&one, &two).unwrap(),
             "TWO reifiers vs ONE must compare unequal"
         );
         // And the same reifier set IS isomorphic.
         let one_again = build(&["r1"]);
-        assert!(datasets_isomorphic(&one, &one_again));
+        assert!(datasets_isomorphic(&one, &one_again).unwrap());
     }
 
     #[test]
@@ -206,8 +232,8 @@ mod tests {
             }
             b.freeze().expect("valid")
         };
-        assert!(!datasets_isomorphic(&build(true), &build(false)));
-        assert!(datasets_isomorphic(&build(true), &build(true)));
+        assert!(!datasets_isomorphic(&build(true), &build(false)).unwrap());
+        assert!(datasets_isomorphic(&build(true), &build(true)).unwrap());
     }
 
     /// Directional / datatype literal differences → NOT isomorphic (ground equality).
@@ -227,14 +253,20 @@ mod tests {
             b.push_quad(s, p, lit, None).unwrap();
             b.freeze().expect("valid")
         };
-        assert!(!datasets_isomorphic(
-            &build(Some(RdfTextDirection::Ltr)),
-            &build(Some(RdfTextDirection::Rtl))
-        ));
-        assert!(datasets_isomorphic(
-            &build(Some(RdfTextDirection::Ltr)),
-            &build(Some(RdfTextDirection::Ltr))
-        ));
+        assert!(
+            !datasets_isomorphic(
+                &build(Some(RdfTextDirection::Ltr)),
+                &build(Some(RdfTextDirection::Rtl))
+            )
+            .unwrap()
+        );
+        assert!(
+            datasets_isomorphic(
+                &build(Some(RdfTextDirection::Ltr)),
+                &build(Some(RdfTextDirection::Ltr))
+            )
+            .unwrap()
+        );
     }
 
     /// BLANK BIJECTION: same structure, different blank labels AND scopes → TRUE.
@@ -251,7 +283,7 @@ mod tests {
         let a = build("b1", 0);
         let b = build("xyz", 7);
         assert!(
-            datasets_isomorphic(&a, &b),
+            datasets_isomorphic(&a, &b).unwrap(),
             "blanks differ only by label/scope; structure is identical"
         );
     }
@@ -270,7 +302,7 @@ mod tests {
             b.push_quad(blank, link, nb, None).unwrap();
             b.freeze().expect("valid")
         };
-        assert!(!datasets_isomorphic(&build("o1"), &build("o2")));
+        assert!(!datasets_isomorphic(&build("o1"), &build("o2")).unwrap());
     }
 
     /// Two blanks with swapped-but-equivalent wiring stay isomorphic under bijection.
@@ -292,7 +324,7 @@ mod tests {
         };
         let a = build("x", 0, "y", 0);
         let b = build("m", 3, "n", 9);
-        assert!(datasets_isomorphic(&a, &b));
+        assert!(datasets_isomorphic(&a, &b).unwrap());
     }
 
     /// The classic symmetric blank ring (`_:x p _:y ; _:y p _:x`): a pure-hash
@@ -310,14 +342,14 @@ mod tests {
             b.push_quad(y, p, x, None).unwrap();
             b.freeze().expect("valid")
         };
-        assert!(datasets_isomorphic(&build("x", "y"), &build("m", "n")));
+        assert!(datasets_isomorphic(&build("x", "y"), &build("m", "n")).unwrap());
     }
 
     #[test]
     fn dataset_diff_reports_counts_and_verdict() {
         let a = ground_triple();
         let b = ground_triple();
-        let diff = dataset_diff(&a, &b);
+        let diff = dataset_diff(&a, &b).unwrap();
         assert_eq!(diff.quad_counts, (1, 1));
         assert!(diff.isomorphic);
     }

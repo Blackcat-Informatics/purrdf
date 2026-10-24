@@ -821,7 +821,7 @@ pub fn deskolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::canon::canonicalize;
+    use crate::ir::canon::try_canonicalize;
     use crate::ir::{RdfDatasetBuilder, canonical_relabel};
 
     const AUTHORITY: &str = "https://example.org";
@@ -887,8 +887,8 @@ mod tests {
         }
         let back = deskolemize(&sk, AUTHORITY).expect("deskolemize");
         assert_eq!(
-            canonicalize(&back).nquads,
-            canonicalize(&ds).nquads,
+            try_canonicalize(&back).unwrap().nquads,
+            try_canonicalize(&ds).unwrap().nquads,
             "round trip must preserve the dataset up to canonical bytes"
         );
         assert_eq!(
@@ -903,7 +903,10 @@ mod tests {
         let ds = hostile_dataset();
         let a = skolemize(&ds, AUTHORITY).expect("skolemize");
         let b = skolemize(&ds, AUTHORITY).expect("skolemize");
-        assert_eq!(canonicalize(&a).nquads, canonicalize(&b).nquads);
+        assert_eq!(
+            try_canonicalize(&a).unwrap().nquads,
+            try_canonicalize(&b).unwrap().nquads
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1235,8 +1238,14 @@ mod tests {
         let relabeled = canonical_relabel(&ds).expect("relabel");
         let round = deskolemize(&skolemize(&ds, AUTHORITY).expect("skolemize"), AUTHORITY)
             .expect("deskolemize");
-        assert_eq!(canonicalize(&relabeled).nquads, canonicalize(&ds).nquads);
-        assert_eq!(canonicalize(&round).nquads, canonicalize(&ds).nquads);
+        assert_eq!(
+            try_canonicalize(&relabeled).unwrap().nquads,
+            try_canonicalize(&ds).unwrap().nquads
+        );
+        assert_eq!(
+            try_canonicalize(&round).unwrap().nquads,
+            try_canonicalize(&ds).unwrap().nquads
+        );
     }
 
     /// Find the [`TermId`] of an interned IRI by linear scan. A rewrite mints a

@@ -880,7 +880,7 @@ mod tests {
                 project_archive(dataset.as_ref(), project_profile, &config).expect("second");
             assert_eq!(first.archive, second.archive);
             let lifted = lift_archive(&first.archive, lift_profile, &config).expect("lift");
-            assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+            assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
         }
 
         let config = csvw_config();
@@ -888,7 +888,7 @@ mod tests {
             .expect("CSVW project");
         let lifted =
             lift_archive(&projected.archive, LiftProfile::CsvwExact, &config).expect("CSVW lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
         assert!(projected.loss_ledger.is_empty());
         assert!(lifted.loss_ledger.is_empty());
     }

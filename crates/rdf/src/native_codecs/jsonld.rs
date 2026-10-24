@@ -2409,6 +2409,6 @@ mod list_depth {
                 .expect("the nested lists serialize");
         assert_eq!(document.matches("@list").count(), 3);
         let parsed = parse_jsonld(document.as_bytes(), None).expect("the document parses back");
-        assert!(crate::datasets_isomorphic(&*parsed, &*dataset));
+        assert!(crate::datasets_isomorphic(&*parsed, &*dataset).unwrap());
     }
 }

@@ -521,7 +521,7 @@ mod tests {
             .expect("serialize trix");
         let reparsed = parse_dataset(&trix, "application/trix", None).expect("re-parse trix");
         assert!(
-            datasets_isomorphic(&ds, &reparsed),
+            datasets_isomorphic(&ds, &reparsed).unwrap(),
             "TriX round-trip must be isomorphic; produced:\n{}",
             String::from_utf8_lossy(&trix)
         );

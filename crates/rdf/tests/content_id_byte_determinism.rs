@@ -24,9 +24,9 @@ use purrdf_rdf::gts_compose::SnapshotBuilder;
 use purrdf_rdf::{
     BlankScope, CanonError, CanonHash, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfTextDirection, TermId, TermPosition, ViewCanonError, blank_count_view,
-    canonical_flat_nquads, canonicalize_with, check_admissible_flat_view, flat_dataset_from_quads,
+    canonical_flat_nquads, check_admissible_flat_view, flat_dataset_from_quads,
     flat_rdf_quads_from_dataset, parse_dataset, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_view,
+    try_canonicalize_flat_view, try_canonicalize_view, try_canonicalize_with,
 };
 
 #[path = "support/blank_identity.rs"]
@@ -131,8 +131,8 @@ fn content_addressing_does_not_perturb_serialized_bytes() {
 
     // The load-bearing assertion: identical logical content → identical bytes,
     // regardless of the (non-serialized) content-addressing side tables.
-    let bytes_a = canonical_flat_nquads(&dataset_a).expect("canonicalize plain");
-    let bytes_b = canonical_flat_nquads(&dataset_b).expect("canonicalize addressed");
+    let bytes_a = canonical_flat_nquads(&dataset_a).expect("try_canonicalize plain");
+    let bytes_b = canonical_flat_nquads(&dataset_b).expect("try_canonicalize addressed");
     assert_eq!(
         bytes_a.as_bytes(),
         bytes_b.as_bytes(),
@@ -211,21 +211,10 @@ fn the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path() {
 // The flat-assertion presentation's flat/native wrapper-agreement differential,
 // identity algebra, and sentinel-absence corpus.
 //
-// The oracle below reproduces the PRE-DELEGATION body of
-// `canonical_flat_nquads_with`, exactly as it stood at commit `863cf2f8`
-// (before `eb7863e2` made it delegate to `purrdf_core::try_canonicalize_flat_view`;
-// see `git show 863cf2f8:crates/rdf/src/native_quads.rs`):
-//
-//     let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(dataset))?;
-//     Ok(crate::canonicalize_with(&flat, hash).nquads)
-//
-// composed here from the SAME surviving helpers this crate still exports
-// (`flat_rdf_quads_from_dataset`, `flat_dataset_from_quads`,
-// `purrdf_core::canonicalize_with` — re-exported as `canonicalize_with`),
-// entirely independent of `try_canonicalize_flat_view` itself. A comparison
-// against the now-delegating `canonical_flat_nquads_with` would be a
-// self-comparison and prove nothing; this route shares no code with the
-// function under test below the two un-fold/re-freeze helpers.
+// The oracle materializes flat quads, freezes them into an independent dataset
+// and runs try_canonicalize_with over that owned dataset. It does not call
+// try_canonicalize_flat_view or its delegating canonical_flat_nquads_with
+// wrapper, so it independently checks the borrowed presentation's projection.
 // ============================================================================
 
 /// The flat/native wrapper-agreement differential oracle: the pre-delegation
@@ -233,7 +222,7 @@ fn the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path() {
 fn reference_flat_canon(dataset: &RdfDataset, hash: CanonHash) -> String {
     let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(dataset))
         .expect("an already-valid dataset's own flat quad stream must re-freeze");
-    canonicalize_with(&flat, hash).nquads
+    try_canonicalize_with(&flat, hash).unwrap().nquads
 }
 
 /// Assert `try_canonicalize_flat_view` agrees with [`reference_flat_canon`] on
@@ -247,7 +236,7 @@ fn assert_flat_differential(dataset: &RdfDataset, case: &str) {
         assert_eq!(
             actual, expected,
             "{case} ({hash:?}): try_canonicalize_flat_view diverged from the \
-             pre-delegation flatten-and-canonicalize route"
+             pre-delegation flatten-and-try_canonicalize route"
         );
     }
 }
@@ -583,7 +572,7 @@ fn flat_canon_is_idempotent_under_both_reachable_reingestion_loaders() {
             .nquads;
         assert!(
             !first.is_empty(),
-            "fixture must actually canonicalize to content"
+            "fixture must actually try_canonicalize to content"
         );
 
         // Loader A: text.

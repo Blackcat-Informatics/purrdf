@@ -1603,7 +1603,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         let out = eval_construct(&related_template(), &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out).nquads,
+            purrdf_core::try_canonicalize(&out).unwrap().nquads,
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n"
         );
@@ -1623,7 +1623,7 @@ mod tests {
         )
         .expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out).nquads,
+            purrdf_core::try_canonicalize(&out).unwrap().nquads,
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n"
         );
@@ -1643,7 +1643,7 @@ mod tests {
         let template = scoped(&related_template(), Some(&graph_var("o")));
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out).nquads,
+            purrdf_core::try_canonicalize(&out).unwrap().nquads,
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://ex/c> .\n"
         );
@@ -1666,7 +1666,7 @@ mod tests {
         ];
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out).nquads,
+            purrdf_core::try_canonicalize(&out).unwrap().nquads,
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/h> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n\
@@ -1690,7 +1690,7 @@ mod tests {
         ];
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out).nquads,
+            purrdf_core::try_canonicalize(&out).unwrap().nquads,
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n\
@@ -1783,7 +1783,7 @@ mod tests {
         ];
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out).nquads,
+            purrdf_core::try_canonicalize(&out).unwrap().nquads,
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n"
         );
@@ -1818,8 +1818,8 @@ mod tests {
             eval_quad_construct(&with_skipped, &where_knows(), &mut ctx).expect("construct");
 
         assert_eq!(
-            purrdf_core::canonicalize(&alone).nquads,
-            purrdf_core::canonicalize(&beside).nquads,
+            purrdf_core::try_canonicalize(&alone).unwrap().nquads,
+            purrdf_core::try_canonicalize(&beside).unwrap().nquads,
             "a skipped graph slot must consume no blank-node counter values"
         );
     }
@@ -1992,8 +1992,8 @@ mod tests {
         let mut ctx2 = EvalCtx::new(&ds2);
         let out2 = eval_construct(&template, &where_pat, &mut ctx2).expect("construct");
         assert_eq!(
-            purrdf_core::canonicalize(&out1).nquads,
-            purrdf_core::canonicalize(&out2).nquads,
+            purrdf_core::try_canonicalize(&out1).unwrap().nquads,
+            purrdf_core::try_canonicalize(&out2).unwrap().nquads,
             "the remint is a pure function of the result"
         );
     }
@@ -2655,7 +2655,7 @@ mod tests {
     /// Both frozen datasets must be isomorphic.
     #[test]
     fn construct_reifier_parity_with_direct_ingest() {
-        use purrdf_core::canonicalize;
+        use purrdf_core::try_canonicalize;
 
         // (1) Via CONSTRUCT
         let ds = reified_graph();
@@ -2685,15 +2685,15 @@ mod tests {
         let direct_out = b.freeze().expect("freeze direct");
 
         assert_eq!(
-            canonicalize(&construct_out).nquads,
-            canonicalize(&direct_out).nquads,
+            try_canonicalize(&construct_out).unwrap().nquads,
+            try_canonicalize(&direct_out).unwrap().nquads,
             "CONSTRUCT output must be isomorphic to direct push_reifier ingest"
         );
     }
 
     #[test]
     fn loss_declaration_is_deterministic_and_collapses() {
-        use purrdf_core::canonicalize;
+        use purrdf_core::try_canonicalize;
         // Two reifiers reify the SAME triple <<( :alice :age 42 )>> → two solution
         // rows that drop to the SAME lost triple, so the deterministic content-keyed
         // loss node collapses to ONE.
@@ -2722,8 +2722,8 @@ mod tests {
 
         // Identical canonical N-Quads across two runs.
         assert_eq!(
-            canonicalize(&out1).nquads,
-            canonicalize(&out2).nquads,
+            try_canonicalize(&out1).unwrap().nquads,
+            try_canonicalize(&out2).unwrap().nquads,
             "loss declaration is deterministic across runs"
         );
 

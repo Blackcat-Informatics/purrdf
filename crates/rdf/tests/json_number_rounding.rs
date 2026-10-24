@@ -330,7 +330,7 @@ fn okf_structured_numbers_read_and_write_back_correctly_rounded() {
     let mut sink = DatasetSink::new();
     lift_okf_bundle(&written.bundle, &config, &mut sink).expect("lift the written bundle");
     let reread = sink.into_dataset().expect("finished sink");
-    assert!(datasets_isomorphic(&dataset, &reread));
+    assert!(datasets_isomorphic(&dataset, &reread).unwrap());
 }
 
 /// CSVW: a datatype's `minimum` and `maximum` read from a referenced schema resource are

@@ -100,7 +100,7 @@ fn keyring(pairs: &[(&str, u8)]) -> FastMap<String, purrdf_ed25519::VerifyingKey
 /// complete symmetric digraph. `crates/rdf/tests/rdfc_w3c.rs` proves this
 /// exact shape (`n = 10`) exceeds `RDFC_CALL_LIMIT` (~5s of permutation
 /// search before the poison guard trips) against the panicking canonicalizer
-/// (`canonicalize`/`canonicalize_with`) — so, by that same construction,
+/// (`try_canonicalize`/`try_canonicalize_with`) — so, by that same construction,
 /// running it through the pre-fix `verify_compaction` (which canonicalized
 /// untrusted bytes via the panicking entry) would abort the process. This
 /// builder reproduces the identical shape as a GTS pack so
@@ -996,6 +996,20 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
     // fallible budget guard, not the count pre-reject, can catch it.
     let poison = poison_symmetric_source(1, "author", 10);
     let ring = keyring(&[("author", 1)]);
+
+    let folded = read(&poison, true, None);
+    assert!(
+        folded.diagnostics.is_empty(),
+        "poison fixture must fold cleanly: {:?}",
+        folded.diagnostics
+    );
+    for digest in [refold_digest(&folded), effective_digest(&folded)] {
+        assert!(matches!(
+            digest,
+            Err(CertifyError::CanonRefused(CanonError::BudgetExceeded(refusal)))
+                if refusal.blank_count == 10
+        ));
+    }
 
     // `post_bytes` is immaterial here: `verify_compaction` computes and
     // compares the PRE-side refold digest before it ever looks at post, so

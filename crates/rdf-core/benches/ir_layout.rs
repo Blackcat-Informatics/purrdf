@@ -1197,7 +1197,7 @@ fn bench_canonicalize(c: &mut Bench) {
 
     let mut group = c.benchmark_group("ir_canonicalize");
     group.bench_function("blank_chains_and_ring", |b| {
-        b.iter(|| std::hint::black_box(purrdf_core::canonicalize(&ds).nquads.len()));
+        b.iter(|| std::hint::black_box(purrdf_core::try_canonicalize(&ds).unwrap().nquads.len()));
     });
     group.finish();
 }

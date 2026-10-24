@@ -111,7 +111,7 @@ fn every_hostile_label_serializes_and_reparses_isomorphically() {
                 )
             });
             assert!(
-                datasets_isomorphic(&ds, &reparsed),
+                datasets_isomorphic(&ds, &reparsed).unwrap(),
                 "{media_type} round trip for {label:?} is not isomorphic:\n{}",
                 String::from_utf8_lossy(&bytes)
             );
@@ -196,7 +196,7 @@ fn distinct_blank_nodes_never_conflate_on_egress() {
             String::from_utf8_lossy(&bytes)
         );
         assert!(
-            datasets_isomorphic(&ds, &reparsed),
+            datasets_isomorphic(&ds, &reparsed).unwrap(),
             "{media_type} round trip is not isomorphic:\n{}",
             String::from_utf8_lossy(&bytes)
         );
@@ -224,7 +224,7 @@ fn co_reference_survives_escaping() {
             "{media_type} must keep the self-reference one node:\n{}",
             String::from_utf8_lossy(&bytes)
         );
-        assert!(datasets_isomorphic(&ds, &reparsed), "{media_type}");
+        assert!(datasets_isomorphic(&ds, &reparsed).unwrap(), "{media_type}");
     }
 }
 
@@ -299,7 +299,7 @@ fn the_dotted_family_stays_distinct_and_verbatim_on_the_wire() {
             "{media_type} re-parses to exactly three blank nodes: {text}"
         );
         assert!(
-            datasets_isomorphic(&ds, &reparsed),
+            datasets_isomorphic(&ds, &reparsed).unwrap(),
             "{media_type} round trip is not isomorphic: {text}"
         );
     }

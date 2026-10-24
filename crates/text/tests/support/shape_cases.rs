@@ -1985,8 +1985,8 @@ pub(crate) fn prepared_and_query_forms() {
         match (shaped, literal) {
             (SparqlResult::Boolean(a), SparqlResult::Boolean(b)) => assert_eq!(a, b),
             (SparqlResult::Graph(a), SparqlResult::Graph(b)) => assert_eq!(
-                purrdf_core::ir::canon::canonicalize(&a).nquads,
-                purrdf_core::ir::canon::canonicalize(&b).nquads
+                purrdf_core::ir::canon::try_canonicalize(&a).unwrap().nquads,
+                purrdf_core::ir::canon::try_canonicalize(&b).unwrap().nquads
             ),
             (a, b) => panic!("same original form: {a:?}/{b:?}"),
         }
@@ -2669,8 +2669,12 @@ pub(crate) fn scoped_streams_and_update_where() {
         .update_with_options(&mut shaped, request(&update), options)
         .unwrap();
     assert_eq!(
-        purrdf_core::ir::canon::canonicalize(&literal).nquads,
-        purrdf_core::ir::canon::canonicalize(&shaped).nquads,
+        purrdf_core::ir::canon::try_canonicalize(&literal)
+            .unwrap()
+            .nquads,
+        purrdf_core::ir::canon::try_canonicalize(&shaped)
+            .unwrap()
+            .nquads,
         "UPDATE WHERE uses the same native physical dispatch and original graph writer"
     );
 }

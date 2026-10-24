@@ -135,8 +135,8 @@ named-graph annotation lossless. No quad can carry that line, so none is folded;
 the identity above holds for every dataset whose canonical form contains no
 named-graph annotation.
 
-The **graph-scoped** entry point (`purrdf_core::canonicalize_graph_view` and its
-fallible twin) erases the graph slot, so its output is always quad-shaped and
+The **graph-scoped** entry point (`purrdf_core::try_canonicalize_graph_view`)
+erases the graph slot, so its output is always quad-shaped and
 **fully idempotent** — a consumer that needs the round trip unconditionally should
 mint from a graph-scoped canonicalization.
 
@@ -170,8 +170,8 @@ second SPELLING: the **flat assertion presentation**, exported as
 `try_flat_digest_view`). The rendering of §3 is itself a named presentation too,
 exported as `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` /
 `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION`, and every entry point named
-WITHOUT a `flat` infix (`canonicalize`, `try_canonicalize_view`,
-`canonicalize_graph_view`, …) pins it.
+WITHOUT a `flat` infix (`try_canonicalize`, `try_canonicalize_view`,
+`try_canonicalize_graph_view`, …) pins it.
 
 The two presentations answer the same question — "what canonical bytes does this
 ADMITTED RDF 1.2 statement layer produce" — with two different spellings of the
@@ -400,16 +400,17 @@ so two parties running the same profile version refuse the same datasets.
 
 Exhaustion yields `CanonError::BudgetExceeded`, carrying the input's blank count.
 
-### 6.1 Fallible and trusted entry points
+### 6.1 Typed refusal through every entry point
 
 | Entry point | On refusal |
 |---|---|
 | `try_canonicalize` / `try_canonicalize_with` | returns `Err(CanonError)` |
-| `canonicalize` / `canonicalize_with` | panics |
+| `try_canonicalize_view` / `try_canonicalize_graph_view` | returns the original `Err(CanonError)`, including source-read failures |
+| `try_graph_digest_view` | returns the original `Err(CanonError)` |
 
-**Any consumer minting identity from canonical bytes must use the fallible entry
-points.** The panicking pair is documented for trusted callers only; its contract
-is that the caller has already vouched for the dataset's provenance.
+Every consumer minting identity from canonical bytes propagates these typed
+refusals. A refused input publishes no identity. The former trusted/panicking
+entry points are removed; callers use the fallible family directly.
 
 ## 7. Versioning
 

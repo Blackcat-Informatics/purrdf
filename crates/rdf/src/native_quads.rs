@@ -238,7 +238,7 @@ fn freeze_flat_sources(
 ///
 /// The complement of [`dataset_from_quads`] (which DOES fold): a caller that already
 /// holds the un-folded flat stream and wants it canonicalized as a flat triple set (not
-/// the folded overlay) re-freezes through here so [`crate::canonicalize`] emits the flat
+/// the folded overlay) re-freezes through here so [`crate::try_canonicalize`] emits the flat
 /// `rdf:reifies` / annotation triples as ordinary quads.
 ///
 /// # Errors
@@ -253,7 +253,7 @@ pub fn flat_dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, Rdf
 ///
 /// Canonicalizes the flat triple set under conformant SHA-256 RDFC-1.0, so every
 /// committed digest/comparison keyed on this string is preserved. The native folded
-/// [`crate::canonicalize`] would instead emit the reserved overlay sentinels.
+/// [`crate::try_canonicalize`] would instead emit the reserved overlay sentinels.
 ///
 /// Delegates straight to [`purrdf_core::try_canonicalize_flat_view`] over the frozen
 /// `dataset` view itself — the flat-assertion presentation
@@ -262,14 +262,8 @@ pub fn flat_dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, Rdf
 /// has to re-freeze on the caller's behalf.
 ///
 /// # Errors
-/// This wrapper's `Err` is now UNREACHABLE: a `&RdfDataset` view's
-/// [`FallibleDatasetView::Error`](purrdf_core::FallibleDatasetView::Error) is
-/// [`Infallible`](std::convert::Infallible), so the typed view-canon path can never
-/// return [`ViewCanonError::NotReady`](purrdf_core::ViewCanonError::NotReady) here — the
-/// only way this function does not return `Ok` is the same trusted-caller panic
-/// [`canonical_flat_nquads_with`] documents. A caller that wants the refusal back as a
-/// VALUE rather than a panic wants [`purrdf_core::try_canonicalize_flat_view`] directly.
-pub fn canonical_flat_nquads(dataset: &RdfDataset) -> Result<String, String> {
+/// Returns the original canonicalization refusal. No partial document is returned.
+pub fn canonical_flat_nquads(dataset: &RdfDataset) -> Result<String, crate::CanonError> {
     canonical_flat_nquads_with(dataset, crate::CanonHash::Sha256)
 }
 
@@ -281,23 +275,15 @@ pub fn canonical_flat_nquads(dataset: &RdfDataset) -> Result<String, String> {
 /// re-freeze through [`flat_dataset_from_quads`]/[`flat_rdf_quads_from_dataset`]).
 ///
 /// # Errors
-/// This wrapper's `Err` is now UNREACHABLE — see [`canonical_flat_nquads`]'s `# Errors`
-/// section for why. The typed spelling that returns a refusal as a value instead of
-/// panicking is [`purrdf_core::try_canonicalize_flat_view`].
-///
-/// # Panics
-/// On [`purrdf_core::ViewCanonError::Refused`] (reserved vocabulary, or n-degree search
-/// budget exhaustion), panics with the SAME message [`crate::canonicalize`] raises for
-/// the equivalent refusal on a frozen dataset — reproduced by formatting the shared
-/// [`purrdf_core::CanonError`] through its own `Display` impl (`"{err}"`), the exact
-/// path [`crate::canonicalize`]'s own panic uses, rather than a duplicated string.
+/// Returns the original canonicalization refusal, including reserved vocabulary
+/// and search-budget exhaustion.
 pub fn canonical_flat_nquads_with(
     dataset: &RdfDataset,
     hash: crate::CanonHash,
-) -> Result<String, String> {
+) -> Result<String, crate::CanonError> {
     match purrdf_core::try_canonicalize_flat_view(dataset, hash) {
         Ok(canonicalized) => Ok(canonicalized.nquads),
-        Err(purrdf_core::ViewCanonError::Refused(err)) => panic!("{err}"),
+        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(err),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
             // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — the
             // frozen dataset never faults, so this arm is unreachable by construction
@@ -601,48 +587,18 @@ ex:g {
         b.freeze().expect("valid")
     }
 
-    /// The string payload of a `panic!("{msg}")` caught by `catch_unwind`, or the
-    /// process-abort message if it was something else entirely.
-    fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
-        payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .expect("panic payload must be a formatted string")
-    }
-
-    /// Message-parity gate: [`canonical_flat_nquads_with`]'s trusted-caller panic on a
-    /// refused (reserved-vocabulary) dataset must carry the EXACT SAME message as
-    /// [`crate::canonicalize_with`]'s panic on the equivalent frozen dataset — both
-    /// format the shared `CanonError` through its own `Display` impl (`"{err}"`), so a
-    /// caller who greps the trusted panic text sees identical text on either path.
+    /// Both public presentations return the same original refusal for this input.
     #[test]
-    fn canonical_flat_nquads_with_panics_with_same_message_as_canonicalize_with() {
+    fn canonical_flat_nquads_with_returns_the_original_refusal() {
         let ds = reserved_vocabulary_dataset();
-
-        let wrapper_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            canonical_flat_nquads_with(&ds, crate::CanonHash::Sha256)
-        }))
-        .expect_err("reserved-vocabulary input must panic through the flat wrapper");
-
-        let trusted_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::canonicalize_with(&ds, crate::CanonHash::Sha256)
-        }))
-        .expect_err("reserved-vocabulary input must panic through the trusted overlay path");
-
-        assert_eq!(
-            panic_message(wrapper_panic.as_ref()),
-            panic_message(trusted_panic.as_ref()),
-            "the flat wrapper's panic message must match crate::canonicalize_with's exactly"
-        );
+        let flat = canonical_flat_nquads_with(&ds, crate::CanonHash::Sha256).unwrap_err();
+        let overlay = crate::try_canonicalize_with(&ds, crate::CanonHash::Sha256).unwrap_err();
+        assert!(matches!(&flat, crate::CanonError::ReservedVocabulary(_)));
+        assert_eq!(flat, overlay);
     }
 
-    /// The typed sibling of the panic-parity gate above: the SAME reserved-vocabulary
-    /// dataset, canonicalized through [`purrdf_core::try_canonicalize_flat_view`]
-    /// directly, comes back as a [`purrdf_core::ViewCanonError::Refused`] VALUE rather
-    /// than a panic — the entry point every untrusted surface (CLI `--canonical`, the
-    /// wasm `canonicalize()` method, the Python binding's `to_nquads`) now uses instead
-    /// of this trusted wrapper.
+    /// The direct flat-view entry point retains the same reserved-vocabulary
+    /// refusal as the public N-Quads wrapper. Host surfaces share this typed path.
     #[test]
     fn try_canonicalize_flat_view_refuses_reserved_vocabulary_as_a_value() {
         let ds = reserved_vocabulary_dataset();

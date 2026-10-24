@@ -248,7 +248,7 @@ fn round_trip(ds: &RdfDataset, media_type: &str, base: &str) -> Result<bool, Str
         .map_err(|e| format!("serialize: {e:?}"))?;
     let reparsed =
         parse_dataset(&text, media_type, Some(base)).map_err(|e| format!("re-parse: {e:?}"))?;
-    Ok(datasets_isomorphic(ds, &reparsed))
+    Ok(datasets_isomorphic(ds, &reparsed).unwrap())
 }
 
 /// Outcome of running one case.
@@ -290,7 +290,7 @@ fn run_case(case: &Case) -> Outcome {
                     Ok(rds) => rds,
                     Err(e) => return Outcome::Fail(format!("parse result: {e:?}")),
                 };
-                if !datasets_isomorphic(&ds, &rds) {
+                if !datasets_isomorphic(&ds, &rds).unwrap() {
                     return Outcome::Fail("action not isomorphic to mf:result".to_owned());
                 }
             }

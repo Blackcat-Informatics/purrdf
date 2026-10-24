@@ -430,7 +430,7 @@ let config = ProjectionConfig::LpgCsv(LpgConfig::new(
 let package = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
 let lifted = lift_archive(&package.archive, LiftProfile::LpgCsv, &config)?;
 assert_eq!(lifted.dataset.quad_count(), 1);
-assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+assert!(datasets_isomorphic(&dataset, &lifted.dataset)?);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

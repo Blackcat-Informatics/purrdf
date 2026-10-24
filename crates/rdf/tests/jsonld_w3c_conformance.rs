@@ -263,7 +263,7 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
             None,
         )
         .unwrap_or_else(|error| panic!("{} invalid pinned N-Quads: {error}", vector.id));
-        if datasets_isomorphic(&actual, &expected) {
+        if datasets_isomorphic(&actual, &expected).unwrap() {
             passed += 1;
         } else {
             failures.push(format!(
