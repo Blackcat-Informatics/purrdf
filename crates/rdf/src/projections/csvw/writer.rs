@@ -704,7 +704,7 @@ mod tests {
             first.package.to_ustar().expect("archive"),
             second.package.to_ustar().expect("archive")
         );
-        assert!(datasets_isomorphic(&original.dataset, &decoded.dataset));
+        assert!(datasets_isomorphic(&original.dataset, &decoded.dataset).unwrap());
         assert!(first.loss_ledger.is_empty());
         assert_eq!(
             first.package.get("tables/data.csv"),

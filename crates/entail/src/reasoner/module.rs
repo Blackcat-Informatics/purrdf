@@ -407,9 +407,7 @@ fn extract(
     // Both identity calls are RDFC-1.0 canonicalizations, and they happen only when
     // `proofs` is set: the non-recording entry point does not compute a digest it would
     // then drop. `ds` and `module` are both wholly caller-supplied (`module` is a subgraph
-    // of `ds`), so this goes through the fallible, non-panicking
-    // `try_ontology_identity` — the untrusted-input entry point — rather than
-    // `ontology_identity`, which panics on the same refusal.
+    // of `ds`), so `try_ontology_identity` retains the original refusal.
     let proof = if proofs {
         let module_digest =
             try_ontology_identity(&module).map_err(EntailError::Canonicalization)?;

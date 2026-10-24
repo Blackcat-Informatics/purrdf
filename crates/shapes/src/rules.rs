@@ -2496,7 +2496,7 @@ mod tests {
     }
 
     fn canon(ds: &RdfDataset) -> String {
-        ::purrdf_rdf::canonicalize(ds).nquads
+        ::purrdf_rdf::try_canonicalize(ds).unwrap().nquads
     }
 
     // ── Parsing ────────────────────────────────────────────────────────────────

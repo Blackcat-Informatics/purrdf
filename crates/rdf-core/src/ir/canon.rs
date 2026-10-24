@@ -12,7 +12,7 @@
 //!
 //! ## What it produces
 //!
-//! [`canonicalize`] assigns every blank node a **stable canonical label**
+//! [`try_canonicalize`] assigns every blank node a **stable canonical label**
 //! (`c14n0`, `c14n1`, …) purely from graph structure and emits the **canonical
 //! N-Quads** form (lines bytewise-sorted, deduplicated). Two datasets are
 //! RDF-isomorphic **iff** their canonical N-Quads strings are byte-equal — an
@@ -26,13 +26,13 @@
 //! [`DatasetView`] already offers. So the whole seam —
 //! component collection, the blank sweep, the admissibility sweep, the first- and
 //! n-degree hashes and the canonical writer — is generic over `D: DatasetView` and
-//! keyed on `D::Id`, and the view entry points ([`canonicalize_view`],
-//! [`try_canonicalize_view`], [`check_admissible_view`], [`blank_count_view`],
-//! [`canonicalize_graph_view`]) run it directly on a composite or delta view with
+//! keyed on `D::Id`, and the view entry points ([`try_canonicalize_view`],
+//! [`check_admissible_view`], [`blank_count_view`],
+//! [`try_canonicalize_graph_view`]) run it directly on a composite or delta view with
 //! **no intermediate dataset built anywhere**.
 //!
-//! The `&RdfDataset` entry points ([`canonicalize`], [`canonicalize_with`],
-//! [`try_canonicalize`], [`try_canonicalize_with`], [`check_admissible`],
+//! The `&RdfDataset` entry points ([`try_canonicalize`], [`try_canonicalize_with`],
+//! [`check_admissible`],
 //! [`blank_count`]) are thin wrappers over that same core — `RdfDataset` IS a
 //! `DatasetView`, so they are the `D = RdfDataset` instantiation and their output is
 //! byte-identical to what it was before the seam existed, not merely equivalent.
@@ -116,15 +116,14 @@
 //! One shape is out of reach, and it is the emitter's doing rather than the fold's: a
 //! NAMED-graph annotation lowers to a five-token line (`r p o <…:annotation> <g> .`)
 //! which is not an N-Quads quad at all, so no quad can carry it and none is folded.
-//! The graph-scoped entry point ([`canonicalize_graph_view`]) erases the graph slot,
+//! The graph-scoped entry point ([`try_canonicalize_graph_view`]) erases the graph slot,
 //! so its output is always quad-shaped and folds in full.
 //!
 //! ## Termination (poison guard)
 //!
 //! The n-degree search is NP-hard in the worst case (pathologically symmetric
-//! blank graphs). Per the project no-optionality / hard-fail rule there is no
-//! knob: a fixed [`RDFC_CALL_LIMIT`] bounds recursion and the routine `panic!`s
-//! with a diagnostic on exhaustion rather than degrading.
+//! blank graphs). The fixed [`RDFC_CALL_LIMIT`] bounds the search. Exhaustion is
+//! returned as [`CanonError::BudgetExceeded`]; no partial identity is published.
 //!
 //! ## This is NOT RDFC-1.0
 //!
@@ -195,9 +194,9 @@ use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 const CANON_PREFIX: &str = "c14n";
 /// The temporary-issuer prefix used inside the n-degree search (RDFC-1.0 §4.5/4.8).
 const TEMP_PREFIX: &str = "b";
-/// The fixed recursion/permutation call budget for the n-degree search. Generous
-/// for every non-adversarial dataset; exhaustion means a pathologically symmetric
-/// blank graph and is a hard `panic!` (no knob, no degraded fallback — `.goals`).
+/// The fixed recursion/permutation call budget for the n-degree search.
+/// Exhaustion returns [`CanonError::BudgetExceeded`] without publishing a
+/// canonical result or digest.
 ///
 /// Public because it is part of the profile's CONTRACT, not an implementation
 /// detail: a consumer pinning [`CANON_PROFILE_ID`] is pinning the bound at which
@@ -255,8 +254,8 @@ pub const CANON_PROFILE_VERSION: u32 = 2;
 /// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
 /// (reifiers, annotations) rendered through this profile's reserved sentinel IRIs
 /// ([`RESERVED_NAMESPACE`]) — see [`CanonPresentation::Overlay`] for the exact shape.
-/// Every entry point in this module named WITHOUT a `flat` infix ([`canonicalize`],
-/// [`try_canonicalize_view`], [`canonicalize_graph_view`], …) pins this presentation;
+/// Every entry point in this module named WITHOUT a `flat` infix ([`try_canonicalize`],
+/// [`try_canonicalize_view`], [`try_canonicalize_graph_view`], …) pins this presentation;
 /// it is the only presentation this module offered before
 /// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`] existed.
 ///
@@ -445,48 +444,16 @@ pub struct Canonicalized<Id = TermId> {
     /// consumer pin's four coordinates `(profile, version, presentation, hash)`
     /// (`docs/RDF12-CANON-PROFILE.md` §9), now readable off the result itself
     /// rather than only inferable from which entry point the caller happened to
-    /// call. [`canonicalize`], [`try_canonicalize_view`],
-    /// [`canonicalize_graph_view`] and their kin always report
+    /// call. [`try_canonicalize`], [`try_canonicalize_view`],
+    /// [`try_canonicalize_graph_view`] and their kin always report
     /// [`CanonPresentation::Overlay`]; [`try_canonicalize_flat_view`],
     /// [`try_canonicalize_flat_graph_view`] and the empty-selection cases of both
     /// families always report the presentation of the family that produced them.
     pub presentation: CanonPresentation,
 }
 
-/// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] (RDFC-1.0 with SHA-256,
-/// extended by the RDF 1.2 overlay).
-///
-/// Deterministic.
-///
-/// # Panics
-/// **Trusted callers only.** Hard-`panic!`s on either refusal: an n-degree search
-/// exceeding [`RDFC_CALL_LIMIT`] on a pathologically symmetric blank graph, or a
-/// dataset carrying an IRI in [`RESERVED_NAMESPACE`]. Both are properties of
-/// ADVERSARIAL input, so a caller who cannot vouch for the dataset's provenance
-/// wants [`try_canonicalize`], which returns them as values.
-#[must_use]
-pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
-    canonicalize_with(ds, CanonHash::Sha256)
-}
-
-/// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] with an explicit hash
-/// algorithm ([`CanonHash::Sha384`] is RDFC-1.0's SHA-384 variant). See
-/// [`canonicalize`].
-///
-/// # Panics
-/// Trusted callers only (`.goals` no-knob contract): hard-`panic!`s on poison-budget
-/// exhaustion and on reserved-vocabulary input alike — see [`try_canonicalize_with`]
-/// for the fallible equivalent.
-#[must_use]
-pub fn canonicalize_with(ds: &RdfDataset, hash: CanonHash) -> Canonicalized {
-    // A thin wrapper, not a second implementation: `RdfDataset` IS a `DatasetView`,
-    // so this is the `D = RdfDataset` instantiation of the one core and its bytes
-    // are identical to the view form's by construction rather than by agreement.
-    canonicalize_view(ds, hash)
-}
-
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`], returning a typed
-/// [`CanonError`] instead of panicking.
+/// [`CanonError`] on refusal.
 ///
 /// **This is the entry point for UNTRUSTED input** — an independent
 /// certificate-verification path folding caller-supplied bytes, or any consumer
@@ -494,10 +461,6 @@ pub fn canonicalize_with(ds: &RdfDataset, hash: CanonHash) -> Canonicalized {
 /// caller can propagate: a pathologically symmetric blank graph never aborts the
 /// process, and a dataset carrying the profile's reserved vocabulary is refused
 /// rather than canonicalized into bytes another dataset could forge.
-///
-/// Byte-identical output to [`canonicalize`] on success — same algorithm, same
-/// n-quads, same labels; only the refusal behavior differs. See [`canonicalize`]
-/// for trusted callers, which panics instead.
 ///
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term is an IRI in
@@ -507,8 +470,7 @@ pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, CanonError> {
     try_canonicalize_with(ds, CanonHash::Sha256)
 }
 
-/// Fallible, explicit-hash-algorithm form of [`try_canonicalize`]. See
-/// [`canonicalize_with`] for the panicking (trusted-caller) equivalent.
+/// Explicit-hash-algorithm form of [`try_canonicalize`].
 ///
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term is an IRI in
@@ -522,7 +484,7 @@ pub fn try_canonicalize_with(
 }
 
 /// Canonicalize any [`DatasetView`] under profile [`CANON_PROFILE_ID`] with an
-/// explicit hash algorithm — the view-generic form of [`canonicalize_with`], and the
+/// explicit hash algorithm — the view-generic form of [`try_canonicalize_with`], and the
 /// function that one delegates to.
 ///
 /// Nothing is materialized: the algorithm reads `view`'s quads, its RDF 1.2 reifier
@@ -536,25 +498,6 @@ pub fn try_canonicalize_with(
 /// `_with` pair on the `&RdfDataset` side exists to keep its long-standing default
 /// spelling, and duplicating that split over the view surface would double it for no
 /// added expressiveness.
-///
-/// # Panics
-/// **Trusted callers only**, exactly like [`canonicalize_with`]: hard-`panic!`s on
-/// poison-budget exhaustion and on reserved-vocabulary input alike. See
-/// [`try_canonicalize_view`] for the fallible equivalent.
-#[must_use]
-pub fn canonicalize_view<D: DatasetView<ReadError = Infallible>>(
-    view: &D,
-    hash: CanonHash,
-) -> Canonicalized<D::Id> {
-    CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run()
-}
-
-/// Canonicalize any [`DatasetView`], returning a typed [`CanonError`] instead of
-/// panicking — the view-generic form of [`try_canonicalize_with`], and the function
-/// that one delegates to.
-///
-/// **This is the entry point for UNTRUSTED input**, for the reasons
-/// [`try_canonicalize`] gives; byte-identical `Ok` output to [`canonicalize_view`].
 ///
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term of `view` is an IRI in
@@ -624,24 +567,6 @@ fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), CanonError> {
 /// never uses as a graph name, names no rows and canonicalizes to the empty document —
 /// absence is an empty subgraph, never an error.
 ///
-/// # Panics
-/// Trusted callers only, exactly like [`canonicalize_view`]; see
-/// [`try_canonicalize_graph_view`] for the fallible equivalent.
-#[must_use]
-pub fn canonicalize_graph_view<D: DatasetView<ReadError = Infallible>>(
-    view: &D,
-    graph: &str,
-    hash: CanonHash,
-) -> Canonicalized<D::Id> {
-    match graph_scope(view, graph) {
-        Some(scope) => CanonState::new(view, scope, CanonPresentation::Overlay, hash).run(),
-        None => empty_canonicalized(CanonPresentation::Overlay),
-    }
-}
-
-/// Canonicalize one named graph of `view`, returning a typed [`CanonError`] instead of
-/// panicking. See [`canonicalize_graph_view`] for the selection rule.
-///
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term of the selected subgraph is an IRI
 /// in [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] on a pathologically
@@ -666,27 +591,8 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
     .map_err(CanonError::with_read_error)
 }
 
-/// The SHA-256 [`ContentDigest`] of one named graph's canonical form — the value a
-/// per-graph content handle pins, taken over [`canonicalize_graph_view`]'s bytes.
-///
-/// # Panics
-/// Trusted callers only, exactly like [`canonicalize_graph_view`]; see
-/// [`try_graph_digest_view`] for the fallible equivalent.
-#[must_use]
-pub fn graph_digest_view<D: DatasetView<ReadError = Infallible>>(
-    view: &D,
-    graph: &str,
-) -> ContentDigest {
-    ContentDigest::of(
-        canonicalize_graph_view(view, graph, CanonHash::Sha256)
-            .nquads
-            .as_bytes(),
-    )
-}
-
 /// The SHA-256 [`ContentDigest`] of one named graph's canonical form, returning a
-/// typed [`CanonError`] instead of panicking. Byte-identical `Ok` output to
-/// [`graph_digest_view`].
+/// typed [`CanonError`] on refusal.
 ///
 /// # Errors
 /// Exactly [`try_canonicalize_graph_view`]'s refusals, unchanged.
@@ -791,9 +697,9 @@ pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
 
 /// Canonicalize one named graph of any [`FallibleDatasetView`] in the
 /// [`FlatAssertion`](CanonPresentation::FlatAssertion) presentation — the graph
-/// scope of [`canonicalize_graph_view`] composed with
+/// scope of [`try_canonicalize_graph_view`] composed with
 /// [`try_canonicalize_flat_view`]'s presentation and fault-checkpointing. Selection
-/// is exactly [`canonicalize_graph_view`]'s rule (graph-FAITHFUL selection,
+/// is exactly [`try_canonicalize_graph_view`]'s rule (graph-FAITHFUL selection,
 /// graph-ERASING emission); a `graph` the view interns nowhere, or interns but never
 /// uses as a graph name, canonicalizes to the empty document rather than an error,
 /// exactly as there. See [`try_canonicalize_flat_view`] for the presentation, the
@@ -851,7 +757,7 @@ pub fn check_admissible_flat_view<D: FallibleDatasetView>(
 
 /// The SHA-256 [`ContentDigest`] of `view`'s WHOLE-DATASET flat canonical
 /// form — the [`FlatAssertion`](CanonPresentation::FlatAssertion) sibling of
-/// [`graph_digest_view`]/[`try_graph_digest_view`], taken over the whole dataset
+/// [`try_graph_digest_view`], taken over the whole dataset
 /// rather than one named graph (this module offers no flat PER-GRAPH digest entry
 /// point). `hash` selects only the RDFC label-issuance algorithm inside the
 /// canonicalization; the digest over the resulting document is unconditionally
@@ -1211,7 +1117,7 @@ enum CanonScope<Id> {
     /// own graph slot.
     Dataset,
     /// Only the rows whose OWN graph slot is this named graph, each emitted with the
-    /// graph slot erased — see [`canonicalize_graph_view`].
+    /// graph slot erased — see [`try_canonicalize_graph_view`].
     Graph(Id),
 }
 
@@ -1230,8 +1136,8 @@ enum CanonScope<Id> {
 /// produced it, via [`Canonicalized::presentation`], so a caller can read back
 /// which one it got without having to remember which entry point it called. A
 /// caller SELECTS a presentation by which entry point it calls instead: each
-/// presentation gets its own explicitly-named entry points. [`canonicalize`],
-/// [`try_canonicalize_view`], [`canonicalize_graph_view`] and their kin pin
+/// presentation gets its own explicitly-named entry points. [`try_canonicalize`],
+/// [`try_canonicalize_view`], [`try_canonicalize_graph_view`] and their kin pin
 /// [`Overlay`](Self::Overlay); [`try_canonicalize_flat_view`],
 /// [`try_canonicalize_flat_graph_view`], [`check_admissible_flat_view`] and
 /// [`try_flat_digest_view`] pin [`FlatAssertion`](Self::FlatAssertion). See
@@ -2008,8 +1914,8 @@ struct CanonState<'a, D: DatasetView> {
 /// exhausted before the dataset canonicalized — a pathologically symmetric
 /// blank graph (adversarial input, not a legitimate large dataset: a
 /// non-symmetric graph of any size stays well under budget). Returned by
-/// [`try_canonicalize`]/[`try_canonicalize_with`] instead of the panic that
-/// [`canonicalize`]/[`canonicalize_with`] raise for trusted callers.
+/// [`try_canonicalize`]/[`try_canonicalize_with`] without publishing a partial
+/// canonical identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BudgetExceeded {
     /// The number of distinct blank nodes in the input that triggered
@@ -2473,18 +2379,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         Ok(())
     }
 
-    /// Run the full algorithm, panicking on poison-budget exhaustion (trusted
-    /// callers — [`canonicalize`]/[`canonicalize_with`]).
-    fn run(self) -> Canonicalized<D::Id> {
-        match self.run_fallible() {
-            Ok(canonicalized) => canonicalized,
-            Err(err) => panic!("{err}"),
-        }
-    }
-
-    /// Run the full algorithm, returning [`CanonError`] instead of panicking
-    /// (untrusted callers — [`try_canonicalize`]/[`try_canonicalize_with`]).
-    /// Byte-identical `Ok` output to [`Self::run`].
+    /// Run the full algorithm, returning the original [`CanonError`] on refusal.
     ///
     /// The reserved-vocabulary sweep runs FIRST, before any hashing. That ordering
     /// is deliberate: a dataset that is both inadmissible and pathologically
@@ -3100,7 +2995,7 @@ mod tests {
     }
 
     fn canon(ds: &RdfDataset) -> String {
-        canonicalize(ds).nquads
+        try_canonicalize(ds).unwrap().nquads
     }
 
     #[test]
@@ -3120,7 +3015,10 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> <http://example.org/o1> .\n\
              <http://example.org/s> <http://example.org/p> <http://example.org/o2> .\n"
         );
-        assert!(canonicalize(&ds).labels.is_empty(), "no blanks → no labels");
+        assert!(
+            try_canonicalize(&ds).unwrap().labels.is_empty(),
+            "no blanks → no labels"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -3402,19 +3300,39 @@ mod tests {
         }
     }
 
-    /// The trusted entry point hard-fails on the same input the fallible one refuses.
-    /// Its contract is "trusted callers only"; a caller who cannot vouch for the bytes
-    /// is meant to be using `try_canonicalize`, and this is what makes that real
-    /// rather than advisory.
+    /// Every overlay entry point preserves the original reserved-vocabulary
+    /// refusal, including graph-scoped identity production.
     #[test]
-    #[should_panic(expected = "reserved IRI")]
-    fn the_trusted_entry_point_panics_on_reserved_vocabulary() {
+    fn public_overlay_entry_points_return_reserved_vocabulary() {
         let mut b = RdfDatasetBuilder::new();
         let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
         let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        let graph = b.intern_iri("http://example.org/g").unwrap();
         b.push_quad(s, bad, o, None).unwrap();
+        b.push_quad(s, bad, o, Some(graph)).unwrap();
         let ds = b.freeze().expect("valid");
-        let _ = canonicalize(&ds);
+        assert!(matches!(
+            try_canonicalize(&ds),
+            Err(CanonError::ReservedVocabulary(_))
+        ));
+        for hash in [CanonHash::Sha256, CanonHash::Sha384] {
+            assert!(matches!(
+                try_canonicalize_with(&ds, hash),
+                Err(CanonError::ReservedVocabulary(_))
+            ));
+            assert!(matches!(
+                try_canonicalize_view(&*ds, hash),
+                Err(CanonError::ReservedVocabulary(_))
+            ));
+            assert!(matches!(
+                try_canonicalize_graph_view(&*ds, "http://example.org/g", hash),
+                Err(CanonError::ReservedVocabulary(_))
+            ));
+        }
+        assert!(matches!(
+            try_graph_digest_view(&*ds, "http://example.org/g"),
+            Err(CanonError::ReservedVocabulary(_))
+        ));
     }
 
     /// The overlay's OWN lowering is not input and must not trip the sweep — otherwise
@@ -3511,7 +3429,7 @@ mod tests {
         let native = statement_layer_fixture(Spelling::Native);
         let reread = statement_layer_fixture(Spelling::Lowered);
 
-        let first = canonicalize(&native);
+        let first = try_canonicalize(&native).unwrap();
         assert!(
             first.nquads.contains("<urn:purrdf:rdfc:reifies>")
                 && first.nquads.contains("<urn:purrdf:rdfc:annotation>")
@@ -3542,7 +3460,7 @@ mod tests {
         );
 
         // And a THIRD pass changes nothing either — idempotence, not a one-off.
-        assert_eq!(canonicalize(&reread).nquads, second.nquads);
+        assert_eq!(try_canonicalize(&reread).unwrap().nquads, second.nquads);
     }
 
     /// The same property through the graph-scoped entry point.
@@ -3567,7 +3485,9 @@ mod tests {
         b.push_quad(o, p, o, None).unwrap();
         let native = b.freeze().expect("valid");
 
-        let scoped = canonicalize_graph_view(&*native, "http://example.org/g", CanonHash::Sha256);
+        let scoped =
+            try_canonicalize_graph_view(&*native, "http://example.org/g", CanonHash::Sha256)
+                .unwrap();
         assert!(
             scoped.nquads.contains("<urn:purrdf:rdfc:reifies>")
                 && scoped.nquads.contains("<urn:purrdf:rdfc:annotation> ."),
@@ -3602,7 +3522,7 @@ mod tests {
             "re-canonicalizing a per-graph document must reproduce it byte for byte"
         );
         assert_eq!(
-            graph_digest_view(&*native, "http://example.org/g"),
+            try_graph_digest_view(&*native, "http://example.org/g").unwrap(),
             ContentDigest::of(
                 try_canonicalize(&reread)
                     .expect("admissible")
@@ -3621,15 +3541,26 @@ mod tests {
         let native = statement_layer_fixture(Spelling::Native);
         let spelled = statement_layer_fixture(Spelling::Lowered);
 
-        assert_eq!(canonicalize(&native).nquads, canonicalize(&spelled).nquads);
         assert_eq!(
-            canonicalize_with(&native, CanonHash::Sha384).nquads,
-            canonicalize_with(&spelled, CanonHash::Sha384).nquads,
+            try_canonicalize(&native).unwrap().nquads,
+            try_canonicalize(&spelled).unwrap().nquads
+        );
+        assert_eq!(
+            try_canonicalize_with(&native, CanonHash::Sha384)
+                .unwrap()
+                .nquads,
+            try_canonicalize_with(&spelled, CanonHash::Sha384)
+                .unwrap()
+                .nquads,
             "the fold is in the ingestion seam, so it is hash-algorithm-independent"
         );
         assert_eq!(
-            canonicalize_view(&*native, CanonHash::Sha256).nquads,
-            canonicalize_view(&*spelled, CanonHash::Sha256).nquads,
+            try_canonicalize_view(&*native, CanonHash::Sha256)
+                .unwrap()
+                .nquads,
+            try_canonicalize_view(&*spelled, CanonHash::Sha256)
+                .unwrap()
+                .nquads,
             "the view-generic entry point folds too — one seam, not two"
         );
         assert_eq!(
@@ -3649,8 +3580,8 @@ mod tests {
 
     /// Whether two datasets mint the same identity under this profile.
     fn datasets_are_byte_equal(a: &RdfDataset, b: &RdfDataset) -> bool {
-        ContentDigest::of(canonicalize(a).nquads.as_bytes())
-            == ContentDigest::of(canonicalize(b).nquads.as_bytes())
+        ContentDigest::of(try_canonicalize(a).unwrap().nquads.as_bytes())
+            == ContentDigest::of(try_canonicalize(b).unwrap().nquads.as_bytes())
     }
 
     /// The fold is SHAPE-EXACT, and these are its near misses: each differs from an
@@ -4084,7 +4015,7 @@ mod tests {
     fn canonical_relabel_output_labels_are_exactly_the_c14n_set() {
         use crate::blank_label::{LabelAlphabet, escape_label, is_valid_label};
         let ds = hostile_blank_dataset();
-        let canonical = canonicalize(&ds);
+        let canonical = try_canonicalize(&ds).unwrap();
         let out = canonical_relabel(&ds).expect("relabel");
         let expected: BTreeSet<(String, BlankScope)> = canonical
             .labels
@@ -4124,13 +4055,13 @@ mod tests {
         let once = canonical_relabel(&ds).expect("relabel once");
         let twice = canonical_relabel(&once).expect("relabel twice");
         assert_eq!(
-            canonicalize(&once).nquads,
-            canonicalize(&ds).nquads,
+            try_canonicalize(&once).unwrap().nquads,
+            try_canonicalize(&ds).unwrap().nquads,
             "relabeling must preserve the isomorphism class"
         );
         assert_eq!(
-            canonicalize(&twice).nquads,
-            canonicalize(&once).nquads,
+            try_canonicalize(&twice).unwrap().nquads,
+            try_canonicalize(&once).unwrap().nquads,
             "relabeling a relabeled dataset must change nothing (canonical bytes)"
         );
         assert_eq!(
@@ -4206,8 +4137,8 @@ mod tests {
     #[test]
     fn the_flat_entry_points_are_the_view_core_at_rdfdataset() {
         let ds = seam_dataset();
-        let flat = canonicalize_with(&ds, CanonHash::Sha256);
-        let view = canonicalize_view(&*ds, CanonHash::Sha256);
+        let flat = try_canonicalize_with(&ds, CanonHash::Sha256).unwrap();
+        let view = try_canonicalize_view(&*ds, CanonHash::Sha256).unwrap();
         assert_eq!(flat.nquads, view.nquads);
         assert_eq!(flat.labels, view.labels);
         assert!(
@@ -4223,8 +4154,12 @@ mod tests {
         let _: &BTreeMap<TermId, Box<str>> = &flat.labels;
         // SHA-384 travels the same seam.
         assert_eq!(
-            canonicalize_with(&ds, CanonHash::Sha384).nquads,
-            canonicalize_view(&*ds, CanonHash::Sha384).nquads
+            try_canonicalize_with(&ds, CanonHash::Sha384)
+                .unwrap()
+                .nquads,
+            try_canonicalize_view(&*ds, CanonHash::Sha384)
+                .unwrap()
+                .nquads
         );
         // And so do the screening surfaces.
         assert_eq!(blank_count(&ds), blank_count_view(&*ds));
@@ -4241,14 +4176,18 @@ mod tests {
         let ds = seam_dataset();
         let graph = "http://example.org/g";
         let projected =
-            canonicalize(&ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap()).nquads;
+            try_canonicalize(&ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap())
+                .unwrap()
+                .nquads;
         assert!(!projected.is_empty(), "the graph must hold content");
         assert_eq!(
-            canonicalize_graph_view(&*ds, graph, CanonHash::Sha256).nquads,
+            try_canonicalize_graph_view(&*ds, graph, CanonHash::Sha256)
+                .unwrap()
+                .nquads,
             projected
         );
         assert_eq!(
-            graph_digest_view(&*ds, graph),
+            try_graph_digest_view(&*ds, graph).unwrap(),
             ContentDigest::of(projected.as_bytes())
         );
         // The default graph's reifier over the same triple term belongs to the
@@ -4261,15 +4200,18 @@ mod tests {
         // it flat does.
         let absent = "http://example.org/no-such-graph";
         assert_eq!(
-            canonicalize(
+            try_canonicalize(
                 &ds.project_graph(Some(&crate::RdfTerm::iri(absent)))
                     .unwrap()
             )
+            .unwrap()
             .nquads,
             ""
         );
         assert_eq!(
-            canonicalize_graph_view(&*ds, absent, CanonHash::Sha256).nquads,
+            try_canonicalize_graph_view(&*ds, absent, CanonHash::Sha256)
+                .unwrap()
+                .nquads,
             ""
         );
     }
@@ -4296,10 +4238,11 @@ mod tests {
                 .expect("a clean graph must still canonicalize");
         assert_eq!(
             neighbour.nquads,
-            canonicalize(
+            try_canonicalize(
                 &ds.project_graph(Some(&crate::RdfTerm::iri("http://example.org/clean")))
                     .unwrap()
             )
+            .unwrap()
             .nquads
         );
         // The whole dataset IS refused, because the offending row is in it.
@@ -4364,7 +4307,7 @@ mod tests {
     #[test]
     fn the_overlay_presentation_is_byte_identical_to_its_pre_axis_output() {
         let ds = presentation_fixture();
-        let canonicalized = canonicalize(&ds);
+        let canonicalized = try_canonicalize(&ds).unwrap();
         assert_eq!(
             canonicalized.nquads,
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
@@ -4392,7 +4335,8 @@ mod tests {
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
         )
-        .run();
+        .run_fallible()
+        .unwrap();
         assert_eq!(
             flat.nquads,
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
@@ -4485,14 +4429,16 @@ mod tests {
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
         )
-        .run();
+        .run_fallible()
+        .unwrap();
         let flat_twice = CanonState::new(
             &twice,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
         )
-        .run();
+        .run_fallible()
+        .unwrap();
         assert_eq!(
             flat_twice.nquads, flat_once.nquads,
             "spelling one default-graph row twice must not change the flat canonical form"
@@ -4537,14 +4483,16 @@ mod tests {
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
         )
-        .run();
+        .run_fallible()
+        .unwrap();
         let flat_twice_g = CanonState::new(
             &twice_g,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
         )
-        .run();
+        .run_fallible()
+        .unwrap();
         assert_eq!(
             flat_twice_g.nquads, flat_once_g.nquads,
             "spelling one named-graph row twice must not change the flat canonical form"
@@ -5207,7 +5155,7 @@ mod tests {
 
     /// `try_flat_digest_view` is exactly hashing `try_canonicalize_flat_view`'s
     /// `nquads` under the same algorithm — the flat sibling of the law
-    /// `graph_digest_view`/`try_graph_digest_view` state for the overlay's per-graph
+    /// `try_graph_digest_view` states for the overlay's per-graph
     /// digest, held here over the whole-dataset flat digest instead.
     #[test]
     fn try_flat_digest_view_hashes_the_flat_canonical_document() {

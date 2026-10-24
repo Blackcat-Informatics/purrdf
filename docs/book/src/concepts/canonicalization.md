@@ -18,18 +18,18 @@ natively in the kernel, tested against the W3C `rdf-canon` fixture suite
 (65 vectors — 64 eval plus 1 negative — all green; see
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)).
 
-The entry point is `canonicalize` (with a `canonicalize_with` variant for
+The entry point is `try_canonicalize` (with a `try_canonicalize_with` variant for
 choosing the hash), producing canonical blank-node labels and, one layer up in
 `purrdf-rdf`, canonical flat N-Quads over the frozen IR:
 
 ```rust
-use purrdf::{canonicalize, parse_dataset};
+use purrdf::{try_canonicalize, parse_dataset};
 
 let ds = parse_dataset(b"_:source <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
 let renamed = parse_dataset(b"_:renamed <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
-let canon = canonicalize(&ds);
+let canon = try_canonicalize(&ds)?;
 // Canonical labels are stable across runs, hosts, and language bindings.
-assert_eq!(canon.nquads, canonicalize(&renamed).nquads);
+assert_eq!(canon.nquads, try_canonicalize(&renamed)?.nquads);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -85,7 +85,7 @@ are holding is part of the identity:
   canonicalizes *that* triple set under conformant RDFC-1.0. This is what the
   CLI's `convert --canonical`, the wasm `Dataset.canonicalize()` and the W3C
   conformance gate run.
-- **The `purrdf-rdfc12` v2 profile** — `canonicalize` in `purrdf-core` keeps
+- **The `purrdf-rdfc12` v2 profile** — `try_canonicalize` in `purrdf-core` keeps
   the statement layer and lowers it into a reserved `urn:purrdf:rdfc:`
   namespace instead (any input already carrying that namespace is refused,
   unless it is written in one of the two shapes the profile itself emits —
@@ -121,13 +121,13 @@ like a code change.
 | Need | Use |
 | --- | --- |
 | Same dataset → same bytes | any native serializer (always true) |
-| Same *graph* (up to blank nodes) → same bytes, RDF 1.1 subset | RDFC-1.0 (`canonicalize` or `canonical_flat_nquads`, identical here) |
-| Same *graph* with reifiers/annotations → same bytes | `canonical_flat_nquads` (RDFC-1.0 over the flattened layer) or `canonicalize` (`purrdf-rdfc12` profile) — not interchangeable |
+| Same *graph* (up to blank nodes) → same bytes, RDF 1.1 subset | RDFC-1.0 (`try_canonicalize` or `canonical_flat_nquads`, identical here) |
+| Same *graph* with reifiers/annotations → same bytes | `canonical_flat_nquads` (RDFC-1.0 over the flattened layer) or `try_canonicalize` (`purrdf-rdfc12` profile) — not interchangeable |
 | "Are these two datasets the same graph?" | `datasets_isomorphic` |
 | "What changed between these datasets?" | `dataset_diff` + describe/normalize |
 | Content-addressed transport of a graph | [GTS](../gts.md) (BLAKE3 content ids) |
 
 API details are on
-[docs.rs/purrdf-core](https://docs.rs/purrdf-core) (the `canonicalize`,
+[docs.rs/purrdf-core](https://docs.rs/purrdf-core) (the `try_canonicalize`,
 `datasets_isomorphic`, and `dataset_diff` items) and
 [docs.rs/purrdf-rdf](https://docs.rs/purrdf-rdf) (describe and normalization).

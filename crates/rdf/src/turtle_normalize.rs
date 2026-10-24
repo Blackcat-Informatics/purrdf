@@ -86,7 +86,7 @@ mod tests {
     fn iso(a: &str, b: &str) -> bool {
         let da = ingest(a.as_bytes()).unwrap();
         let db = ingest(b.as_bytes()).unwrap();
-        crate::ir::datasets_isomorphic(&da, &db)
+        crate::ir::datasets_isomorphic(&da, &db).unwrap()
     }
 
     #[test]

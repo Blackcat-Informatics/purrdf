@@ -2964,8 +2964,10 @@ mod tests {
             "the direct dataset must carry exactly the quads the text does"
         );
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&round_tripped).nquads,
+            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
+            ::purrdf_rdf::try_canonicalize(&round_tripped)
+                .unwrap()
+                .nquads,
             "to_dataset() and parse(to_ntriples()) must be the same graph"
         );
     }
@@ -3026,8 +3028,10 @@ mod tests {
                 .expect("must parse");
 
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&round_tripped).nquads
+            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
+            ::purrdf_rdf::try_canonicalize(&round_tripped)
+                .unwrap()
+                .nquads
         );
         assert_eq!(conforms_from_dataset(&direct), Some(true));
         assert!(tuples_from_dataset(&direct).is_empty());
@@ -3049,8 +3053,10 @@ mod tests {
 
         // Same graph up to blank labelling…
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&round_tripped).nquads,
+            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
+            ::purrdf_rdf::try_canonicalize(&round_tripped)
+                .unwrap()
+                .nquads,
             "escaping a blank label must not change the graph"
         );
         // …and the direct path still holds the caller's label unescaped.
@@ -3063,8 +3069,10 @@ mod tests {
         );
         // …and the public report graph is the same graph under the report's labels.
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&report.to_dataset().expect("authored report emits")).nquads,
+            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
+            ::purrdf_rdf::try_canonicalize(&report.to_dataset().expect("authored report emits"))
+                .unwrap()
+                .nquads,
             "relabelling must not change the graph"
         );
     }
@@ -3193,15 +3201,18 @@ mod tests {
         }
         // …and the graph is still the same one the text path produces.
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&dataset).nquads,
-            ::purrdf_rdf::canonicalize(
+            ::purrdf_rdf::try_canonicalize(&dataset).unwrap().nquads,
+            ::purrdf_rdf::try_canonicalize(
                 &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse")
             )
+            .unwrap()
             .nquads
         );
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&dataset).nquads,
-            ::purrdf_rdf::canonicalize(&report.to_dataset().expect("authored report emits")).nquads,
+            ::purrdf_rdf::try_canonicalize(&dataset).unwrap().nquads,
+            ::purrdf_rdf::try_canonicalize(&report.to_dataset().expect("authored report emits"))
+                .unwrap()
+                .nquads,
             "relabelling must not change the graph"
         );
     }

@@ -102,7 +102,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, canonicalize};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, try_canonicalize};
 use purrdf_entail::{Materialization, materialize};
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
@@ -862,7 +862,7 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
 /// `fixture`'s canonical N-Quads input — degenerate N-Triples, since every fixture lives
 /// entirely in the default graph.
 fn input_text(fixture: &Fixture) -> String {
-    canonicalize(&build(fixture)).nquads
+    try_canonicalize(&build(fixture)).unwrap().nquads
 }
 
 /// The committed corpus file's full text: an N-Triples `#`-comment header (the grammar
@@ -891,7 +891,8 @@ fn purrdf_closure_lines(fixture: &Fixture) -> BTreeSet<String> {
     let ds = build(fixture);
     let (closed, _report) = materialize(&ds, Materialization::OwlRl)
         .unwrap_or_else(|e| panic!("{}: OWL-RL materialization refused: {e}", fixture.name));
-    canonicalize(&closed)
+    try_canonicalize(&closed)
+        .unwrap()
         .nquads
         .lines()
         .map(ToOwned::to_owned)

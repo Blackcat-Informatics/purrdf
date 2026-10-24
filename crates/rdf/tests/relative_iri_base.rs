@@ -526,7 +526,7 @@ fn a_ucschar_that_renders_as_whitespace_survives_serialize_then_parse() {
                 )
             });
         assert!(
-            datasets_isomorphic(&dataset, &reparsed),
+            datasets_isomorphic(&dataset, &reparsed).unwrap(),
             "U+{:04X}: serialize then parse must be a round trip",
             decoded as u32
         );
@@ -678,7 +678,7 @@ fn every_base_emitting_format_round_trips_through_its_own_declaration() {
             )
         });
         assert!(
-            datasets_isomorphic(&dataset, &reparsed),
+            datasets_isomorphic(&dataset, &reparsed).unwrap(),
             "{format:?}: the base round trip must be isomorphic:\n{}",
             String::from_utf8_lossy(&bytes)
         );
@@ -732,7 +732,7 @@ fn a_caller_jsonld_context_and_the_egress_base_compose() {
     let reparsed = parse_dataset(&bytes, NativeRdfFormat::JsonLd.media_type(), None)
         .expect("the emitted document carries its own context and base");
     assert!(
-        datasets_isomorphic(&dataset, &reparsed),
+        datasets_isomorphic(&dataset, &reparsed).unwrap(),
         "the composed round trip must be isomorphic:\n{text}"
     );
 }
@@ -883,7 +883,7 @@ fn a_base_and_the_statement_layer_survive_together_under_a_non_dataset_selection
             "{format:?} must keep the annotation row:\n{text}"
         );
         assert!(
-            datasets_isomorphic(&dataset, &reparsed),
+            datasets_isomorphic(&dataset, &reparsed).unwrap(),
             "{format:?}: base + statement layer must round-trip losslessly:\n{text}"
         );
     }
@@ -1817,7 +1817,7 @@ fn a_document_declared_base_survives_a_transcode_with_no_caller_base() {
     let original = parse_dataset(source.as_bytes(), "text/turtle", None).expect("original");
     let round_tripped = parse_dataset(text.as_bytes(), "text/turtle", None).expect("round trip");
     assert!(
-        datasets_isomorphic(&original, &round_tripped),
+        datasets_isomorphic(&original, &round_tripped).unwrap(),
         "a base-preserving transcode must not change what the document denotes",
     );
 }

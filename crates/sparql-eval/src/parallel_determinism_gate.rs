@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
-    canonicalize,
+    try_canonicalize,
 };
 
 use crate::engine::NativeSparqlEngine;
@@ -500,7 +500,7 @@ fn comparable(result: &SparqlResult) -> Comparable {
         },
         SparqlResult::Boolean(b) => Comparable::Boolean(*b),
         SparqlResult::Graph(ds) => Comparable::Graph {
-            nquads: canonicalize(ds).nquads,
+            nquads: try_canonicalize(ds).unwrap().nquads,
         },
     }
 }

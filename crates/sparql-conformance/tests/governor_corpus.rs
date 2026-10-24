@@ -1542,7 +1542,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
         }
         SparqlResult::Graph(graph) => {
             out.push_str("graph\n");
-            out.push_str(&purrdf_core::canonicalize(graph).nquads);
+            out.push_str(&purrdf_core::try_canonicalize(graph).unwrap().nquads);
         }
         SparqlResult::Solutions {
             variables,
@@ -1570,7 +1570,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
             // an ordinary SELECT's record is not padded with an empty section.
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
-                out.push_str(&purrdf_core::canonicalize(aux).nquads);
+                out.push_str(&purrdf_core::try_canonicalize(aux).unwrap().nquads);
             }
         }
     }

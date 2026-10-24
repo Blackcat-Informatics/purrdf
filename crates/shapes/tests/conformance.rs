@@ -153,5 +153,7 @@ fn canonical_without_messages(nt: &str) -> String {
     }
     let dataset = purrdf_rdf::parse_dataset(kept.as_bytes(), "application/n-triples", None)
         .unwrap_or_else(|e| panic!("a report's N-Triples parse: {e}"));
-    purrdf_rdf::canonicalize(dataset.as_ref()).nquads
+    purrdf_rdf::try_canonicalize(dataset.as_ref())
+        .unwrap()
+        .nquads
 }

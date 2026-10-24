@@ -39,9 +39,9 @@
 use purrdf_rdf::{
     BlankScope, CanonHash, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfLookaside, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads,
-    canonicalize_with, dataset_from_quad_sources, flat_dataset_from_quad_sources,
-    flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
-    try_canonicalize_flat_view,
+    dataset_from_quad_sources, flat_dataset_from_quad_sources, flat_dataset_from_quads,
+    flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset, try_canonicalize_flat_view,
+    try_canonicalize_with,
 };
 use purrdf_testkit::prop::prelude::*;
 
@@ -531,7 +531,7 @@ prop_test! {
     /// Wrapper-agreement differential: `try_canonicalize_flat_view` agrees with the
     /// PRE-DELEGATION flatten-and-canonicalize route —
     /// `flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&d))` then
-    /// `canonicalize_with` — over generated datasets carrying scoped blanks (two
+    /// `try_canonicalize_with` — over generated datasets carrying scoped blanks (two
     /// independently-scoped sources), nested triple terms, blank graph names,
     /// and the `rdf:reifies` reifier "spelling": [`dataset_from_quad_sources`]
     /// (folds an `rdf:reifies` triple-term quad into a reifier binding, the same
@@ -570,7 +570,7 @@ prop_test! {
         let reference = {
             let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&dataset))
                 .expect("an already-valid dataset's own flat quad stream must re-freeze");
-            canonicalize_with(&flat, hash).nquads
+            try_canonicalize_with(&flat, hash).unwrap().nquads
         };
         match try_canonicalize_flat_view(&*dataset, hash) {
             Ok(canonicalized) => prop_assert_eq!(canonicalized.nquads, reference),
@@ -659,7 +659,7 @@ prop_test! {
             Ok(canonicalized) => prop_assert_eq!(
                 canonicalized.nquads,
                 swapped_canonicalized.nquads,
-                "a sentinel-spelled reifier row must flat-canonicalize identically \
+                "a sentinel-spelled reifier row must flat-try_canonicalize identically \
                  to its real-predicate spelling"
             ),
             Err(_) => {

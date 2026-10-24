@@ -15,7 +15,7 @@
 //! * `owned` — the pre-delegation shape a caller without a borrowed entry point
 //!   had to assemble by hand: [`flat_rdf_quads_from_dataset`] walks a dataset ONCE
 //!   into an owned `Vec<RdfQuad>`, [`flat_dataset_from_quads`] re-freezes that
-//!   vector into a SECOND `RdfDataset`, and [`canonicalize_with`] runs over the
+//!   vector into a SECOND `RdfDataset`, and [`try_canonicalize_with`] runs over the
 //!   frozen result.
 //! * `borrowed` — [`try_canonicalize_flat_view`] over the SAME view directly. Its
 //!   own RDFC-1.0 n-degree search runs as usual, and the
@@ -62,8 +62,8 @@ use purrdf_rdf::{
     BlankScope, CanonHash, Canonicalized, CompositeDatasetView, DatasetMut, DatasetView,
     DeltaDatasetView, FallibleDatasetView, MutableDataset, PagedDataset, PagedQueryLimits,
     QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue, ViewLimits,
-    canonicalize_with, dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
-    try_canonicalize_flat_view,
+    dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    try_canonicalize_flat_view, try_canonicalize_with,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
@@ -185,7 +185,7 @@ fn delta_view(base: &Arc<RdfDataset>) -> DeltaDatasetView {
 fn owned_route(dataset: &RdfDataset, hash: CanonHash) -> Canonicalized {
     let quads = flat_rdf_quads_from_dataset(dataset);
     let refrozen = flat_dataset_from_quads(&quads).expect("the flattened quads refreeze");
-    canonicalize_with(&refrozen, hash)
+    try_canonicalize_with(&refrozen, hash).unwrap()
 }
 
 /// The owned route over a view that is not already a concrete `RdfDataset`: an

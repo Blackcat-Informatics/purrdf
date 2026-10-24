@@ -153,7 +153,7 @@ fn render_result(result: &SparqlResult, ordered: bool, volatile: bool, out: &mut
             }
         }
         SparqlResult::Graph(graph) => {
-            let nquads = purrdf_core::canonicalize(graph).nquads;
+            let nquads = purrdf_core::try_canonicalize(graph).unwrap().nquads;
             writeln!(out, "graph quads={}", nquads.lines().count()).expect("write");
             if !volatile {
                 margin(&nquads, out);
@@ -179,7 +179,7 @@ fn render_result(result: &SparqlResult, ordered: bool, volatile: bool, out: &mut
             }
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
-                margin(&purrdf_core::canonicalize(aux).nquads, out);
+                margin(&purrdf_core::try_canonicalize(aux).unwrap().nquads, out);
             }
         }
     }
@@ -442,7 +442,7 @@ fn render_case(case: &SparqlTestCase, header: &str, out: &mut String) {
 /// The canonical rendering of a graph store — default and named graphs — in the form
 /// the conformance comparer compares update post-states in: RDFC-1.0 canonical N-Quads.
 fn render_store(store: &RdfDataset, volatile: bool, out: &mut String) {
-    let nquads = purrdf_core::canonicalize(store).nquads;
+    let nquads = purrdf_core::try_canonicalize(store).unwrap().nquads;
     writeln!(out, "store quads={}", nquads.lines().count()).expect("write");
     if !volatile {
         margin(&nquads, out);
@@ -451,7 +451,7 @@ fn render_store(store: &RdfDataset, volatile: bool, out: &mut String) {
 
 /// The store's quad count and — unless volatile — the digest of its canonical form.
 fn store_digest(store: &RdfDataset, volatile: bool) -> String {
-    let nquads = purrdf_core::canonicalize(store).nquads;
+    let nquads = purrdf_core::try_canonicalize(store).unwrap().nquads;
     let quads = nquads.lines().count();
     if volatile {
         format!("quads={quads}")

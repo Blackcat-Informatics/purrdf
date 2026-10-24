@@ -1125,7 +1125,7 @@ mod tests {
                     (
                         r.fact().to_string(),
                         r.witness().clone(),
-                        purrdf_core::canonicalize(r.premises()).nquads,
+                        purrdf_core::try_canonicalize(r.premises()).unwrap().nquads,
                         r.decisions(),
                     )
                 })

@@ -944,10 +944,7 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     .unwrap();
     assert_eq!(graph_count(&restated), 1);
     let restored = purrdf_core::dataset_from_view(&read).unwrap();
-    assert!(purrdf_core::datasets_isomorphic(
-        source.as_ref(),
-        restored.as_ref()
-    ));
+    assert!(purrdf_core::datasets_isomorphic(source.as_ref(), restored.as_ref()).unwrap());
     assert_eq!(restored.named_graphs().count(), 1);
 
     // A pack written without the declaration (as every pack written before

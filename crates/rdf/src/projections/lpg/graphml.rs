@@ -655,7 +655,7 @@ mod tests {
             &write_lpg_graphml(&decoded, &config).expect("rewrite")
         ));
         let lifted = lift_lpg(&decoded, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
 
         let pack = PackBuilder::build_bytes(&dataset).expect("pack");
         let view = PackView::from_bytes(&pack).expect("view");

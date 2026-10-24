@@ -108,7 +108,10 @@ fn render(result: &SparqlResult) -> String {
     match result {
         SparqlResult::Boolean(value) => format!("boolean\n{value}\n"),
         SparqlResult::Graph(graph) => {
-            format!("graph\n{}", purrdf_core::canonicalize(graph).nquads)
+            format!(
+                "graph\n{}",
+                purrdf_core::try_canonicalize(graph).unwrap().nquads
+            )
         }
         SparqlResult::Solutions {
             variables,
@@ -119,8 +122,12 @@ fn render(result: &SparqlResult) -> String {
             for row in rows {
                 writeln!(out, "row {row:?}").expect("writing to a String cannot fail");
             }
-            write!(out, "aux\n{}", purrdf_core::canonicalize(aux).nquads)
-                .expect("writing to a String cannot fail");
+            write!(
+                out,
+                "aux\n{}",
+                purrdf_core::try_canonicalize(aux).unwrap().nquads
+            )
+            .expect("writing to a String cannot fail");
             out
         }
     }

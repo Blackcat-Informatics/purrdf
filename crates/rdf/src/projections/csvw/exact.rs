@@ -1709,7 +1709,7 @@ mod tests {
 
         let decoded = read_csvw_exact(&projected.package, &config).expect("read");
         assert!(decoded.loss_ledger.is_empty());
-        assert!(datasets_isomorphic(&dataset, &decoded.dataset));
+        assert!(datasets_isomorphic(&dataset, &decoded.dataset).unwrap());
         let rewritten = project_csvw_exact(decoded.dataset.as_ref(), &config).expect("rewrite");
         assert!(same_artifacts(&projected.package, &rewritten.package));
 
@@ -1793,7 +1793,7 @@ mod tests {
         let config = test_config(100);
         let projected = project_csvw_exact(dataset.as_ref(), &config).expect("project");
         let decoded = read_csvw_exact(&projected.package, &config).expect("read");
-        assert!(datasets_isomorphic(&dataset, &decoded.dataset));
+        assert!(datasets_isomorphic(&dataset, &decoded.dataset).unwrap());
         assert_eq!(decoded.dataset.named_graphs().count(), 2);
     }
 }

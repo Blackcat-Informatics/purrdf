@@ -12,7 +12,7 @@
 //! * syntax tests → parse success/failure matches the kind.
 //!
 //! Blank-node equality reuses the same RDFC-1.0 canonicalizer the
-//! CONSTRUCT/UPDATE dataset comparison is built on ([`purrdf_core::canonicalize`]):
+//! CONSTRUCT/UPDATE dataset comparison is built on ([`purrdf_core::try_canonicalize`]):
 //! the **entire** result set is encoded as ONE synthetic dataset (a distinct
 //! solution blank node per row, one quad `(solution, var-predicate, value)` per
 //! bound cell) and canonicalized once, so a single bijection must map every
@@ -21,6 +21,7 @@
 //! and their variable positions — still compare exactly. See
 //! the private `encode_solution_set`.
 
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,12 +34,52 @@ use purrdf_sparql_results::ParsedSolutions;
 use crate::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use crate::run::RunOutcome;
 
+/// A comparison found different results or could not establish an identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompareError {
+    /// The completed comparison's human-readable mismatch report.
+    Mismatch(String),
+    /// Original canonicalization failure; no equality verdict was established.
+    Canonicalization(purrdf_core::CanonError),
+}
+
+impl purrdf_hash::error::StructuredError for CompareError {
+    purrdf_hash::error_visit! {
+        Mismatch(message) => "sparql-comparison-mismatch" { "message" => Text(message) },
+        Canonicalization(cause) => "sparql-comparison-canonicalization" { "cause" => Cause(cause) },
+    }
+}
+
+impl fmt::Display for CompareError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mismatch(message) => fmt::Display::fmt(message, f),
+            Self::Canonicalization(cause) => fmt::Display::fmt(cause, f),
+        }
+    }
+}
+
+impl std::error::Error for CompareError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Mismatch(_) => None,
+            Self::Canonicalization(cause) => Some(cause),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(CompareError {
+    Mismatch(String),
+    Canonicalization(purrdf_core::CanonError),
+});
+
 /// Compare `outcome` against `case`'s expected result.
 ///
 /// # Errors
 ///
 /// Returns a human-readable mismatch description; `Ok(())` means the case passed.
-pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String> {
+pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), CompareError> {
     // A case that expects a hard failure produced an outcome instead. Checked here,
     // before any kind-specific comparison, so the verdict is the same sentence
     // whether the case was a query, an update, or a syntax test — and so the
@@ -47,19 +88,22 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
         return Err(format!(
             "expected a hard failure matching {} — the case ran to completion instead",
             path.display()
-        ));
+        )
+        .into());
     }
     match outcome {
         RunOutcome::Syntax { parsed_ok } => match case.kind {
             TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax if *parsed_ok => Ok(()),
             TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax => {
-                Err("positive-syntax test failed to parse".to_owned())
+                Err("positive-syntax test failed to parse".to_owned().into())
             }
             TestKind::NegativeSyntax | TestKind::NegativeUpdateSyntax if !*parsed_ok => Ok(()),
             TestKind::NegativeSyntax | TestKind::NegativeUpdateSyntax => {
-                Err("negative-syntax test parsed but should have failed".to_owned())
+                Err("negative-syntax test parsed but should have failed"
+                    .to_owned()
+                    .into())
             }
-            other => Err(format!("syntax outcome for non-syntax kind {other:?}")),
+            other => Err(format!("syntax outcome for non-syntax kind {other:?}").into()),
         },
         RunOutcome::Eval { result, ordered } => {
             compare_eval(case, EvalRef::from(result), *ordered, result.query_form())
@@ -135,11 +179,11 @@ pub fn compare_results(
     left: &SparqlResult,
     right: &SparqlResult,
     ordered: bool,
-) -> Result<(), String> {
+) -> Result<(), CompareError> {
     match (left, right) {
         (SparqlResult::Boolean(l), SparqlResult::Boolean(r)) if l == r => Ok(()),
         (SparqlResult::Boolean(l), SparqlResult::Boolean(r)) => {
-            Err(format!("ASK mismatch: {l} vs {r}"))
+            Err(format!("ASK mismatch: {l} vs {r}").into())
         }
         (
             SparqlResult::Solutions {
@@ -154,7 +198,7 @@ pub fn compare_results(
             },
         ) => {
             if l_vars != r_vars {
-                return Err(format!("variable lists differ: {l_vars:?} vs {r_vars:?}"));
+                return Err(format!("variable lists differ: {l_vars:?} vs {r_vars:?}").into());
             }
             compare_solutions(
                 l_vars,
@@ -167,19 +211,22 @@ pub fn compare_results(
             )
         }
         (SparqlResult::Graph(l), SparqlResult::Graph(r)) => {
-            let l_canon = purrdf_core::canonicalize(l).nquads;
-            let r_canon = purrdf_core::canonicalize(r).nquads;
+            let l_canon = purrdf_core::try_canonicalize(l)?.nquads;
+            let r_canon = purrdf_core::try_canonicalize(r)?.nquads;
             if l_canon == r_canon {
                 Ok(())
             } else {
-                Err("graph results differ (canonical N-Quads mismatch)".to_owned())
+                Err("graph results differ (canonical N-Quads mismatch)"
+                    .to_owned()
+                    .into())
             }
         }
         (l, r) => Err(format!(
             "result kind mismatch: {} vs {}",
             l.query_form(),
             r.query_form()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -188,20 +235,25 @@ pub fn compare_results(
 /// The mutated dataset and the expected dataset are compared graph-preservingly
 /// by RDFC-1.0 canonical N-Quads — the same equality CONSTRUCT graphs use — so a
 /// differing default graph OR any named graph surfaces as a mismatch.
-fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(), String> {
+fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(), CompareError> {
     let ExpectedResult::DatasetState { data, graph_data } = &case.expected else {
         return Err(format!(
             "update case {} has no DatasetState expected result",
             case.iri
-        ));
+        )
+        .into());
     };
     let expected = crate::run::build_dataset(&case.base, data, graph_data)?;
-    let actual_canon = purrdf_core::canonicalize(actual).nquads;
-    let expected_canon = purrdf_core::canonicalize(&expected).nquads;
+    let actual_canon = purrdf_core::try_canonicalize(actual)?.nquads;
+    let expected_canon = purrdf_core::try_canonicalize(&expected)?.nquads;
     if actual_canon == expected_canon {
         Ok(())
     } else {
-        Err("UPDATE post-state differs from expected (canonical N-Quads mismatch)".to_owned())
+        Err(
+            "UPDATE post-state differs from expected (canonical N-Quads mismatch)"
+                .to_owned()
+                .into(),
+        )
     }
 }
 
@@ -254,14 +306,14 @@ fn compare_eval(
     result: EvalRef<'_>,
     ordered: bool,
     query_form: &str,
-) -> Result<(), String> {
+) -> Result<(), CompareError> {
     match (&case.expected, result) {
         (ExpectedResult::Srx(path) | ExpectedResult::Srj(path), EvalRef::Boolean(actual)) => {
             let expected = read_boolean(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
             if expected == actual {
                 Ok(())
             } else {
-                Err(format!("ASK mismatch: expected {expected}, got {actual}"))
+                Err(format!("ASK mismatch: expected {expected}, got {actual}").into())
             }
         }
         (
@@ -285,7 +337,7 @@ fn compare_eval(
                     if expected == actual {
                         Ok(())
                     } else {
-                        Err(format!("ASK mismatch: expected {expected}, got {actual}"))
+                        Err(format!("ASK mismatch: expected {expected}, got {actual}").into())
                     }
                 }
                 (
@@ -297,7 +349,9 @@ fn compare_eval(
                         variables, rows, ..
                     },
                 ) => compare_case_solutions(case, variables, rows, &solutions, indexed),
-                _ => Err("DAWG RDF result kind differs from the query result".to_owned()),
+                _ => Err("DAWG RDF result kind differs from the query result"
+                    .to_owned()
+                    .into()),
             }
         }
         (ExpectedResult::Graph(path), EvalRef::Graph(actual)) => {
@@ -306,22 +360,28 @@ fn compare_eval(
             let media = crate::run::data_media_type(path);
             let expected = purrdf::parse_dataset(&expected_bytes, media, None)
                 .map_err(|e| format!("parse expected graph {}: {e}", path.display()))?;
-            let actual_canon = purrdf_core::canonicalize(actual).nquads;
-            let expected_canon = purrdf_core::canonicalize(&expected).nquads;
+            let actual_canon = purrdf_core::try_canonicalize(actual)?.nquads;
+            let expected_canon = purrdf_core::try_canonicalize(&expected)?.nquads;
             if actual_canon == expected_canon {
                 Ok(())
             } else {
-                Err("CONSTRUCT graph differs from expected (canonical N-Quads mismatch)".to_owned())
+                Err(
+                    "CONSTRUCT graph differs from expected (canonical N-Quads mismatch)"
+                        .to_owned()
+                        .into(),
+                )
             }
         }
-        (ExpectedResult::Unsupported(path), _) => Err(format!(
-            "unsupported expected-result format: {}",
-            path.display()
-        )),
-        (ExpectedResult::None, _) => Err("evaluation case has no expected result".to_owned()),
+        (ExpectedResult::Unsupported(path), _) => {
+            Err(format!("unsupported expected-result format: {}", path.display()).into())
+        }
+        (ExpectedResult::None, _) => {
+            Err("evaluation case has no expected result".to_owned().into())
+        }
         (expected, _) => Err(format!(
             "result-kind mismatch: expected {expected:?}, got a {query_form} result"
-        )),
+        )
+        .into()),
     }
 }
 
@@ -332,7 +392,7 @@ fn compare_case_solutions(
     rows: &[Vec<Option<TermValue>>],
     expected: &ParsedSolutions,
     ordered: bool,
-) -> Result<(), String> {
+) -> Result<(), CompareError> {
     if !case.lax_cardinality {
         return compare_solutions(variables, rows, expected, ordered);
     }
@@ -344,7 +404,9 @@ fn compare_case_solutions(
     let actual = row_multiplicities(rows);
     let wanted = row_multiplicities(&expected.rows);
     if actual.len() != wanted.len() {
-        return Err("REDUCED result has missing or extra distinct solutions".to_owned());
+        return Err("REDUCED result has missing or extra distinct solutions"
+            .to_owned()
+            .into());
     }
     let actual_rows: Vec<_> = actual.iter().map(|(row, _)| (*row).clone()).collect();
     let mut pending = vec![Vec::<usize>::new()];
@@ -366,14 +428,22 @@ fn compare_case_solutions(
                 variables: expected.variables.clone(),
                 rows: paired,
             };
-            if compare_solutions(variables, &actual_rows[..=at], &paired, true).is_ok() {
-                let mut next = selected.clone();
-                next.push(candidate);
-                pending.push(next);
+            match compare_solutions(variables, &actual_rows[..=at], &paired, true) {
+                Ok(()) => {
+                    let mut next = selected.clone();
+                    next.push(candidate);
+                    pending.push(next);
+                }
+                Err(CompareError::Mismatch(_)) => {}
+                Err(error) => return Err(error),
             }
         }
     }
-    Err("REDUCED multiplicities or global blank-node correspondence differ".to_owned())
+    Err(
+        "REDUCED multiplicities or global blank-node correspondence differ"
+            .to_owned()
+            .into(),
+    )
 }
 
 /// Group equal rows without changing the identity of their value blank nodes.
@@ -403,7 +473,7 @@ fn compare_solutions(
     rows: &[Vec<Option<TermValue>>],
     expected: &ParsedSolutions,
     ordered: bool,
-) -> Result<(), String> {
+) -> Result<(), CompareError> {
     let actual_canon = encode_solution_set(variables, rows, ordered, Literals::ByValue)?;
     let expected_canon = encode_solution_set(
         &expected.variables,
@@ -431,7 +501,7 @@ fn compare_solutions(
                     || "one result's canonical graph ends earlier".to_owned(),
                     |(actual, expected)| format!("expected {expected} / actual {actual}")
                 )
-        ))
+        ).into())
     }
 }
 
@@ -485,7 +555,7 @@ fn encode_solution_set(
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
     literals: Literals,
-) -> Result<String, String> {
+) -> Result<String, CompareError> {
     let mut builder = RdfDatasetBuilder::new();
     let index_predicate = builder
         .intern_iri(&format!("{CONFORMANCE_NS}index"))
@@ -538,7 +608,7 @@ fn encode_solution_set(
         .map_err(|e| format!("encode solution set for comparison: {e}"))?;
     purrdf_core::try_canonicalize(&dataset)
         .map(|canonical| canonical.nquads)
-        .map_err(|error| format!("canonicalize solution set for comparison: {error}"))
+        .map_err(CompareError::from)
 }
 
 /// The canonical form a solution sequence is compared in: the RDFC-1.0 canonical
@@ -557,7 +627,7 @@ pub fn canonical_solutions(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
-) -> Result<String, String> {
+) -> Result<String, CompareError> {
     // Exact: a trace that records this string must see the lexical forms the
     // evaluator produced, so a change in how it spells a number still moves it.
     encode_solution_set(variables, rows, ordered, Literals::Exact)
@@ -672,6 +742,68 @@ mod tests {
     use super::*;
     use crate::manifest::TestKind;
 
+    /// Identity refusal survives input disposal and is distinct from inequality.
+    #[test]
+    fn graph_comparison_retains_the_original_canonicalization_refusal() {
+        let mut builder = RdfDatasetBuilder::new();
+        let node = builder.intern_iri("http://example.org/node").unwrap();
+        let reserved = builder.intern_iri(purrdf_core::RESERVED_NAMESPACE).unwrap();
+        builder.push_quad(node, reserved, node, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let original = purrdf_core::try_canonicalize(&dataset).unwrap_err();
+        assert!(matches!(
+            &original,
+            purrdf_core::CanonError::ReservedVocabulary(_)
+        ));
+        let result = SparqlResult::Graph(dataset.into());
+        let refusal = compare_results(&result, &result, false).unwrap_err();
+        drop(result);
+        assert_eq!(refusal, CompareError::Canonicalization(original));
+        let captured = purrdf_testkit::error_capture::Capture::read(&refusal);
+        assert_eq!(captured.code, "sparql-comparison-canonicalization");
+        assert!(
+            std::error::Error::source(&refusal)
+                .unwrap()
+                .is::<purrdf_core::CanonError>()
+        );
+
+        let healthy = SparqlResult::Graph(RdfDatasetBuilder::new().freeze().unwrap().into());
+        assert!(compare_results(&healthy, &healthy, false).is_ok());
+    }
+
+    #[test]
+    fn solution_comparison_never_treats_a_refusal_as_a_reduced_mismatch() {
+        let variables = vec!["x".to_owned()];
+        let rows = vec![vec![Some(TermValue::iri(purrdf_core::RESERVED_NAMESPACE))]];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: rows.clone(),
+        };
+        let refusal = canonical_solutions(&variables, &rows, false).unwrap_err();
+        assert!(matches!(
+            &refusal,
+            CompareError::Canonicalization(purrdf_core::CanonError::ReservedVocabulary(_))
+        ));
+        assert_eq!(
+            compare_solutions(&variables, &rows, &expected, false).unwrap_err(),
+            refusal
+        );
+        let mut case = case_with(ExpectedResult::None);
+        for lax in [false, true] {
+            case.lax_cardinality = lax;
+            assert_eq!(
+                compare_case_solutions(&case, &variables, &rows, &expected, false).unwrap_err(),
+                refusal
+            );
+        }
+        let healthy = vec![vec![Some(TermValue::iri("https://example.org/value"))]];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: healthy.clone(),
+        };
+        assert!(compare_case_solutions(&case, &variables, &healthy, &expected, false).is_ok());
+    }
+
     /// A minimal case whose `mf:result` is the given expectation.
     fn case_with(expected: ExpectedResult) -> SparqlTestCase {
         SparqlTestCase {
@@ -745,7 +877,10 @@ mod tests {
             },
         )
         .expect_err("an expected refusal cannot be met by a completed run");
-        assert!(error.contains("ran to completion instead"), "{error}");
+        assert!(
+            matches!(&error, CompareError::Mismatch(message) if message.contains("ran to completion instead")),
+            "{error}"
+        );
     }
 
     fn lit(lexical_form: &str, datatype: &str) -> TermValue {
@@ -995,7 +1130,10 @@ mod tests {
             vec![Some(lit("2", XSD_INTEGER))],
         ];
         let err = compare_solutions(&vars, &two_rows, &reversed_expected, true).unwrap_err();
-        assert!(err.contains("ordered sequence"), "message: {err}");
+        assert!(
+            matches!(&err, CompareError::Mismatch(message) if message.contains("ordered sequence")),
+            "message: {err}"
+        );
         // Same rows, opposite order, compare EQUAL when unordered.
         assert!(compare_solutions(&vars, &two_rows, &reversed_expected, false).is_ok());
     }

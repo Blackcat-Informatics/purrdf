@@ -161,8 +161,8 @@ pub use owl_dl::proof::{
     DlProofError, MAX_CHECK_WORK as DL_MAX_CHECK_WORK, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS,
     MergeCause, MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative,
     ProofAnswer, ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
-    TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, ontology_identity,
-    prove_consistency, try_ontology_identity, try_ontology_identity_with_stop,
+    TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, prove_consistency,
+    try_ontology_identity, try_ontology_identity_with_stop,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
@@ -599,8 +599,7 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// the OWL-DL proof producers, which canonicalize the caller's dataset to bind every
     /// proof to it; [`Reasoner::new`](reasoner::Reasoner::new) never canonicalizes anything
     /// and so never returns this. The caller's data is wholly untrusted here — a document
-    /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
-    /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
+    /// parsed at a wasm/Python/C-ABI boundary — so the original typed refusal is retained.
     Canonicalization(purrdf_core::CanonError<E>),
 }
 

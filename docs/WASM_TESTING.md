@@ -18,6 +18,12 @@ the shipped JavaScript/Worker bindings and identity ABI; those are host-interfac
 checks. Assembly codegen remains the separate seven-configuration `make simd-asm`
 claim. None of these substitutes for another.
 
+The packaged case `isomorphic refusal crosses the wasm boundary as a JavaScript
+Error` in `canonicalization-host-error.test.mjs` exercises the wasm-bindgen
+`JsError` construction/import and JavaScript exception prototype. It distinguishes
+a caught host Error from a WASM trap; native Rust owns the underlying reserved-
+vocabulary refusal semantics. Run only this named package case for that obligation.
+
 ## Audited focused execution
 
 The 2026-10-23 audit examined every Makefile WASM invocation and the direct

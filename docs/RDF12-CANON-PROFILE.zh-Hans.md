@@ -73,7 +73,7 @@ canon(parse(canon(D))) == canon(D)
 
 **命名图注解**行在终止的 `.` 之前输出**五个**词元：主体、谓词、客体、注解哨兵和图项。它刻意不是有效的 N-Quads：原生四元组绝不会携带两个图词元，所以这种形状不可能与原生四元组碰撞，命名图注解也因此保持无损。没有四元组能承载这一行，因此也没有相应的折叠；上述身份等式适用于规范形式不含命名图注解的每个数据集。
 
-**图作用域**入口（`purrdf_core::canonicalize_graph_view` 及其可失败对应入口）会擦除图槽位，所以输出始终是四元组形状，具有**无条件的幂等性**。需要无条件往返性质的使用方，应从图作用域规范化结果分配身份。
+**图作用域**入口（`purrdf_core::try_canonicalize_graph_view`）会擦除图槽位，所以输出始终是四元组形状，具有**无条件的幂等性**。需要无条件往返性质的使用方，应从图作用域规范化结果分配身份。
 
 仅比较或计算摘要的使用方不受这一差别影响：输出始终是**规范字节串**，比较或散列都不需要先解析它。幂等性是使用方可以依赖的性质——分配身份时所用的字节能够重新导出同一身份——而不是使用方必须另行证明的义务。在 RDF 1.1 子集上，输出确实是有效的规范 N-Quads，因此可以由 W3C 套件把关。
 
@@ -85,7 +85,7 @@ canon(parse(canon(D))) == canon(D)
 
 ### 3.3 平铺断言表示
 
-每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view` 和 `try_flat_digest_view`。§3 的输出形式也有独立名称，由 `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`canonicalize`、`try_canonicalize_view`、`canonicalize_graph_view` 等）固定使用这种叠加表示。
+每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view` 和 `try_flat_digest_view`。§3 的输出形式也有独立名称，由 `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`try_canonicalize`、`try_canonicalize_view`、`try_canonicalize_graph_view` 等）固定使用这种叠加表示。
 
 两种表示回答的是同一问题：“这个**可接纳的** RDF 1.2 陈述层生成哪些规范字节？”它们以不同书写形式表达**相同的可接纳内容**。表示选择与可接纳性相互独立：§4 的保留词汇和 §5 的拒绝规则不随调用方选择的表示而改变。不同之处仅在于：已接纳的具体化节点或注解行最终**如何输出**。
 
@@ -183,14 +183,15 @@ n 阶搜索在最坏情况下可能出现组合爆炸：具有病态对称性的
 
 耗尽时返回 `CanonError::BudgetExceeded`，其中携带输入的空节点数量。
 
-### 6.1 可失败入口和受信任入口
+### 6.1 所有入口均返回类型化拒绝
 
 | 入口 | 拒绝时的行为 |
 |---|---|
 | `try_canonicalize` / `try_canonicalize_with` | 返回 `Err(CanonError)` |
-| `canonicalize` / `canonicalize_with` | panic |
+| `try_canonicalize_view` / `try_canonicalize_graph_view` | 返回原始 `Err(CanonError)`，包括源读取失败 |
+| `try_graph_digest_view` | 返回原始 `Err(CanonError)` |
 
-**任何从规范字节分配身份的使用方，都必须使用可失败入口。** 会 panic 的一对入口仅供受信任调用方使用；其契约要求调用方已经为数据集的来源作出保证。
+任何从规范字节分配身份的使用方，都必须传播这些类型化拒绝。被拒绝的输入不会产生身份。原先供受信任调用方使用、会 panic 的入口已删除；调用方直接使用可失败入口。
 
 ## 7. 版本管理
 

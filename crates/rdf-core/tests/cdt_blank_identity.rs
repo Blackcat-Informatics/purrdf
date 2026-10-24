@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermRef, canonical_relabel,
-    canonicalize, datasets_isomorphic, deskolemize, skolemize,
+    datasets_isomorphic, deskolemize, skolemize, try_canonicalize,
 };
 
 const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
@@ -49,8 +49,8 @@ fn blank_subject_list(subject: &str, lexical: &str) -> Arc<RdfDataset> {
 fn a_consistent_renaming_inside_a_composite_literal_is_isomorphic() {
     let a = list_object("[_:x, 42]");
     let b = list_object("[_:y, 42]");
-    assert!(datasets_isomorphic(&a, &b));
-    assert!(datasets_isomorphic(&b, &a));
+    assert!(datasets_isomorphic(&a, &b).unwrap());
+    assert!(datasets_isomorphic(&b, &a).unwrap());
 }
 
 /// The renaming stays consistent across every occurrence, including a repeated
@@ -59,7 +59,7 @@ fn a_consistent_renaming_inside_a_composite_literal_is_isomorphic() {
 fn a_consistent_renaming_holds_across_repeats_and_nesting() {
     let a = list_object("[_:x, 42, [_:x], _:x]");
     let b = list_object("[_:q, 42, [_:q], _:q]");
-    assert!(datasets_isomorphic(&a, &b));
+    assert!(datasets_isomorphic(&a, &b).unwrap());
 }
 
 /// A label shared by a term-position blank and an embedded one renames as one
@@ -68,7 +68,7 @@ fn a_consistent_renaming_holds_across_repeats_and_nesting() {
 fn a_renaming_spanning_the_literal_boundary_is_isomorphic() {
     let a = blank_subject_list("x", "[_:x, 42]");
     let b = blank_subject_list("y", "[_:y, 42]");
-    assert!(datasets_isomorphic(&a, &b));
+    assert!(datasets_isomorphic(&a, &b).unwrap());
 }
 
 // ── Isomorphism: the negative direction ─────────────────────────────────────
@@ -80,8 +80,8 @@ fn a_renaming_spanning_the_literal_boundary_is_isomorphic() {
 fn splitting_an_embedded_blank_node_is_not_isomorphic() {
     let one = list_object("[_:x, 42, _:x]");
     let two = list_object("[_:x, 42, _:y]");
-    assert!(!datasets_isomorphic(&one, &two));
-    assert!(!datasets_isomorphic(&two, &one));
+    assert!(!datasets_isomorphic(&one, &two).unwrap());
+    assert!(!datasets_isomorphic(&two, &one).unwrap());
 }
 
 /// Conflating the subject with the embedded element is not a renaming either:
@@ -92,28 +92,22 @@ fn splitting_an_embedded_blank_node_is_not_isomorphic() {
 fn conflating_across_the_literal_boundary_is_not_isomorphic() {
     let shared = blank_subject_list("x", "[_:x, 42]");
     let split = blank_subject_list("x", "[_:y, 42]");
-    assert!(!datasets_isomorphic(&shared, &split));
-    assert!(!datasets_isomorphic(&split, &shared));
+    assert!(!datasets_isomorphic(&shared, &split).unwrap());
+    assert!(!datasets_isomorphic(&split, &shared).unwrap());
 }
 
 /// A change to the literal's GROUND content is still a difference — the blank
 /// handling must not make the rest of the lexical form invisible.
 #[test]
 fn ground_content_still_counts() {
-    assert!(!datasets_isomorphic(
-        &list_object("[_:x, 42]"),
-        &list_object("[_:x, 43]")
-    ));
+    assert!(!datasets_isomorphic(&list_object("[_:x, 42]"), &list_object("[_:x, 43]")).unwrap());
 }
 
 /// Adding an embedded blank node changes the blank-node count, so the cheap
 /// structural pre-check must see it too.
 #[test]
 fn an_embedded_blank_node_counts_as_a_blank_node() {
-    assert!(!datasets_isomorphic(
-        &list_object("[42]"),
-        &list_object("[_:x]")
-    ));
+    assert!(!datasets_isomorphic(&list_object("[42]"), &list_object("[_:x]")).unwrap());
 }
 
 // ── Canonicalization ────────────────────────────────────────────────────────
@@ -122,8 +116,8 @@ fn an_embedded_blank_node_counts_as_a_blank_node() {
 /// form carries the ISSUED labels rather than the input ones.
 #[test]
 fn the_canonical_form_carries_issued_labels_inside_the_literal() {
-    let a = canonicalize(&list_object("[_:x, 42]")).nquads;
-    let b = canonicalize(&list_object("[_:y, 42]")).nquads;
+    let a = try_canonicalize(&list_object("[_:x, 42]")).unwrap().nquads;
+    let b = try_canonicalize(&list_object("[_:y, 42]")).unwrap().nquads;
     assert_eq!(a, b);
     assert!(a.contains("c14n0"), "canonical N-Quads: {a}");
     assert!(
@@ -168,7 +162,7 @@ fn canonical_relabel_is_idempotent_over_embedded_blanks() {
     let once = canonical_relabel(&source).expect("admissible");
     let twice = canonical_relabel(&once).expect("admissible");
     assert_eq!(sole_literal(&once), sole_literal(&twice));
-    assert!(datasets_isomorphic(&source, &once));
+    assert!(datasets_isomorphic(&source, &once).unwrap());
 }
 
 // ── Skolemization round trip ────────────────────────────────────────────────
@@ -191,7 +185,7 @@ fn skolemization_round_trips_over_an_embedded_blank() {
 
     let back = deskolemize(&skolemized, "http://example.org").expect("invertible");
     assert!(
-        datasets_isomorphic(&source, &back),
+        datasets_isomorphic(&source, &back).unwrap(),
         "skolemize/deskolemize is not the identity over composite literals"
     );
 }
