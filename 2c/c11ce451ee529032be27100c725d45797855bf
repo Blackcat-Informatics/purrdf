@@ -1,0 +1,21 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: f0790be778cb81201162e3649815f423974305fa
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 707
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/707
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 2341eb0ad7bae4e5ea09f3b72cdb277f061e36ed
+GhpRsq-Head-Ref: paudley/704-remove-panicking-canonicalization-apis
+GhpRsq-Head-OID: f0790be778cb81201162e3649815f423974305fa
+GhpRsq-Result-Tree: edef4d74c762286a033711b7949ef87fd549a885
+GhpRsq-Result-Commit: 2cc11ce451ee529032be27100c725d45797855bf
+GhpRsq-Parent-Hashes: f0790be778cb81201162e3649815f423974305fa
+GhpRsq-Squash-Notes-SHA256: 8f8d51b48dda080bf105b09e80fc290d396f07e95e0e8007a027da8d366d2e4b
+GhpRsq-Defect-Class: source-error-erasure
+GhpRsq-Stage-Tree: 1b882c24dea66177a4dcbcbf78f42e56a7df20c9
+GhpRsq-Stage-Ref: refs/ghprsq/pr/707/stage
+GhpRsq-Stage-Files: 71
