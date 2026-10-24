@@ -1,0 +1,44 @@
+{
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABBGQZng": {
+    "resolution": "declined",
+    "reason": "Alert 411 is used in tests. The exact sink prints page counts from directory_image(1025), whose only inputs are fixed public URN values and quad rows in cfg(test). The posted reply identifies the precise diagnostic and synthetic input provenance; no production secret is logged.",
+    "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/709#discussion_r4368667946",
+    "revision": {
+      "body": "## CodeQL / Cleartext logging of sensitive information\n\nThis operation writes [...::certify(...)](1) to a log file.\n\n[Show more details](https://github.com/Blackcat-Informatics/purrdf/security/code-scanning/411)",
+      "updated_at": "2026-10-24T21:49:28Z",
+      "state": null,
+      "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+      "path": "crates/rdf-core/src/ir/segmented/build.rs",
+      "line": 1783
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABfNxBjQ": {
+    "resolution": "acknowledged",
+    "reason": "Completed independent review covers all eight files at b45cef24c and establishes no actionable code or architecture concern. Private docstring percentage advice does not expand the frozen contract. Older profile refusal and explicit regeneration are intentional v4 behavior, not a compatibility waiver.",
+    "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+    "reply_url": null,
+    "revision": {
+      "body": "Technical review projection, head b45cef24c7f1198cfff0a28f5a02b40cfc378df3,\nbase 2cc11ce451ee529032be27100c725d45797855bf.\n\nNo actionable comments generated. Merge risk minimal; no identified blocker\nafter normal checks. Security architecture risk low; no architecture concern\nor introduced security weakness established. Older images need regeneration;\ndeployed reader/writer compatibility remains unverified.\n\nProfile 5 uses a 408-byte header, checkpoint stream 11, 37-byte records\n(digest 32, ordinal 4, stream 1) and one checkpoint per 32 rows. Prefix requests\nread the preceding checkpoint and at most 31 tail digests, return exact\nwork.members and refuse endpoints beyond the directory. Construction and\ncertification check checkpoint counts, sums and block packing. Related scopes:\n564 streaming/common-order scans, 705 oversized terms, earlier 687 directory.\n\nThe integrity boundary is a receipt-bound image and derived source comparisons.\nIncorrect checkpoint authority could hide changes. Semantic certification and\nauthenticated selective reads protect that boundary. Receipt fields are private;\nrestoration needs host authentication; opening checks snapshot identity/length;\npages are authenticated before use. A checksum does not replace certification.\nFailures latch in shared state; cache publication follows successful reading,\nauthentication, decoding and reservation. Full validation precedes authority.\n\nTitle, description, linked-issue coding requirements and scope checks pass.\nAll eight changed files relate to compact records, prefix reads, checkpoints,\ncertification, refusal, documentation or reviewed source-bound capacity proofs.\nNo unrelated change, new dependency, general-semantic WASM work or compatibility\ndecoder was identified. Proof reasons remain intact.\n\nOptional docstring advisory: 9.52% against 80.00%, 21 functions in six files,\ntwo unsupported skipped. This does not expand frozen scope.\n\nReview limits: build.rs and test bodies were not directly read. Certification,\ntamper results, 53 native cases and 82 versus 205 pages rely on change summaries\nand author evidence; tests were not rerun by the reviewer. Checkpoint packing\n(block_bytes - 9) / 32 was not independently checked. Hosted qualification was\npending at review time and is a process gate. Scope assessment directly read\nsource_directory.rs, session/statistics.rs and format.rs. No formal approval\nis inferred from this review.\n\nThis projection retains technical findings, advisories and evidence limits.\nDecorative UI, private navigation, automation controls and poems are omitted.\n",
+      "updated_at": "2026-10-24T21:38:18Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABBGSVKg": {
+    "resolution": "acknowledged",
+    "reason": "This author reply supplies the exact CodeQL sink and deterministic fixture provenance. Alert 411 is classified as used in tests; the thread is resolved and no codec change is requested.",
+    "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+    "reply_url": null,
+    "revision": {
+      "body": "The sink at line 1783 prints two page counts from the private native fixture.\nBoth counts derive from `directory_image(1025)`, which interns only the fixed\n`urn:directory:{index}` sequence and constructs deterministic quad rows. The\nentire module is under `#[cfg(test)]`; this fixture accepts no external data or\ncredentials. The adjacent byte-equality assertion is a separate determinism\ncontrol. Alert 411 is classified as `used in tests` for this specific synthetic\ninput and diagnostic. The codec and its certification behavior remain covered\nby the existing native controls.\n",
+      "updated_at": "2026-10-24T22:00:55Z",
+      "state": null,
+      "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+      "path": "crates/rdf-core/src/ir/segmented/build.rs",
+      "line": 1783
+    }
+  }
+}

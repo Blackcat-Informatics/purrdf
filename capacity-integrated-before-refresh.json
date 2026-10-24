@@ -1,0 +1,1368 @@
+{
+  "capacity_constructor_identity": "source:85d94cb0bf107df0",
+  "capacity_constructor_sources": [
+    "crates/rdf-core/build.rs",
+    "crates/rdf-core/src/artifact/container.rs",
+    "crates/rdf-core/src/artifact/identity.rs",
+    "crates/rdf-core/src/backend.rs",
+    "crates/rdf-core/src/binding_pattern.rs",
+    "crates/rdf-core/src/blank_label.rs",
+    "crates/rdf-core/src/bundle.rs",
+    "crates/rdf-core/src/bytes.rs",
+    "crates/rdf-core/src/cdt_blank.rs",
+    "crates/rdf-core/src/collections.rs",
+    "crates/rdf-core/src/content_id.rs",
+    "crates/rdf-core/src/content_store.rs",
+    "crates/rdf-core/src/cover.rs",
+    "crates/rdf-core/src/cover/emit.rs",
+    "crates/rdf-core/src/csv/arch.rs",
+    "crates/rdf-core/src/csv/backend.rs",
+    "crates/rdf-core/src/csv/error.rs",
+    "crates/rdf-core/src/csv/mod.rs",
+    "crates/rdf-core/src/csv/read.rs",
+    "crates/rdf-core/src/csv/scan.rs",
+    "crates/rdf-core/src/csv/write.rs",
+    "crates/rdf-core/src/dataset_view.rs",
+    "crates/rdf-core/src/describe.rs",
+    "crates/rdf-core/src/diagnostic.rs",
+    "crates/rdf-core/src/distance/binary64.rs",
+    "crates/rdf-core/src/distance/build_identity.rs",
+    "crates/rdf-core/src/distance/dispatch.rs",
+    "crates/rdf-core/src/distance/exact.rs",
+    "crates/rdf-core/src/distance/mod.rs",
+    "crates/rdf-core/src/distance/reassociated.rs",
+    "crates/rdf-core/src/distance/shape.rs",
+    "crates/rdf-core/src/evidence.rs",
+    "crates/rdf-core/src/evidence/accepted.rs",
+    "crates/rdf-core/src/evidence/answer.rs",
+    "crates/rdf-core/src/evidence/column.rs",
+    "crates/rdf-core/src/evidence/conversion.rs",
+    "crates/rdf-core/src/evidence/dictionary.rs",
+    "crates/rdf-core/src/evidence/frame.rs",
+    "crates/rdf-core/src/evidence/information.rs",
+    "crates/rdf-core/src/evidence/ledger.rs",
+    "crates/rdf-core/src/evidence/ledger/frame.rs",
+    "crates/rdf-core/src/evidence/ledger/row.rs",
+    "crates/rdf-core/src/evidence/ledger/source.rs",
+    "crates/rdf-core/src/evidence/ledger/terms.rs",
+    "crates/rdf-core/src/evidence/ledger/view.rs",
+    "crates/rdf-core/src/evidence/reason.rs",
+    "crates/rdf-core/src/evidence/record.rs",
+    "crates/rdf-core/src/evidence/standpoint.rs",
+    "crates/rdf-core/src/evidence/workspace.rs",
+    "crates/rdf-core/src/fno.rs",
+    "crates/rdf-core/src/governor.rs",
+    "crates/rdf-core/src/graph.rs",
+    "crates/rdf-core/src/graph_roles.rs",
+    "crates/rdf-core/src/hash.rs",
+    "crates/rdf-core/src/imports.rs",
+    "crates/rdf-core/src/ir/absolute.rs",
+    "crates/rdf-core/src/ir/builder.rs",
+    "crates/rdf-core/src/ir/builder/triple.rs",
+    "crates/rdf-core/src/ir/bundle.rs",
+    "crates/rdf-core/src/ir/canon.rs",
+    "crates/rdf-core/src/ir/canon/state.rs",
+    "crates/rdf-core/src/ir/compare.rs",
+    "crates/rdf-core/src/ir/composite.rs",
+    "crates/rdf-core/src/ir/cursor.rs",
+    "crates/rdf-core/src/ir/dataset.rs",
+    "crates/rdf-core/src/ir/dataset/inspection.rs",
+    "crates/rdf-core/src/ir/embedding/contract.rs",
+    "crates/rdf-core/src/ir/embedding/error.rs",
+    "crates/rdf-core/src/ir/embedding/identity.rs",
+    "crates/rdf-core/src/ir/embedding/metadata.rs",
+    "crates/rdf-core/src/ir/embedding/mod.rs",
+    "crates/rdf-core/src/ir/embedding/target.rs",
+    "crates/rdf-core/src/ir/embedding/verify.rs",
+    "crates/rdf-core/src/ir/embedding/view.rs",
+    "crates/rdf-core/src/ir/embedding/wire.rs",
+    "crates/rdf-core/src/ir/embedding/writer.rs",
+    "crates/rdf-core/src/ir/event_sink.rs",
+    "crates/rdf-core/src/ir/frozen_terms.rs",
+    "crates/rdf-core/src/ir/global.rs",
+    "crates/rdf-core/src/ir/import.rs",
+    "crates/rdf-core/src/ir/ingest.rs",
+    "crates/rdf-core/src/ir/ingest/error.rs",
+    "crates/rdf-core/src/ir/mod.rs",
+    "crates/rdf-core/src/ir/mutable.rs",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs",
+    "crates/rdf-core/src/ir/pack/bits.rs",
+    "crates/rdf-core/src/ir/pack/certify.rs",
+    "crates/rdf-core/src/ir/pack/container.rs",
+    "crates/rdf-core/src/ir/pack/dict.rs",
+    "crates/rdf-core/src/ir/pack/mod.rs",
+    "crates/rdf-core/src/ir/pack/side.rs",
+    "crates/rdf-core/src/ir/pack/triples.rs",
+    "crates/rdf-core/src/ir/pack/view.rs",
+    "crates/rdf-core/src/ir/paged/admission.rs",
+    "crates/rdf-core/src/ir/paged/graph_index.rs",
+    "crates/rdf-core/src/ir/paged/mod.rs",
+    "crates/rdf-core/src/ir/paged/provider.rs",
+    "crates/rdf-core/src/ir/paged/query.rs",
+    "crates/rdf-core/src/ir/paged/stack.rs",
+    "crates/rdf-core/src/ir/paged/summary.rs",
+    "crates/rdf-core/src/ir/paged/translation.rs",
+    "crates/rdf-core/src/ir/pipeline_bundle.rs",
+    "crates/rdf-core/src/ir/segmented/build.rs",
+    "crates/rdf-core/src/ir/segmented/file.rs",
+    "crates/rdf-core/src/ir/segmented/format.rs",
+    "crates/rdf-core/src/ir/segmented/mod.rs",
+    "crates/rdf-core/src/ir/segmented/query.rs",
+    "crates/rdf-core/src/ir/segmented/query/changes.rs",
+    "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+    "crates/rdf-core/src/ir/segmented/query/statistics.rs",
+    "crates/rdf-core/src/ir/segmented/query/view.rs",
+    "crates/rdf-core/src/ir/segmented/session.rs",
+    "crates/rdf-core/src/ir/segmented/session/cache.rs",
+    "crates/rdf-core/src/ir/segmented/session/statistics.rs",
+    "crates/rdf-core/src/ir/segmented/stack.rs",
+    "crates/rdf-core/src/ir/skolem.rs",
+    "crates/rdf-core/src/ir/source_directory.rs",
+    "crates/rdf-core/src/ir/statistics.rs",
+    "crates/rdf-core/src/ir/statistics/codec.rs",
+    "crates/rdf-core/src/ir/statistics/source.rs",
+    "crates/rdf-core/src/ir/term.rs",
+    "crates/rdf-core/src/ir/term/canonical.rs",
+    "crates/rdf-core/src/ir/term_walk.rs",
+    "crates/rdf-core/src/ir/triple.rs",
+    "crates/rdf-core/src/ir/triple/read.rs",
+    "crates/rdf-core/src/ir/validate.rs",
+    "crates/rdf-core/src/ir/view_accounting.rs",
+    "crates/rdf-core/src/lookaside.rs",
+    "crates/rdf-core/src/loss.rs",
+    "crates/rdf-core/src/model.rs",
+    "crates/rdf-core/src/model/traits.rs",
+    "crates/rdf-core/src/named_graph.rs",
+    "crates/rdf-core/src/ownership.rs",
+    "crates/rdf-core/src/provenance.rs",
+    "crates/rdf-core/src/purremb_fixture.rs",
+    "crates/rdf-core/src/query_scope.rs",
+    "crates/rdf-core/src/query_scope/counters.rs",
+    "crates/rdf-core/src/sink.rs",
+    "crates/rdf-core/src/small.rs",
+    "crates/rdf-core/src/source.rs",
+    "crates/rdf-core/src/sssom.rs",
+    "crates/rdf-core/src/statistics.rs",
+    "crates/rdf-core/src/statistics/layered.rs",
+    "crates/rdf-core/src/store.rs",
+    "crates/rdf-core/src/term_fixture.rs",
+    "crates/rdf-core/src/term_writer.rs",
+    "crates/rdf-core/src/turtle.rs",
+    "crates/rdf-core/src/turtle_render.rs",
+    "crates/rdf-core/src/view_fixture.rs",
+    "crates/rdf-core/src/xml_escape.rs",
+    "crates/rdf-core/src/xsd_regex/blocks.rs",
+    "crates/rdf-core/src/xsd_regex/case_variants.rs",
+    "crates/rdf-core/src/xsd_regex/classes.rs",
+    "crates/rdf-core/src/xsd_regex/ecma_emit.rs",
+    "crates/rdf-core/src/xsd_regex/emit.rs",
+    "crates/rdf-core/src/xsd_regex/error.rs",
+    "crates/rdf-core/src/xsd_regex/mod.rs",
+    "crates/rdf-core/src/xsd_regex/prefilter.rs",
+    "crates/rdf-core/src/xsd_regex/replace.rs",
+    "crates/rdf-core/src/xsd_regex/scan.rs",
+    "crates/rdf-core/src/xsd_regex/xflag.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/cache.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/compatibility.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/compile.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/dated_names.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/match.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/mod.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/pike.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/replace.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/sets.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs"
+  ],
+  "capacity_sources": [
+    {
+      "file": "crates/rdf-core/build.rs",
+      "identity": "source:b5d5a4b3feba7e96"
+    },
+    {
+      "file": "crates/rdf-core/src/artifact/container.rs",
+      "identity": "source:4fc34db2ec0dea4c"
+    },
+    {
+      "file": "crates/rdf-core/src/artifact/identity.rs",
+      "identity": "source:6c1dd92628cca5d0"
+    },
+    {
+      "file": "crates/rdf-core/src/artifact/mod.rs",
+      "identity": "source:163a104a282b67b6"
+    },
+    {
+      "file": "crates/rdf-core/src/backend.rs",
+      "identity": "source:312d44b8a76f2267"
+    },
+    {
+      "file": "crates/rdf-core/src/binding_pattern.rs",
+      "identity": "source:1db070156b546e39"
+    },
+    {
+      "file": "crates/rdf-core/src/blank_label.rs",
+      "identity": "source:cbf3ecbec905f511"
+    },
+    {
+      "file": "crates/rdf-core/src/bundle.rs",
+      "identity": "source:4d30a0b6f8dddb97"
+    },
+    {
+      "file": "crates/rdf-core/src/bytes.rs",
+      "identity": "source:3f3cfa60f14acc61"
+    },
+    {
+      "file": "crates/rdf-core/src/cdt_blank.rs",
+      "identity": "source:c53db183851c60cd"
+    },
+    {
+      "file": "crates/rdf-core/src/collections.rs",
+      "identity": "source:10f01085a483fc0c"
+    },
+    {
+      "file": "crates/rdf-core/src/content_id.rs",
+      "identity": "source:49e087cb49c711d4"
+    },
+    {
+      "file": "crates/rdf-core/src/content_store.rs",
+      "identity": "source:62bd5be953557e2b"
+    },
+    {
+      "file": "crates/rdf-core/src/cover.rs",
+      "identity": "source:b8bbdeee4d787aa3"
+    },
+    {
+      "file": "crates/rdf-core/src/cover/emit.rs",
+      "identity": "source:8d60a4aecf513de0"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/arch.rs",
+      "identity": "source:2ee9f19074662a01"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/backend.rs",
+      "identity": "source:37565e9db6dc6d42"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/error.rs",
+      "identity": "source:a0d89ebed24cddba"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/mod.rs",
+      "identity": "source:9b7b6d6bfe1da66d"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/read.rs",
+      "identity": "source:12abcb1faabad712"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/scan.rs",
+      "identity": "source:884126659fffcdb8"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/write.rs",
+      "identity": "source:7b9e658ce91f2ac5"
+    },
+    {
+      "file": "crates/rdf-core/src/dataset_view.rs",
+      "identity": "source:57c3278793273899"
+    },
+    {
+      "file": "crates/rdf-core/src/describe.rs",
+      "identity": "source:233efc64e065512d"
+    },
+    {
+      "file": "crates/rdf-core/src/diagnostic.rs",
+      "identity": "source:3a1b8140f4ad421a"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/binary64.rs",
+      "identity": "source:c6d8eae19848031b"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/build_identity.rs",
+      "identity": "source:73741f8ce67f4deb"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/dispatch.rs",
+      "identity": "source:563b7c6b5e4da5ac"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/exact.rs",
+      "identity": "source:7237bd73c412f65c"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/mod.rs",
+      "identity": "source:c6bb81183fa5a548"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/reassociated.rs",
+      "identity": "source:0c0aa4a82c6128f2"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/shape.rs",
+      "identity": "source:9506c7ceccd2226d"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence.rs",
+      "identity": "source:5dee5b746907a4f8"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/accepted.rs",
+      "identity": "source:6201e5937debfcb5"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/answer.rs",
+      "identity": "source:01b0cc16af753bff"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/column.rs",
+      "identity": "source:fb15488d73aa191d"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/conversion.rs",
+      "identity": "source:d25caa511427b385"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/dictionary.rs",
+      "identity": "source:2f5316a415b70840"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/frame.rs",
+      "identity": "source:be2acdf40cb4f221"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/information.rs",
+      "identity": "source:17e542861d8d7ef0"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger.rs",
+      "identity": "source:eef39ffe6113d2aa"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/frame.rs",
+      "identity": "source:7b58fd6cf3b30031"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/row.rs",
+      "identity": "source:3b7e446535a2dc28"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/source.rs",
+      "identity": "source:51a4beba7118c244"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/terms.rs",
+      "identity": "source:6edefc907025f820"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/view.rs",
+      "identity": "source:f87b547908598b23"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/reason.rs",
+      "identity": "source:91cb357d156e9e6e"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/record.rs",
+      "identity": "source:d0b293b7c956f84c"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/standpoint.rs",
+      "identity": "source:7b2c4caf76250989"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/workspace.rs",
+      "identity": "source:0fc71ac27582c292"
+    },
+    {
+      "file": "crates/rdf-core/src/fno.rs",
+      "identity": "source:c8f428c4d6da9e4e"
+    },
+    {
+      "file": "crates/rdf-core/src/governor.rs",
+      "identity": "source:3f43a2a4ab9f59e6"
+    },
+    {
+      "file": "crates/rdf-core/src/graph.rs",
+      "identity": "source:60a56639b7be26a7"
+    },
+    {
+      "file": "crates/rdf-core/src/graph_roles.rs",
+      "identity": "source:c65f64f39a649dc2"
+    },
+    {
+      "file": "crates/rdf-core/src/hash.rs",
+      "identity": "source:ca955a84c7721f7e"
+    },
+    {
+      "file": "crates/rdf-core/src/imports.rs",
+      "identity": "source:e1cf92ba57443304"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/absolute.rs",
+      "identity": "source:6a1c6d11088442ec"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "identity": "source:03ddf41248fe1335"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder/triple.rs",
+      "identity": "source:d23ea46408afce76"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/bundle.rs",
+      "identity": "source:df509c2e51078dee"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/canon.rs",
+      "identity": "source:c3b0f9b2a36f73cb"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/canon/state.rs",
+      "identity": "source:3838bf3e873084da"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/compare.rs",
+      "identity": "source:5fc05e9b58c93ec1"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/composite.rs",
+      "identity": "source:099729f765ca16e9"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/cursor.rs",
+      "identity": "source:50be0a6c21a9adb6"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/dataset.rs",
+      "identity": "source:16ca05164c952a9e"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/dataset/inspection.rs",
+      "identity": "source:0256bfdfb89dbc52"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/contract.rs",
+      "identity": "source:1c0dc2b9477aa9b4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/error.rs",
+      "identity": "source:c8e96fa9119164b4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/identity.rs",
+      "identity": "source:16bb089bdfebac1a"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/metadata.rs",
+      "identity": "source:1fe508bb0ba201be"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/mod.rs",
+      "identity": "source:97d0de139ab31ff2"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/target.rs",
+      "identity": "source:f1e995ae1f7e3170"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/verify.rs",
+      "identity": "source:a4da75d72b359b54"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/view.rs",
+      "identity": "source:c0b521011405b639"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/wire.rs",
+      "identity": "source:c33349e34bf8113d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/writer.rs",
+      "identity": "source:e7a6e4ab2aa72bfb"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/event_sink.rs",
+      "identity": "source:06dde97381917c60"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/frozen_terms.rs",
+      "identity": "source:9d73ba6870970982"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/global.rs",
+      "identity": "source:bbf736546130634d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/import.rs",
+      "identity": "source:09acdcc44cac78ec"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/ingest.rs",
+      "identity": "source:04fc92cdfa199602"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/ingest/error.rs",
+      "identity": "source:ab1cac2b5bc01495"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mod.rs",
+      "identity": "source:44d066d906500088"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable.rs",
+      "identity": "source:c2c581ca7cbb0af4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+      "identity": "source:57ff17ef53a819dd"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/bits.rs",
+      "identity": "source:1c09e58c0e79a58b"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/certify.rs",
+      "identity": "source:af5c5872dac82e79"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/container.rs",
+      "identity": "source:f622ee29794420ce"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/dict.rs",
+      "identity": "source:dc003c8e56d84a4c"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/mod.rs",
+      "identity": "source:8790db46180632c0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/side.rs",
+      "identity": "source:c2f76ba2c141e179"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/triples.rs",
+      "identity": "source:4230ffe207be48e1"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/view.rs",
+      "identity": "source:4544f20df76ae376"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/admission.rs",
+      "identity": "source:8a09b0ab8926b5ef"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/graph_index.rs",
+      "identity": "source:b6799826cf387e7d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/mod.rs",
+      "identity": "source:1a570fb503439f42"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/provider.rs",
+      "identity": "source:7aa0b2bed0d1f840"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/query.rs",
+      "identity": "source:e31194863cd46cf0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/stack.rs",
+      "identity": "source:06399db5856a0664"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/summary.rs",
+      "identity": "source:42235a1b2f9e4eb4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/translation.rs",
+      "identity": "source:cfca6f6c499c62ad"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pipeline_bundle.rs",
+      "identity": "source:8ac83ae5ad693d98"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/build.rs",
+      "identity": "source:61c0c0102f710a4b"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/file.rs",
+      "identity": "source:e650600f8afc91b0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/format.rs",
+      "identity": "source:4ff8519cc0d144a8"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/mod.rs",
+      "identity": "source:48243fb234fbcaaf"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query.rs",
+      "identity": "source:d775f4106ea78471"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/changes.rs",
+      "identity": "source:025e8e93534b3a40"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+      "identity": "source:f9bc9526648d8738"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/statistics.rs",
+      "identity": "source:e70b2d9c25da7c7a"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/view.rs",
+      "identity": "source:8c1fc0c5f493f100"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/session.rs",
+      "identity": "source:abff00e5939991b2"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/session/cache.rs",
+      "identity": "source:4d2a182ff7030765"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/session/statistics.rs",
+      "identity": "source:bd9e7ecbdd473852"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/stack.rs",
+      "identity": "source:b4f48d7f901831f8"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/skolem.rs",
+      "identity": "source:385433657726ccd5"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/source_directory.rs",
+      "identity": "source:b0cee4946acd78c5"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/statistics.rs",
+      "identity": "source:e06422180f284243"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/statistics/codec.rs",
+      "identity": "source:4bcbf8c44c1cb05d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/statistics/source.rs",
+      "identity": "source:0ac3c4f9da6972bf"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/term.rs",
+      "identity": "source:9b82577f216b62e0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/term/canonical.rs",
+      "identity": "source:ac4eacd5bb79a7cb"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/term_walk.rs",
+      "identity": "source:5f1c23d770cae26f"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/triple.rs",
+      "identity": "source:243c8c2e412928e6"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/triple/read.rs",
+      "identity": "source:c03053a5650b4acf"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/validate.rs",
+      "identity": "source:bb7eaea66da9a620"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/view_accounting.rs",
+      "identity": "source:f0ee1e8ad50d0f2f"
+    },
+    {
+      "file": "crates/rdf-core/src/lib.rs",
+      "identity": "source:c6de65cf20090de8"
+    },
+    {
+      "file": "crates/rdf-core/src/lookaside.rs",
+      "identity": "source:6eaac414a7d3946d"
+    },
+    {
+      "file": "crates/rdf-core/src/loss.rs",
+      "identity": "source:eec1b08d43c072d8"
+    },
+    {
+      "file": "crates/rdf-core/src/model.rs",
+      "identity": "source:9796f6cc72da987c"
+    },
+    {
+      "file": "crates/rdf-core/src/model/traits.rs",
+      "identity": "source:eacf9eece8df76d3"
+    },
+    {
+      "file": "crates/rdf-core/src/named_graph.rs",
+      "identity": "source:e6f36fd8d3d49a0d"
+    },
+    {
+      "file": "crates/rdf-core/src/ownership.rs",
+      "identity": "source:97a29772bcb4d134"
+    },
+    {
+      "file": "crates/rdf-core/src/provenance.rs",
+      "identity": "source:616214617fd8b17d"
+    },
+    {
+      "file": "crates/rdf-core/src/purremb_fixture.rs",
+      "identity": "source:8b2c5f02d311710c"
+    },
+    {
+      "file": "crates/rdf-core/src/query_scope.rs",
+      "identity": "source:60e1a45340147a15"
+    },
+    {
+      "file": "crates/rdf-core/src/query_scope/counters.rs",
+      "identity": "source:ca4658681a98c12e"
+    },
+    {
+      "file": "crates/rdf-core/src/sink.rs",
+      "identity": "source:3dbf8bc5c7c0c322"
+    },
+    {
+      "file": "crates/rdf-core/src/small.rs",
+      "identity": "source:8ee865e659a9b598"
+    },
+    {
+      "file": "crates/rdf-core/src/source.rs",
+      "identity": "source:e2b2aeba9a2caeab"
+    },
+    {
+      "file": "crates/rdf-core/src/sssom.rs",
+      "identity": "source:3fa45adb137d3a59"
+    },
+    {
+      "file": "crates/rdf-core/src/statistics.rs",
+      "identity": "source:4d60a94d1b9c11b6"
+    },
+    {
+      "file": "crates/rdf-core/src/statistics/layered.rs",
+      "identity": "source:63be08418a6ca561"
+    },
+    {
+      "file": "crates/rdf-core/src/store.rs",
+      "identity": "source:57fe7347ed557caf"
+    },
+    {
+      "file": "crates/rdf-core/src/term_fixture.rs",
+      "identity": "source:05d2b56207541454"
+    },
+    {
+      "file": "crates/rdf-core/src/term_writer.rs",
+      "identity": "source:2a1b82441371bb34"
+    },
+    {
+      "file": "crates/rdf-core/src/turtle.rs",
+      "identity": "source:fe4543fce5fcd3db"
+    },
+    {
+      "file": "crates/rdf-core/src/turtle_render.rs",
+      "identity": "source:709dd6553dd0b117"
+    },
+    {
+      "file": "crates/rdf-core/src/view_fixture.rs",
+      "identity": "source:70175dac8f61e9b9"
+    },
+    {
+      "file": "crates/rdf-core/src/xml_escape.rs",
+      "identity": "source:baf0332f6f4f76c1"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/blocks.rs",
+      "identity": "source:cb6bd5b8e27e7bf8"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/case_variants.rs",
+      "identity": "source:5818ac913d151082"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/classes.rs",
+      "identity": "source:74dcda5d902d6a64"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/ecma.rs",
+      "identity": "source:9f3bbdb0a0690a99"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/ecma_emit.rs",
+      "identity": "source:2e99f4629e8e3de2"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/emit.rs",
+      "identity": "source:5716005a78f0586d"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/error.rs",
+      "identity": "source:4812255ee6a452a5"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/mod.rs",
+      "identity": "source:a152a78214f8f902"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/prefilter.rs",
+      "identity": "source:75e5c936696d59ee"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/replace.rs",
+      "identity": "source:99ec35d281259656"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/scan.rs",
+      "identity": "source:bec5f551dab4a499"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xflag.rs",
+      "identity": "source:62c3f5ef5582d628"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/cache.rs",
+      "identity": "source:8b30a7caa9490517"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/compatibility.rs",
+      "identity": "source:4087f372a5672a4c"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs",
+      "identity": "source:6ad7105ca8b303d8"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/compile.rs",
+      "identity": "source:199d4291adecdd48"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs",
+      "identity": "source:d4a8f064ae31cc63"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/dated_names.rs",
+      "identity": "source:405ea39131d23b58"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/match.rs",
+      "identity": "source:c78f0ee4a6143f95"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/mod.rs",
+      "identity": "source:cc7f895b996d3fa4"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/pike.rs",
+      "identity": "source:3d0e514619ca9d0d"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/replace.rs",
+      "identity": "source:6532e000485304ac"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/sets.rs",
+      "identity": "source:6cb428e0435d0bee"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs",
+      "identity": "source:c1461a01127cc29f"
+    }
+  ],
+  "errors": [
+    "capacity proof crates/rdf-core/src/ir/builder.rs::lookup_hashed [source:bcb4a119fb003223]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/builder.rs::lookup_owned_blank [source:bcb4a119fb003223]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory [source:68501dd74980d201]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory [source:469fd0ba6adc3424]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/builder.rs::append_builder_with_memory [source:f9e400eaac2b01f1]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/composite.rs::term_ids [source:cff2cf01734ea1d3]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/composite.rs::term_ids [source:d14392e033854316]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/dataset.rs::permutation [source:93359fa72451a90c]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed [source:bcb4a119fb003223]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed [source:bcb4a119fb003223]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/embedding/wire.rs::header [source:9c6128d42cb7a529]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/embedding/writer.rs::write_matrix [source:8045eb2f4d5285e2]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/embedding/writer.rs::prepare_matrix [source:759fa0c7869386ce]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/mutable.rs::visit_blank_identities [source:c4edb708dec6980b]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/mutable.rs::visit_blank_identities [source:eb9a0b3db238c761]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/mutable/delta_view.rs::new [source:3d42d43948575620]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/mutable/delta_view.rs::new [source:bfcc85921a648621]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids [source:c4edb708dec6980b]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids [source:eb9a0b3db238c761]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/event_sink.rs::emit [source:ae1073a499b2ccac]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/global.rs::find [source:c1a00658c1ffa4e5]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/global.rs::value_index [source:921e8adc54613316]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/ingest.rs::drive [source:ae1073a499b2ccac]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/ingest.rs::drive [source:ae1073a499b2ccac]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/provider.rs::logical_rdf_byte_len [source:20664803727b8ebe]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/provider.rs::logical_rdf_byte_len [source:a89aa0bcdd678ca2]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/query.rs::validate_materialization [source:77a0de8cadadbe03]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/query.rs::validate_materialization [source:2b2967d384636018]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/stack.rs::snapshot_with_head [source:e56729be357eb4f1]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/translation.rs::try_build [source:082c3ff94178a18d]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/translation.rs::try_build [source:dbc961a86092a7d3]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/translation.rs::remap [source:082c3ff94178a18d]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/paged/translation.rs::remap [source:dbc961a86092a7d3]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/segmented/build.rs::global [source:399173dc809511f8]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/segmented/build.rs::local [source:93bf37ec51519cfd]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/segmented/build.rs::map_id [source:495627ce45322797]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/segmented/build.rs::encode_dataset [source:93bf37ec51519cfd]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory [source:55afea662f67f62d]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory [source:55afea662f67f62d]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure",
+    "capacity proof crates/rdf-core/src/turtle_render.rs::find_iri [source:ae1073a499b2ccac]: stale, duplicate or incomplete source proof (1 matching sinks); review the actual owner and constructor closure"
+  ],
+  "capacity_matches": [
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "in_home": false,
+      "line": 610,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/builder.rs::lookup_hashed",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "in_home": false,
+      "line": 636,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/builder.rs::lookup_owned_blank",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "in_home": false,
+      "line": 868,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:68501dd74980d201]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "in_home": false,
+      "line": 868,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:469fd0ba6adc3424]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "in_home": false,
+      "line": 2237,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:f9e400eaac2b01f1]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/builder.rs::append_builder_with_memory",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/composite.rs",
+      "in_home": false,
+      "line": 261,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:cff2cf01734ea1d3]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/composite.rs::term_ids",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/composite.rs",
+      "in_home": false,
+      "line": 261,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:d14392e033854316]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/composite.rs::term_ids",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/dataset.rs",
+      "in_home": false,
+      "line": 1371,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:93359fa72451a90c]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/dataset.rs::permutation",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/wire.rs",
+      "in_home": false,
+      "line": 321,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:9c6128d42cb7a529]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/embedding/wire.rs::header",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/writer.rs",
+      "in_home": false,
+      "line": 641,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: runtime table capacity is asserted; return the named capacity error [source:8045eb2f4d5285e2]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/embedding/writer.rs::write_matrix",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/writer.rs",
+      "in_home": false,
+      "line": 716,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: runtime table capacity is asserted; return the named capacity error [source:759fa0c7869386ce]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/embedding/writer.rs::prepare_matrix",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/frozen_terms.rs",
+      "in_home": false,
+      "line": 113,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/frozen_terms.rs",
+      "in_home": false,
+      "line": 116,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable.rs",
+      "in_home": false,
+      "line": 606,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:c4edb708dec6980b]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/mutable.rs::visit_blank_identities",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable.rs",
+      "in_home": false,
+      "line": 606,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:eb9a0b3db238c761]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/mutable.rs::visit_blank_identities",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+      "in_home": false,
+      "line": 114,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:3d42d43948575620]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::new",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+      "in_home": false,
+      "line": 114,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bfcc85921a648621]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::new",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+      "in_home": false,
+      "line": 203,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:c4edb708dec6980b]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+      "in_home": false,
+      "line": 203,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:eb9a0b3db238c761]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/event_sink.rs",
+      "in_home": false,
+      "line": 95,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/event_sink.rs::emit",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/global.rs",
+      "in_home": false,
+      "line": 432,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:c1a00658c1ffa4e5]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/global.rs::find",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/global.rs",
+      "in_home": false,
+      "line": 890,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:921e8adc54613316]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/global.rs::value_index",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/ingest.rs",
+      "in_home": false,
+      "line": 588,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/ingest.rs::drive",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/ingest.rs",
+      "in_home": false,
+      "line": 603,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/ingest.rs::drive",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/provider.rs",
+      "in_home": false,
+      "line": 458,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:20664803727b8ebe]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/provider.rs::logical_rdf_byte_len",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/provider.rs",
+      "in_home": false,
+      "line": 458,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:a89aa0bcdd678ca2]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/provider.rs::logical_rdf_byte_len",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/query.rs",
+      "in_home": false,
+      "line": 677,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:77a0de8cadadbe03]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/query.rs::validate_materialization",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/query.rs",
+      "in_home": false,
+      "line": 677,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:2b2967d384636018]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/query.rs::validate_materialization",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/stack.rs",
+      "in_home": false,
+      "line": 467,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:e56729be357eb4f1]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/stack.rs::snapshot_with_head",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/translation.rs",
+      "in_home": false,
+      "line": 113,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:082c3ff94178a18d]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/translation.rs::try_build",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/translation.rs",
+      "in_home": false,
+      "line": 113,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:dbc961a86092a7d3]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/translation.rs::try_build",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/translation.rs",
+      "in_home": false,
+      "line": 196,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:082c3ff94178a18d]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/translation.rs::remap",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/translation.rs",
+      "in_home": false,
+      "line": 196,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:dbc961a86092a7d3]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/paged/translation.rs::remap",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/build.rs",
+      "in_home": false,
+      "line": 110,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:399173dc809511f8]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/segmented/build.rs::global",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/build.rs",
+      "in_home": false,
+      "line": 127,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:93bf37ec51519cfd]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/segmented/build.rs::local",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/build.rs",
+      "in_home": false,
+      "line": 529,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:495627ce45322797]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/segmented/build.rs::map_id",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/build.rs",
+      "in_home": false,
+      "line": 554,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:93bf37ec51519cfd]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/segmented/build.rs::encode_dataset",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/validate.rs",
+      "in_home": false,
+      "line": 471,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:55afea662f67f62d]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/ir/validate.rs",
+      "in_home": false,
+      "line": 519,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:55afea662f67f62d]"
+      ],
+      "symbol": "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory",
+      "variant": false
+    },
+    {
+      "file": "crates/rdf-core/src/turtle_render.rs",
+      "in_home": false,
+      "line": 254,
+      "package": "purrdf-core",
+      "reasons": [
+        "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+      ],
+      "symbol": "crates/rdf-core/src/turtle_render.rs::find_iri",
+      "variant": false
+    }
+  ]
+}

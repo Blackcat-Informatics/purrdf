@@ -1,0 +1,21 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 08s
+     Running unittests src/lib.rs (/opt/.cargo/16/a9cbdbdb4bc5af/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 13 tests
+test ir::segmented::build::certification_tests::conservative_term_admission_does_not_authorize_unminted_ids ... ok
+test ir::segmented::build::certification_tests::freeze_storage_refusal_stays_distinct_from_malformed_rdf ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_source_union ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_pruning_bounds ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_source_directory ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_an_underpriced_owned_term ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_reverse_identifiers ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_foreign_quad_references ... ok
+test ir::segmented::build::certification_tests::source_directory_rejects_an_overflowing_physical_population ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_statistics ... ok
+test ir::segmented::build::certification_tests::statistical_counts_are_selective_and_preserve_original_read_refusal ... ok
+test ir::segmented::build::certification_tests::sparse_source_prefixes_match_a_full_scan_across_pages_and_checkpoints ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_sparse_source_checkpoints ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1387 filtered out; finished in 0.03s
+

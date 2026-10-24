@@ -1,0 +1,7 @@
+remote: 
+remote: Create a pull request for 'paudley/708-compact-authenticated-source-directory' on GitHub by visiting:        
+remote:      https://github.com/Blackcat-Informatics/purrdf/pull/new/paudley/708-compact-authenticated-source-directory        
+remote: 
+To ssh://ssh.github.com:443/Blackcat-Informatics/purrdf.git
+ * [new branch]          paudley/708-compact-authenticated-source-directory -> paudley/708-compact-authenticated-source-directory
+branch 'paudley/708-compact-authenticated-source-directory' set up to track 'origin/paudley/708-compact-authenticated-source-directory'.

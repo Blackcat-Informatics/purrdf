@@ -1,0 +1,16 @@
+gpg: Signature made Sat Oct 24 16:25:27 2026 MDT
+gpg:                using EDDSA key AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11
+gpg: Good signature from "Patrick Audley (GitHub signing) <paudley@blackcatinformatics.ca>" [ultimate]
+Staged artifacts captured: 39 files, tree a8ca260a4fe1
+From ssh://ssh.github.com:443/Blackcat-Informatics/purrdf
+ * [new ref]             refs/notes/ghprsq -> refs/notes/ghprsq-work/tmp.jJLs19SKPg
+gpg: Signature made Sat Oct 24 16:25:34 2026 MDT
+gpg:                using EDDSA key AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11
+gpg: Good signature from "Patrick Audley (GitHub signing) <paudley@blackcatinformatics.ca>" [ultimate]
+gpg: Signature made Sat Oct 24 16:25:35 2026 MDT
+gpg:                using EDDSA key AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11
+gpg: Good signature from "Patrick Audley (GitHub signing) <paudley@blackcatinformatics.ca>" [ultimate]
+Stage Git guard: commit 377dadf2dffa7d37c3311327672579775549a76d, file 'pr-comments.md': prohibited agent attribution
+error: failed to push some refs to 'ssh://ssh.github.com:443/Blackcat-Informatics/purrdf.git'
+Merge failed while atomically pushing structured squash commit, notes, and audit refs; squash file preserved at: /home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory.squash_notes
+{"completed": [], "blocked": [{"code": "merge", "message": "ghprsq exited 1; diagnostics are on stderr"}], "unavailable": [{"source": "publication", "reason": "push did not confirm its outcome"}], "publication": "unknown", "merge_commit": null, "cleanup": {"remote_branch": "not_started", "local_delivery": "not_started"}, "next_actions": ["Inspect remote PR, base and audit refs before retrying; retain notes and evidence"], "artifacts": {}}

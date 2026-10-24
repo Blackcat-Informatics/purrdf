@@ -1,0 +1,896 @@
+diff --git crates/rdf-core/src/ir/segmented/build.rs crates/rdf-core/src/ir/segmented/build.rs
+index 9227e1a51..646fa08fa 100644
+--- crates/rdf-core/src/ir/segmented/build.rs
++++ crates/rdf-core/src/ir/segmented/build.rs
+@@ -396,6 +396,7 @@ impl SegmentedImage {
+             header.statistics[2],
+             header.statistics[3],
+             header.effective_directory,
++            header.source_checkpoints,
+         ]
+         .iter()
+         .try_fold(1_u64, |n, stream| {
+@@ -646,6 +647,25 @@ fn encode_dataset(
+         &mut blocks,
+         block_bytes,
+     )?;
++    let directory = dataset.predicate_statistics().effective_source_directory();
++    let checkpoint_count = directory.checkpoint_sums().len();
++    let per = (block_bytes - 9) / 32;
++    let source_checkpoints = append_fixed(
++        &mut blocks,
++        (0..checkpoint_count).step_by(per).map(|start| {
++            directory
++                .checkpoint_sums()
++                .skip(start)
++                .take(per)
++                .flatten()
++                .copied()
++                .collect::<Vec<_>>()
++        }),
++        checkpoint_count as u64,
++        format::SOURCE_CHECKPOINTS,
++        32,
++        block_bytes,
++    )?;
+     let caps = dataset.capabilities();
+     let flags = u8::from(caps.quoted_triples)
+         | (u8::from(caps.reifiers) << 1)
+@@ -667,6 +687,7 @@ fn encode_dataset(
+         summaries,
+         statistics,
+         effective_directory,
++        source_checkpoints,
+         flags,
+         source_union: dataset.predicate_statistics().source_union(),
+     };
+@@ -1326,6 +1347,25 @@ fn validate_source_directory(
+         ordinal += count;
+     }
+     memory.release_vec(expected)?;
++    let mut sums = directory.checkpoint_sums();
++    let per = (header.block_bytes as usize - 9) / 32;
++    for slot in header.source_checkpoints.first
++        ..header.source_checkpoints.first + header.source_checkpoints.blocks
++    {
++        let actual = fixed_records(block(bytes, header, slot)?, format::SOURCE_CHECKPOINTS, 32)?;
++        if actual.len() / 32 != sums.len().min(per) {
++            return Err(SegmentedError::Corrupt(
++                "source checkpoint packing disagrees with RDF rows",
++            ));
++        }
++        for sum in actual.as_chunks::<32>().0 {
++            if Some(sum) != sums.next() {
++                return Err(SegmentedError::Corrupt(
++                    "source checkpoint contents disagree with RDF rows",
++                ));
++            }
++        }
++    }
+     Ok(())
+ }
+ pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8], SegmentedError> {
+@@ -1715,7 +1755,7 @@ mod certification_tests {
+             let stream = header.effective_directory;
+             assert!(stream.rows > 0);
+             let start = stream.first as usize * header.block_bytes as usize + 9;
+-            for offset in [0, 32, 36, 40, 56] {
++            for offset in [0, 32, 36] {
+                 let mut bytes = image.bytes().to_vec();
+                 bytes[start + offset] ^= 1;
+                 rehash(&mut bytes, image.receipt());
+@@ -1727,6 +1767,93 @@ mod certification_tests {
+         }
+     }
+ 
++    #[test]
++    fn sparse_source_prefixes_match_a_full_scan_across_pages_and_checkpoints() {
++        use crate::ir::source_directory::DirectoryRead;
++        use crate::source::SourceDifferenceWork;
++        use purrdf_hash::multiset::Multiset256;
++
++        let image = directory_image(1025);
++        let header = Header::decode(image.bytes()).unwrap();
++        let count = header.effective_directory.rows;
++        let compact = header.effective_directory.blocks + header.source_checkpoints.blocks;
++        let previous = count.div_ceil((u64::from(header.block_bytes) - 9) / 88);
++        assert!(
++            compact * 2 < previous,
++            "directory pages: {compact} vs {previous}"
++        );
++        assert_eq!(image.bytes(), directory_image(1025).bytes());
++        let session = image
++            .open_session(SegmentedReadLimits::new(
++                8_000_000,
++                4,
++                100_000,
++                100_000_000,
++                8,
++            ))
++            .unwrap();
++        let directory = session.source_directory();
++        let mut expected = Multiset256::default();
++        for end in 0..=directory.len().unwrap() {
++            if end != 0 {
++                expected
++                    .insert(directory.record(end - 1).unwrap().digest)
++                    .unwrap();
++            }
++            let mut work = SourceDifferenceWork::default();
++            assert_eq!(
++                directory.prefix(end, &mut work).unwrap(),
++                expected,
++                "prefix {end}"
++            );
++            assert_eq!(work.members, (end % 32) as u64);
++        }
++        assert!(matches!(
++            directory.prefix(1026, &mut SourceDifferenceWork::default()),
++            Err(SegmentedError::Corrupt(_))
++        ));
++    }
++
++    fn directory_image(count: u32) -> SegmentedImage {
++        let mut builder = SegmentedBuilder::new(
++            SegmentedBuildLimits::new(count + 2, 100_000, count, 512, 4).unwrap(),
++        )
++        .unwrap();
++        let values = (0..count + 2)
++            .map(|index| TermValue::iri(format!("urn:directory:{index}")))
++            .collect::<Vec<_>>();
++        let mut ids = Vec::new();
++        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
++        for &id in &ids[2..] {
++            builder
++                .push_quad(QuadIds {
++                    s: id,
++                    p: ids[0],
++                    o: ids[1],
++                    g: None,
++                })
++                .unwrap();
++        }
++        builder.seal().unwrap()
++    }
++
++    #[test]
++    fn recomputed_hashes_cannot_certify_false_sparse_source_checkpoints() {
++        let image = directory_image(1025);
++        let header = Header::decode(image.bytes()).unwrap();
++        let stream = header.source_checkpoints;
++        assert!(stream.blocks > 1);
++        for slot in stream.first..stream.first + stream.blocks {
++            let mut bytes = image.bytes().to_vec();
++            bytes[slot as usize * header.block_bytes as usize + 9] ^= 1;
++            rehash(&mut bytes, image.receipt());
++            assert_eq!(
++                SegmentedImage::certify(bytes).unwrap_err(),
++                SegmentedError::Corrupt("source checkpoint contents disagree with RDF rows")
++            );
++        }
++    }
++
+     #[test]
+     fn recomputed_hashes_cannot_certify_a_false_source_union() {
+         let image = image();
+diff --git crates/rdf-core/src/ir/segmented/format.rs crates/rdf-core/src/ir/segmented/format.rs
+index f64e0fe2d..68003ce25 100644
+--- crates/rdf-core/src/ir/segmented/format.rs
++++ crates/rdf-core/src/ir/segmented/format.rs
+@@ -12,8 +12,8 @@ use super::{
+     SegmentedSnapshot,
+ };
+ 
+-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG4";
+-pub(super) const HEADER_BYTES: usize = 384;
++pub(super) const MAGIC: &[u8; 8] = b"PURRSEG5";
++pub(super) const HEADER_BYTES: usize = 408;
+ pub(super) const RECORD_HEADER: usize = 13;
+ const COMPRESSED_RECORDS: u32 = 1 << 31;
+ pub(super) const SUMMARY_BYTES: usize = 88;
+@@ -24,6 +24,7 @@ pub(super) const QUADS: u8 = 3;
+ pub(super) const GRAPHS: u8 = 4;
+ pub(super) const SUMMARIES: u8 = 5;
+ pub(super) const SOURCE_DIRECTORY: u8 = 10;
++pub(super) const SOURCE_CHECKPOINTS: u8 = 11;
+ 
+ pub(super) const fn statistics_kind(section: super::super::statistics::StatisticsSection) -> u8 {
+     6 + section.index() as u8
+@@ -67,6 +68,7 @@ pub(super) struct Header {
+     pub summaries: Stream,
+     pub statistics: [Stream; 4],
+     pub effective_directory: Stream,
++    pub source_checkpoints: Stream,
+     pub flags: u8,
+     pub source_union: purrdf_hash::multiset::Multiset256,
+ }
+@@ -75,7 +77,7 @@ impl Header {
+     pub(super) fn encode(self) -> Vec<u8> {
+         let mut out = Vec::with_capacity(HEADER_BYTES);
+         out.extend_from_slice(MAGIC);
+-        out.extend_from_slice(&4_u32.to_le_bytes());
++        out.extend_from_slice(&5_u32.to_le_bytes());
+         out.extend_from_slice(&self.block_bytes.to_le_bytes());
+         out.extend_from_slice(&self.records_per_block.to_le_bytes());
+         out.push(self.flags);
+@@ -96,6 +98,7 @@ impl Header {
+             self.statistics[2],
+             self.statistics[3],
+             self.effective_directory,
++            self.source_checkpoints,
+         ] {
+             for value in [stream.first, stream.blocks, stream.rows] {
+                 out.extend_from_slice(&value.to_le_bytes());
+@@ -107,9 +110,9 @@ impl Header {
+     }
+ 
+     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
+-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(4) {
++        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(5) {
+             return Err(SegmentedError::Corrupt(
+-                "unsupported segmented format/profile",
++                "unsupported segmented format/profile; regenerate the image from RDF input",
+             ));
+         }
+         let mut input = Reader::at(bytes, 12);
+@@ -130,7 +133,7 @@ impl Header {
+         first_term_index
+             .checked_add(terms)
+             .ok_or(SegmentedError::AddressExhausted)?;
+-        let mut streams = [Stream::default(); 12];
++        let mut streams = [Stream::default(); 13];
+         for stream in &mut streams {
+             *stream = Stream {
+                 first: input.u64()?,
+@@ -162,6 +165,7 @@ impl Header {
+             summaries: streams[6],
+             statistics: [streams[7], streams[8], streams[9], streams[10]],
+             effective_directory: streams[11],
++            source_checkpoints: streams[12],
+             source_union: purrdf_hash::multiset::Multiset256::from_parts(
+                 source_sum,
+                 source_population,
+@@ -206,6 +210,16 @@ impl Header {
+                 "effective source directory packing mismatch",
+             ));
+         }
++        let checkpoints = header.effective_directory.rows
++            / super::super::source_directory::CHECKPOINT_ROWS as u64;
++        if header.source_checkpoints.rows != checkpoints
++            || header.source_checkpoints.blocks
++                != checkpoints.div_ceil((u64::from(block_bytes) - 9) / 32)
++        {
++            return Err(SegmentedError::Corrupt(
++                "source checkpoint packing mismatch",
++            ));
++        }
+         Ok(header)
+     }
+ 
+@@ -224,6 +238,7 @@ impl Header {
+             self.statistics[2],
+             self.statistics[3],
+             self.effective_directory,
++            self.source_checkpoints,
+         ] {
+             if stream.first != next || (stream.blocks == 0) != (stream.rows == 0) {
+                 return Err(SegmentedError::Corrupt("non-contiguous block directory"));
+diff --git crates/rdf-core/src/ir/segmented/session.rs crates/rdf-core/src/ir/segmented/session.rs
+index 45d5579a8..d1383b7b9 100644
+--- crates/rdf-core/src/ir/segmented/session.rs
++++ crates/rdf-core/src/ir/segmented/session.rs
+@@ -829,6 +829,7 @@ impl SegmentedOperation {
+                 summaries: Stream::default(),
+                 statistics: [Stream::default(); 4],
+                 effective_directory: Stream::default(),
++                source_checkpoints: Stream::default(),
+                 flags: 0,
+                 source_union: purrdf_hash::multiset::Multiset256::default(),
+             },
+diff --git crates/rdf-core/src/ir/segmented/session/statistics.rs crates/rdf-core/src/ir/segmented/session/statistics.rs
+index c15f21d02..46fb1a050 100644
+--- crates/rdf-core/src/ir/segmented/session/statistics.rs
++++ crates/rdf-core/src/ir/segmented/session/statistics.rs
+@@ -46,11 +46,6 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
+             2 => StatisticsStream::Annotations,
+             _ => return Err(SegmentedError::Corrupt("invalid source directory stream")),
+         };
+-        if bytes[37..40] != [0; 3] {
+-            return Err(SegmentedError::Corrupt(
+-                "nonzero source directory reserved bytes",
+-            ));
+-        }
+         Ok(crate::ir::source_directory::SourceRecord {
+             digest: bytes[..32].try_into().expect("fixed source digest"),
+             ordinal: crate::bytes::read_u32_le(&bytes, 32).expect("fixed source ordinal"),
+@@ -63,29 +58,33 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
+         end: usize,
+         work: &mut crate::source::SourceDifferenceWork,
+     ) -> Result<purrdf_hash::multiset::Multiset256, Self::Error> {
+-        if end == 0 {
+-            self.session.ready()?;
+-            return Ok(purrdf_hash::multiset::Multiset256::default());
+-        }
+-        let bytes = self
+-            .session
+-            .fixed_record::<{ crate::ir::source_directory::RECORD_BYTES }>(
+-                self.stream,
+-                format::SOURCE_DIRECTORY,
+-                (end - 1) as u64,
+-            )?;
+-        work.members += 1;
+-        let population =
+-            u128::from_le_bytes(*bytes[40..].first_chunk().expect("fixed source population"));
+-        if population != end as u128 {
++        use crate::ir::source_directory::CHECKPOINT_ROWS;
++
++        if end > self.len()? {
+             return Err(SegmentedError::Corrupt(
+-                "false source directory prefix population",
++                "source directory prefix outside section",
+             ));
+         }
+-        Ok(purrdf_hash::multiset::Multiset256::from_parts(
+-            bytes[56..].try_into().expect("fixed source prefix"),
+-            population,
+-        ))
++        let checkpoint = end / CHECKPOINT_ROWS;
++        let start = checkpoint * CHECKPOINT_ROWS;
++        let mut prefix = if checkpoint == 0 {
++            purrdf_hash::multiset::Multiset256::default()
++        } else {
++            let sum = self.session.fixed_record::<32>(
++                self.session.header.source_checkpoints,
++                format::SOURCE_CHECKPOINTS,
++                (checkpoint - 1) as u64,
++            )?;
++            purrdf_hash::multiset::Multiset256::from_parts(sum, start as u128)
++        };
++        for index in start..end {
++            let record = self.record(index)?;
++            prefix
++                .insert(record.digest)
++                .map_err(|_| SegmentedError::AddressExhausted)?;
++            work.members += 1;
++        }
++        Ok(prefix)
+     }
+ }
+ 
+diff --git crates/rdf-core/src/ir/source_directory.rs crates/rdf-core/src/ir/source_directory.rs
+index 7e7f5b3b8..a5f722e55 100644
+--- crates/rdf-core/src/ir/source_directory.rs
++++ crates/rdf-core/src/ir/source_directory.rs
+@@ -13,8 +13,8 @@ use purrdf_lex::walk::WorkList;
+ 
+ use crate::{StatisticsStream, source::SourceDifferenceWork};
+ 
+-const CHECKPOINT_ROWS: usize = 32;
+-pub(crate) const RECORD_BYTES: usize = 88;
++pub(crate) const CHECKPOINT_ROWS: usize = 32;
++pub(crate) const RECORD_BYTES: usize = 37;
+ 
+ pub(crate) fn first_differing_bit(a: &[u8; 32], b: &[u8; 32]) -> Option<u16> {
+     (0_u16..)
+@@ -164,11 +164,14 @@ impl SourceDirectory {
+         self.records.len()
+     }
+ 
+-    /// Persist a sorted physical address and its exact inclusive prefix. Full
++    pub(crate) fn checkpoint_sums(&self) -> impl ExactSizeIterator<Item = &[u8; 32]> {
++        self.checkpoints.iter().map(Multiset256::sum)
++    }
++
++    /// Persist sorted digests and physical addresses without implied populations. Full
+     /// certification compares these bytes with metadata rebuilt from RDF rows.
+     pub(crate) fn encode_records(&self, start: usize, output: &mut [u8]) {
+         assert!(output.len().is_multiple_of(RECORD_BYTES));
+-        let mut prefix = self.prefix(start, &mut SourceDifferenceWork::default());
+         for (index, bytes) in output
+             .as_chunks_mut::<RECORD_BYTES>()
+             .0
+@@ -176,9 +179,6 @@ impl SourceDirectory {
+             .enumerate()
+         {
+             let record = self.records[start + index];
+-            prefix
+-                .insert(record.digest)
+-                .expect("directory population fits u128");
+             bytes[..32].copy_from_slice(&record.digest);
+             bytes[32..]
+                 .first_chunk_mut::<4>()
+@@ -189,12 +189,6 @@ impl SourceDirectory {
+                 StatisticsStream::Reifiers => 1,
+                 StatisticsStream::Annotations => 2,
+             };
+-            bytes[37..40].fill(0);
+-            bytes[40..]
+-                .first_chunk_mut::<16>()
+-                .expect("fixed source population")
+-                .copy_from_slice(&prefix.population().to_le_bytes());
+-            bytes[56..].copy_from_slice(prefix.sum());
+         }
+     }
+ 
+diff --git crates/rdf-core/tests/segmented.rs crates/rdf-core/tests/segmented.rs
+index 5b1f0a9a6..cf7b703b2 100644
+--- crates/rdf-core/tests/segmented.rs
++++ crates/rdf-core/tests/segmented.rs
+@@ -347,12 +347,12 @@ fn reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot()
+     ];
+     let (image, ids) = build(&values, (1_u64 << 54) + 19);
+     let mut previous_profile = image.bytes().to_vec();
+-    previous_profile[7] = b'2';
+-    purrdf_core::bytes::put_u32_le(&mut previous_profile, 8, 2).unwrap();
++    previous_profile[7] = b'4';
++    purrdf_core::bytes::put_u32_le(&mut previous_profile, 8, 4).unwrap();
+     assert!(matches!(
+         SegmentedImage::certify(previous_profile),
+         Err(SegmentedError::Corrupt(
+-            "unsupported segmented format/profile"
++            "unsupported segmented format/profile; regenerate the image from RDF input"
+         ))
+     ));
+     assert_eq!(
+diff --git docs/design/purrdf-segmented-query-storage.md docs/design/purrdf-segmented-query-storage.md
+index c9469642f..ef971a6b1 100644
+--- docs/design/purrdf-segmented-query-storage.md
++++ docs/design/purrdf-segmented-query-storage.md
+@@ -29,7 +29,7 @@ One encoded record, including its framing, must fit a block or sealing
+ returns `ConstructionLimit`. The encoder does not retry the complete image with
+ a larger layout. Selective term lookup uses authenticated stored ID ranges;
+ opening still loads no dictionary directory or term map. Full-population
+-blocks retain their direct first-probe lookup. Data profile 4 refuses older
++blocks retain their direct first-probe lookup. Data profile 5 refuses older
+ profiles; regenerate their images from the original RDF input.
+ 
+ Reverse lookup compares the referenced dictionary keys through the same admitted
+@@ -88,7 +88,7 @@ ordinary positive LIMIT need not intern every reifier in the image.
+ 
+ ## Statistical metadata
+ 
+-Data profile 4 retains four authenticated statistical sections: predicate/scope
++Data profile 5 retains four authenticated statistical sections: predicate/scope
+ records, compressed distinct-ID domains, selected object frequencies and
+ object-category/datatype counts. Predicate records carry row and distinct counts
+ and ranges into the other sections. Each predicate/scope record also carries
+@@ -109,7 +109,7 @@ require regeneration from their RDF input; this reader refuses unsupported
+ profiles. The certification receipt's encoding and hash laws remain distinct
+ from the data profile.
+ 
+-The 384-byte profile 4 header also retains the exact normalized statement-union
++The 408-byte profile 5 header also retains the exact normalized statement-union
+ and reifier multiset: asserted and annotation occurrences of the same value quad
+ count once in that union, while a virtual reifier declaration remains a separate
+ family. Its 128-bit population and 256-bit sum are reconstructed and compared
+@@ -120,18 +120,27 @@ retain original immutable source owners and use the query's own visibility and
+ read admission for overlap and removals. A source version's retained grant stays
+ charged after the creating query drops.
+ 
+-The final fixed-record stream is the normalized source directory. It collapses asserted/annotation copies
++The normalized source directory collapses asserted/annotation copies
+ of a statement and keeps virtual reifiers in their separate identity family;
+ its entries retain actual source-local addresses for selective value reads.
+-Each 88-byte record contains the canonical record digest, the source-local
+-32-bit ordinal and stream tag, three reserved zero bytes, and the inclusive
+-prefix's 128-bit population and 256-bit sum. Full certification reconstructs
+-all directory bytes from the RDF rows. Selective reads compare digest ranges
++Each 37-byte record contains the canonical record digest, the source-local
++32-bit ordinal and stream tag. A separate authenticated fixed-record stream
++stores one 256-bit cumulative sum per complete group of 32 records. Prefix
++populations are implied by position, and zero is implicit. A selective prefix
++read combines its checkpoint with at most 31 tail digests; actual tail visits
++are counted in `SourceDifferenceWork::members`, while the original read owner
++accounts for checkpoint and directory block reads. Full certification rebuilds
++and compares every record and checkpoint from the RDF rows, including their
++exact packing. Selective reads compare digest ranges
+ using those authenticated prefixes through the same algorithm as resident
+ directories; only differing records fetch their physical rows. The original
+ read operation owns every directory and row read. Replacing a sealed descriptor
+ therefore does not itself require enumerating either complete layer.
+ 
++The directory payload approaches 38 bytes per row, before physical page padding
++and the authentication tree, instead of 88. Old images require regeneration
++from their original RDF input; there is one decoder for the current profile.
++
+ Native construction reserves source-record storage from the exact physical row
+ count. Sources without annotations reuse their physical directory for normalized
+ keys; they retain no duplicate record or checkpoint buffers. Annotated sources
+diff --git helpers-ledger.toml helpers-ledger.toml
+index a0a5afc95..1afb37223 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3138,7 +3138,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3154,7 +3154,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3170,7 +3170,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3186,7 +3186,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3202,7 +3202,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3219,7 +3219,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3236,7 +3236,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3252,7 +3252,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3268,7 +3268,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3284,7 +3284,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3298,7 +3298,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:97d0de139ab31ff2",
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3313,7 +3313,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+     "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3328,7 +3328,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+     "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3345,7 +3345,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3362,7 +3362,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3379,7 +3379,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3396,7 +3396,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3413,7 +3413,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3430,7 +3430,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3447,7 +3447,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3460,7 +3460,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:e9db6463871b2877",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3473,7 +3473,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:e9db6463871b2877",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3490,7 +3490,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:04fc92cdfa199602",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3507,7 +3507,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:04fc92cdfa199602",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3524,7 +3524,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3541,7 +3541,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3559,7 +3559,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3577,7 +3577,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3591,7 +3591,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:06399db5856a0664",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3608,7 +3608,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3625,7 +3625,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3642,7 +3642,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3659,7 +3659,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3674,11 +3674,11 @@ authorities = [
+     "crates/rdf-core/src/ir/dataset.rs=source:16ca05164c952a9e",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+-    "crates/rdf-core/src/ir/segmented/build.rs=source:27f5b708a4cb3b7c",
++    "crates/rdf-core/src/ir/segmented/build.rs=source:61c0c0102f710a4b",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3693,17 +3693,17 @@ authorities = [
+     "crates/rdf-core/src/ir/dataset.rs=source:16ca05164c952a9e",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+-    "crates/rdf-core/src/ir/segmented/build.rs=source:27f5b708a4cb3b7c",
++    "crates/rdf-core/src/ir/segmented/build.rs=source:61c0c0102f710a4b",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/segmented/build.rs"
+ symbol = "crates/rdf-core/src/ir/segmented/build.rs::map_id"
+-line = 528
++line = 529
+ sink = "source:495627ce45322797"
+ class = "segmented-checked-interval"
+ authorities = [
+@@ -3712,17 +3712,17 @@ authorities = [
+     "crates/rdf-core/src/ir/dataset.rs=source:16ca05164c952a9e",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+-    "crates/rdf-core/src/ir/segmented/build.rs=source:27f5b708a4cb3b7c",
++    "crates/rdf-core/src/ir/segmented/build.rs=source:61c0c0102f710a4b",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/segmented/build.rs"
+ symbol = "crates/rdf-core/src/ir/segmented/build.rs::encode_dataset"
+-line = 553
++line = 554
+ sink = "source:93bf37ec51519cfd"
+ class = "segmented-checked-interval"
+ authorities = [
+@@ -3731,11 +3731,11 @@ authorities = [
+     "crates/rdf-core/src/ir/dataset.rs=source:16ca05164c952a9e",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+-    "crates/rdf-core/src/ir/segmented/build.rs=source:27f5b708a4cb3b7c",
++    "crates/rdf-core/src/ir/segmented/build.rs=source:61c0c0102f710a4b",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "encode_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3752,7 +3752,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+     "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3769,7 +3769,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+     "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3786,7 +3786,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+     "crates/rdf-core/src/turtle_render.rs=source:709dd6553dd0b117",
+ ]
+-constructors = "source:e628d73bee0a8140"
++constructors = "source:85d94cb0bf107df0"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]

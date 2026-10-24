@@ -1,0 +1,6 @@
+   Compiling libc v0.2.186
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory/crates/alloc-probe)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory/crates/testkit)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory/crates/rdf-core)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory/crates/stack)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 15.35s

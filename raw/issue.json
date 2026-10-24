@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "The effective source directory persists an 88-byte record for every normalized\nsource row: a 32-byte digest, four-byte physical ordinal, stream tag and padding,\nplus a 48-byte inclusive multiset prefix. The prefix population is implied by\nposition and the cumulative sum can use sparse checkpoints, as the resident\ndirectory already does.\n\nDeliver a complete compact authenticated directory representation. Keep source\ndigests, original physical row addresses, exact range comparison and native\ntyped refusal behavior. Store sparse cumulative sums and reconstruct bounded\nprefix tails through admitted readers, counting actual work. Remove redundant\nper-row population and padding. Certification must independently rebuild and\ncompare all records and checkpoints against RDF rows, including reifiers and\nannotations. Tampering with a recomputed block hash must still be refused.\n\nUse a new explicit image profile and refuse older profiles clearly; v4 does not\nrequire a parallel compatibility decoder. Preserve deterministic bytes within\nthe new profile and document image regeneration. No external dependencies or\nupstream implementation are authorized.\n\nAcceptance: native prefix/row-boundary and source-difference behavior, corruption\nrefusal for addresses/digests/checkpoints, exact work/admission behavior, and an\nimage-size comparison on the same deterministic native fixture. Compile actual\nconsumers and run normal hooks and required hosted gates. General semantics stay\nnative; do not duplicate them on WASM.\n\nThis is the directory-compaction delivery under #705. Oversized out-of-line\ndictionary terms remain a separate complete delivery in #705. Neither delivery\ncompletes #564's bounded streaming builder/certification and common-order scan\ncontract. Keep both parents open until their full requirements are met.\n\nBudget: at most four active engineering/local-validation hours, reassess scope at\ntwo hours; hosted CI/review waits are excluded.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-24T20:15:22Z",
+  "labels": [],
+  "milestone": null,
+  "number": 708,
+  "state": "OPEN",
+  "title": "Compact authenticated source directory with sparse prefix checkpoints",
+  "updatedAt": "2026-10-24T20:15:22Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/708"
+}

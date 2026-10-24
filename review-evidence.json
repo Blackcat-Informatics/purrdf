@@ -1,0 +1,72 @@
+{
+  "ok": true,
+  "head": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+  "items": [
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABfNxBjQ",
+      "kind": "comment",
+      "body": "Technical review projection, head b45cef24c7f1198cfff0a28f5a02b40cfc378df3,\nbase 2cc11ce451ee529032be27100c725d45797855bf.\n\nNo actionable comments generated. Merge risk minimal; no identified blocker\nafter normal checks. Security architecture risk low; no architecture concern\nor introduced security weakness established. Older images need regeneration;\ndeployed reader/writer compatibility remains unverified.\n\nProfile 5 uses a 408-byte header, checkpoint stream 11, 37-byte records\n(digest 32, ordinal 4, stream 1) and one checkpoint per 32 rows. Prefix requests\nread the preceding checkpoint and at most 31 tail digests, return exact\nwork.members and refuse endpoints beyond the directory. Construction and\ncertification check checkpoint counts, sums and block packing. Related scopes:\n564 streaming/common-order scans, 705 oversized terms, earlier 687 directory.\n\nThe integrity boundary is a receipt-bound image and derived source comparisons.\nIncorrect checkpoint authority could hide changes. Semantic certification and\nauthenticated selective reads protect that boundary. Receipt fields are private;\nrestoration needs host authentication; opening checks snapshot identity/length;\npages are authenticated before use. A checksum does not replace certification.\nFailures latch in shared state; cache publication follows successful reading,\nauthentication, decoding and reservation. Full validation precedes authority.\n\nTitle, description, linked-issue coding requirements and scope checks pass.\nAll eight changed files relate to compact records, prefix reads, checkpoints,\ncertification, refusal, documentation or reviewed source-bound capacity proofs.\nNo unrelated change, new dependency, general-semantic WASM work or compatibility\ndecoder was identified. Proof reasons remain intact.\n\nOptional docstring advisory: 9.52% against 80.00%, 21 functions in six files,\ntwo unsupported skipped. This does not expand frozen scope.\n\nReview limits: build.rs and test bodies were not directly read. Certification,\ntamper results, 53 native cases and 82 versus 205 pages rely on change summaries\nand author evidence; tests were not rerun by the reviewer. Checkpoint packing\n(block_bytes - 9) / 32 was not independently checked. Hosted qualification was\npending at review time and is a process gate. Scope assessment directly read\nsource_directory.rs, session/statistics.rs and format.rs. No formal approval\nis inferred from this review.\n\nThis projection retains technical findings, advisories and evidence limits.\nDecorative UI, private navigation, automation controls and poems are omitted.\n",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/709#issuecomment-6389776781",
+      "author": "coderabbitai",
+      "updated_at": "2026-10-24T21:38:18Z",
+      "state": null,
+      "commit": null
+    },
+    {
+      "id": "github:review:PRR_kwDOTKq-Ms8AAAABUC4CLA",
+      "kind": "review",
+      "body": "",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/709#pullrequestreview-5640159788",
+      "author": "github-advanced-security",
+      "updated_at": "2026-10-24T21:49:28Z",
+      "state": "COMMENTED",
+      "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3"
+    },
+    {
+      "id": "github:review:PRR_kwDOTKq-Ms8AAAABUC6Ijw",
+      "kind": "review",
+      "body": "",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/709#pullrequestreview-5640194191",
+      "author": "paudley",
+      "updated_at": "2026-10-24T22:00:55Z",
+      "state": "COMMENTED",
+      "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3"
+    },
+    {
+      "id": "github:inline:PRRC_kwDOTKq-Ms8AAAABBGQZng",
+      "kind": "inline",
+      "body": "## CodeQL / Cleartext logging of sensitive information\n\nThis operation writes [...::certify(...)](1) to a log file.\n\n[Show more details](https://github.com/Blackcat-Informatics/purrdf/security/code-scanning/411)",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/709#discussion_r4368636318",
+      "author": "github-advanced-security",
+      "updated_at": "2026-10-24T21:49:28Z",
+      "state": null,
+      "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+      "thread_id": "PRRT_kwDOTKq-Ms6v7-Gu",
+      "resolved": true,
+      "outdated": false,
+      "path": "crates/rdf-core/src/ir/segmented/build.rs",
+      "line": 1783
+    },
+    {
+      "id": "github:inline:PRRC_kwDOTKq-Ms8AAAABBGSVKg",
+      "kind": "inline",
+      "body": "The sink at line 1783 prints two page counts from the private native fixture.\nBoth counts derive from `directory_image(1025)`, which interns only the fixed\n`urn:directory:{index}` sequence and constructs deterministic quad rows. The\nentire module is under `#[cfg(test)]`; this fixture accepts no external data or\ncredentials. The adjacent byte-equality assertion is a separate determinism\ncontrol. Alert 411 is classified as `used in tests` for this specific synthetic\ninput and diagnostic. The codec and its certification behavior remain covered\nby the existing native controls.\n",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/709#discussion_r4368667946",
+      "author": "paudley",
+      "updated_at": "2026-10-24T22:00:55Z",
+      "state": null,
+      "commit": "b45cef24c7f1198cfff0a28f5a02b40cfc378df3",
+      "thread_id": "PRRT_kwDOTKq-Ms6v7-Gu",
+      "resolved": true,
+      "outdated": false,
+      "path": "crates/rdf-core/src/ir/segmented/build.rs",
+      "line": 1783
+    }
+  ],
+  "coverage": {
+    "comments": "complete",
+    "reviews": "complete",
+    "inline_comments": "complete",
+    "threads": "complete"
+  }
+}

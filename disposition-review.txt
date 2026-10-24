@@ -1,0 +1,11 @@
+{
+  "completed": [
+    "github:comment:IC_kwDOTKq-Ms8AAAABfNxBjQ"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "dispositions": "/home/paudley/Active/purrdf/.worktrees/708-compact-authenticated-source-directory/.stage/compact-authenticated-source-directory/review-dispositions.json"
+  }
+}
