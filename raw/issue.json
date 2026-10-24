@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Result\n\nRemove successful-path Columnar metadata allocations and transfer decoded blob\npayloads into their final content owner without copying the payload.\n\nThis is the independently useful allocation component extracted from #688 under\nthe approved optimized queue. The complete typed grammar-error migration remains\nin #688; the full shipping error contract remains in #558. Neither parent closes\nwith this delivery.\n\n## Existing implementation\n\nCommit bb07611a9 changes three files: borrow expected metadata/encoding values,\nmove parsed metadata keys, move checked blob payloads into ContentStore, and build\nthe fixed five-table output directly in its array. Transfer only this committed\nbehavior onto current main. Preserve the donor's unfinished grammar and later\nwriter changes.\n\n## Acceptance\n\n- Metadata validation covers all five tables and both compression modes with\n  zero validation allocations and requested bytes.\n- Blob reconstruction at 1 KiB and 1 MiB retains the original pointer and complete\n  payload, with allocation traffic independent of payload length.\n- Actual malformed/checksum and structured-cause controls preserve original\n  ownership, first faults and presentation.\n- All ten frozen file identities remain unchanged. Native library/integration,\n  strict affected compilation, required gates and release WASM portability pass.\n  General semantics are tested natively.\n- Normal signed hooks, current-head independent hosted review and complete CI\n  qualify ghprsq integration. Verify archive/closure and supported cleanup.\n\nNo upstream dependency or external repository work is authorized. API\ncompatibility is not a constraint for v4. Budget four hours of active work,\nincluding local verification; hosted CI/review waits are excluded.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-24T16:45:56Z",
+  "labels": [],
+  "milestone": null,
+  "number": 702,
+  "state": "OPEN",
+  "title": "Remove transient Columnar metadata allocations and decoded blob copies",
+  "updatedAt": "2026-10-24T16:45:56Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/702"
+}

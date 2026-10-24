@@ -1,0 +1,55 @@
+{
+  "issue": 702,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Remove transient Columnar metadata allocations and decoded blob copies",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "688": "Retain typed Columnar grammar refusals without diagnostic string allocations",
+    "558": "Structured access to error variants and fields, so consumers never render errors to text",
+    "673": "Preserve original source failures through columnar projection and writing",
+    "634": "Retain original geographic refusal operands and native causes",
+    "635": "Retain native causes through RDF materialization and pack attachments",
+    "637": "Retain structured entailment failures through public reasoning inspection",
+    "649": "Make Datalog governors and predicate access explicit; retain native failures",
+    "657": "Expose regime term arena limits across hosts"
+  },
+  "link_relations": {
+    "688": "mentions",
+    "558": "mentions",
+    "673": "2-hop",
+    "634": "2-hop",
+    "635": "2-hop",
+    "637": "2-hop",
+    "649": "2-hop",
+    "657": "2-hop"
+  },
+  "related": [
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 16,
+    "source-error-erasure": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/702-remove-transient-columnar-metadata"
+  },
+  "coverage": [
+    "issue #702 + 0 comment(s) via github",
+    "link crawl: 8 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Remove', 'transient', 'Columnar']: 1 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #702 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #702: 0",
+    "requirement candidates: 6 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 0 URL(s)"
+  ]
+}

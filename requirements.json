@@ -1,0 +1,71 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 21,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Metadata validation covers all five tables and both compression modes with",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 23,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Blob reconstruction at 1 KiB and 1 MiB retains the original pointer and complete",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 25,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Actual malformed/checksum and structured-cause controls preserve original",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 27,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- All ten frozen file identities remain unchanged. Native library/integration,",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B5",
+      "line": 28,
+      "rules": [
+        "modal"
+      ],
+      "text": "strict affected compilation, required gates and release WASM portability pass.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B6",
+      "line": 30,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Normal signed hooks, current-head independent hosted review and complete CI",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}
