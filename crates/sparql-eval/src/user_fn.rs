@@ -1413,6 +1413,17 @@ impl BoundFunctionRegistry {
         self
     }
 
+    /// Borrow the application context owned by this registry. Nested registries
+    /// borrow their context weakly and expose it only during an invocation;
+    /// they cannot be reused as independent request owners through this method.
+    #[must_use]
+    pub fn owned_invocation_context<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        match &self.invocation_context {
+            Some(InvocationContext::Strong(context)) => context.downcast_ref(),
+            Some(InvocationContext::Weak(_)) | None => None,
+        }
+    }
+
     /// Resolve a call-position IRI to its declaration and its bound body.
     ///
     /// Both halves come back together because both are needed and neither is

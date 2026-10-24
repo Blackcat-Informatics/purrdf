@@ -458,6 +458,7 @@ where
         base,
         originals: FastSet::default(),
         shapes,
+        class_supplement: crate::engine::request_subclasses(shapes),
         shapes_graph_iri,
         empty,
         view: RefCell::new(None),
@@ -873,7 +874,12 @@ impl LiveView {
             engine.shapes_graph_iri.clone(),
         );
         let data = Rc::new(
-            crate::engine::with_shapes_graph_subclasses(&data, engine.shapes)?.unwrap_or(data),
+            engine
+                .class_supplement
+                .as_deref()
+                .map(|supplement| supplement.apply(&data))
+                .transpose()?
+                .unwrap_or(data),
         );
         Ok(Self {
             generation,
@@ -917,6 +923,8 @@ struct Engine<'r, 'a, const N: usize> {
     originals: FastSet<[Term; 3]>,
     /// The shapes.
     shapes: &'a Shapes,
+    /// Immutable shapes configuration reused across every actual rule snapshot.
+    class_supplement: Option<Box<crate::data::ClassSupplement>>,
     /// The shapes graph IRI a SPARQL rule sees as `$shapesGraph`.
     shapes_graph_iri: Option<String>,
     /// The empty dataset a pure expression is evaluated over.
@@ -1129,7 +1137,11 @@ where
         };
         let data = ShaclData::from_views(core, sparql, self.shapes_graph_iri.clone());
         view.data = Rc::new(
-            crate::engine::with_shapes_graph_subclasses(&data, self.shapes)?.unwrap_or(data),
+            self.class_supplement
+                .as_deref()
+                .map(|supplement| supplement.apply(&data))
+                .transpose()?
+                .unwrap_or(data),
         );
         Ok(Some(Rc::clone(&view.data)))
     }

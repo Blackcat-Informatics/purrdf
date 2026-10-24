@@ -352,3 +352,84 @@ fn delta_and_nested_selection_preserve_statement_layers_and_blank_classes() {
     );
     println!("delta/nested-selection statement probe: {measured:?}");
 }
+
+/// Borrowed IRI lookup keeps first-source identities and selection boundaries
+/// without allocating a temporary spelling, even through a committed delta.
+#[test]
+fn borrowed_iri_lookup_preserves_canonical_handles_without_payload_copies() {
+    for length in [1_usize, 32, 512] {
+        let spelling = format!("http://example.org/{}", "i".repeat(length));
+        let added = format!("http://example.org/delta/{}", "i".repeat(length));
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri(&spelling).unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder.intern_iri("http://example.org/o").unwrap();
+        let graph = builder.intern_iri("http://example.org/g").unwrap();
+        let outside = builder.intern_iri("http://example.org/outside").unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
+        builder.push_quad(outside, predicate, object, None).unwrap();
+        let base = builder.freeze().unwrap();
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        mutable
+            .insert(QuadValues {
+                s: TermValue::iri(&added),
+                p: TermValue::iri("http://example.org/p"),
+                o: TermValue::iri("http://example.org/o"),
+                g: Some(TermValue::iri("http://example.org/g")),
+            })
+            .unwrap();
+        let delta = Arc::new(mutable.snapshot_view().unwrap());
+        let composite = Arc::new(
+            CompositeDatasetView::from_bound_sources(
+                vec![
+                    CompositeSource::new(base),
+                    CompositeSource::from_delta(Arc::clone(&delta)),
+                ],
+                ViewLimits::default(),
+            )
+            .unwrap(),
+        );
+        let selected = CompositeDatasetView::from_bound_sources(
+            vec![
+                CompositeSource::from_selection(
+                    Arc::clone(&composite),
+                    [TermValue::iri("http://example.org/g")],
+                    ViewLimits::default(),
+                )
+                .unwrap(),
+            ],
+            ViewLimits::default(),
+        )
+        .unwrap();
+        let window = CurrentThreadWindow::open();
+        let base_id = composite.lookup_iri(&spelling);
+        let delta_base = delta.lookup_iri(&spelling);
+        let delta_added = delta.lookup_iri(&added);
+        let composite_added = composite.lookup_iri(&added);
+        let selected_base = selected.lookup_iri(&spelling);
+        let selected_added = selected.lookup_iri(&added);
+        let excluded = selected.lookup_iri("http://example.org/outside");
+        let absent = selected.lookup_iri("http://example.org/absent");
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0, "length={length}: {measured:?}");
+        assert_eq!(measured.requested_bytes, 0, "length={length}: {measured:?}");
+        assert_eq!(base_id, Some(composite.source_id(0, subject)));
+        assert_eq!(
+            base_id,
+            delta_base.map(|id| composite.delta_source_id(1, id))
+        );
+        assert_eq!(
+            composite_added,
+            delta_added.map(|id| composite.delta_source_id(1, id))
+        );
+        for (id, expected) in [(selected_base, spelling), (selected_added, added)] {
+            let id = id.unwrap();
+            assert!(selected.quads().any(|quad| quad.s == id));
+            assert_eq!(selected.term_value(id), TermValue::iri(expected));
+        }
+        assert!(excluded.is_none());
+        assert!(absent.is_none());
+    }
+}

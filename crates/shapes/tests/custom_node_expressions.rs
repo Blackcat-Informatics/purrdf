@@ -1485,6 +1485,10 @@ fn request_severities_survive_native_and_sparql_function_boundaries() {
                            sh:expression [ {expression} ] ."
                     );
                     let mut shapes = parse_shapes(&source, None).expect("valid declarations");
+                    let default_functions =
+                        purrdf_shapes::sparql::bind_in_current_env(&shapes, None).unwrap();
+                    let _prior_request =
+                        purrdf_shapes::sparql::enter_function_scope(default_functions);
                     let default = validate_with(&store, &shapes).expect("default validation");
                     assert_eq!(default.conforms, severity == "ex:Advisory", "{label}");
                     shapes.set_validation_options(options.clone());
@@ -1911,6 +1915,111 @@ fn callback_request_policy_reaches_serial_and_parallel_focus_chunks() {
                 report.results.len(),
                 if ignore_warning { 0 } else { population }
             );
+        }
+    }
+}
+
+/// Rebinding within an owned scope shares the actual immutable bindings. A
+/// different original model, graph placement or policy gets its own request.
+#[test]
+fn scoped_bindings_share_work_without_reusing_another_model_or_request() {
+    use purrdf_rdf::TermValue;
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+
+    let model = |value| {
+        parse_shapes(&format!(
+        "{PREFIXES} ex:value a sh:ListParameterExpressionFunction ; sh:bodyExpression {value} ."
+    ), None).unwrap()
+    };
+    let mut shapes = model(1);
+    let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes, None).unwrap();
+    let _scope = purrdf_shapes::sparql::enter_function_scope(Arc::clone(&functions));
+    let window = CurrentThreadWindow::open();
+    let repeated = purrdf_shapes::sparql::bind_in_current_env(&shapes, None);
+    let measured = window.close();
+    let repeated = repeated.unwrap();
+    assert!(Arc::ptr_eq(&functions, &repeated));
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    assert_eq!(measured.requested_bytes, 0, "{measured:?}");
+    let placed =
+        purrdf_shapes::sparql::bind_in_current_env(&shapes, Some("http://example.org/shapes"))
+            .unwrap();
+    assert!(!Arc::ptr_eq(&functions, &placed));
+    shapes.set_validation_options(
+        ValidationOptions::default()
+            .with_conformance_disallows(ConformanceDisallows::new([Severity::Violation]).unwrap()),
+    );
+    let changed = purrdf_shapes::sparql::bind_in_current_env(&shapes, None).unwrap();
+    assert!(!Arc::ptr_eq(&functions, &changed));
+    let foreign = model(2);
+    let foreign_functions = purrdf_shapes::sparql::bind_in_current_env(&foreign, None).unwrap();
+    let data = data_of("");
+    let result = NativeSparqlEngine::new().query_with_options_view(
+        &data,
+        SparqlRequest {
+            query: "PREFIX ex: <http://example.org/ns#> SELECT ?v WHERE { BIND(ex:value() AS ?v) }",
+            base_iri: None, substitutions: &[],
+        },
+        QueryOptions::new().with_functions(&foreign_functions).with_focus_graph(Some(&data)),
+    ).unwrap();
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("solutions")
+    };
+    assert_eq!(rows, vec![vec![Some(TermValue::integer(2))]]);
+}
+
+/// Long subclass names belong to the immutable request dictionary. Once warmed,
+/// callback allocation must not copy them into a fresh arena on every call.
+#[test]
+fn callback_allocation_does_not_copy_static_class_dictionary_payloads() {
+    use purrdf_rdf::TermValue;
+    use purrdf_shapes::engine::ValidationOptions;
+
+    let data = data_of("ex:n a ex:Bottom .");
+    let engine = NativeSparqlEngine::new();
+    let mut baseline = None;
+    for length in [1_usize, 32, 512] {
+        let parent = format!("http://example.org/{}", "c".repeat(length));
+        let mut shapes = parse_shapes(
+            &format!(
+            "{PREFIXES} ex:constant a sh:ListParameterExpressionFunction ; sh:bodyExpression 1 .
+             ex:Bottom rdfs:subClassOf <{parent}> ."
+        ),
+            None,
+        )
+        .unwrap();
+        shapes.set_validation_options(
+            ValidationOptions::default().with_subclass_of_in_shapes_graph(true),
+        );
+        let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes, None).unwrap();
+        let evaluate = || {
+            engine.query_with_options_view(
+            &data,
+            SparqlRequest {
+                query: "PREFIX ex: <http://example.org/ns#> SELECT ?v WHERE { BIND(ex:constant() AS ?v) }",
+                base_iri: None, substitutions: &[],
+            },
+            QueryOptions::new().with_functions(&functions).with_focus_graph(Some(&data)),
+        )
+        };
+        evaluate().unwrap();
+        let window = CurrentThreadWindow::open();
+        let result = evaluate();
+        let measured = window.close();
+        let SparqlResult::Solutions { rows, .. } = result.unwrap() else {
+            panic!("solutions")
+        };
+        assert_eq!(rows, vec![vec![Some(TermValue::integer(1))]]);
+        let cost = (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.peak_working_bytes,
+            measured.retained_bytes,
+        );
+        match baseline {
+            None => baseline = Some(cost),
+            Some(expected) => assert_eq!(cost, expected, "class IRI length={length}: {measured:?}"),
         }
     }
 }

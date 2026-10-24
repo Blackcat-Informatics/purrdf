@@ -1754,6 +1754,14 @@ impl ValidationRequest {
     pub(crate) fn is_default(&self) -> bool {
         self.0.is_none()
     }
+
+    pub(crate) fn same_options(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
 }
 
 impl From<ValidationOptions> for ValidationRequest {
@@ -3852,23 +3860,19 @@ pub(crate) fn with_shapes_graph_subclasses(
     data: &ShaclData,
     shapes: &Shapes,
 ) -> Result<Option<ShaclData>, ShapesError> {
-    let supplement = request_subclasses(shapes);
-    if supplement.is_empty() {
-        return Ok(None);
-    }
-    data.with_class_supplement(&supplement).map(Some)
+    request_subclasses(shapes)
+        .map(|supplement| supplement.apply(data))
+        .transpose()
 }
 
-pub(crate) fn request_subclasses(shapes: &Shapes) -> Vec<(String, String)> {
+pub(crate) fn request_subclasses(shapes: &Shapes) -> Option<Box<crate::data::ClassSupplement>> {
     if !shapes.validation_options.subclass_of_in_shapes_graph {
-        return Vec::new();
+        return None;
     }
     let graph = shapes.shapes_dataset.as_ref();
-    graph
-        .term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF)
-        .map_or_else(Vec::new, |predicate| {
-            shapes_graph_subclass_pairs(graph, predicate)
-        })
+    let predicate = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF)?;
+    let pairs = shapes_graph_subclass_pairs(graph, predicate);
+    (!pairs.is_empty()).then(|| Box::new(crate::data::ClassSupplement::new(pairs)))
 }
 
 /// The `(subclass, superclass)` IRI pairs SHACL type follows from `graph`'s

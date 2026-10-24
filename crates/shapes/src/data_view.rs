@@ -1109,7 +1109,8 @@ impl ShaclRead for ShaclDatasetView {
     fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
         match &self.source {
             Source::Native(source) => source.term_id_by_iri(iri),
-            _ => self.term_id_by_value(&TermValue::iri(iri)).unwrap(),
+            Source::Composite(dense) => dense.source.lookup_iri(iri).map(|id| dense.id(id)),
+            Source::Delta(dense) => dense.source.lookup_iri(iri).map(|id| dense.id(id)),
         }
     }
     fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {

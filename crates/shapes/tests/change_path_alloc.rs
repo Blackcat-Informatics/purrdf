@@ -2091,21 +2091,13 @@ const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetC
 
 /// The expansion's fixed cost, independent of how many rows changed.
 ///
-/// One of the three is the `sh:shape` trigger every shapes graph carries: the
-/// data graph's `n sh:shape <shape>` statements (SHACL 1.2 Core, "Explicit shape
-/// targets") can make any node a focus node of any shape, so the footprint reads
-/// them for every shapes graph. The expansion resolves each trigger's predicate
-/// once per call, and on a delta-backed view that lookup builds the owned term it
-/// asks for — one allocation, charged once, whatever the change's size. It adds
-/// nothing to the per-row or per-doubling terms.
-///
-/// A fourth is the same kind of lookup for `sh:shapesGraph`. A change that adds or
-/// retracts a data-graph link (SHACL 1.2 Core section 6.4) changes the shapes graph
-/// itself, so the expansion first asks whether the snapshot interns that predicate at all
-/// — one owned term on a delta-backed view, charged once per call. A snapshot that does
-/// not intern it has no link on either side of the change, and the question costs nothing
-/// further.
-const EXPANSION_CONST: u64 = 4;
+/// The shapes-graph link check constructs one owned `sh:shapesGraph` term.
+/// Trigger predicate lookups borrow their IRIs, including on delta views.
+const EXPANSION_CONST: u64 = 1;
+
+/// The changed-row and affected-id vectors each start at capacity four, so their
+/// doubling series each needs one fewer allocation than `log2(N)`.
+const EXPANSION_VECTOR_STARTUP: u64 = 2;
 
 /// What ONE changed row costs the expansion once it has a chain to walk back.
 ///
@@ -2143,12 +2135,16 @@ const EXPANSION_PER_DOUBLING: u64 = 3;
 
 /// The expansion's measured cost for `changes` changed rows.
 ///
-/// `EXPANSION_CONST + EXPANSION_PER_ROW * N + EXPANSION_PER_DOUBLING * log2(N)`.
+/// `1 + 2N + 3 log2(N) - 2`.
 /// Exact at every size in [`EXPANSION_CHANGE_SIZES`], with no tolerance: an
 /// allocation count is a fact about the code.
 fn expansion_alloc_model(changes: usize) -> u64 {
-    let doublings = u64::from(changes.ilog2());
-    EXPANSION_CONST + EXPANSION_PER_ROW * changes as u64 + EXPANSION_PER_DOUBLING * doublings
+    EXPANSION_PER_ROW * changes as u64 + expansion_growth_alloc_model(changes)
+}
+
+/// Fixed cost and collection growth shared by expansions with and without paths.
+fn expansion_growth_alloc_model(changes: usize) -> u64 {
+    EXPANSION_CONST + EXPANSION_PER_DOUBLING * u64::from(changes.ilog2()) - EXPANSION_VECTOR_STARTUP
 }
 
 /// A delta-bound validator over [`EXPANSION_FOCUS_NODES`] focus nodes whose mutation
@@ -2239,7 +2235,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
     ids.len()
 }
 
-/// **Expanding a change costs `3 + 2N + 3·log2(N)` allocations for `N` changed
+/// **Expanding a change costs `1 + 2N + 3·log2(N) - 2` allocations for `N` changed
 /// rows — and the `2N` is the delta view's type-erased probe, not the walk.**
 ///
 /// `affected_focus_node_ids` is the surface the incremental soundness claim rests
@@ -2249,7 +2245,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 /// building a `HashSet` frontier table per changed row — while the validation
 /// beside it ran the lowered one. Measured on this revision before that was fixed,
 /// the same fixture cost `4 + 4N + 3·log2(N)`: 278 allocations for 64 changed rows
-/// and 537 for 128, against 149 and 280 now.
+/// and 537 for 128, against 145 and 276 now.
 ///
 /// A closed form rather than a flat `alloc(2N) == alloc(N)`, for the reason
 /// `tests/sparql_path_alloc.rs` states for its three surfaces: the residual terms
@@ -2264,18 +2260,22 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 #[test]
 fn change_expansion_allocation_matches_its_pinned_closed_form() {
     let _guard = measure_lock();
-
+    let mut samples = Vec::with_capacity(EXPANSION_CHANGE_SIZES.len());
     for changes in EXPANSION_CHANGE_SIZES {
         let fixture = expansion_fixture(EXPANSION_SHAPES, changes);
         // Warm-up, outside the window and with the exact arguments measured below.
         assert_eq!(expand(&fixture, changes), changes);
 
         let (_, measured) = measure_min(|| expand(&fixture, changes));
+        samples.push((changes, measured));
+    }
+    for (changes, measured) in samples {
         assert_eq!(
             measured.allocations,
             expansion_alloc_model(changes),
             "expanding {changes} changed rows allocated {}, and the pinned closed form \
-             ({EXPANSION_CONST} + {EXPANSION_PER_ROW}N + {EXPANSION_PER_DOUBLING}·log2 N) says \
+             ({EXPANSION_CONST} + {EXPANSION_PER_ROW}N + {EXPANSION_PER_DOUBLING}·log2 N \
+             - {EXPANSION_VECTOR_STARTUP}) says \
              {}. A HIGHER per-row coefficient means the expansion has gone back to walking a \
              chain it rebuilds and re-resolves per changed row; a lower one is welcome and should \
              move these constants\n  {measured:?}",
@@ -2294,10 +2294,10 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 /// matching trigger is anchored AT the changed row's subject, so the expansion takes
 /// the branch that performs no pattern lookup at all.
 ///
-/// Measured on this revision the per-row term is then exactly zero — 18 allocations
-/// for 32 changed rows and 27 for 256, which is `3 + 3·log2(N)`: the three doubling
-/// series, and a constant of 3 that includes the `sh:shape` trigger's predicate
-/// lookup and the `sh:shapesGraph` link lookup [`EXPANSION_CONST`] describes. So the `2N` above really is one probe per row, and a
+/// Measured on this revision the per-row term is then exactly zero — 14 allocations
+/// for 32 changed rows and 23 for 256, which is `1 + 3 log2(N) - 2`: the three
+/// doubling series with their initial capacities and the fixed link check.
+/// So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
 #[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
@@ -2312,12 +2312,12 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
     }
 
     for (changes, sample) in &measured {
-        let doublings = u64::from(changes.ilog2());
         assert_eq!(
             sample.allocations,
-            3 + EXPANSION_PER_DOUBLING * doublings,
+            expansion_growth_alloc_model(*changes),
             "expanding {changes} changed rows through an EMPTY chain allocated {}, not the \
-             3 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
+             {EXPANSION_CONST} + {EXPANSION_PER_DOUBLING}·log2 N - {EXPANSION_VECTOR_STARTUP} \
+             this control is pinned at. A per-row term here \
              is the expansion's own, and it would mean the {EXPANSION_PER_ROW} charged per row \
              in change_expansion_allocation_matches_its_pinned_closed_form is no longer the \
              probe it is attributed to\n  {sample:?}",

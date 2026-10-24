@@ -2268,6 +2268,18 @@ pub fn bind_in_current_env(
         return Ok(Arc::clone(&EMPTY));
     }
     let env = current_env()?;
+    // The orchestration scope already owns this immutable binding. Reuse it in
+    // focus chunks instead of cloning declarations and rescanning shape-class
+    // edges per shape. Every match is about original owners and request law;
+    // no data graph or conformance answer is retained here.
+    if let Some(bound) = CURRENT_FUNCTIONS.with(|slot| {
+        let slot = slot.borrow();
+        let bound = slot.as_ref()?;
+        let request = bound.owned_invocation_context::<FunctionRequest>()?;
+        (request.matches(shapes, shapes_graph) && bound.admits(&env)).then(|| Arc::clone(bound))
+    }) {
+        return Ok(bound);
+    }
     let bound = SPARQL_ENGINE
         .with(|engine| engine.bind_functions(functions.as_ref().clone(), &env))
         .map_err(|e| e.to_string())?;
@@ -2277,12 +2289,15 @@ pub fn bind_in_current_env(
     {
         return Ok(Arc::new(bound));
     }
+    let subclasses = crate::engine::request_subclasses(shapes);
     Ok(Arc::new(bound.with_invocation_context(|registry| {
         FunctionRequest {
             registry: Arc::new(registry),
+            declarations: Arc::downgrade(functions),
+            shapes_source: Arc::downgrade(&shapes.shapes_dataset),
             request: shapes.validation_options.clone(),
             shapes_graph: shapes_graph.map(Arc::from),
-            subclasses: crate::engine::request_subclasses(shapes),
+            subclasses,
         }
     })))
 }
@@ -2292,12 +2307,22 @@ pub fn bind_in_current_env(
 #[derive(Debug)]
 pub(crate) struct FunctionRequest {
     registry: Arc<BoundFunctionRegistry>,
+    declarations: std::sync::Weak<purrdf_sparql_eval::UserFunctionRegistry>,
+    shapes_source: std::sync::Weak<RdfDataset>,
     pub(crate) request: crate::engine::ValidationRequest,
     shapes_graph: Option<Arc<str>>,
-    subclasses: Vec<(String, String)>,
+    subclasses: Option<Box<crate::data::ClassSupplement>>,
 }
 
 impl FunctionRequest {
+    fn matches(&self, shapes: &crate::shapes::Shapes, graph: Option<&str>) -> bool {
+        // Weak anchors preserve allocation identity without retaining the raw
+        // shape acquisition. Its payload may drop when only bindings remain.
+        self.declarations.as_ptr() == Arc::as_ptr(&shapes.functions)
+            && self.shapes_source.as_ptr() == Arc::as_ptr(&shapes.shapes_dataset)
+            && self.request.same_options(&shapes.validation_options)
+            && self.shapes_graph.as_deref() == graph
+    }
     pub(crate) fn enter(call: &purrdf_sparql_eval::ExprFnCall<'_>) -> Option<FunctionScope> {
         let context = call.invocation_context::<Self>()?;
         Some(enter_function_scope(Arc::clone(&context.registry)))
@@ -2313,10 +2338,8 @@ impl FunctionRequest {
             None,
         )
         .with_shapes_graph(context.and_then(|context| context.shapes_graph.clone()));
-        match context {
-            Some(context) if !context.subclasses.is_empty() => {
-                store.with_class_supplement(&context.subclasses)
-            }
+        match context.and_then(|context| context.subclasses.as_deref()) {
+            Some(subclasses) => subclasses.apply(&store),
             _ => Ok(store),
         }
     }
@@ -2335,7 +2358,7 @@ impl FunctionRequest {
 /// Install `registry` as the current SHACL-AF function table, returning a guard that
 /// restores the previous table when dropped.
 ///
-/// Takes a [`BoundFunctionRegistry`], not a [`UserFunctionRegistry`]: a function
+/// Takes a [`BoundFunctionRegistry`], not a [`purrdf_sparql_eval::UserFunctionRegistry`]: a function
 /// body is SPARQL, so which of its predicate IRIs are calls to registered relations
 /// is decided by the extension environment in force, and a registry that has not
 /// been bound to one has no answer to that question. Requiring the bound form here
