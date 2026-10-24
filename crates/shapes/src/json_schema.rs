@@ -1118,8 +1118,7 @@ pub struct SchemaCompilation {
 }
 
 const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
-const SCHEMA_POLICY_SALT: &str =
-    "rdf12;json-schema-2020-12;openapi-3.1;input-derived-surface-v2;owl-rdfs-fragment-v2";
+const SCHEMA_POLICY_SALT: &str = "rdf12;json-schema-2020-12;openapi-3.1-local-refs-v1;input-derived-surface-v2;owl-rdfs-fragment-v2";
 pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
 /// Existing guard for exponential anonymous-expression expansion, independent
 /// of the input-derived class, property-coverage and emitter width bounds.
@@ -1722,7 +1721,7 @@ pub fn compile_with_value_vocab(
 
     ctx.append_catalog_defs(&mut defs)?;
     let schema = root_schema(&defs, ns);
-    let openapi = openapi_doc(&defs);
+    let openapi = openapi_doc(defs);
 
     Ok(CompiledSchema {
         schema_json: to_pretty(&schema),
@@ -1895,7 +1894,7 @@ fn compile_with_surface(
     ctx.append_catalog_defs(&mut defs)?;
     Ok(CompiledSchema {
         schema_json: to_pretty(&root_schema(&defs, ns)),
-        openapi_json: to_pretty(&openapi_doc(&defs)),
+        openapi_json: to_pretty(&openapi_doc(defs)),
         losses: ctx.ledger,
     })
 }
@@ -3861,8 +3860,40 @@ fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
 }
 
 /// The OpenAPI 3.1 document embedding the same `$defs` as `components/schemas`.
-fn openapi_doc(defs: &Map<String, Value>) -> Value {
-    json!({
+fn openapi_doc(mut defs: Map<String, Value>) -> Value {
+    // Move the already-emitted catalog into its OpenAPI location. Walk only
+    // schema positions: a `$ref` member inside const/enum/default/examples is
+    // instance data, and must retain its original value. References are edges,
+    // never an instruction to unfold a recursive definition.
+    let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
+    pending.extend(defs.values_mut());
+    while let Some(schema) = pending.pop() {
+        let Value::Object(object) = schema else {
+            continue;
+        };
+        for (keyword, value) in object.iter_mut() {
+            if keyword == "$ref" {
+                if let Value::String(reference) = value
+                    && reference.starts_with("#/$defs/")
+                {
+                    // The suffix is already a JSON Pointer; preserve its
+                    // escaped tokens rather than decoding/re-encoding them.
+                    reference.replace_range(.."#/$defs/".len(), "#/components/schemas/");
+                }
+            } else if crate::schema_catalog::schema_map_keywords().contains(&keyword.as_str()) {
+                if let Value::Object(children) = value {
+                    pending.extend(children.values_mut());
+                }
+            } else if crate::schema_catalog::schema_array_keywords().contains(&keyword.as_str()) {
+                if let Value::Array(children) = value {
+                    pending.extend(children.iter_mut());
+                }
+            } else if crate::schema_catalog::schema_single_keywords().contains(&keyword.as_str()) {
+                pending.push(value);
+            }
+        }
+    }
+    let mut document = json!({
         "openapi": "3.1.0",
         "info": {
             "title": "PURRDF",
@@ -3891,8 +3922,12 @@ fn openapi_doc(defs: &Map<String, Value>) -> Value {
                 }
             }
         },
-        "components": { "schemas": crate::json_model::object(defs.clone()) }
-    })
+        "components": { "schemas": {} }
+    });
+    // json! borrows expression values through ToJson; install the catalog
+    // directly so it is moved, rather than cloned by that conversion.
+    document["components"]["schemas"] = crate::json_model::object(defs);
+    document
 }
 
 // ── The `@annotation` fragment (statement metadata) ─────────────────────
@@ -8417,10 +8452,8 @@ mod tests {
 
         let openapi: Value =
             purrdf_lex::json::read(&compilation.compiled.openapi_json).expect("OpenAPI is JSON");
-        assert_eq!(
-            openapi["components"]["schemas"]["EmailMessage"], schema["$defs"]["EmailMessage"],
-            "OpenAPI embeds the exact shared carrier definition"
-        );
+        assert_surface_equivalence(&schema["$defs"], &openapi["components"]["schemas"]);
+        assert_local_reference_closure(&openapi);
         assert!(validates(
             &compilation.compiled.schema_json,
             &json!({
@@ -10310,6 +10343,118 @@ mod tests {
         assert!(openapi["paths"]["/entities/{id}"]["get"].is_object());
         // trailing newline convention
         assert!(c.openapi_json.ends_with("}\n"));
+        assert_local_reference_closure(&openapi);
+        assert_eq!(
+            openapi["components"]["schemas"]["Person"]["properties"]["@annotation"]["$ref"],
+            "#/components/schemas/Annotation"
+        );
+        assert_eq!(
+            schema_of(&c)["$defs"]["Person"]["properties"]["@annotation"]["$ref"],
+            "#/$defs/Annotation"
+        );
+    }
+
+    /// Check the complete physical document, without following reference edges.
+    fn assert_local_reference_closure(document: &Value) {
+        let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
+        pending.push(document);
+        let mut references = 0;
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Object(object) => {
+                    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                        && let Some(pointer) = reference.strip_prefix('#')
+                    {
+                        assert!(document.pointer(pointer).is_some(), "dangling {reference}");
+                        references += 1;
+                    }
+                    pending.extend(object.values());
+                }
+                Value::Array(items) => pending.extend(items.iter()),
+                _ => {}
+            }
+        }
+        assert!(references > 0, "the closure check must exercise references");
+    }
+
+    /// All emitted constraints agree; only document-local reference bases differ.
+    fn assert_surface_equivalence(schema: &Value, openapi: &Value) {
+        let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
+        pending.push((schema, openapi));
+        while let Some((left, right)) = pending.pop() {
+            match (left, right) {
+                (Value::Object(left), Value::Object(right)) => {
+                    assert_eq!(left.len(), right.len());
+                    for (key, value) in left.iter() {
+                        let other = right.get(key).expect("same schema member");
+                        if key == "$ref" {
+                            assert_eq!(
+                                value
+                                    .as_str()
+                                    .and_then(|text| text.strip_prefix("#/$defs/"))
+                                    .expect("JSON Schema reference base"),
+                                other
+                                    .as_str()
+                                    .and_then(|text| text.strip_prefix("#/components/schemas/"))
+                                    .expect("OpenAPI reference base")
+                            );
+                        } else {
+                            pending.push((value, other));
+                        }
+                    }
+                }
+                (Value::Array(left), Value::Array(right)) => {
+                    assert_eq!(left.len(), right.len());
+                    pending.extend(left.iter().zip(right));
+                }
+                _ => assert_eq!(left, right),
+            }
+        }
+    }
+
+    #[test]
+    fn openapi_relocates_recursive_escaped_refs_without_rewriting_instance_data() {
+        let literal = json!({ "$ref": "#/$defs/a~1b~0c" });
+        let body = json!({
+            "properties": {
+                "next": { "$ref": "#/$defs/a~1b~0c" },
+                "$ref": { "const": literal }
+            },
+            "allOf": [{ "if": { "type": "object" }, "then": { "$ref": "#/$defs/a~1b~0c" } }],
+            "items": { "$ref": "#/$defs/a~1b~0c" },
+            "const": literal,
+            "enum": [literal],
+            "default": literal,
+            "examples": [literal]
+        });
+        let defs = Map::from([("a/b~c".to_owned(), body.clone())]);
+        let openapi = openapi_doc(defs);
+        let emitted = &openapi["components"]["schemas"]["a/b~c"];
+        assert_eq!(
+            emitted["properties"]["next"]["$ref"],
+            "#/components/schemas/a~1b~0c"
+        );
+        assert_eq!(
+            emitted["allOf"][0]["then"]["$ref"],
+            "#/components/schemas/a~1b~0c"
+        );
+        assert_eq!(emitted["items"]["$ref"], "#/components/schemas/a~1b~0c");
+        for keyword in ["const", "enum", "default", "examples"] {
+            assert_eq!(
+                emitted[keyword], body[keyword],
+                "{keyword} is instance data"
+            );
+        }
+        assert_eq!(emitted["properties"]["$ref"]["const"], literal);
+        // Literal `$ref` fields above are data rather than schema references;
+        // exercise whole-document closure on the actual recursive schemas.
+        let recursive = openapi_doc(Map::from([(
+            "a/b~c".to_owned(),
+            json!({
+                "anyOf": [false, { "$ref": "#/$defs/a~1b~0c" }]
+            }),
+        )]));
+        assert_local_reference_closure(&recursive);
     }
 
     /// Recursively collect every `"$ref": "#/$defs/<name>"` `<name>` reachable
@@ -10356,6 +10501,9 @@ mod tests {
             ",
         );
         let schema = schema_of(&c);
+        assert_local_reference_closure(
+            &purrdf_lex::json::read(&c.openapi_json).expect("OpenAPI JSON"),
+        );
 
         // Collect the set of emitted $defs keys.
         let defs: BTreeSet<String> = schema["$defs"]
@@ -10538,7 +10686,14 @@ mod tests {
     /// prefix (the fixture's non-primary vocabulary namespace) is declared here so
     /// bodies can use `logic:` terms directly.
     fn compile_vocab(body: &str) -> CompiledSchema {
-        try_compile_vocab(body).expect("schema compilation")
+        let compiled = try_compile_vocab(body).expect("schema compilation");
+        let openapi = purrdf_lex::json::read(&compiled.openapi_json).expect("OpenAPI JSON");
+        assert_local_reference_closure(&openapi);
+        assert_surface_equivalence(
+            &schema_of(&compiled)["$defs"],
+            &openapi["components"]["schemas"],
+        );
+        compiled
     }
 
     fn try_compile_vocab(body: &str) -> Result<CompiledSchema, SchemaCompileError> {
@@ -10943,8 +11098,15 @@ mod tests {
             vocab: &vocab,
             ontology: onto.as_ref(),
         };
-        compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
-            .expect("schema compilation")
+        let compiled = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+            .expect("schema compilation");
+        let openapi = purrdf_lex::json::read(&compiled.openapi_json).expect("OpenAPI JSON");
+        assert_local_reference_closure(&openapi);
+        assert_surface_equivalence(
+            &schema_of(&compiled)["$defs"],
+            &openapi["components"]["schemas"],
+        );
+        compiled
     }
 
     const STABILITY_VOCAB: &str = r"
