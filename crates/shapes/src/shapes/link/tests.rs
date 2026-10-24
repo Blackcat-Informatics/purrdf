@@ -425,7 +425,7 @@ fn linked_custom_function_recursion_resolves() {
             },
             QueryOptions::new()
                 .with_functions(
-                    &crate::sparql::bind_in_current_env(&shapes.functions)
+                    &crate::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
                 )
                 .with_focus_graph(Some(&data)),

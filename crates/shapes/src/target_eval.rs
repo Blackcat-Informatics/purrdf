@@ -104,15 +104,21 @@ pub(crate) fn declared_shape_targets(data: &ShaclData, shape: &Term) -> Vec<Term
 pub(crate) fn where_targets(
     data: &ShaclData,
     shape: &Shape,
-    disallows: &ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
     model: Option<&std::sync::Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<TermId>, crate::error::ShapesError> {
     let lowered = crate::plan::lower_shapes_in_model(std::iter::once(shape), model)?;
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
-    binding.set_conformance_disallows(disallows);
+    binding.set_validation_request(request);
     let plan = lowered.untargeted_plan(shape, 0, &binding)?;
     data.prepare_class_membership();
-    let narrowed = narrowing(data, shape, disallows, model.map(std::sync::Arc::as_ref), 0)?;
+    let narrowed = narrowing(
+        data,
+        shape,
+        &request.conformance_disallows,
+        model.map(std::sync::Arc::as_ref),
+        0,
+    )?;
     let candidates: &[TermId] = match &narrowed {
         Some(ids) => ids,
         None => data.graph_nodes(),
@@ -136,10 +142,10 @@ pub(crate) fn node_expression_targets(
     data: &ShaclData,
     shape: &Term,
     expr: &NodeExpr,
-    disallows: &ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
     model: Option<&std::sync::Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    crate::expression::eval_node_expr_in_run(data, shape, expr, disallows, model).map_err(|error| {
+    crate::expression::eval_node_expr_in_run(data, shape, expr, request, model).map_err(|error| {
         error.context(&format!(
             "sh:targetNode node expression on shape {shape} failed: "
         ))

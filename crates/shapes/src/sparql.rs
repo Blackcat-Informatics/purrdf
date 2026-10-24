@@ -28,7 +28,7 @@ use purrdf_sparql_eval::{
     AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, GraphResolver,
     InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine,
     Prebinding, PreparedExecution, PropertyFunctionRegistry, QueryOptions, ServiceResolver,
-    StopCause, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
+    StopCause, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -2221,7 +2221,7 @@ impl CachedEnv {
     }
 }
 
-/// Bind `functions`' SPARQL bodies against the extension environment currently in
+/// Bind `shapes`' function bodies and validation request against the environment currently in
 /// force — the only route from a parsed shapes graph's declarations to something
 /// the evaluator will accept.
 ///
@@ -2231,6 +2231,9 @@ impl CachedEnv {
 /// of them, and the parse that used to happen at load time was correct for none of
 /// them that used a relation. It happens here, where the declarations and the
 /// environment finally meet.
+/// `shapes_graph` is the executing binding's graph placement, when supplied;
+/// otherwise the parsed shapes' placement applies. The query still supplies its
+/// own fresh focus graph. Raw SPARQL engine binding supplies no SHACL request.
 ///
 /// Repeated calls under the same environment are cheap rather than wasteful: the
 /// engine's plan cache is keyed on the body text and the environment's identity, so
@@ -2244,8 +2247,11 @@ impl CachedEnv {
 /// declared access mode can serve, fails HERE, once, rather than per row during
 /// evaluation.
 pub fn bind_in_current_env(
-    functions: &UserFunctionRegistry,
+    shapes: &crate::shapes::Shapes,
+    shapes_graph: Option<&str>,
 ) -> Result<Arc<BoundFunctionRegistry>, String> {
+    let functions = &shapes.functions;
+    let shapes_graph = shapes_graph.or(shapes.shapes_graph.as_deref());
     // Nothing declared, nothing to bind — and an empty bound registry is compatible
     // with every environment, because it bound no body and so cannot have bound one
     // against the wrong one (see `BoundFunctionRegistry::EMPTY`).
@@ -2262,10 +2268,68 @@ pub fn bind_in_current_env(
         return Ok(Arc::clone(&EMPTY));
     }
     let env = current_env()?;
-    SPARQL_ENGINE
-        .with(|engine| engine.bind_functions(functions.clone(), &env))
-        .map(Arc::new)
-        .map_err(|e| e.to_string())
+    let bound = SPARQL_ENGINE
+        .with(|engine| engine.bind_functions(functions.as_ref().clone(), &env))
+        .map_err(|e| e.to_string())?;
+    if !bound.requires_focus_graph()
+        && shapes.validation_options.is_default()
+        && shapes_graph.is_none()
+    {
+        return Ok(Arc::new(bound));
+    }
+    Ok(Arc::new(bound.with_invocation_context(|registry| {
+        FunctionRequest {
+            registry: Arc::new(registry),
+            request: shapes.validation_options.clone(),
+            shapes_graph: shapes_graph.map(Arc::from),
+            subclasses: crate::engine::request_subclasses(shapes),
+        }
+    })))
+}
+
+/// The request is retained with the bound registry; the graph is supplied anew
+/// by each query. Function declarations continue to retain their original model.
+#[derive(Debug)]
+pub(crate) struct FunctionRequest {
+    registry: Arc<BoundFunctionRegistry>,
+    pub(crate) request: crate::engine::ValidationRequest,
+    shapes_graph: Option<Arc<str>>,
+    subclasses: Vec<(String, String)>,
+}
+
+impl FunctionRequest {
+    pub(crate) fn enter(call: &purrdf_sparql_eval::ExprFnCall<'_>) -> Option<FunctionScope> {
+        let context = call.invocation_context::<Self>()?;
+        Some(enter_function_scope(Arc::clone(&context.registry)))
+    }
+
+    pub(crate) fn store(
+        call: &purrdf_sparql_eval::ExprFnCall<'_>,
+    ) -> Result<crate::data::ShaclData, crate::ShapesError> {
+        let context = call.invocation_context::<Self>();
+        let store = crate::data::ShaclData::new(
+            Arc::clone(call.focus_graph),
+            Arc::clone(call.focus_graph),
+            None,
+        )
+        .with_shapes_graph(context.and_then(|context| context.shapes_graph.clone()));
+        match context {
+            Some(context) if !context.subclasses.is_empty() => {
+                store.with_class_supplement(&context.subclasses)
+            }
+            _ => Ok(store),
+        }
+    }
+
+    pub(crate) fn guard(
+        call: &purrdf_sparql_eval::ExprFnCall<'_>,
+    ) -> crate::expression::RecursionGuard {
+        let guard = crate::expression::RecursionGuard::with_depth(call.depth);
+        match call.invocation_context::<Self>() {
+            Some(context) => guard.with_request(&context.request),
+            None => guard,
+        }
+    }
 }
 
 /// Install `registry` as the current SHACL-AF function table, returning a guard that

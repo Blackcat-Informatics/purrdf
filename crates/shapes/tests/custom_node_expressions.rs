@@ -452,7 +452,7 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
             },
             QueryOptions::new()
                 .with_functions(
-                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
                 )
                 .with_focus_graph(Some(&data)),
@@ -488,7 +488,7 @@ fn sparql_column(data_ttl: &str, shapes_ttl: &str, query: &str) -> Vec<Option<St
             },
             QueryOptions::new()
                 .with_functions(
-                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
                 )
                 .with_focus_graph(Some(&data)),
@@ -1093,7 +1093,7 @@ fn a_registered_function_without_a_focus_graph_refuses_rather_than_answering() {
                 substitutions: &[],
             },
             QueryOptions::new().with_functions(
-                &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                     .expect("the fixture's bodies parse and admit"),
             ),
         )
@@ -1133,7 +1133,7 @@ fn the_focus_node_of_a_sparql_call_is_the_function_s_own_iri() {
             },
             QueryOptions::new()
                 .with_functions(
-                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
                 )
                 .with_focus_graph(Some(&data)),
@@ -1435,6 +1435,486 @@ fn a_declared_builtin_list_function_is_callable_from_sparql_expr() {
     assert_eq!(focus, vec![ex_term("b").to_string()]);
 }
 
+/// Native and registered SPARQL calls ask the same conformance question under
+/// the validation request's severity policy, including foreign focus nodes.
+#[test]
+fn request_severities_survive_native_and_sparql_function_boundaries() {
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+
+    let invocations = [
+        ("native", "shnex:conformsToShape ( sh:this ex:Checked )"),
+        ("native custom", "ex:conforms ( sh:this )"),
+        (
+            "SPARQL built-in",
+            r#"sh:sparqlExpr "shnex:conformsToShape($this, ex:Checked)""#,
+        ),
+        ("SPARQL custom", r#"sh:sparqlExpr "ex:conforms($this)""#),
+    ];
+    for (severity, levels, expected) in [
+        ("sh:Warning", vec![Severity::Violation], true),
+        (
+            "ex:Advisory",
+            vec![
+                Severity::Violation,
+                Severity::Other(purrdf_shapes::term::NamedNode::from(
+                    "http://example.org/ns#Advisory",
+                )),
+            ],
+            false,
+        ),
+    ] {
+        let options = ValidationOptions::default().with_conformance_disallows(
+            ConformanceDisallows::new(levels).expect("a nonempty request policy"),
+        );
+        for data in ["", "ex:n ex:p ex:o ."] {
+            let store = store_of(data);
+            let observed: Vec<_> = invocations
+                .iter()
+                .map(|&(label, expression)| {
+                    let source = format!(
+                        "{PREFIXES}
+                         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+                         ex:conforms a sh:ListParameterExpressionFunction ;
+                           sh:parameter [ sh:path shnex:arg0 ] ;
+                           sh:bodyExpression [ shnex:conformsToShape (
+                             [ shnex:arg 0 ] ex:Checked ) ] .
+                         ex:Checked a sh:NodeShape ; sh:severity {severity} ;
+                           sh:nodeKind sh:Literal .
+                         ex:S a sh:NodeShape ; sh:targetNode ex:n ;
+                           sh:expression [ {expression} ] ."
+                    );
+                    let mut shapes = parse_shapes(&source, None).expect("valid declarations");
+                    let default = validate_with(&store, &shapes).expect("default validation");
+                    assert_eq!(default.conforms, severity == "ex:Advisory", "{label}");
+                    shapes.set_validation_options(options.clone());
+                    let report = validate_with(&store, &shapes).expect("scoped validation");
+                    (label, report.conforms)
+                })
+                .collect();
+            assert_eq!(
+                observed,
+                invocations
+                    .iter()
+                    .map(|&(label, _)| (label, expected))
+                    .collect::<Vec<_>>(),
+                "severity={severity}, data={data:?}"
+            );
+        }
+    }
+}
+
+/// A bound request owns its policy and declaration domain, but never owns the
+/// answer or the dataset of a previous query.
+#[test]
+fn registered_requests_survive_input_drop_and_keep_independent_graphs_and_policies() {
+    use purrdf_rdf::TermValue;
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+
+    let registries = {
+        let source = format!(
+            "{PREFIXES}
+             shnex:conformsToShape a sh:ListParameterExpressionFunction .
+             ex:conforms a sh:ListParameterExpressionFunction ;
+               sh:parameter [ sh:path shnex:arg0 ] ;
+               sh:bodyExpression [ shnex:conformsToShape (
+                 [ shnex:arg 0 ] ex:Checked ) ] .
+             ex:Checked a sh:NodeShape ; sh:class ex:Top .
+             ex:Warning a sh:NodeShape ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .
+             ex:nested a sh:ListParameterExpressionFunction ;
+               sh:parameter [ sh:path shnex:arg0 ] ;
+               sh:bodyExpression [ sh:sparqlExpr \"shnex:conformsToShape($arg0, ex:Checked)\" ] .
+             ex:Bottom rdfs:subClassOf ex:Top ."
+        );
+        let mut shapes = parse_shapes(&source, None).unwrap();
+        let defaults = purrdf_shapes::sparql::bind_in_current_env(&shapes, None).unwrap();
+        shapes.set_validation_options(
+            ValidationOptions::default()
+                .with_subclass_of_in_shapes_graph(true)
+                .with_conformance_disallows(
+                    ConformanceDisallows::new([Severity::Violation]).unwrap(),
+                ),
+        );
+        let scoped = purrdf_shapes::sparql::bind_in_current_env(&shapes, None).unwrap();
+        [defaults, scoped]
+    };
+    // The public query seam borrows a registry value. Moving it out of the
+    // factory's Arc and cloning it must preserve both nested calls and ownership.
+    let registries = registries.map(|registry| Arc::try_unwrap(registry).unwrap());
+    let window = CurrentThreadWindow::open();
+    let copies = registries.clone();
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    assert_eq!(measured.requested_bytes, 0, "{measured:?}");
+    drop(registries);
+    let registries = copies;
+    let engine = NativeSparqlEngine::new();
+    for (graph, class_conforms) in [
+        ("ex:n a ex:Bottom .", true),
+        ("ex:n a ex:Other .", false),
+        ("ex:n a ex:Bottom .", true),
+    ] {
+        let data = data_of(graph);
+        for (scoped, functions) in registries.iter().enumerate() {
+            let result = engine
+                .query_with_options_view(
+                    &data,
+                    SparqlRequest {
+                        query: "PREFIX ex: <http://example.org/ns#>
+                            PREFIX shnex: <http://www.w3.org/ns/shacl-node-expr#>
+                            SELECT ?custom ?builtin ?warning ?nested WHERE {
+                              BIND(ex:conforms(ex:n) AS ?custom)
+                              BIND(shnex:conformsToShape(ex:n, ex:Checked) AS ?builtin)
+                              BIND(shnex:conformsToShape(ex:n, ex:Warning) AS ?warning)
+                              BIND(ex:nested(ex:n) AS ?nested)
+                            }",
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::new()
+                        .with_functions(functions)
+                        .with_focus_graph(Some(&data)),
+                )
+                .unwrap();
+            let SparqlResult::Solutions { rows, .. } = result else {
+                panic!("solutions")
+            };
+            assert_eq!(
+                rows,
+                vec![vec![
+                    Some(TermValue::boolean(scoped == 1 && class_conforms)),
+                    Some(TermValue::boolean(scoped == 1 && class_conforms)),
+                    Some(TermValue::boolean(scoped == 1)),
+                    Some(TermValue::boolean(scoped == 1 && class_conforms)),
+                ]],
+                "graph={graph}, scoped={scoped}"
+            );
+        }
+    }
+}
+
+/// Restoring a preparation changes storage, not the request used by callbacks,
+/// targets, nested native conformance or complete report collection.
+#[test]
+fn prepared_and_restored_callback_requests_agree_in_complete_reports() {
+    use purrdf_shapes::engine::{PreparedShapes, ValidationOptions};
+    use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+
+    let prepared = {
+        let source = format!(
+            r#"{PREFIXES}
+             shnex:conformsToShape a sh:ListParameterExpressionFunction .
+             ex:Warning a sh:NodeShape ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .
+             ex:Select a sh:NodeShape ;
+               sh:targetNode [ sh:sparqlExpr "IF(shnex:conformsToShape(ex:n, ex:Warning), ex:n, ex:other)" ] ;
+               sh:in ( ex:n ) .
+             ex:S a sh:NodeShape ; sh:targetNode ex:n ;
+               sh:expression [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Warning)" ] ."#
+        );
+        PreparedShapes::new(Arc::new(parse_shapes(&source, None).unwrap()))
+    };
+    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let options = ValidationOptions::default()
+        .with_conformance_disallows(ConformanceDisallows::new([Severity::Violation]).unwrap());
+    let restored = ShapesProduct::open(&bytes)
+        .unwrap()
+        .admit_with_options(&ShapesProfile::CORE, &HostBindings::empty(), &options)
+        .unwrap();
+    let configured = prepared.with_validation_options(options);
+    drop(bytes);
+    let data = data_of("");
+    for model in [&configured, &restored] {
+        let report = model
+            .bind_shared_dataset(Arc::clone(&data))
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert!(report.conforms, "{report:?}");
+        assert!(report.results.is_empty());
+        let complete = model
+            .bind_complete_shared_dataset(Arc::clone(&data))
+            .unwrap()
+            .validate()
+            .unwrap()
+            .into_legacy();
+        assert!(complete.conforms, "{complete:?}");
+        assert!(complete.results.is_empty());
+    }
+}
+
+/// The binding's explicit graph placement overrides the parsed document's
+/// default, and remains available inside a shape reached from either callback.
+#[test]
+fn registered_conformance_preserves_the_bindings_actual_shapes_graph() {
+    use purrdf_shapes::engine::PreparedShapes;
+    let shapes = parse_shapes(
+        &format!(
+            r#"{PREFIXES}
+             shnex:conformsToShape a sh:ListParameterExpressionFunction .
+             ex:conforms a sh:ListParameterExpressionFunction ;
+               sh:parameter [ sh:path shnex:arg0 ] ;
+               sh:bodyExpression [ shnex:conformsToShape ( [ shnex:arg 0 ] ex:Checked ) ] .
+             ex:Marker ex:p ex:o .
+             ex:Checked a sh:NodeShape ; sh:sparql [ sh:select """
+               SELECT $this WHERE {{
+                 FILTER(!BOUND($shapesGraph) || $shapesGraph != <http://example.org/actual>
+                   || NOT EXISTS {{ GRAPH $shapesGraph {{
+                     <http://example.org/ns#Marker> <http://example.org/ns#p> <http://example.org/ns#o>
+                   }} }})
+               }}""" ] .
+             ex:S a sh:NodeShape ; sh:targetNode ex:n ; sh:expression [ sh:sparqlExpr
+               "ex:conforms($this) && shnex:conformsToShape($this, ex:Checked)" ] ."#
+        ),
+        None,
+    ).unwrap();
+    let prepared = PreparedShapes::new(Arc::new(shapes));
+    let data = data_of("");
+    let without = prepared
+        .bind_shared_dataset(Arc::clone(&data))
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert!(
+        !without.conforms,
+        "an absent graph context must fail the inner shape"
+    );
+    let bound = prepared
+        .bind_shared_dataset_with_shapes_graph(
+            Arc::clone(&data),
+            Some("http://example.org/actual"),
+            purrdf_rdf::ir::ViewLimits::default(),
+        )
+        .unwrap();
+    assert!(bound.validate().unwrap().conforms);
+    let complete = prepared
+        .bind_complete_shared_dataset_with_shapes_graph(data, Some("http://example.org/actual"))
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert!(complete.into_legacy().conforms);
+}
+
+/// Naming the shapes graph makes its rows visible to GRAPH queries; those rows
+/// do not become Core data when a registered function re-enters conformance.
+#[test]
+fn named_shapes_rows_do_not_become_callback_core_data() {
+    use purrdf_shapes::engine::PreparedShapes;
+    let source = format!(
+        r#"{PREFIXES}
+         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         ex:n a ex:Top ; ex:flag 1 .
+         ex:Checked a sh:NodeShape ; sh:class ex:Top .
+         ex:Empty a sh:NodeShape ; sh:property [ sh:path ex:flag ; sh:maxCount 0 ] .
+         ex:Native a sh:NodeShape ; sh:targetNode ex:n ;
+           sh:expression [ shnex:conformsToShape ( sh:this ex:Checked ) ],
+                         [ shnex:conformsToShape ( sh:this ex:Empty ) ] .
+         ex:Registered a sh:NodeShape ; sh:targetNode ex:n ;
+           sh:expression [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Checked)" ],
+                         [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Empty)" ] ."#
+    );
+    let prepared = PreparedShapes::new(Arc::new(parse_shapes(&source, None).unwrap()));
+    for (data, violations) in [("", 2), ("ex:n a ex:Top .", 0)] {
+        let data = data_of(data);
+        for graph in [None, Some("http://example.org/shapes")] {
+            let report = prepared
+                .bind_shared_dataset_with_shapes_graph(
+                    Arc::clone(&data),
+                    graph,
+                    purrdf_rdf::ir::ViewLimits::default(),
+                )
+                .unwrap()
+                .validate()
+                .unwrap();
+            assert_eq!(
+                report.results.len(),
+                violations,
+                "graph={graph:?}: {report:?}"
+            );
+        }
+    }
+}
+
+/// Rules use the same request for their native heads, registered calls and
+/// conditions, including the fresh class view of a later inference round.
+#[test]
+fn rule_heads_and_conditions_share_the_callback_validation_request() {
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+
+    let source = format!(
+        r#"{PREFIXES}
+         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         ex:Warning a sh:NodeShape ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .
+         ex:Class a sh:NodeShape ; sh:class ex:Top .
+         ex:Bottom rdfs:subClassOf ex:Top .
+         ex:S a sh:NodeShape ; sh:targetNode ex:n ;
+           sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:native ;
+             sh:object [ shnex:conformsToShape ( sh:this ex:Warning ) ] ] ;
+           sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:registered ;
+             sh:object [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Warning)" ] ] ;
+           sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:nativeClass ;
+             sh:object [ shnex:conformsToShape ( sh:this ex:Class ) ] ] ;
+           sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:registeredClass ;
+             sh:object [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Class)" ] ] ;
+           sh:rule [ a sh:TripleRule ; sh:condition ex:Warning ;
+             sh:subject sh:this ; sh:predicate ex:condition ; sh:object ex:yes ] ."#
+    );
+    let data = data_of("ex:n a ex:Bottom .");
+    let mut shapes = parse_shapes(&source, None).unwrap();
+    for enabled in [false, true, false] {
+        shapes.set_validation_options(if enabled {
+            ValidationOptions::default()
+                .with_subclass_of_in_shapes_graph(true)
+                .with_conformance_disallows(
+                    ConformanceDisallows::new([Severity::Violation]).unwrap(),
+                )
+        } else {
+            ValidationOptions::default()
+        });
+        let entailed = entail_dataset(&data, &shapes).unwrap();
+        let triples = triples_of(&entailed);
+        for predicate in ["native", "registered", "nativeClass", "registeredClass"] {
+            let values: Vec<_> = triples
+                .iter()
+                .filter(|(_, p, _)| *p == format!("http://example.org/ns#{predicate}"))
+                .map(|(_, _, value)| value.as_str())
+                .collect();
+            assert_eq!(
+                values,
+                [if enabled { "true" } else { "false" }],
+                "{predicate}, enabled={enabled}"
+            );
+        }
+        assert_eq!(
+            triples
+                .iter()
+                .any(|(_, p, _)| p == "http://example.org/ns#condition"),
+            enabled
+        );
+    }
+}
+
+/// Binding retains large request payloads once. Repeated callback evaluation
+/// must not copy either custom severity IRIs or a long graph-context IRI.
+#[test]
+fn callback_allocation_does_not_scale_with_retained_request_payloads() {
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+    use purrdf_shapes::term::NamedNode;
+
+    let mut shapes = parse_shapes(
+        &format!(
+            "{PREFIXES}
+         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         ex:Warning a sh:NodeShape ; sh:severity sh:Warning ; sh:nodeKind sh:Literal ."
+        ),
+        None,
+    )
+    .unwrap();
+    let data = data_of("");
+    let engine = NativeSparqlEngine::new();
+    let query = "PREFIX ex: <http://example.org/ns#>
+                 PREFIX shnex: <http://www.w3.org/ns/shacl-node-expr#>
+                 SELECT ?result WHERE { BIND(shnex:conformsToShape(ex:n, ex:Warning) AS ?result) }";
+    let mut baseline = None;
+    for population in [1_usize, 32, 512] {
+        let levels = std::iter::once(Severity::Violation).chain((0..population).map(|index| {
+            Severity::Other(NamedNode::new_unchecked(format!(
+                "http://example.org/severity/{index}"
+            )))
+        }));
+        shapes.set_validation_options(
+            ValidationOptions::default()
+                .with_conformance_disallows(ConformanceDisallows::new(levels).unwrap()),
+        );
+        let graph = format!("http://example.org/{}", "g".repeat(population));
+        let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes, Some(&graph)).unwrap();
+        let evaluate = || {
+            engine.query_with_options_view(
+                &data,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::new()
+                    .with_functions(&functions)
+                    .with_focus_graph(Some(&data)),
+            )
+        };
+        evaluate().unwrap();
+        let window = CurrentThreadWindow::open();
+        let result = evaluate();
+        let measured = window.close();
+        let SparqlResult::Solutions { rows, .. } = result.unwrap() else {
+            panic!("solutions")
+        };
+        assert_eq!(rows, vec![vec![Some(purrdf_rdf::TermValue::boolean(true))]]);
+        let costs = (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.peak_working_bytes,
+            measured.retained_bytes,
+        );
+        match baseline {
+            None => baseline = Some(costs),
+            Some(expected) => assert_eq!(
+                costs, expected,
+                "request population={population}: {measured:?}"
+            ),
+        }
+    }
+}
+
+/// Cross the production worker threshold under an explicit two-worker pool,
+/// then repeat under a different request to expose any retained worker policy.
+#[test]
+fn callback_request_policy_reaches_serial_and_parallel_focus_chunks() {
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::report::{ConformanceDisallows, Severity};
+    use std::fmt::Write as _;
+
+    let mut shapes = parse_shapes(
+        &format!(
+            r#"{PREFIXES}
+         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         ex:Warning a sh:NodeShape ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .
+         ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
+           sh:expression [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Warning)" ] ."#
+        ),
+        None,
+    )
+    .unwrap();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    for population in [1, 1025] {
+        let mut triples = String::new();
+        for index in 0..population {
+            writeln!(triples, "ex:n{index} ex:p 1 .").unwrap();
+        }
+        let data = store_of(&triples);
+        for ignore_warning in [true, false, true] {
+            shapes.set_validation_options(if ignore_warning {
+                ValidationOptions::default().with_conformance_disallows(
+                    ConformanceDisallows::new([Severity::Violation]).unwrap(),
+                )
+            } else {
+                ValidationOptions::default()
+            });
+            let report = pool.install(|| validate_with(&data, &shapes)).unwrap();
+            assert_eq!(report.conforms, ignore_warning);
+            assert_eq!(
+                report.results.len(),
+                if ignore_warning { 0 } else { population }
+            );
+        }
+    }
+}
+
 /// The neighbour: WITHOUT the declaration the graph provides no instance of the
 /// class, so nothing registers the IRI and the SPARQL call has no function to
 /// reach — the validation is refused rather than answered, which is a different
@@ -1475,7 +1955,7 @@ fn a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbou
     let attempt = |shapes: &str, call: &str| {
         let shapes = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
         let data = data_of("ex:a ex:n 1 .");
-        let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+        let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
             .expect("the fixture's bodies parse and admit");
         NativeSparqlEngine::new()
             .query_with_options_view(

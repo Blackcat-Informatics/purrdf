@@ -153,10 +153,13 @@ pub(crate) fn evaluate_parsed(
 ) -> Result<NodeExprEvaluation, ShapesError> {
     let projected = crate::engine::project_dataset(request.data)?;
     let data = crate::engine::build_projected_data(projected, shapes, None)?;
-    let _function_scope =
-        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
+    let data = crate::engine::with_shapes_graph_subclasses(&data, shapes)?.unwrap_or(data);
+    let _function_scope = crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(
+        shapes,
+        data.shapes_graph_iri(),
+    )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-    let mut guard = RecursionGuard::default();
+    let mut guard = RecursionGuard::default().with_request(&shapes.validation_options);
     let outputs = eval_bound(
         &data,
         request.focus,

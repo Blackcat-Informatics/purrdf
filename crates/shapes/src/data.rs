@@ -128,7 +128,7 @@ pub struct ShaclData {
     /// The same relation over the dataset visible to SHACL-SPARQL.
     sparql_view: ClassMembershipView,
     /// The named-graph IRI under which the shapes dataset is exposed, when known.
-    shapes_graph_iri: Option<String>,
+    shapes_graph_iri: Option<Arc<str>>,
     /// The NODES of the Core data graph, derived on first use and shared by every
     /// `sh:targetWhere` the bound shapes declare (see [`Self::graph_nodes`]).
     graph_nodes: OnceLock<Box<[TermId]>>,
@@ -187,6 +187,20 @@ impl ShaclData {
         shapes_graph_iri: Option<String>,
         supplement: &[(String, String)],
     ) -> Self {
+        Self::from_shared_views_with_supplement(
+            core,
+            sparql,
+            shapes_graph_iri.map(Arc::from),
+            supplement,
+        )
+    }
+
+    fn from_shared_views_with_supplement(
+        core: Arc<ShaclDatasetView>,
+        sparql: Arc<ShaclDatasetView>,
+        shapes_graph_iri: Option<Arc<str>>,
+        supplement: &[(String, String)],
+    ) -> Self {
         let class_membership =
             ClassMembershipView::from_view_with_supplement(Arc::clone(&core), supplement);
         let sparql_view = if Arc::ptr_eq(&core, &sparql) {
@@ -202,6 +216,11 @@ impl ShaclData {
             shapes_graph_iri,
             graph_nodes: OnceLock::new(),
         }
+    }
+
+    pub(crate) fn with_shapes_graph(mut self, iri: Option<Arc<str>>) -> Self {
+        self.shapes_graph_iri = iri;
+        self
     }
 
     /// The NODES of the Core data graph, as RDF 1.2 Concepts defines them: "The
@@ -330,7 +349,7 @@ impl ShaclData {
             };
             (core, sparql)
         };
-        Ok(Self::from_views_with_supplement(
+        Ok(Self::from_shared_views_with_supplement(
             core,
             sparql,
             self.shapes_graph_iri.clone(),

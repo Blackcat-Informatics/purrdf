@@ -474,10 +474,10 @@ impl ReportRun<'_> {
 
 impl<'a> ValidationContext<'a, '_> {
     fn report_profile(self) -> crate::profile::ShaclProfile {
-        self.capture
-            .map_or(crate::profile::ShaclProfile::LEGACY, |capture| {
-                capture.profile
-            })
+        self.capture.map_or(
+            self.plan.binding().validation_request().shacl_profile,
+            |capture| capture.profile,
+        )
     }
 
     /// This context re-aimed at a shape reached through a constraint.
