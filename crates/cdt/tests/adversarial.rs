@@ -375,6 +375,15 @@ fn oversized_lexical_forms_are_typed_errors() {
         lexical.push_str("1]");
         assert!(lexical.len() > OVERSIZED_BYTES);
         let error = parse_list(&lexical).expect_err("a 200 MB list is refused");
+        let record = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(record.code, "cdt-input-too-large");
+        assert_eq!(record.events.len(), 2);
+        assert!(
+            matches!(record.field("offset"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == MAX_LEXICAL_BYTES as u128)
+        );
+        assert!(
+            matches!(record.field("length"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == lexical.len() as u128)
+        );
         let CdtError::InputTooLarge { offset, length } = error else {
             panic!("expected an input-size error, got {error:?}");
         };
@@ -411,6 +420,15 @@ fn the_element_bound_refuses_a_small_input_that_would_build_a_huge_value() {
         "this case must pass the byte bound so it can exercise the element bound"
     );
     let error = parse_list(&lexical).expect_err("too many elements is refused");
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "cdt-too-many-elements");
+    assert_eq!(record.events.len(), 2);
+    assert!(
+        matches!(record.field("offset"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == (MAX_ELEMENTS * 2 + 1) as u128)
+    );
+    assert!(
+        matches!(record.field("limit"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == MAX_ELEMENTS as u128)
+    );
     let CdtError::TooManyElements { limit, .. } = error else {
         panic!("expected an element-count error, got {error:?}");
     };
