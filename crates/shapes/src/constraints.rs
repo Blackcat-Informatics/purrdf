@@ -899,7 +899,14 @@ struct MemoKey<'a> {
     /// into a hard error instead of a stack overflow: an answer reached with
     /// depth to spare is not an answer to a deeper ask.
     depth: u32,
-    /// The shape's IRI, borrowed out of the shapes graph.
+    /// The original model domain, or the actual body of an unowned shape.
+    ///
+    /// Equal names in different models need not describe the same constraints.
+    /// These addresses identify live, immutable owners for this run only; they
+    /// never enter artifacts or returned results. An unowned programmatic body
+    /// has no catalog guaranteeing that another equal name has the same meaning.
+    domain: usize,
+    /// The shape's name, borrowed out of its original model.
     ///
     /// The IRI and not the lowering's address, because a shape reached through
     /// a constraint is stored INLINE at each constraint site
@@ -907,15 +914,16 @@ struct MemoKey<'a> {
     /// two `Shape` values at two addresses, and an address key would refuse to
     /// connect them — which is precisely the overlap this memo exists to
     /// collapse. In the SHACL data model a shape IS its node in the shapes
-    /// graph, so two constraint sites naming the same IRI name the same shape
-    /// and must reach the same verdict.
+    /// graph, so two constraint sites naming the same IRI IN THE SAME MODEL name
+    /// the same shape and must reach the same verdict. Borrowing the Term keeps
+    /// the key one pointer wide without allocating or copying its IRI.
     ///
     /// Only IRI-identified shapes are keyed. A blank-node-identified shape is
     /// anonymous and belongs to exactly one constraint site, so it has no
     /// second site to share an answer with, and excluding it keeps the key clear
     /// of every question about whether a parser might reuse a blank label
     /// between a shape and something derived from it.
-    shape: &'a str,
+    shape: &'a Term,
 }
 
 /// The conformance answers one validation run has already computed.
@@ -1020,10 +1028,14 @@ fn conforms_memoized<'a>(
     // can be equal), and a blank-node-identified shape has no second site to share
     // an answer with. Either missing simply means the question is recomputed.
     let key = match (focus.id(), &plan.shape().id) {
-        (Some(node), Term::NamedNode(iri)) => Some(MemoKey {
+        (Some(node), Term::NamedNode(_)) => Some(MemoKey {
             node,
             depth: context.depth,
-            shape: iri.as_str(),
+            domain: plan.model().map_or_else(
+                || std::ptr::from_ref(plan.shape()).addr(),
+                |owner| std::sync::Arc::as_ptr(owner).addr(),
+            ),
+            shape: &plan.shape().id,
         }),
         _ => None,
     };
