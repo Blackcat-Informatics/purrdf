@@ -1,0 +1,10 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/geo-kernel)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/datalog)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/conformance-kit)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 06s

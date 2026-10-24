@@ -1,0 +1,61 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-eval)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/helper-census)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/gts)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/datalog)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/jsonschema)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/xsd)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf-core)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/testkit)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/ed25519)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-algebra)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/iri)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/lex)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/columnar)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/cdt)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/bench)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/json)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shex)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/mime)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/markdown)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/conformance-kit)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/envelope-probe)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf-capi)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/bindings/python)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf-wasm)
+error: use of `format!` to build up a string from an iterator
+    --> crates/shapes/tests/custom_node_expressions.rs:1844:23
+     |
+1844 |           let triples = (0..population)
+     |  _______________________^
+1845 | |             .map(|index| format!("ex:n{index} ex:p 1 .\n"))
+1846 | |             .collect::<String>();
+     | |________________________________^
+     |
+help: call `fold` instead
+    --> crates/shapes/tests/custom_node_expressions.rs:1845:14
+     |
+1845 |             .map(|index| format!("ex:n{index} ex:p 1 .\n"))
+     |              ^^^
+help: ... and use the `write!` macro here
+    --> crates/shapes/tests/custom_node_expressions.rs:1845:26
+     |
+1845 |             .map(|index| format!("ex:n{index} ex:p 1 .\n"))
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: this can be written more efficiently by appending to a `String` directly
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#format_collect
+     = note: `-D clippy::format-collect` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::format_collect)]`
+
+error: could not compile `purrdf-shapes` (test "custom_node_expressions") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

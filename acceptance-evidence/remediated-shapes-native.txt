@@ -1,0 +1,122 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 16.68s
+     Running tests/change_path_alloc.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/062c75a6ffb1e9eb/out/change_path_alloc-062c75a6ffb1e9eb)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.09s
+
+     Running tests/complete_reports.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/b71f19671f322a16/out/complete_reports-b71f19671f322a16)
+
+running 24 tests
+test complete_core_validation_spends_no_sparql_fuel ... ok
+test changed_constraint_cannot_inherit_a_source_occurrence ... ok
+test deliberate_shared_source_retains_shared_blank_identity ... ok
+test complete_governor_refusal_is_typed_and_each_call_has_fresh_fuel ... ok
+test bounded_complete_routes_use_the_same_source_evidence_and_refuse_foreign_ids ... ok
+test duplicate_public_root_identity_is_refused_before_complete_binding ... ok
+test equal_graph_bytes_from_independent_acquisitions_do_not_share_identity ... ok
+test independent_equal_blank_labels_have_distinct_source_acquisitions ... ok
+test equal_queries_retain_distinct_actual_source_constraints ... ok
+test native_data_blanks_keep_scoped_identity_without_shapes_blanks ... ok
+test isomorphic_report_only_blanks_do_not_authorize_changed_source_identity ... ok
+test nested_rdf12_blanks_keep_independent_original_scopes ... ok
+test identical_fresh_blank_spellings_from_four_query_acquisitions_remain_distinct ... ok
+test nested_source_refusal_survives_a_later_conforming_some_value ... ok
+test projected_and_shapes_graph_bindings_retain_actual_source_identity ... ok
+test prepared_binding_and_egress_retain_sources_after_input_drop ... ok
+test query_minted_blanks_cannot_impersonate_retained_shape_blanks ... ok
+test repeated_detail_query_acquisitions_mint_distinct_blanks ... ok
+test recursive_details_keep_their_own_source_constraints ... ok
+test sequence_inverse_path_nodes_are_minted_without_source_correspondence ... ok
+test restored_product_reconstructs_evidence_without_changing_carried_bytes ... ok
+test result_multiplicity_survives_complete_collection_and_emission ... ok
+test warm_complete_core_allocation_count_has_no_per_focus_growth ... ok
+test fresh_query_identity_is_stable_across_focus_execution ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/conformance_memo.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/96121c647d5e9e26/out/conformance_memo-96121c647d5e9e26)
+
+running 3 tests
+test a_named_inner_shape_is_evaluated_once_for_a_shared_value_node ... ok
+test an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_is_reachable ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/product_model_census.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/ebb3d718c5d46fae/out/product_model_census-ebb3d718c5d46fae)
+
+running 28 tests
+test detector_self_tests::a_field_type_change_alone_moves_the_stage_id ... ok
+test detector_self_tests::a_new_variant_reaches_the_census_rows_and_the_stage_id ... ok
+test detector_self_tests::aliases_do_not_hide_a_reachable_type ... ok
+test detector_self_tests::an_ambiguous_reachable_name_is_refused - should panic ... ok
+test detector_self_tests::an_ambiguous_unreachable_name_is_not_refused ... ok
+test detector_self_tests::an_opaque_field_type_is_refused - should panic ... ok
+test detector_self_tests::an_undeclared_reachable_type_is_flagged ... ok
+test detector_self_tests::cfg_test_items_are_invisible_to_the_census ... ok
+test detector_self_tests::doc_comments_and_formatting_do_not_move_the_stage_id ... ok
+test detector_self_tests::malformed_source_fails_loudly - should panic ... ok
+test detector_self_tests::ordinary_field_types_are_read_not_refused ... ok
+test detector_self_tests::tuple_and_unit_variants_are_censused ... ok
+test detector_self_tests::variant_order_moves_the_stage_id ... ok
+test reformatting_the_class_walk_does_not_move_the_stage_id ... ok
+test census_closure_is_complete ... ok
+test constraint_variants_are_the_spec_table_component_rows ... ok
+test census_rows_carry_every_variant_and_field ... ok
+test stage_id_changes_when_a_capability_table_changes ... ok
+test stage_id_changes_when_a_rule_variant_is_added ... ok
+test report_cache_is_censused_but_not_carried_by_the_stage ... ok
+test stage_id_changes_when_a_variant_is_added ... ok
+test stage_id_changes_when_the_class_reachability_rule_changes ... ok
+test stage_id_changes_when_the_preamble_gains_a_field ... ok
+test stage_id_changes_when_the_spec_table_changes ... ok
+test stage_id_depends_on_the_profile_id ... ok
+test stage_id_matches_shipped_constant ... ok
+test report_cache_exclusion_is_exact_and_model_fields_still_move_the_stage ... ok
+test stage_id_is_reproducible_and_its_preimage_is_readable ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.52s
+
+     Running tests/shape_catalog.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/5a531e9ca6986d70/out/shape_catalog-5a531e9ca6986d70)
+
+running 7 tests
+test function_domain_admission_has_no_per_declaration_allocation ... ok
+test missing_catalog_identity_retains_the_original_term_without_clone_allocation ... ok
+test catalog_admission_allocation_growth_and_retained_reference_execution ... ok
+test identity_reference_report_retains_caller_path_role_vocabulary ... ok
+test static_root_preparation_does_not_copy_unreferenced_catalog_bodies ... ok
+test catalog_root_export_and_clone_share_constraint_bodies ... ok
+test shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth ... FAILED
+
+failures:
+
+---- shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth stdout ----
+depth 1: preparation Measurement { allocations: 145, requested_bytes: 31735, retained_bytes: 8249, peak_working_bytes: 13033 }, expansion Measurement { allocations: 10, requested_bytes: 3458, retained_bytes: 84, peak_working_bytes: 1612 }
+depth 8: preparation Measurement { allocations: 676, requested_bytes: 161551, retained_bytes: 38368, peak_working_bytes: 63388 }, expansion Measurement { allocations: 48, requested_bytes: 27502, retained_bytes: 64, peak_working_bytes: 2952 }
+depth 32: preparation Measurement { allocations: 2456, requested_bytes: 634310, retained_bytes: 145455, peak_working_bytes: 249419 }, expansion Measurement { allocations: 172, requested_bytes: 111982, retained_bytes: 64, peak_working_bytes: 8032 }
+
+thread 'shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth' (638270) panicked at crates/shapes/tests/shape_catalog.rs:106:13:
+assertion failed: expansion_cost.requested_bytes <= old_expansion.requested_bytes * multiplier
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test shape_catalog`

@@ -1,0 +1,95 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 3m 28s
+     Running tests/change_path_alloc.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/062c75a6ffb1e9eb/out/change_path_alloc-062c75a6ffb1e9eb)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.25s
+
+     Running tests/conformance_memo.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/96121c647d5e9e26/out/conformance_memo-96121c647d5e9e26)
+
+running 3 tests
+test a_named_inner_shape_is_evaluated_once_for_a_shared_value_node ... ok
+test an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_is_reachable ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/custom_node_expressions.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/c71af43536de13e2/out/custom_node_expressions-c71af43536de13e2)
+
+running 43 tests
+test a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error ... ok
+test a_blank_node_argument_is_an_error_under_the_editors_draft_and_an_argument_under_the_working_draft ... ok
+test a_blank_node_argument_is_an_error_unless_its_parameter_is_optional ... ok
+test a_declaration_without_a_body_is_a_load_error ... ok
+test a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbound ... ok
+test a_declared_builtin_follows_the_same_value_and_error_rule ... ok
+test a_cardinality_failure_in_a_body_is_a_sparql_error_in_a_report ... ok
+test a_declared_builtin_list_function_is_callable_from_sparql_expr ... ok
+test a_cycle_through_sparql_query_text_is_bounded_too ... ok
+test a_declared_sparql_builtin_is_callable_from_sparql_expr ... ok
+test a_list_parameter_function_resolves_from_sparql_query_text ... ok
+test a_named_parameter_function_has_no_positional_call_form ... ok
+test a_recursive_function_makes_validation_fail_rather_than_conform ... ok
+test a_registered_function_without_a_focus_graph_refuses_rather_than_answering ... ok
+test a_function_called_during_the_rules_fixpoint_sees_the_current_round_s_graph ... ok
+test a_required_parameter_after_an_optional_one_is_a_load_error ... ok
+test a_self_recursive_function_fails_closed_at_the_depth_bound ... ok
+test a_sparql_expr_body_sees_its_arguments_as_pre_bound_variables ... ok
+test an_optional_parameter_widens_the_arity_range_without_removing_its_bounds ... ok
+test a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed_cause ... ok
+test a_select_body_sees_its_arguments_and_the_focus_graph ... ok
+test an_undeclared_builtin_list_function_is_not_registered ... ok
+test an_unparsable_body_is_a_load_error ... ok
+test an_optional_trailing_parameter_may_be_omitted_or_supplied ... ok
+test body_expression_without_a_declaring_class_is_a_load_error ... ok
+test arity_mismatch_at_the_call_site_is_a_load_error ... ok
+test body_level_processor_failures_are_typed ... ok
+test body_reading_an_undeclared_argument_is_a_load_error ... ok
+test colliding_key_parameters_are_a_load_error ... ok
+test direct_custom_function_calls_bound_argument_allocation_growth ... ok
+test evaluated_function_arguments_keep_optional_indices_and_query_bindings ... ok
+test exact_argument_indices_preserve_the_u64_boundary ... ok
+test list_parameter_function_returns_its_body_s_value ... ok
+test direct_custom_function_large_result_is_moved_without_a_second_payload_copy ... ok
+test list_parameter_function_drives_a_validation_verdict ... ok
+test an_unresolvable_shape_in_a_body_is_a_sparql_error ... ok
+test named_parameter_function_without_a_key_parameter_is_a_load_error ... ok
+test named_parameter_function_evaluates_its_body_under_the_argument_scope ... ok
+test registered_requests_survive_input_drop_and_keep_independent_graphs_and_policies ... ok
+test the_focus_node_of_a_sparql_call_is_the_function_s_own_iri ... ok
+test prepared_and_restored_callback_requests_agree_in_complete_reports ... ok
+test registered_conformance_preserves_the_bindings_actual_shapes_graph ... ok
+test request_severities_survive_native_and_sparql_function_boundaries ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/shape_catalog.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/5a531e9ca6986d70/out/shape_catalog-5a531e9ca6986d70)
+
+running 7 tests
+test function_domain_admission_has_no_per_declaration_allocation ... ok
+test missing_catalog_identity_retains_the_original_term_without_clone_allocation ... ok
+test catalog_admission_allocation_growth_and_retained_reference_execution ... ok
+test identity_reference_report_retains_caller_path_role_vocabulary ... ok
+test static_root_preparation_does_not_copy_unreferenced_catalog_bodies ... ok
+test catalog_root_export_and_clone_share_constraint_bodies ... ok
+test shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

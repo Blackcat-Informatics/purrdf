@@ -1,0 +1,50 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 6.51s
+     Running tests/shape_catalog.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/5a531e9ca6986d70/out/shape_catalog-5a531e9ca6986d70)
+
+running 7 tests
+test function_domain_admission_has_no_per_declaration_allocation ... ok
+test missing_catalog_identity_retains_the_original_term_without_clone_allocation ... ok
+test catalog_admission_allocation_growth_and_retained_reference_execution ... ok
+test identity_reference_report_retains_caller_path_role_vocabulary ... ok
+test static_root_preparation_does_not_copy_unreferenced_catalog_bodies ... ok
+test catalog_root_export_and_clone_share_constraint_bodies ... ok
+test shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/w3c12_conformance.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/3e0972d63ea39127/out/w3c12_conformance-3e0972d63ea39127)
+
+running 29 tests
+test a_stale_unlisted_file_delta_is_refused ... ok
+test comparator_is_exact_term_equality ... ok
+test comparator_order_and_cardinality ... ok
+test a_spec_contradicted_entry_is_reported_failed_with_its_rationale ... ok
+test engine_spells_a_whole_computed_decimal_with_a_point ... ok
+test a_listed_entry_is_never_amended ... ok
+test every_planned_inventory_id_passes ... ok
+test the_claimed_classes_are_the_union_over_the_shacl_root ... ok
+test the_grader_grades_result_annotations_both_ways ... ok
+test the_entries_resting_on_post_wd_text_need_the_editors_draft_law ... ok
+test the_grader_grades_the_source_shape_both_ways ... ok
+test the_grader_grades_sh_detail_where_it_is_stated ... ok
+test the_suite_commit_is_the_vendored_one ... ok
+test spec_contradicted_entries_fail_unamended ... ok
+test earl_agrees_with_scoreboard ... ok
+test w3c12_class_lines_cover_the_scope ... ok
+test w3c12_earl_is_deterministic_and_carries_no_date ... ok
+test w3c12_earl_keys_equal_wg_page_keys ... ok
+test the_shacl_root_scope_is_pinned ... ok
+test w3c12_earl_report_is_written_when_configured ... ok
+test w3c12_earl_outcomes_equal_the_unamended_grades ... ok
+test w3c12_earl_support_behaviour ... ok
+test w3c12_proposed_entries_are_excluded_from_earl ... ok
+test w3c_shacl12_conformance ... ok
+test w3c12_earl_subject_and_assertor_are_exact ... ok
+test xfail_ledger_is_empty ... ok
+test unlisted_file_deltas_are_exact ... ok
+test validator_001_passes_in_both_suites_with_no_import_supplied ... ok
+test w3c_shacl12_unlisted_vendored_files ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+

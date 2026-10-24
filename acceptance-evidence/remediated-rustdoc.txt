@@ -1,0 +1,5 @@
+ Documenting purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/sparql-eval)
+ Documenting purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/rdf-core)
+ Documenting purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.11s
+   Generated /opt/.cargo/target/699-preserve-validation-requests-across-f315eff7/doc/purrdf_core/index.html and 2 other files

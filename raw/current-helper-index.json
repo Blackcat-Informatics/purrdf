@@ -1,0 +1,6543 @@
+{
+  "capacity_sources": [
+    {
+      "file": "bindings/python/src/attestation.rs",
+      "identity": "source:cf5db3576f403fa1"
+    },
+    {
+      "file": "bindings/python/src/lib.rs",
+      "identity": "source:fb7ec896c29521a2"
+    },
+    {
+      "file": "bindings/python/src/py_entail.rs",
+      "identity": "source:9978cc0f059869e4"
+    },
+    {
+      "file": "bindings/python/src/py_geo.rs",
+      "identity": "source:15406aa28cc1d5c0"
+    },
+    {
+      "file": "bindings/python/src/py_gts.rs",
+      "identity": "source:79258bf470b13449"
+    },
+    {
+      "file": "bindings/python/src/py_gts_dataset.rs",
+      "identity": "source:aed50a6d751f3eff"
+    },
+    {
+      "file": "bindings/python/src/py_gts_view.rs",
+      "identity": "source:3171afdadfce8f6e"
+    },
+    {
+      "file": "bindings/python/src/py_jsonld.rs",
+      "identity": "source:cfa879bcd47617ba"
+    },
+    {
+      "file": "bindings/python/src/py_projection.rs",
+      "identity": "source:7aa8312accb57db7"
+    },
+    {
+      "file": "bindings/python/src/py_retrieval.rs",
+      "identity": "source:85b5980eabfd103b"
+    },
+    {
+      "file": "bindings/python/src/py_shex.rs",
+      "identity": "source:41c950ead1b5e42d"
+    },
+    {
+      "file": "bindings/python/src/py_slice.rs",
+      "identity": "source:6c126ee8a7a72dba"
+    },
+    {
+      "file": "bindings/python/src/py_sssom.rs",
+      "identity": "source:3413f406969be9a4"
+    },
+    {
+      "file": "bindings/python/src/py_store.rs",
+      "identity": "source:6df5b02d9c9a994e"
+    },
+    {
+      "file": "bindings/python/src/py_store/canon.rs",
+      "identity": "source:3fb0de5bc7dac103"
+    },
+    {
+      "file": "bindings/python/src/py_store/env.rs",
+      "identity": "source:cab6353d282dafdd"
+    },
+    {
+      "file": "bindings/python/src/py_store/io.rs",
+      "identity": "source:9879987c3392c469"
+    },
+    {
+      "file": "bindings/python/src/py_store/load.rs",
+      "identity": "source:96ab14f485e0d969"
+    },
+    {
+      "file": "bindings/python/src/py_store/mutable.rs",
+      "identity": "source:03f0b00ebbda232e"
+    },
+    {
+      "file": "bindings/python/src/py_store/prepared.rs",
+      "identity": "source:748437d75acf457f"
+    },
+    {
+      "file": "bindings/python/src/py_store/presentation.rs",
+      "identity": "source:d281e0fbe9b078e0"
+    },
+    {
+      "file": "bindings/python/src/py_store/quad_store.rs",
+      "identity": "source:2936736d82810ecd"
+    },
+    {
+      "file": "bindings/python/src/py_store/query.rs",
+      "identity": "source:60d9d122e7f6a79f"
+    },
+    {
+      "file": "bindings/python/src/py_store/results.rs",
+      "identity": "source:01e9f0e3cf4a9411"
+    },
+    {
+      "file": "bindings/python/src/py_store/store.rs",
+      "identity": "source:742d6ad38a287d13"
+    },
+    {
+      "file": "bindings/python/src/py_store/term.rs",
+      "identity": "source:f34166c4f1b30a3e"
+    },
+    {
+      "file": "bindings/python/src/py_store/xsd.rs",
+      "identity": "source:a9f146c753146afe"
+    },
+    {
+      "file": "bindings/python/src/rdf.rs",
+      "identity": "source:7f9fafd92e42d971"
+    },
+    {
+      "file": "bindings/python/src/shacl.rs",
+      "identity": "source:f270bfbdfa2dc42c"
+    },
+    {
+      "file": "bindings/python/src/xpath_regex.rs",
+      "identity": "source:9db44ee99f64930c"
+    },
+    {
+      "file": "crates/alloc-probe/src/lib.rs",
+      "identity": "source:7a8c5bcddfc00758"
+    },
+    {
+      "file": "crates/bench/src/lib.rs",
+      "identity": "source:cb51582b162eaafd"
+    },
+    {
+      "file": "crates/bench/src/lubm/check.rs",
+      "identity": "source:9f76d74a81b99a8e"
+    },
+    {
+      "file": "crates/bench/src/lubm/generate.rs",
+      "identity": "source:105fa48ff4fbdad1"
+    },
+    {
+      "file": "crates/bench/src/lubm/mod.rs",
+      "identity": "source:abda31f95bed80fd"
+    },
+    {
+      "file": "crates/bench/src/lubm/output.rs",
+      "identity": "source:17b1a0b86b1c82fe"
+    },
+    {
+      "file": "crates/bench/src/lubm_check_main.rs",
+      "identity": "source:d434497cc6407903"
+    },
+    {
+      "file": "crates/bench/src/lubm_main.rs",
+      "identity": "source:2a68ca8448dfaf6d"
+    },
+    {
+      "file": "crates/bench/src/main.rs",
+      "identity": "source:a5d8bde82b40d220"
+    },
+    {
+      "file": "crates/cdt/src/conformance.rs",
+      "identity": "source:bd20b5e574e11ae3"
+    },
+    {
+      "file": "crates/cdt/src/datatype.rs",
+      "identity": "source:be8f6df782ceac72"
+    },
+    {
+      "file": "crates/cdt/src/error.rs",
+      "identity": "source:626f9e26daf3adfd"
+    },
+    {
+      "file": "crates/cdt/src/functions.rs",
+      "identity": "source:b568e7a9e2ecb7ec"
+    },
+    {
+      "file": "crates/cdt/src/lib.rs",
+      "identity": "source:72bc46528793c6e9"
+    },
+    {
+      "file": "crates/cdt/src/limits.rs",
+      "identity": "source:3f48ac5f4956f10e"
+    },
+    {
+      "file": "crates/cdt/src/literal.rs",
+      "identity": "source:44509533414cce2e"
+    },
+    {
+      "file": "crates/cdt/src/memory.rs",
+      "identity": "source:2422d3b2e0f348b8"
+    },
+    {
+      "file": "crates/cdt/src/ops.rs",
+      "identity": "source:af493832bf6c8a56"
+    },
+    {
+      "file": "crates/cdt/src/parse.rs",
+      "identity": "source:7931ef5c0ff6d6f2"
+    },
+    {
+      "file": "crates/cdt/src/render.rs",
+      "identity": "source:36f917c7b86cabfd"
+    },
+    {
+      "file": "crates/cdt/src/term.rs",
+      "identity": "source:28b2182b1a997766"
+    },
+    {
+      "file": "crates/cdt/src/tree.rs",
+      "identity": "source:c3585e531a809050"
+    },
+    {
+      "file": "crates/cdt/src/value.rs",
+      "identity": "source:b631550966398b1d"
+    },
+    {
+      "file": "crates/cli/src/argv_documents.rs",
+      "identity": "source:53a0ef434bcdeb37"
+    },
+    {
+      "file": "crates/cli/src/cli.rs",
+      "identity": "source:0af08479720c2252"
+    },
+    {
+      "file": "crates/cli/src/consistency.rs",
+      "identity": "source:795897612011d850"
+    },
+    {
+      "file": "crates/cli/src/convert.rs",
+      "identity": "source:e6ef5be2beb725f8"
+    },
+    {
+      "file": "crates/cli/src/describe.rs",
+      "identity": "source:0056744eae54f65b"
+    },
+    {
+      "file": "crates/cli/src/entails.rs",
+      "identity": "source:84f74e2c847a4b51"
+    },
+    {
+      "file": "crates/cli/src/error.rs",
+      "identity": "source:57ca49228cfc0e80"
+    },
+    {
+      "file": "crates/cli/src/format.rs",
+      "identity": "source:6067b17385742574"
+    },
+    {
+      "file": "crates/cli/src/governors.rs",
+      "identity": "source:7da7b95e6e1676bc"
+    },
+    {
+      "file": "crates/cli/src/immutable.rs",
+      "identity": "source:cdec5ea516dc37f5"
+    },
+    {
+      "file": "crates/cli/src/ingest.rs",
+      "identity": "source:754d021884651821"
+    },
+    {
+      "file": "crates/cli/src/ledger.rs",
+      "identity": "source:d8e0738deeb1cff0"
+    },
+    {
+      "file": "crates/cli/src/lib.rs",
+      "identity": "source:5d53085683253e4c"
+    },
+    {
+      "file": "crates/cli/src/main.rs",
+      "identity": "source:193fccae0567fb05"
+    },
+    {
+      "file": "crates/cli/src/mmap.rs",
+      "identity": "source:ba57fafe801d7fe5"
+    },
+    {
+      "file": "crates/cli/src/pack.rs",
+      "identity": "source:c4842068c8c59d13"
+    },
+    {
+      "file": "crates/cli/src/path_relation.rs",
+      "identity": "source:a86210c6ec4dcda9"
+    },
+    {
+      "file": "crates/cli/src/premise_imports.rs",
+      "identity": "source:550db45ec9df61c2"
+    },
+    {
+      "file": "crates/cli/src/projection.rs",
+      "identity": "source:a666b5df52c10003"
+    },
+    {
+      "file": "crates/cli/src/query.rs",
+      "identity": "source:47188543e6fc57f6"
+    },
+    {
+      "file": "crates/cli/src/reason.rs",
+      "identity": "source:7095148e5e254601"
+    },
+    {
+      "file": "crates/cli/src/report.rs",
+      "identity": "source:5f30d449f73438c2"
+    },
+    {
+      "file": "crates/cli/src/shacl.rs",
+      "identity": "source:f66d70acdeb7c9ff"
+    },
+    {
+      "file": "crates/cli/src/shapes_source.rs",
+      "identity": "source:362d37f548acc39f"
+    },
+    {
+      "file": "crates/cli/src/shapes_tools.rs",
+      "identity": "source:c8957ffd4b523129"
+    },
+    {
+      "file": "crates/cli/src/shex.rs",
+      "identity": "source:674c56182b0aac4a"
+    },
+    {
+      "file": "crates/cli/src/sink.rs",
+      "identity": "source:b5833e9af02e0d98"
+    },
+    {
+      "file": "crates/cli/src/source.rs",
+      "identity": "source:5ba844defd460bcb"
+    },
+    {
+      "file": "crates/cli/src/update.rs",
+      "identity": "source:80cbae06c3897dc2"
+    },
+    {
+      "file": "crates/cli/src/validate.rs",
+      "identity": "source:6b733367ea121b5d"
+    },
+    {
+      "file": "crates/columnar/src/column.rs",
+      "identity": "source:bc74e1029e93c26b"
+    },
+    {
+      "file": "crates/columnar/src/compact.rs",
+      "identity": "source:5fa7093467f5ff72"
+    },
+    {
+      "file": "crates/columnar/src/error.rs",
+      "identity": "source:e73c9f0c21c3ab9d"
+    },
+    {
+      "file": "crates/columnar/src/files.rs",
+      "identity": "source:ef7f2ac4be11a10f"
+    },
+    {
+      "file": "crates/columnar/src/lib.rs",
+      "identity": "source:c3196272468ae4d2"
+    },
+    {
+      "file": "crates/columnar/src/parquet.rs",
+      "identity": "source:12e8a1175a266d7d"
+    },
+    {
+      "file": "crates/columnar/src/plain_bench.rs",
+      "identity": "source:3d3815c76359d51c"
+    },
+    {
+      "file": "crates/columnar/src/projection.rs",
+      "identity": "source:95754964a20f9ee8"
+    },
+    {
+      "file": "crates/columnar/src/reader.rs",
+      "identity": "source:428914e8de85701d"
+    },
+    {
+      "file": "crates/columnar/src/schema.rs",
+      "identity": "source:12d6cf805327101e"
+    },
+    {
+      "file": "crates/columnar/src/writer.rs",
+      "identity": "source:3614cbd7a2c8b892"
+    },
+    {
+      "file": "crates/conformance-kit/src/bag.rs",
+      "identity": "source:67fe64072d86a260"
+    },
+    {
+      "file": "crates/conformance-kit/src/graph.rs",
+      "identity": "source:8349d36cf9b5f985"
+    },
+    {
+      "file": "crates/conformance-kit/src/identity.rs",
+      "identity": "source:a8c4f4fde961b4e7"
+    },
+    {
+      "file": "crates/conformance-kit/src/inventory.rs",
+      "identity": "source:6faddcb0850a7811"
+    },
+    {
+      "file": "crates/conformance-kit/src/lib.rs",
+      "identity": "source:b17efcd56c56317e"
+    },
+    {
+      "file": "crates/conformance-kit/src/manifest.rs",
+      "identity": "source:fa2a8295efe4010e"
+    },
+    {
+      "file": "crates/conformance-kit/src/outcome.rs",
+      "identity": "source:baa46b38f961199a"
+    },
+    {
+      "file": "crates/conformance-kit/src/report.rs",
+      "identity": "source:7bc9c2a4aaae0a20"
+    },
+    {
+      "file": "crates/conformance-kit/src/report/projection.rs",
+      "identity": "source:6b64cda54cd962fc"
+    },
+    {
+      "file": "crates/conformance-kit/src/result_set.rs",
+      "identity": "source:7a5cf91cf22c9e6d"
+    },
+    {
+      "file": "crates/conformance-kit/src/reviews.rs",
+      "identity": "source:64e14893ac3e791a"
+    },
+    {
+      "file": "crates/datalog/src/admission.rs",
+      "identity": "source:78e79d3fb17c3382"
+    },
+    {
+      "file": "crates/datalog/src/allocation.rs",
+      "identity": "source:0cf87060c974d09f"
+    },
+    {
+      "file": "crates/datalog/src/cache.rs",
+      "identity": "source:17d540c64c405f52"
+    },
+    {
+      "file": "crates/datalog/src/chase.rs",
+      "identity": "source:ab851ba5a3d62e6d"
+    },
+    {
+      "file": "crates/datalog/src/clause.rs",
+      "identity": "source:81c3f91eedd31cf2"
+    },
+    {
+      "file": "crates/datalog/src/cursor.rs",
+      "identity": "source:a050bf282f9c1c1d"
+    },
+    {
+      "file": "crates/datalog/src/dictionary.rs",
+      "identity": "source:3c436bed34faeec5"
+    },
+    {
+      "file": "crates/datalog/src/dictionary/integer.rs",
+      "identity": "source:4994f86d98297233"
+    },
+    {
+      "file": "crates/datalog/src/evidence.rs",
+      "identity": "source:07e80b030bbcc1db"
+    },
+    {
+      "file": "crates/datalog/src/guard.rs",
+      "identity": "source:fb6bd8ab7c097159"
+    },
+    {
+      "file": "crates/datalog/src/id.rs",
+      "identity": "source:dfa18de630ce4c86"
+    },
+    {
+      "file": "crates/datalog/src/lib.rs",
+      "identity": "source:b83972ff1d19dff4"
+    },
+    {
+      "file": "crates/datalog/src/maintenance.rs",
+      "identity": "source:156925b119fa6159"
+    },
+    {
+      "file": "crates/datalog/src/paths.rs",
+      "identity": "source:37af54202d9e286a"
+    },
+    {
+      "file": "crates/datalog/src/plan.rs",
+      "identity": "source:5b01d4dc9a5ddb6c"
+    },
+    {
+      "file": "crates/datalog/src/proof.rs",
+      "identity": "source:e5b6a485ca8c0893"
+    },
+    {
+      "file": "crates/datalog/src/proof/malformed.rs",
+      "identity": "source:c55d8615379c3c45"
+    },
+    {
+      "file": "crates/datalog/src/resolve_fol.rs",
+      "identity": "source:e87540ffb57eab6e"
+    },
+    {
+      "file": "crates/datalog/src/schedule.rs",
+      "identity": "source:8fc30220ea39dbe0"
+    },
+    {
+      "file": "crates/datalog/src/seminaive.rs",
+      "identity": "source:6d1c7f038ca103b0"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/atom.rs",
+      "identity": "source:e09951ad9fe83ef3"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/commit.rs",
+      "identity": "source:f16fc8ee09323e39"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/cycle.rs",
+      "identity": "source:cfbd4c9e9a453264"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/evidence.rs",
+      "identity": "source:f8d977f3d8cd8101"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/factors.rs",
+      "identity": "source:932dfb9ab82bf7ff"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/factors/execution.rs",
+      "identity": "source:7b53e98465b3926d"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/factors/filters.rs",
+      "identity": "source:5b240517f53ef96b"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/factors/matches.rs",
+      "identity": "source:a6e181a92581474c"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/factors/product.rs",
+      "identity": "source:0df4b9b7db443d70"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/factors/relations.rs",
+      "identity": "source:5c082896a7ceb03d"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/guards.rs",
+      "identity": "source:4823c12ea6f8012d"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/join.rs",
+      "identity": "source:acad7638a6c8ad2c"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained.rs",
+      "identity": "source:924ab8b717da71ca"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained/event.rs",
+      "identity": "source:6e2f1fe99e28892d"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained/initial.rs",
+      "identity": "source:0decd2b0773de848"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained/prepare.rs",
+      "identity": "source:531c4dc12569b815"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained/reclaim.rs",
+      "identity": "source:c8af3df887bc57f9"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained/storage.rs",
+      "identity": "source:3f345c0a7478851f"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/maintained/work.rs",
+      "identity": "source:af34a2cd983b1bb5"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/negation.rs",
+      "identity": "source:b63806a10c853f40"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/negative.rs",
+      "identity": "source:cfcfe5fa05774541"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/ordered.rs",
+      "identity": "source:c77b142a9a807c33"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/probe.rs",
+      "identity": "source:fb5b63379f3777a0"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/round.rs",
+      "identity": "source:097441a8246382e9"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/rule.rs",
+      "identity": "source:b43aca7579537e6a"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/session.rs",
+      "identity": "source:bde0b0cf6ec267de"
+    },
+    {
+      "file": "crates/datalog/src/seminaive/stratum.rs",
+      "identity": "source:2f041ee65ae7a2bb"
+    },
+    {
+      "file": "crates/datalog/src/stop.rs",
+      "identity": "source:ef9ca8dffaaa6d39"
+    },
+    {
+      "file": "crates/datalog/src/store.rs",
+      "identity": "source:ae972e396e6439a8"
+    },
+    {
+      "file": "crates/datalog/src/store/columns.rs",
+      "identity": "source:f0ccae6a13b9a85e"
+    },
+    {
+      "file": "crates/datalog/src/store/directory.rs",
+      "identity": "source:a822584c22801992"
+    },
+    {
+      "file": "crates/datalog/src/store/index.rs",
+      "identity": "source:897581c8e7383239"
+    },
+    {
+      "file": "crates/datalog/src/store/maintenance_indexes.rs",
+      "identity": "source:d6f710fb72464ef4"
+    },
+    {
+      "file": "crates/datalog/src/store/metadata.rs",
+      "identity": "source:3087d0f7237623f7"
+    },
+    {
+      "file": "crates/datalog/src/store/rows.rs",
+      "identity": "source:343d6b2a53b9cfc9"
+    },
+    {
+      "file": "crates/datalog/src/store/seal.rs",
+      "identity": "source:9f81548c8a19396b"
+    },
+    {
+      "file": "crates/datalog/src/store/terms.rs",
+      "identity": "source:32b88abf198ce2b5"
+    },
+    {
+      "file": "crates/datalog/src/term.rs",
+      "identity": "source:1ac3dbc0b34ca37e"
+    },
+    {
+      "file": "crates/datalog/src/term/retained.rs",
+      "identity": "source:313aebbda549bedf"
+    },
+    {
+      "file": "crates/datalog/src/unify.rs",
+      "identity": "source:9678466b5c31c626"
+    },
+    {
+      "file": "crates/deflate/src/arch/aarch64.rs",
+      "identity": "source:2b952986a20cf969"
+    },
+    {
+      "file": "crates/deflate/src/arch/mod.rs",
+      "identity": "source:26c03bd8c43e6fd3"
+    },
+    {
+      "file": "crates/deflate/src/arch/wasm32.rs",
+      "identity": "source:6a58feb876fa2e94"
+    },
+    {
+      "file": "crates/deflate/src/arch/x86_64.rs",
+      "identity": "source:e25964f1301c5ec5"
+    },
+    {
+      "file": "crates/deflate/src/backend.rs",
+      "identity": "source:ba249e3bb7879503"
+    },
+    {
+      "file": "crates/deflate/src/deflate.rs",
+      "identity": "source:9e04f6d3653a0407"
+    },
+    {
+      "file": "crates/deflate/src/error.rs",
+      "identity": "source:7da2407d1beee34f"
+    },
+    {
+      "file": "crates/deflate/src/gzip.rs",
+      "identity": "source:e2cf2bb7ceb56bd1"
+    },
+    {
+      "file": "crates/deflate/src/huffman.rs",
+      "identity": "source:5d97b903f769b9f7"
+    },
+    {
+      "file": "crates/deflate/src/inflate.rs",
+      "identity": "source:d4d0d2379cc85264"
+    },
+    {
+      "file": "crates/deflate/src/kernels.rs",
+      "identity": "source:db09ded6b0ae9469"
+    },
+    {
+      "file": "crates/deflate/src/lib.rs",
+      "identity": "source:73661711f49e2e4b"
+    },
+    {
+      "file": "crates/deflate/src/tables.rs",
+      "identity": "source:40053f26821c9770"
+    },
+    {
+      "file": "crates/ed25519/src/ct.rs",
+      "identity": "source:4f5af03d61008df4"
+    },
+    {
+      "file": "crates/ed25519/src/field.rs",
+      "identity": "source:0327f4832875e53d"
+    },
+    {
+      "file": "crates/ed25519/src/keys.rs",
+      "identity": "source:a35dae970a2c920e"
+    },
+    {
+      "file": "crates/ed25519/src/lib.rs",
+      "identity": "source:44b37601f30c14c0"
+    },
+    {
+      "file": "crates/ed25519/src/point.rs",
+      "identity": "source:940c2322c8e9443e"
+    },
+    {
+      "file": "crates/ed25519/src/scalar.rs",
+      "identity": "source:90698e2096503a0e"
+    },
+    {
+      "file": "crates/entail/src/axioms.rs",
+      "identity": "source:423cf8209f004c4f"
+    },
+    {
+      "file": "crates/entail/src/calculus/cax.rs",
+      "identity": "source:6f76f18226c21c23"
+    },
+    {
+      "file": "crates/entail/src/calculus/cls.rs",
+      "identity": "source:7afa85ca5cfcbf7a"
+    },
+    {
+      "file": "crates/entail/src/calculus/dt.rs",
+      "identity": "source:2203bf840f284832"
+    },
+    {
+      "file": "crates/entail/src/calculus/eq.rs",
+      "identity": "source:652c6d4dab6eb017"
+    },
+    {
+      "file": "crates/entail/src/calculus/ext.rs",
+      "identity": "source:02fc864bdf0260a6"
+    },
+    {
+      "file": "crates/entail/src/calculus/mod.rs",
+      "identity": "source:37904faabb430fa5"
+    },
+    {
+      "file": "crates/entail/src/calculus/prp.rs",
+      "identity": "source:ff50c726e5a13932"
+    },
+    {
+      "file": "crates/entail/src/calculus/rdfs.rs",
+      "identity": "source:01d5ea5d985b6f77"
+    },
+    {
+      "file": "crates/entail/src/calculus/scm.rs",
+      "identity": "source:ce8e11a7c7918106"
+    },
+    {
+      "file": "crates/entail/src/combined.rs",
+      "identity": "source:1404a40cf1f529e6"
+    },
+    {
+      "file": "crates/entail/src/datatypes.rs",
+      "identity": "source:6d3d8022aa624272"
+    },
+    {
+      "file": "crates/entail/src/engine.rs",
+      "identity": "source:b6f5d827233ba756"
+    },
+    {
+      "file": "crates/entail/src/entails/answers.rs",
+      "identity": "source:c211ed868b508327"
+    },
+    {
+      "file": "crates/entail/src/entails/certificate.rs",
+      "identity": "source:ab3541e48321c2d9"
+    },
+    {
+      "file": "crates/entail/src/entails/comprehension.rs",
+      "identity": "source:eea78f4d499ca583"
+    },
+    {
+      "file": "crates/entail/src/entails/datarange.rs",
+      "identity": "source:0d0f8a581a84aee8"
+    },
+    {
+      "file": "crates/entail/src/entails/freeze.rs",
+      "identity": "source:666c4d46ef213fa8"
+    },
+    {
+      "file": "crates/entail/src/entails/fresh.rs",
+      "identity": "source:1ff77553349931fc"
+    },
+    {
+      "file": "crates/entail/src/entails/graph.rs",
+      "identity": "source:3b811286a08d06d7"
+    },
+    {
+      "file": "crates/entail/src/entails/homomorphism.rs",
+      "identity": "source:58b7eab22bde72ef"
+    },
+    {
+      "file": "crates/entail/src/entails/imports.rs",
+      "identity": "source:6e4e0d0d24f30270"
+    },
+    {
+      "file": "crates/entail/src/entails/membership.rs",
+      "identity": "source:2fb09a667d0db55a"
+    },
+    {
+      "file": "crates/entail/src/entails/mod.rs",
+      "identity": "source:31253f6e99750e75"
+    },
+    {
+      "file": "crates/entail/src/entails/negation.rs",
+      "identity": "source:f55afb00d28f8d46"
+    },
+    {
+      "file": "crates/entail/src/entails/pattern.rs",
+      "identity": "source:726db3942e2eb7e7"
+    },
+    {
+      "file": "crates/entail/src/entails/precondition.rs",
+      "identity": "source:5ce2eb176059ca95"
+    },
+    {
+      "file": "crates/entail/src/entails/reflexivity.rs",
+      "identity": "source:57abcc93e23222ef"
+    },
+    {
+      "file": "crates/entail/src/entails/refutation.rs",
+      "identity": "source:c2ed211b7b4fdb02"
+    },
+    {
+      "file": "crates/entail/src/entails/warrant.rs",
+      "identity": "source:7d0522b22146b205"
+    },
+    {
+      "file": "crates/entail/src/explain.rs",
+      "identity": "source:2cf24556515e2aa0"
+    },
+    {
+      "file": "crates/entail/src/interner.rs",
+      "identity": "source:87d70f20b718987a"
+    },
+    {
+      "file": "crates/entail/src/lib.rs",
+      "identity": "source:3afe72089df4e3fd"
+    },
+    {
+      "file": "crates/entail/src/lists.rs",
+      "identity": "source:8c73ff46b287aa59"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/absorb.rs",
+      "identity": "source:5439460b759bb064"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/axiom_source.rs",
+      "identity": "source:c438a5a7569aed02"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/bounds.rs",
+      "identity": "source:56c050605331f7fb"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/clause.rs",
+      "identity": "source:c3570a3a5081ec70"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/concept.rs",
+      "identity": "source:fd2812b81eff68f2"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/constructs.rs",
+      "identity": "source:5e44659e1bc71683"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/data.rs",
+      "identity": "source:465c3bf56433e162"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/graph.rs",
+      "identity": "source:dca42d9f198f3878"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/graph/changes.rs",
+      "identity": "source:dcee8e9a6cd1dbc0"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/graph/changes/reach.rs",
+      "identity": "source:1fdf9fc32a463eb7"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/graph/changes/slice.rs",
+      "identity": "source:8de2868380f7e3cc"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/graph/changes/slice/key.rs",
+      "identity": "source:2e27b4c640092d13"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/graph/changes/slice/schema.rs",
+      "identity": "source:6ded6c80c6d8c3a5"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/hyper.rs",
+      "identity": "source:f5a3a890e29e3f4b"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/input_source.rs",
+      "identity": "source:e24070fe31733d9f"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/key_proofs.rs",
+      "identity": "source:c8a28757eba46ef9"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/key_values.rs",
+      "identity": "source:365014ada4a57747"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/mod.rs",
+      "identity": "source:ea7acfe4afa8ee24"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/parser.rs",
+      "identity": "source:1eb34602a717aee6"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/parser/error.rs",
+      "identity": "source:e348c0ee13c65ca8"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof.rs",
+      "identity": "source:775152b732ac11bd"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/capture.rs",
+      "identity": "source:114a86ef99ea9422"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/schema.rs",
+      "identity": "source:34e12463bc0466a7"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source.rs",
+      "identity": "source:3b254820e6e6d161"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source/causal.rs",
+      "identity": "source:3723cf81b7e2a72c"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source/causal/branch.rs",
+      "identity": "source:1c936dd8929c1b7a"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source/causal/schema.rs",
+      "identity": "source:894d174363fafb16"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source/causal/syntax.rs",
+      "identity": "source:b2a11c1ce0630450"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source/origin.rs",
+      "identity": "source:bcb162cd5d9017aa"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/proof/source/schema.rs",
+      "identity": "source:2dabad7d45ee1a8a"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/query.rs",
+      "identity": "source:66cff775b03ce6d5"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/roles.rs",
+      "identity": "source:098a16ee0d4bb06a"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/roles/licence.rs",
+      "identity": "source:1d189f682e691342"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/roles/order.rs",
+      "identity": "source:b04684eff95dd225"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/roles/source.rs",
+      "identity": "source:966ea03feea5f46f"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/saturate.rs",
+      "identity": "source:05cf4076b703d021"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/support.rs",
+      "identity": "source:80d74285cad69bc4"
+    },
+    {
+      "file": "crates/entail/src/owl_dl/syntax.rs",
+      "identity": "source:8c019e255f5f0233"
+    },
+    {
+      "file": "crates/entail/src/reasoner/axiom.rs",
+      "identity": "source:0575fbfa9d0bdccf"
+    },
+    {
+      "file": "crates/entail/src/reasoner/certificate.rs",
+      "identity": "source:9a886fb14c0a3421"
+    },
+    {
+      "file": "crates/entail/src/reasoner/classify.rs",
+      "identity": "source:78684e7374981009"
+    },
+    {
+      "file": "crates/entail/src/reasoner/mod.rs",
+      "identity": "source:5a6db75f3c1f41cb"
+    },
+    {
+      "file": "crates/entail/src/reasoner/module.rs",
+      "identity": "source:cc36ddfa0a7a1b54"
+    },
+    {
+      "file": "crates/entail/src/reasoner/profile.rs",
+      "identity": "source:145d05dffe44b294"
+    },
+    {
+      "file": "crates/entail/src/reasoner/proof.rs",
+      "identity": "source:a2ddfc8276f2c50d"
+    },
+    {
+      "file": "crates/entail/src/reasoner/proof/causal.rs",
+      "identity": "source:aece71f69debe8ff"
+    },
+    {
+      "file": "crates/entail/src/reasoner/proof/current.rs",
+      "identity": "source:d14afe47ba0b746a"
+    },
+    {
+      "file": "crates/entail/src/reasoner/realize.rs",
+      "identity": "source:81e914ff54d03850"
+    },
+    {
+      "file": "crates/entail/src/report.rs",
+      "identity": "source:80518edd13325a35"
+    },
+    {
+      "file": "crates/entail/src/rif/error.rs",
+      "identity": "source:6bcba089b5b55784"
+    },
+    {
+      "file": "crates/entail/src/rif/eval.rs",
+      "identity": "source:327d31a5d37d5737"
+    },
+    {
+      "file": "crates/entail/src/rif/mod.rs",
+      "identity": "source:0a03d505a7a9f1ce"
+    },
+    {
+      "file": "crates/entail/src/rif/model.rs",
+      "identity": "source:a067a533cf47a194"
+    },
+    {
+      "file": "crates/entail/src/rif_xml.rs",
+      "identity": "source:dd12bf4f554b75ba"
+    },
+    {
+      "file": "crates/entail/src/rif_xml/error.rs",
+      "identity": "source:c6cc2f1399001c8d"
+    },
+    {
+      "file": "crates/entail/src/rules.rs",
+      "identity": "source:80e4e5abc4966491"
+    },
+    {
+      "file": "crates/entail/src/surrogates.rs",
+      "identity": "source:6c33ccb4d054451b"
+    },
+    {
+      "file": "crates/entail/src/vocab.rs",
+      "identity": "source:c5f04fd6041b6d87"
+    },
+    {
+      "file": "crates/envelope-probe/src/lib.rs",
+      "identity": "source:1f196e3c1c306bbd"
+    },
+    {
+      "file": "crates/envelope-probe/src/main.rs",
+      "identity": "source:88fb9d2b46dc016c"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas.rs",
+      "identity": "source:d24517474a1b819e"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs.rs",
+      "identity": "source:6f70719408617706"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/arrangement.rs",
+      "identity": "source:6ac861b46029bb5b"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/arrangement/relation.rs",
+      "identity": "source:d13c939ed4aac009"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/axis_overlap.rs",
+      "identity": "source:47f16a14effcddfa"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/constant.rs",
+      "identity": "source:400061ead5b72831"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/polynomial.rs",
+      "identity": "source:a5d576a9d7d3d220"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/source_join.rs",
+      "identity": "source:063c293e00e76278"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arcs/subset.rs",
+      "identity": "source:d4405500793fdb7a"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/area.rs",
+      "identity": "source:9bbc3ff17ab8edc1"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/area/hemisphere.rs",
+      "identity": "source:b208a53737943ebe"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/arrangement.rs",
+      "identity": "source:46035c8d6424d18f"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/boundary.rs",
+      "identity": "source:cc20c9b578376c48"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/chart_index.rs",
+      "identity": "source:22ef34ef5141fc16"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/enclosure.rs",
+      "identity": "source:637d1af4ca7633b7"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/native.rs",
+      "identity": "source:f2c240be2fd7dd4b"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/oriented.rs",
+      "identity": "source:2ac3aa28fe5f9142"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/point.rs",
+      "identity": "source:0a20603f16ce5f19"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/relate.rs",
+      "identity": "source:dea65338fddd3567"
+    },
+    {
+      "file": "crates/geo-kernel/src/atlas/union.rs",
+      "identity": "source:0872008422e57001"
+    },
+    {
+      "file": "crates/geo-kernel/src/binding.rs",
+      "identity": "source:b2438b126b29c0d2"
+    },
+    {
+      "file": "crates/geo-kernel/src/binding/prepared_image.rs",
+      "identity": "source:21f291b38472a189"
+    },
+    {
+      "file": "crates/geo-kernel/src/buffer.rs",
+      "identity": "source:4d063aeb848adab8"
+    },
+    {
+      "file": "crates/geo-kernel/src/buffer/materialize.rs",
+      "identity": "source:e6aa100f8f89446f"
+    },
+    {
+      "file": "crates/geo-kernel/src/buffer/materialize/covering.rs",
+      "identity": "source:3d2c4bc31e3b393b"
+    },
+    {
+      "file": "crates/geo-kernel/src/buffer/materialize/cut.rs",
+      "identity": "source:c98757630a9b1d32"
+    },
+    {
+      "file": "crates/geo-kernel/src/buffer/materialize/global.rs",
+      "identity": "source:15b9f5bb41fb80a7"
+    },
+    {
+      "file": "crates/geo-kernel/src/carrier.rs",
+      "identity": "source:d5a64d57e74e7ac8"
+    },
+    {
+      "file": "crates/geo-kernel/src/carrier/admission.rs",
+      "identity": "source:1b1402dc45fd3fba"
+    },
+    {
+      "file": "crates/geo-kernel/src/carrier/output.rs",
+      "identity": "source:a8276355918d7b71"
+    },
+    {
+      "file": "crates/geo-kernel/src/carrier/storage.rs",
+      "identity": "source:bae4b1feb938c77c"
+    },
+    {
+      "file": "crates/geo-kernel/src/carrier/term.rs",
+      "identity": "source:60e8be7f7fd6b237"
+    },
+    {
+      "file": "crates/geo-kernel/src/carrier/writer.rs",
+      "identity": "source:2fb6adb0bf1641af"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells.rs",
+      "identity": "source:73409c708fed7286"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/carrier.rs",
+      "identity": "source:c484d6f0d2dd6f05"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/constants.rs",
+      "identity": "source:d577193e1ed67a23"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/cover.rs",
+      "identity": "source:91902fbe308ff5bb"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/cover/chart.rs",
+      "identity": "source:ebe0d057813f43b2"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/cover/disk.rs",
+      "identity": "source:6cdc27540837189e"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/fixed.rs",
+      "identity": "source:02946299b7225fba"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/hierarchy.rs",
+      "identity": "source:dff772714e7a6769"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/index.rs",
+      "identity": "source:9daa940f8995e6c7"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/profile.rs",
+      "identity": "source:5eadb63bfcdd2b06"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/region.rs",
+      "identity": "source:3a63587a9e57529e"
+    },
+    {
+      "file": "crates/geo-kernel/src/cells/scale.rs",
+      "identity": "source:353a4082440b7580"
+    },
+    {
+      "file": "crates/geo-kernel/src/construct.rs",
+      "identity": "source:6ef2859c8fdc95ef"
+    },
+    {
+      "file": "crates/geo-kernel/src/construct/arithmetic.rs",
+      "identity": "source:baef27cab612a26b"
+    },
+    {
+      "file": "crates/geo-kernel/src/context.rs",
+      "identity": "source:fdcd28aa95858f90"
+    },
+    {
+      "file": "crates/geo-kernel/src/context/native_memory.rs",
+      "identity": "source:62b5d865998b3351"
+    },
+    {
+      "file": "crates/geo-kernel/src/context/output.rs",
+      "identity": "source:42c9d04b9f670ecb"
+    },
+    {
+      "file": "crates/geo-kernel/src/context/preparation.rs",
+      "identity": "source:0c7542198a52e6fd"
+    },
+    {
+      "file": "crates/geo-kernel/src/context/retained.rs",
+      "identity": "source:833da99157e35750"
+    },
+    {
+      "file": "crates/geo-kernel/src/de9im.rs",
+      "identity": "source:8cb69127644e10ca"
+    },
+    {
+      "file": "crates/geo-kernel/src/determinism.rs",
+      "identity": "source:0a5efe5c7661e227"
+    },
+    {
+      "file": "crates/geo-kernel/src/ellipsoidal.rs",
+      "identity": "source:2a6d7ef20988be79"
+    },
+    {
+      "file": "crates/geo-kernel/src/ellipsoidal/distance.rs",
+      "identity": "source:edd49f69d344b0cb"
+    },
+    {
+      "file": "crates/geo-kernel/src/ellipsoidal/distance/selected.rs",
+      "identity": "source:5a029ef50738104d"
+    },
+    {
+      "file": "crates/geo-kernel/src/ellipsoidal/jet.rs",
+      "identity": "source:5f961ac82d447c5e"
+    },
+    {
+      "file": "crates/geo-kernel/src/ellipsoidal/native.rs",
+      "identity": "source:34f5927290f04eeb"
+    },
+    {
+      "file": "crates/geo-kernel/src/error.rs",
+      "identity": "source:629224d0f1f10498"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/affine.rs",
+      "identity": "source:3299d60785759d7e"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/argument_input.rs",
+      "identity": "source:f963ec6add255555"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/binding.rs",
+      "identity": "source:a4aafea596df00cd"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/carrier_input.rs",
+      "identity": "source:3b174edcc572fff5"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/cause.rs",
+      "identity": "source:3783b5f9e36941ee"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/context_config.rs",
+      "identity": "source:9bc234ddb47ed3ea"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/crs.rs",
+      "identity": "source:51266ce540902ad8"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/ellipsoid.rs",
+      "identity": "source:9a4ca94c6e820808"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/geojson_shape.rs",
+      "identity": "source:6e76476123bdecea"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/geojson_write.rs",
+      "identity": "source:82a46e9928f9a157"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/geometry_domain.rs",
+      "identity": "source:97dc1109fddbef07"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/index_config.rs",
+      "identity": "source:2e3d891e81368b27"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/json_syntax.rs",
+      "identity": "source:73fb3b96521a2c3a"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/matrix.rs",
+      "identity": "source:e8b9fc32b2a2bee9"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/metric_input.rs",
+      "identity": "source:98b8cb6e76efa519"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/metric_unit.rs",
+      "identity": "source:d88e90033ae48c55"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/model.rs",
+      "identity": "source:0e576701bddc99d8"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/pattern.rs",
+      "identity": "source:126ade52b38ed991"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/polynomial.rs",
+      "identity": "source:87cfea49e9271b25"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/projection.rs",
+      "identity": "source:2e794f88051fcf81"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/source_preparation.rs",
+      "identity": "source:eb2468732c4fbd4a"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/transverse.rs",
+      "identity": "source:0939286f212e7a0c"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/unsupported.rs",
+      "identity": "source:04dd75c0a0c82d51"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/vocabulary.rs",
+      "identity": "source:4f155a00e9eaf760"
+    },
+    {
+      "file": "crates/geo-kernel/src/error/wkt.rs",
+      "identity": "source:dcde648c5d07e582"
+    },
+    {
+      "file": "crates/geo-kernel/src/exact.rs",
+      "identity": "source:2e4aec836c8b0186"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic.rs",
+      "identity": "source:bfd7ceef5b9ca933"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/arc_view.rs",
+      "identity": "source:0ea8e46c868f5de7"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/astroid.rs",
+      "identity": "source:a926a0db72ff04b6"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/band.rs",
+      "identity": "source:47c33ce0a80495b2"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/coefficients.rs",
+      "identity": "source:51db493955347802"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/direct.rs",
+      "identity": "source:b5649c514b510d67"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/integral_fallback.rs",
+      "identity": "source:8386f4fc6e996538"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/inverse.rs",
+      "identity": "source:12f86c52365fca7d"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/inverse/area.rs",
+      "identity": "source:4e65341dab1c26bd"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/line.rs",
+      "identity": "source:1b92d24e46dfdad0"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/normal.rs",
+      "identity": "source:1e79d6c1fa6c7e12"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/point.rs",
+      "identity": "source:f2bb95138493fe11"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/preparation.rs",
+      "identity": "source:1e7f3bc243c8b4f6"
+    },
+    {
+      "file": "crates/geo-kernel/src/geodesic/seed.rs",
+      "identity": "source:ce2accd8c1db75b6"
+    },
+    {
+      "file": "crates/geo-kernel/src/geographic.rs",
+      "identity": "source:31dd00c933b70037"
+    },
+    {
+      "file": "crates/geo-kernel/src/geojson.rs",
+      "identity": "source:140975b99ecc5ee9"
+    },
+    {
+      "file": "crates/geo-kernel/src/geom.rs",
+      "identity": "source:26d8f814145108c6"
+    },
+    {
+      "file": "crates/geo-kernel/src/geom/tree.rs",
+      "identity": "source:67a336765785544e"
+    },
+    {
+      "file": "crates/geo-kernel/src/index.rs",
+      "identity": "source:5333119f30cd64d8"
+    },
+    {
+      "file": "crates/geo-kernel/src/index/geographic.rs",
+      "identity": "source:2e465b9cccca4c10"
+    },
+    {
+      "file": "crates/geo-kernel/src/index/projection.rs",
+      "identity": "source:26e0387dcbd11704"
+    },
+    {
+      "file": "crates/geo-kernel/src/json.rs",
+      "identity": "source:794d6ae565a2a9aa"
+    },
+    {
+      "file": "crates/geo-kernel/src/lib.rs",
+      "identity": "source:d56d0a7f9cd462a8"
+    },
+    {
+      "file": "crates/geo-kernel/src/measure.rs",
+      "identity": "source:2ecd069a9475cff5"
+    },
+    {
+      "file": "crates/geo-kernel/src/metric.rs",
+      "identity": "source:36716fb93e52bf16"
+    },
+    {
+      "file": "crates/geo-kernel/src/metric/input.rs",
+      "identity": "source:0c50c0c16c1088a8"
+    },
+    {
+      "file": "crates/geo-kernel/src/metric/report.rs",
+      "identity": "source:5a0fbb3742cbfdd0"
+    },
+    {
+      "file": "crates/geo-kernel/src/metric/unit.rs",
+      "identity": "source:484c9586cd7f23db"
+    },
+    {
+      "file": "crates/geo-kernel/src/numerical.rs",
+      "identity": "source:a5688ad4fde49f2d"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation.rs",
+      "identity": "source:e1656079438af0d0"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/admission.rs",
+      "identity": "source:e74cc07ce3c76728"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/affine.rs",
+      "identity": "source:7b690fda9e393937"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/forward.rs",
+      "identity": "source:cfce3dffb2f4a49c"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/gcj_inverse.rs",
+      "identity": "source:f97ea0a97d72c80f"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry.rs",
+      "identity": "source:16b4699ed70a0bd6"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry/critical.rs",
+      "identity": "source:30d01692461e41b5"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry/curve.rs",
+      "identity": "source:778dc9ecf04e6e8b"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry/curve/selected.rs",
+      "identity": "source:6843f05c34bfc7c9"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry/curve/selected/range.rs",
+      "identity": "source:0e24cd1fff633817"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry/directional.rs",
+      "identity": "source:c4af5b01aaede1ee"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/geometry/point.rs",
+      "identity": "source:febb1c13f0f549cc"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/grid.rs",
+      "identity": "source:7c9cbcfd124c0505"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/inverse.rs",
+      "identity": "source:211fc647daa32bcb"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/models.rs",
+      "identity": "source:54214c39fca81dda"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/models_inverse.rs",
+      "identity": "source:ce3f5f862974816a"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/transverse.rs",
+      "identity": "source:4b2202e4776dcb8a"
+    },
+    {
+      "file": "crates/geo-kernel/src/operation/transverse_inverse.rs",
+      "identity": "source:eb38aa593aeb7c33"
+    },
+    {
+      "file": "crates/geo-kernel/src/prepared.rs",
+      "identity": "source:9dd259a25d541c9d"
+    },
+    {
+      "file": "crates/geo-kernel/src/profile.rs",
+      "identity": "source:21979406380f6e9f"
+    },
+    {
+      "file": "crates/geo-kernel/src/relations.rs",
+      "identity": "source:5e31a3d522ad562f"
+    },
+    {
+      "file": "crates/geo-kernel/src/topology/arrangement.rs",
+      "identity": "source:adafff402a29844f"
+    },
+    {
+      "file": "crates/geo-kernel/src/topology/locate.rs",
+      "identity": "source:2f451a6925573726"
+    },
+    {
+      "file": "crates/geo-kernel/src/topology/mod.rs",
+      "identity": "source:89885f82d12449f2"
+    },
+    {
+      "file": "crates/geo-kernel/src/topology/noding.rs",
+      "identity": "source:d23d25e260897f57"
+    },
+    {
+      "file": "crates/geo-kernel/src/topology/relate.rs",
+      "identity": "source:cbddef2fbb826394"
+    },
+    {
+      "file": "crates/geo-kernel/src/topology/segment.rs",
+      "identity": "source:a601819ebde0a352"
+    },
+    {
+      "file": "crates/geo-kernel/src/vocab.rs",
+      "identity": "source:584950eaec5ba8c5"
+    },
+    {
+      "file": "crates/geo-kernel/src/wkt.rs",
+      "identity": "source:a99e4d742f0f6efa"
+    },
+    {
+      "file": "crates/geo/src/lib.rs",
+      "identity": "source:524be9cc4d8a690c"
+    },
+    {
+      "file": "crates/gts/src/codec.rs",
+      "identity": "source:764bc9fd4e8c0978"
+    },
+    {
+      "file": "crates/gts/src/codec/error.rs",
+      "identity": "source:b12838ac7fe17b26"
+    },
+    {
+      "file": "crates/gts/src/compact.rs",
+      "identity": "source:4b71155b803bd5c2"
+    },
+    {
+      "file": "crates/gts/src/compact/error.rs",
+      "identity": "source:a08091420413eeeb"
+    },
+    {
+      "file": "crates/gts/src/cose.rs",
+      "identity": "source:ddeea22f6de61085"
+    },
+    {
+      "file": "crates/gts/src/cose/borrowed.rs",
+      "identity": "source:ffa9048ad5b94414"
+    },
+    {
+      "file": "crates/gts/src/cose/composite.rs",
+      "identity": "source:e29f965861a2b96a"
+    },
+    {
+      "file": "crates/gts/src/cose/sign1.rs",
+      "identity": "source:560558583acfa265"
+    },
+    {
+      "file": "crates/gts/src/dict.rs",
+      "identity": "source:572f183c55fc2f84"
+    },
+    {
+      "file": "crates/gts/src/event_stream.rs",
+      "identity": "source:5c09be20f407cf5b"
+    },
+    {
+      "file": "crates/gts/src/event_stream/error.rs",
+      "identity": "source:aef1925e47fcd714"
+    },
+    {
+      "file": "crates/gts/src/files.rs",
+      "identity": "source:03a1f2912e20d9c4"
+    },
+    {
+      "file": "crates/gts/src/files/error.rs",
+      "identity": "source:2aca8c43522a241c"
+    },
+    {
+      "file": "crates/gts/src/files/fs_error.rs",
+      "identity": "source:e6e458d305114e1e"
+    },
+    {
+      "file": "crates/gts/src/fixture.rs",
+      "identity": "source:7428eae9d61329ad"
+    },
+    {
+      "file": "crates/gts/src/from_tar.rs",
+      "identity": "source:a14c5708c523963b"
+    },
+    {
+      "file": "crates/gts/src/lib.rs",
+      "identity": "source:483052eb08653669"
+    },
+    {
+      "file": "crates/gts/src/mldsa65/codec.rs",
+      "identity": "source:2bda34edb60c7421"
+    },
+    {
+      "file": "crates/gts/src/mldsa65/math.rs",
+      "identity": "source:f982b16162ba90d4"
+    },
+    {
+      "file": "crates/gts/src/mldsa65/mod.rs",
+      "identity": "source:2d8c1b2592be2ecf"
+    },
+    {
+      "file": "crates/gts/src/mldsa65/sampling.rs",
+      "identity": "source:3409cd6404e865c4"
+    },
+    {
+      "file": "crates/gts/src/mmr.rs",
+      "identity": "source:a4989fe8fa76c881"
+    },
+    {
+      "file": "crates/gts/src/mmr/hex_error.rs",
+      "identity": "source:0bc7bd9e4bf09391"
+    },
+    {
+      "file": "crates/gts/src/mmr/proof_error.rs",
+      "identity": "source:6aa3fbd982f577fc"
+    },
+    {
+      "file": "crates/gts/src/model.rs",
+      "identity": "source:a1962b4e73ffdf08"
+    },
+    {
+      "file": "crates/gts/src/nested.rs",
+      "identity": "source:0270d6a01916e1ed"
+    },
+    {
+      "file": "crates/gts/src/nested/error.rs",
+      "identity": "source:0cb418ce89005d9d"
+    },
+    {
+      "file": "crates/gts/src/openpgp.rs",
+      "identity": "source:2b088ca0c09c33c4"
+    },
+    {
+      "file": "crates/gts/src/openpgp/error.rs",
+      "identity": "source:7e8089df1c5f995b"
+    },
+    {
+      "file": "crates/gts/src/policy.rs",
+      "identity": "source:168bd3f9dd0010f5"
+    },
+    {
+      "file": "crates/gts/src/reader.rs",
+      "identity": "source:d28ff0db89ee2fc7"
+    },
+    {
+      "file": "crates/gts/src/reader/append_error.rs",
+      "identity": "source:660eec4960ae6208"
+    },
+    {
+      "file": "crates/gts/src/reader/fold_error.rs",
+      "identity": "source:4dfa97d04147b3a5"
+    },
+    {
+      "file": "crates/gts/src/reader/payload_error.rs",
+      "identity": "source:d0a9afe92e57161b"
+    },
+    {
+      "file": "crates/gts/src/reader_index.rs",
+      "identity": "source:10e9763ca13c743b"
+    },
+    {
+      "file": "crates/gts/src/reader_layout.rs",
+      "identity": "source:1c84efcd21fcbe14"
+    },
+    {
+      "file": "crates/gts/src/reader_layout/error.rs",
+      "identity": "source:e46279ac932083e8"
+    },
+    {
+      "file": "crates/gts/src/reader_rows.rs",
+      "identity": "source:67d850a6dccdb224"
+    },
+    {
+      "file": "crates/gts/src/reader_rows/error.rs",
+      "identity": "source:b2d0d129fc7ff856"
+    },
+    {
+      "file": "crates/gts/src/reader_union.rs",
+      "identity": "source:3d4180e512d8a08b"
+    },
+    {
+      "file": "crates/gts/src/replication.rs",
+      "identity": "source:b4d6d3432a4e1631"
+    },
+    {
+      "file": "crates/gts/src/replication/error.rs",
+      "identity": "source:01db15a86bb34679"
+    },
+    {
+      "file": "crates/gts/src/rfc3339.rs",
+      "identity": "source:32c2b3f6c37517f6"
+    },
+    {
+      "file": "crates/gts/src/segment_decode.rs",
+      "identity": "source:9dc803a28c469327"
+    },
+    {
+      "file": "crates/gts/src/stream.rs",
+      "identity": "source:3237b779c071613c"
+    },
+    {
+      "file": "crates/gts/src/tar.rs",
+      "identity": "source:74ee56095fb851ab"
+    },
+    {
+      "file": "crates/gts/src/tar/error.rs",
+      "identity": "source:f628ea019e9e3b2c"
+    },
+    {
+      "file": "crates/gts/src/transport.rs",
+      "identity": "source:e58fa6d7c50a8aac"
+    },
+    {
+      "file": "crates/gts/src/transport/refusal.rs",
+      "identity": "source:428889b9647565d7"
+    },
+    {
+      "file": "crates/gts/src/ulid.rs",
+      "identity": "source:0ed22f19d1272705"
+    },
+    {
+      "file": "crates/gts/src/verify.rs",
+      "identity": "source:f28094e7457ceb0b"
+    },
+    {
+      "file": "crates/gts/src/verify/error.rs",
+      "identity": "source:b98eb9420f98996e"
+    },
+    {
+      "file": "crates/gts/src/wire.rs",
+      "identity": "source:081ba6788f4f5d0c"
+    },
+    {
+      "file": "crates/gts/src/writer.rs",
+      "identity": "source:4d73430dc2cd8eb9"
+    },
+    {
+      "file": "crates/gts/src/writer/error.rs",
+      "identity": "source:f0ceb1e0a1038a30"
+    },
+    {
+      "file": "crates/hash-conformance/src/lib.rs",
+      "identity": "source:3ba7aac5dfa3c413"
+    },
+    {
+      "file": "crates/hash/src/arch/aarch64.rs",
+      "identity": "source:d19d199e9c52e262"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_avx2.rs",
+      "identity": "source:cb1cd10d3a7ca8f6"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_lanes.rs",
+      "identity": "source:c1e5771c95dba818"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_neon.rs",
+      "identity": "source:585e2173036d42c8"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_parents2.rs",
+      "identity": "source:b521d55d7b6954cc"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_rows.rs",
+      "identity": "source:32ca5fd506661fab"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_sse2.rs",
+      "identity": "source:e7f0b3406197bb46"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_wasm.rs",
+      "identity": "source:f617ec2aaeb95fbd"
+    },
+    {
+      "file": "crates/hash/src/arch/blake3_x86.rs",
+      "identity": "source:1e108f7cea73a432"
+    },
+    {
+      "file": "crates/hash/src/arch/mod.rs",
+      "identity": "source:d9cf89e99fde23cb"
+    },
+    {
+      "file": "crates/hash/src/arch/wasm32.rs",
+      "identity": "source:0dab7a07b60624c5"
+    },
+    {
+      "file": "crates/hash/src/arch/x86_64.rs",
+      "identity": "source:a5188dd529fceded"
+    },
+    {
+      "file": "crates/hash/src/backend.rs",
+      "identity": "source:425dc4629a07c3bf"
+    },
+    {
+      "file": "crates/hash/src/blake3.rs",
+      "identity": "source:3468dbfb73acbbee"
+    },
+    {
+      "file": "crates/hash/src/block.rs",
+      "identity": "source:cb037acdaab1a1e3"
+    },
+    {
+      "file": "crates/hash/src/crc32.rs",
+      "identity": "source:3fcb1cd8dca8d9de"
+    },
+    {
+      "file": "crates/hash/src/digest.rs",
+      "identity": "source:6caf742ffa7c9498"
+    },
+    {
+      "file": "crates/hash/src/dispatch.rs",
+      "identity": "source:7c52c4b15e9788db"
+    },
+    {
+      "file": "crates/hash/src/domain.rs",
+      "identity": "source:4ebe59890fc10404"
+    },
+    {
+      "file": "crates/hash/src/error.rs",
+      "identity": "source:b2d0774d41a06e8c"
+    },
+    {
+      "file": "crates/hash/src/error/io.rs",
+      "identity": "source:db57161797bf0ae0"
+    },
+    {
+      "file": "crates/hash/src/fixed.rs",
+      "identity": "source:4bd83eb887071e19"
+    },
+    {
+      "file": "crates/hash/src/fixed/aes.rs",
+      "identity": "source:eb0ac6491e2c9a75"
+    },
+    {
+      "file": "crates/hash/src/fixed/fold.rs",
+      "identity": "source:6545213add657194"
+    },
+    {
+      "file": "crates/hash/src/fixed/keys.rs",
+      "identity": "source:d8cb3b797dc7cc5f"
+    },
+    {
+      "file": "crates/hash/src/fixed/portable.rs",
+      "identity": "source:2da85e30ca37126b"
+    },
+    {
+      "file": "crates/hash/src/fnv.rs",
+      "identity": "source:c24a3481dd7d6c1e"
+    },
+    {
+      "file": "crates/hash/src/frame.rs",
+      "identity": "source:cf1faa3728697d2a"
+    },
+    {
+      "file": "crates/hash/src/hex.rs",
+      "identity": "source:1aad5e49fb5ae2d6"
+    },
+    {
+      "file": "crates/hash/src/impls.rs",
+      "identity": "source:25606116ed77f6d6"
+    },
+    {
+      "file": "crates/hash/src/lib.rs",
+      "identity": "source:b6d01d24fac989d4"
+    },
+    {
+      "file": "crates/hash/src/md5.rs",
+      "identity": "source:d48fdc9c58b010b2"
+    },
+    {
+      "file": "crates/hash/src/mix.rs",
+      "identity": "source:8f0eb2a7435cbdbc"
+    },
+    {
+      "file": "crates/hash/src/multiset.rs",
+      "identity": "source:58b684425dfc41b6"
+    },
+    {
+      "file": "crates/hash/src/secret.rs",
+      "identity": "source:6712284566530a18"
+    },
+    {
+      "file": "crates/hash/src/sha1.rs",
+      "identity": "source:cce1228fc42665bc"
+    },
+    {
+      "file": "crates/hash/src/sha3.rs",
+      "identity": "source:a37dff10c2f1b904"
+    },
+    {
+      "file": "crates/helper-census/src/asm_reports.rs",
+      "identity": "source:ee4ba18f73ee5529"
+    },
+    {
+      "file": "crates/helper-census/src/capacity.rs",
+      "identity": "source:e35b512ef16c9b62"
+    },
+    {
+      "file": "crates/helper-census/src/census.rs",
+      "identity": "source:2d52578d4c810c85"
+    },
+    {
+      "file": "crates/helper-census/src/glossary/mod.rs",
+      "identity": "source:5524e44f468e99ab"
+    },
+    {
+      "file": "crates/helper-census/src/glossary/pattern.rs",
+      "identity": "source:4d81c088664c3ba9"
+    },
+    {
+      "file": "crates/helper-census/src/glossary/po.rs",
+      "identity": "source:6e7080a18a8ab885"
+    },
+    {
+      "file": "crates/helper-census/src/glossary/surface.rs",
+      "identity": "source:b43a2067f1f588e1"
+    },
+    {
+      "file": "crates/helper-census/src/layout.rs",
+      "identity": "source:8515548b54d54680"
+    },
+    {
+      "file": "crates/helper-census/src/ledger.rs",
+      "identity": "source:8250688494a8f212"
+    },
+    {
+      "file": "crates/helper-census/src/main.rs",
+      "identity": "source:bdd296f5c2e64327"
+    },
+    {
+      "file": "crates/helper-census/src/non_rust.rs",
+      "identity": "source:4c11fc2ea61b5638"
+    },
+    {
+      "file": "crates/helper-census/src/normalize.rs",
+      "identity": "source:b2e816a7ad28cc1a"
+    },
+    {
+      "file": "crates/helper-census/src/policy.rs",
+      "identity": "source:de53a996575b16eb"
+    },
+    {
+      "file": "crates/helper-census/src/rules.rs",
+      "identity": "source:a87fb77a43f4178f"
+    },
+    {
+      "file": "crates/helper-census/src/source.rs",
+      "identity": "source:d0959f23e0c4bb43"
+    },
+    {
+      "file": "crates/helper-census/src/structure.rs",
+      "identity": "source:7a7ec41a8ad5faf8"
+    },
+    {
+      "file": "crates/helper-census/src/toml.rs",
+      "identity": "source:de602ae933dcb222"
+    },
+    {
+      "file": "crates/hnsw/src/builder.rs",
+      "identity": "source:80af768011ccfa13"
+    },
+    {
+      "file": "crates/hnsw/src/determinism.rs",
+      "identity": "source:851cb09567319c8b"
+    },
+    {
+      "file": "crates/hnsw/src/error.rs",
+      "identity": "source:b63376a629232834"
+    },
+    {
+      "file": "crates/hnsw/src/error/guard_payload.rs",
+      "identity": "source:484c0b6f9b90db89"
+    },
+    {
+      "file": "crates/hnsw/src/error/matrix.rs",
+      "identity": "source:dd6d12f3a9d8ee02"
+    },
+    {
+      "file": "crates/hnsw/src/error/payload.rs",
+      "identity": "source:f3962ce7ac37e79b"
+    },
+    {
+      "file": "crates/hnsw/src/error/profile.rs",
+      "identity": "source:d2f801e96749b18f"
+    },
+    {
+      "file": "crates/hnsw/src/fixture.rs",
+      "identity": "source:36d0fc631cef27c7"
+    },
+    {
+      "file": "crates/hnsw/src/graph.rs",
+      "identity": "source:cb5fb7b50de557ec"
+    },
+    {
+      "file": "crates/hnsw/src/guard.rs",
+      "identity": "source:aaf8dc9abd0e9767"
+    },
+    {
+      "file": "crates/hnsw/src/level.rs",
+      "identity": "source:e3bac1d69896fbc2"
+    },
+    {
+      "file": "crates/hnsw/src/lib.rs",
+      "identity": "source:975611bdbeb99f1d"
+    },
+    {
+      "file": "crates/hnsw/src/params.rs",
+      "identity": "source:c334bc9152a49667"
+    },
+    {
+      "file": "crates/hnsw/src/profile.rs",
+      "identity": "source:6e1cc344de551133"
+    },
+    {
+      "file": "crates/hnsw/src/relation.rs",
+      "identity": "source:5a2a3873de3e2c59"
+    },
+    {
+      "file": "crates/hnsw/src/relation/setup.rs",
+      "identity": "source:f0c1e21b6fdace86"
+    },
+    {
+      "file": "crates/hnsw/src/search.rs",
+      "identity": "source:f54f542ee8217166"
+    },
+    {
+      "file": "crates/hnsw/src/select.rs",
+      "identity": "source:7855b110796c7e90"
+    },
+    {
+      "file": "crates/iri/src/base.rs",
+      "identity": "source:080ca9462ad33af1"
+    },
+    {
+      "file": "crates/iri/src/curie.rs",
+      "identity": "source:80f3bd1e0c3a1d23"
+    },
+    {
+      "file": "crates/iri/src/error.rs",
+      "identity": "source:7b91f9cbba487fd2"
+    },
+    {
+      "file": "crates/iri/src/host.rs",
+      "identity": "source:708796d354d7fae3"
+    },
+    {
+      "file": "crates/iri/src/idna.rs",
+      "identity": "source:ae356daeb180b38d"
+    },
+    {
+      "file": "crates/iri/src/idna_tables.rs",
+      "identity": "source:41ef5f0ca073a711"
+    },
+    {
+      "file": "crates/iri/src/langtag.rs",
+      "identity": "source:a44d09096a4f3a0d"
+    },
+    {
+      "file": "crates/iri/src/lib.rs",
+      "identity": "source:89f8a3ef8c6cbb61"
+    },
+    {
+      "file": "crates/iri/src/normalize.rs",
+      "identity": "source:e1e5ae11fadbebea"
+    },
+    {
+      "file": "crates/iri/src/parse.rs",
+      "identity": "source:178d1312d0da80be"
+    },
+    {
+      "file": "crates/iri/src/pos.rs",
+      "identity": "source:a833fa3a9a0e12bc"
+    },
+    {
+      "file": "crates/iri/src/resolve.rs",
+      "identity": "source:e3c4463e43cdc8ac"
+    },
+    {
+      "file": "crates/iri/src/vocab.rs",
+      "identity": "source:cb98f1b4a92d19c5"
+    },
+    {
+      "file": "crates/iri/src/vocab/ogc.rs",
+      "identity": "source:b65f3c6622f4c15f"
+    },
+    {
+      "file": "crates/json/src/decode.rs",
+      "identity": "source:5347b2d32a4536fa"
+    },
+    {
+      "file": "crates/json/src/error.rs",
+      "identity": "source:894e706fa5bd58cf"
+    },
+    {
+      "file": "crates/json/src/lib.rs",
+      "identity": "source:e4427343639a8cf6"
+    },
+    {
+      "file": "crates/json/src/model.rs",
+      "identity": "source:57a84a45228557d4"
+    },
+    {
+      "file": "crates/json/src/parse.rs",
+      "identity": "source:4e0a538e177bf422"
+    },
+    {
+      "file": "crates/json/src/profile.rs",
+      "identity": "source:cef5f9b5fc12b63d"
+    },
+    {
+      "file": "crates/json/src/project.rs",
+      "identity": "source:65043bede25717fe"
+    },
+    {
+      "file": "crates/jsonschema/src/compile.rs",
+      "identity": "source:613625d3f5eb8177"
+    },
+    {
+      "file": "crates/jsonschema/src/content.rs",
+      "identity": "source:bc50161dcf1513a2"
+    },
+    {
+      "file": "crates/jsonschema/src/dialect.rs",
+      "identity": "source:41c41e07a9505bf2"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/emit.rs",
+      "identity": "source:75e1d7af6b43b26d"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/mod.rs",
+      "identity": "source:b035d6a5a4afe0e5"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/property.rs",
+      "identity": "source:d70f380a1ff3c160"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/property_tables.rs",
+      "identity": "source:b2a29c6033f28ce7"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/refusal.rs",
+      "identity": "source:863ef65b672ac912"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/unicode_ranges.rs",
+      "identity": "source:406ca4797a81f1c9"
+    },
+    {
+      "file": "crates/jsonschema/src/ecma/vm.rs",
+      "identity": "source:04bdb6632e6daa4d"
+    },
+    {
+      "file": "crates/jsonschema/src/error.rs",
+      "identity": "source:a1eaf6d1552a350c"
+    },
+    {
+      "file": "crates/jsonschema/src/error/keyword.rs",
+      "identity": "source:6781ac800a91c3ff"
+    },
+    {
+      "file": "crates/jsonschema/src/format.rs",
+      "identity": "source:d4f4de9547e3023a"
+    },
+    {
+      "file": "crates/jsonschema/src/lib.rs",
+      "identity": "source:9b23b4377c53e373"
+    },
+    {
+      "file": "crates/jsonschema/src/meta_set.rs",
+      "identity": "source:3e4c82daf9130f47"
+    },
+    {
+      "file": "crates/jsonschema/src/number.rs",
+      "identity": "source:8bb174a68796a020"
+    },
+    {
+      "file": "crates/jsonschema/src/output.rs",
+      "identity": "source:b03a2516d4d3dbd4"
+    },
+    {
+      "file": "crates/jsonschema/src/output/refusal.rs",
+      "identity": "source:ebb3cb7a48cd3a39"
+    },
+    {
+      "file": "crates/jsonschema/src/pointer.rs",
+      "identity": "source:4763286454f9cc56"
+    },
+    {
+      "file": "crates/jsonschema/src/registry.rs",
+      "identity": "source:43c88d593c07d21a"
+    },
+    {
+      "file": "crates/jsonschema/src/schema.rs",
+      "identity": "source:941a23f445f747e7"
+    },
+    {
+      "file": "crates/jsonschema/src/unique_items.rs",
+      "identity": "source:45b6c5a5e040bcd2"
+    },
+    {
+      "file": "crates/jsonschema/src/validate.rs",
+      "identity": "source:aab9412e58745ccf"
+    },
+    {
+      "file": "crates/lex/src/allocation.rs",
+      "identity": "source:e9db6463871b2877"
+    },
+    {
+      "file": "crates/lex/src/allocation/boxed.rs",
+      "identity": "source:7606dae0462dfdb3"
+    },
+    {
+      "file": "crates/lex/src/allocation/ordered.rs",
+      "identity": "source:a8b6d39dfc85ca18"
+    },
+    {
+      "file": "crates/lex/src/allocation/shared.rs",
+      "identity": "source:849ad8397c2dd532"
+    },
+    {
+      "file": "crates/lex/src/allocation/shared/buffers.rs",
+      "identity": "source:f0238474878ed6a5"
+    },
+    {
+      "file": "crates/lex/src/allocation/text.rs",
+      "identity": "source:7663bfb2908d6053"
+    },
+    {
+      "file": "crates/lex/src/assoc.rs",
+      "identity": "source:a60b7215bb1da79e"
+    },
+    {
+      "file": "crates/lex/src/cbor.rs",
+      "identity": "source:42c518a1bc300401"
+    },
+    {
+      "file": "crates/lex/src/cbor/decode.rs",
+      "identity": "source:4b4408cff77dc6e8"
+    },
+    {
+      "file": "crates/lex/src/cbor/encode.rs",
+      "identity": "source:494228d288c0fdc8"
+    },
+    {
+      "file": "crates/lex/src/cbor/head.rs",
+      "identity": "source:4540ba3065577743"
+    },
+    {
+      "file": "crates/lex/src/cbor/value.rs",
+      "identity": "source:6454d79cc1f79fc4"
+    },
+    {
+      "file": "crates/lex/src/constructors.rs",
+      "identity": "source:9d30d930447001ad"
+    },
+    {
+      "file": "crates/lex/src/crockford.rs",
+      "identity": "source:a2f6873e9132938a"
+    },
+    {
+      "file": "crates/lex/src/diagnostic.rs",
+      "identity": "source:35e20dade20e3fac"
+    },
+    {
+      "file": "crates/lex/src/html.rs",
+      "identity": "source:0dbb7776ae8425a8"
+    },
+    {
+      "file": "crates/lex/src/html/entities.rs",
+      "identity": "source:ad9da522177cb167"
+    },
+    {
+      "file": "crates/lex/src/iri_escape.rs",
+      "identity": "source:96ec3ecac0531cc7"
+    },
+    {
+      "file": "crates/lex/src/json.rs",
+      "identity": "source:47a14f99f19cefac"
+    },
+    {
+      "file": "crates/lex/src/json/error.rs",
+      "identity": "source:c1708099e00a1b25"
+    },
+    {
+      "file": "crates/lex/src/json/number.rs",
+      "identity": "source:2c730fca24c95bc1"
+    },
+    {
+      "file": "crates/lex/src/json/output.rs",
+      "identity": "source:7493299df79b6c22"
+    },
+    {
+      "file": "crates/lex/src/json/read.rs",
+      "identity": "source:41fd710787e50a49"
+    },
+    {
+      "file": "crates/lex/src/json/record.rs",
+      "identity": "source:b4752a403353693b"
+    },
+    {
+      "file": "crates/lex/src/json/record/error.rs",
+      "identity": "source:98c663f6400bca19"
+    },
+    {
+      "file": "crates/lex/src/json/value.rs",
+      "identity": "source:33b97260ceb30c93"
+    },
+    {
+      "file": "crates/lex/src/json/write.rs",
+      "identity": "source:f9e130d9d1584390"
+    },
+    {
+      "file": "crates/lex/src/json_escape.rs",
+      "identity": "source:a6ef22a416419117"
+    },
+    {
+      "file": "crates/lex/src/json_pointer.rs",
+      "identity": "source:d38b1f6f5b0c4e34"
+    },
+    {
+      "file": "crates/lex/src/lib.rs",
+      "identity": "source:56b8f1c7d9b99af9"
+    },
+    {
+      "file": "crates/lex/src/literal_escape.rs",
+      "identity": "source:f4e8ba5474b206d2"
+    },
+    {
+      "file": "crates/lex/src/message_error.rs",
+      "identity": "source:87737e35a633e1e2"
+    },
+    {
+      "file": "crates/lex/src/percent.rs",
+      "identity": "source:cb1d95d1471e8053"
+    },
+    {
+      "file": "crates/lex/src/scan.rs",
+      "identity": "source:b6ecf40b46067580"
+    },
+    {
+      "file": "crates/lex/src/term_syntax.rs",
+      "identity": "source:aebeb9c78047b141"
+    },
+    {
+      "file": "crates/lex/src/terminals.rs",
+      "identity": "source:89d81e9f0ce87311"
+    },
+    {
+      "file": "crates/lex/src/text_out.rs",
+      "identity": "source:e515ff4cc08ba8d7"
+    },
+    {
+      "file": "crates/lex/src/unicode.rs",
+      "identity": "source:aff9a1b44c980003"
+    },
+    {
+      "file": "crates/lex/src/unicode/aligned.rs",
+      "identity": "source:fd3ea223f9e9c132"
+    },
+    {
+      "file": "crates/lex/src/unicode/case_tables.rs",
+      "identity": "source:078f588aa39ad77b"
+    },
+    {
+      "file": "crates/lex/src/unicode/casing.rs",
+      "identity": "source:524a883342dce6e5"
+    },
+    {
+      "file": "crates/lex/src/unicode_tables.rs",
+      "identity": "source:52d1c2b0dd6e2c9b"
+    },
+    {
+      "file": "crates/lex/src/walk.rs",
+      "identity": "source:7afb232c4a507ba3"
+    },
+    {
+      "file": "crates/lex/src/walk/scalar.rs",
+      "identity": "source:2c7258eae6faa703"
+    },
+    {
+      "file": "crates/lex/src/walk/sort.rs",
+      "identity": "source:cb570ce9248c4fd4"
+    },
+    {
+      "file": "crates/lex/src/xml.rs",
+      "identity": "source:e6abc91feacefc7d"
+    },
+    {
+      "file": "crates/lex/src/xml/decode.rs",
+      "identity": "source:d42c50954045e9d4"
+    },
+    {
+      "file": "crates/lex/src/xml/dom.rs",
+      "identity": "source:e1b8a255136b7e90"
+    },
+    {
+      "file": "crates/lex/src/xml/error.rs",
+      "identity": "source:0d46d91502e3df4f"
+    },
+    {
+      "file": "crates/lex/src/xml/reader.rs",
+      "identity": "source:f71f432651528832"
+    },
+    {
+      "file": "crates/lex/src/xml/reader/dtd.rs",
+      "identity": "source:c336deae7aa2c7ec"
+    },
+    {
+      "file": "crates/lex/src/yaml.rs",
+      "identity": "source:732a933af15877a5"
+    },
+    {
+      "file": "crates/lex/src/yaml/read.rs",
+      "identity": "source:1d9b0d754c1e22ee"
+    },
+    {
+      "file": "crates/lex/src/yaml/resolve.rs",
+      "identity": "source:bf3415b0cb510df7"
+    },
+    {
+      "file": "crates/lex/src/yaml/write.rs",
+      "identity": "source:b5d1b8e1b8d2a678"
+    },
+    {
+      "file": "crates/markdown/src/claims.rs",
+      "identity": "source:ae81a71a62ae15a6"
+    },
+    {
+      "file": "crates/markdown/src/decode.rs",
+      "identity": "source:d635b276746d1a0d"
+    },
+    {
+      "file": "crates/markdown/src/dialect/markdown.rs",
+      "identity": "source:1a9a0a45d15916ea"
+    },
+    {
+      "file": "crates/markdown/src/dialect/mod.rs",
+      "identity": "source:d84abd8d4c0264da"
+    },
+    {
+      "file": "crates/markdown/src/error.rs",
+      "identity": "source:412e444e1c5ee466"
+    },
+    {
+      "file": "crates/markdown/src/identity.rs",
+      "identity": "source:5a10ba7fea4b4c62"
+    },
+    {
+      "file": "crates/markdown/src/lib.rs",
+      "identity": "source:f47fa07cb3034032"
+    },
+    {
+      "file": "crates/markdown/src/model.rs",
+      "identity": "source:b355b9c86fad47ae"
+    },
+    {
+      "file": "crates/markdown/src/profile.rs",
+      "identity": "source:31b71c4e25d774f8"
+    },
+    {
+      "file": "crates/markdown/src/split.rs",
+      "identity": "source:309e7aae16cb6630"
+    },
+    {
+      "file": "crates/mime/src/decode.rs",
+      "identity": "source:84fdbb8ce30ed709"
+    },
+    {
+      "file": "crates/mime/src/error.rs",
+      "identity": "source:87a0beddddbea114"
+    },
+    {
+      "file": "crates/mime/src/lib.rs",
+      "identity": "source:ef1fa04bbeb5b710"
+    },
+    {
+      "file": "crates/mime/src/model.rs",
+      "identity": "source:5c1e1b32b2e4f717"
+    },
+    {
+      "file": "crates/mime/src/parse.rs",
+      "identity": "source:3d6ac77e92b83a37"
+    },
+    {
+      "file": "crates/mime/src/profile.rs",
+      "identity": "source:53970d3701a0aeca"
+    },
+    {
+      "file": "crates/mime/src/project.rs",
+      "identity": "source:c0d5b5f8613f3417"
+    },
+    {
+      "file": "crates/mime/src/transfer.rs",
+      "identity": "source:e8ffab47c9c3dcd4"
+    },
+    {
+      "file": "crates/purrdf/src/lib.rs",
+      "identity": "source:715c6b69f6edef98"
+    },
+    {
+      "file": "crates/purrdf/src/profile.rs",
+      "identity": "source:6d50b52a5d00aac6"
+    },
+    {
+      "file": "crates/purrdf/src/reasoning.rs",
+      "identity": "source:a7b77345d2b0f672"
+    },
+    {
+      "file": "crates/rdf-capi/src/buffer.rs",
+      "identity": "source:3d64f3e034246b2b"
+    },
+    {
+      "file": "crates/rdf-capi/src/cursor.rs",
+      "identity": "source:5adb80a9b1f5ca16"
+    },
+    {
+      "file": "crates/rdf-capi/src/entail.rs",
+      "identity": "source:88ec263e958e19fe"
+    },
+    {
+      "file": "crates/rdf-capi/src/error.rs",
+      "identity": "source:ee927599c63fd666"
+    },
+    {
+      "file": "crates/rdf-capi/src/geo.rs",
+      "identity": "source:e4205f61335f8e4e"
+    },
+    {
+      "file": "crates/rdf-capi/src/governor.rs",
+      "identity": "source:cc42653d83dee761"
+    },
+    {
+      "file": "crates/rdf-capi/src/graph.rs",
+      "identity": "source:c733ecac37ddcc80"
+    },
+    {
+      "file": "crates/rdf-capi/src/gts.rs",
+      "identity": "source:1f9608da34ab8fe0"
+    },
+    {
+      "file": "crates/rdf-capi/src/handles.rs",
+      "identity": "source:7ad440c3c1abeb56"
+    },
+    {
+      "file": "crates/rdf-capi/src/lib.rs",
+      "identity": "source:babf47d06a9e2efd"
+    },
+    {
+      "file": "crates/rdf-capi/src/parse.rs",
+      "identity": "source:f27f665b948db725"
+    },
+    {
+      "file": "crates/rdf-capi/src/projection.rs",
+      "identity": "source:65ae3519413b4b52"
+    },
+    {
+      "file": "crates/rdf-capi/src/query.rs",
+      "identity": "source:59a8abfb373053e0"
+    },
+    {
+      "file": "crates/rdf-capi/src/regex_profile.rs",
+      "identity": "source:d6d29bb81b7b46b7"
+    },
+    {
+      "file": "crates/rdf-capi/src/rowcursor.rs",
+      "identity": "source:c13953ac4cfa4b03"
+    },
+    {
+      "file": "crates/rdf-capi/src/serialize.rs",
+      "identity": "source:a4542a7291409fc4"
+    },
+    {
+      "file": "crates/rdf-capi/src/shacl.rs",
+      "identity": "source:2e06cda9f40822eb"
+    },
+    {
+      "file": "crates/rdf-capi/src/status.rs",
+      "identity": "source:726d072ef203cbfb"
+    },
+    {
+      "file": "crates/rdf-capi/src/term.rs",
+      "identity": "source:8358a39461cf8d14"
+    },
+    {
+      "file": "crates/rdf-capi/src/version.rs",
+      "identity": "source:2960ea2149c5452e"
+    },
+    {
+      "file": "crates/rdf-capi/src/xsd.rs",
+      "identity": "source:86c40b29dc8d3d8b"
+    },
+    {
+      "file": "crates/rdf-core/build.rs",
+      "identity": "source:b5d5a4b3feba7e96"
+    },
+    {
+      "file": "crates/rdf-core/src/artifact/container.rs",
+      "identity": "source:4fc34db2ec0dea4c"
+    },
+    {
+      "file": "crates/rdf-core/src/artifact/identity.rs",
+      "identity": "source:6c1dd92628cca5d0"
+    },
+    {
+      "file": "crates/rdf-core/src/artifact/mod.rs",
+      "identity": "source:163a104a282b67b6"
+    },
+    {
+      "file": "crates/rdf-core/src/backend.rs",
+      "identity": "source:312d44b8a76f2267"
+    },
+    {
+      "file": "crates/rdf-core/src/binding_pattern.rs",
+      "identity": "source:1db070156b546e39"
+    },
+    {
+      "file": "crates/rdf-core/src/blank_label.rs",
+      "identity": "source:cbf3ecbec905f511"
+    },
+    {
+      "file": "crates/rdf-core/src/bundle.rs",
+      "identity": "source:4d30a0b6f8dddb97"
+    },
+    {
+      "file": "crates/rdf-core/src/bytes.rs",
+      "identity": "source:3f3cfa60f14acc61"
+    },
+    {
+      "file": "crates/rdf-core/src/cdt_blank.rs",
+      "identity": "source:c53db183851c60cd"
+    },
+    {
+      "file": "crates/rdf-core/src/collections.rs",
+      "identity": "source:10f01085a483fc0c"
+    },
+    {
+      "file": "crates/rdf-core/src/content_id.rs",
+      "identity": "source:49e087cb49c711d4"
+    },
+    {
+      "file": "crates/rdf-core/src/content_store.rs",
+      "identity": "source:62bd5be953557e2b"
+    },
+    {
+      "file": "crates/rdf-core/src/cover.rs",
+      "identity": "source:b8bbdeee4d787aa3"
+    },
+    {
+      "file": "crates/rdf-core/src/cover/emit.rs",
+      "identity": "source:8d60a4aecf513de0"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/arch.rs",
+      "identity": "source:2ee9f19074662a01"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/backend.rs",
+      "identity": "source:37565e9db6dc6d42"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/error.rs",
+      "identity": "source:a0d89ebed24cddba"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/mod.rs",
+      "identity": "source:9b7b6d6bfe1da66d"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/read.rs",
+      "identity": "source:12abcb1faabad712"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/scan.rs",
+      "identity": "source:884126659fffcdb8"
+    },
+    {
+      "file": "crates/rdf-core/src/csv/write.rs",
+      "identity": "source:7b9e658ce91f2ac5"
+    },
+    {
+      "file": "crates/rdf-core/src/dataset_view.rs",
+      "identity": "source:57c3278793273899"
+    },
+    {
+      "file": "crates/rdf-core/src/describe.rs",
+      "identity": "source:233efc64e065512d"
+    },
+    {
+      "file": "crates/rdf-core/src/diagnostic.rs",
+      "identity": "source:3a1b8140f4ad421a"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/binary64.rs",
+      "identity": "source:c6d8eae19848031b"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/build_identity.rs",
+      "identity": "source:73741f8ce67f4deb"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/dispatch.rs",
+      "identity": "source:563b7c6b5e4da5ac"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/exact.rs",
+      "identity": "source:7237bd73c412f65c"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/mod.rs",
+      "identity": "source:c6bb81183fa5a548"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/reassociated.rs",
+      "identity": "source:0c0aa4a82c6128f2"
+    },
+    {
+      "file": "crates/rdf-core/src/distance/shape.rs",
+      "identity": "source:9506c7ceccd2226d"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence.rs",
+      "identity": "source:5dee5b746907a4f8"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/accepted.rs",
+      "identity": "source:6201e5937debfcb5"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/answer.rs",
+      "identity": "source:01b0cc16af753bff"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/column.rs",
+      "identity": "source:fb15488d73aa191d"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/conversion.rs",
+      "identity": "source:d25caa511427b385"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/dictionary.rs",
+      "identity": "source:2f5316a415b70840"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/frame.rs",
+      "identity": "source:be2acdf40cb4f221"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/information.rs",
+      "identity": "source:17e542861d8d7ef0"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger.rs",
+      "identity": "source:eef39ffe6113d2aa"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/frame.rs",
+      "identity": "source:7b58fd6cf3b30031"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/row.rs",
+      "identity": "source:3b7e446535a2dc28"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/source.rs",
+      "identity": "source:51a4beba7118c244"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/terms.rs",
+      "identity": "source:6edefc907025f820"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/ledger/view.rs",
+      "identity": "source:f87b547908598b23"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/reason.rs",
+      "identity": "source:91cb357d156e9e6e"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/record.rs",
+      "identity": "source:d0b293b7c956f84c"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/standpoint.rs",
+      "identity": "source:7b2c4caf76250989"
+    },
+    {
+      "file": "crates/rdf-core/src/evidence/workspace.rs",
+      "identity": "source:0fc71ac27582c292"
+    },
+    {
+      "file": "crates/rdf-core/src/fno.rs",
+      "identity": "source:c8f428c4d6da9e4e"
+    },
+    {
+      "file": "crates/rdf-core/src/governor.rs",
+      "identity": "source:3f43a2a4ab9f59e6"
+    },
+    {
+      "file": "crates/rdf-core/src/graph.rs",
+      "identity": "source:60a56639b7be26a7"
+    },
+    {
+      "file": "crates/rdf-core/src/graph_roles.rs",
+      "identity": "source:c65f64f39a649dc2"
+    },
+    {
+      "file": "crates/rdf-core/src/hash.rs",
+      "identity": "source:ca955a84c7721f7e"
+    },
+    {
+      "file": "crates/rdf-core/src/imports.rs",
+      "identity": "source:e1cf92ba57443304"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/absolute.rs",
+      "identity": "source:6a1c6d11088442ec"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder.rs",
+      "identity": "source:03ddf41248fe1335"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/builder/triple.rs",
+      "identity": "source:d23ea46408afce76"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/bundle.rs",
+      "identity": "source:df509c2e51078dee"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/canon.rs",
+      "identity": "source:2a6c852312114b5b"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/canon/state.rs",
+      "identity": "source:3838bf3e873084da"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/compare.rs",
+      "identity": "source:9f1b5bad79115ca9"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/composite.rs",
+      "identity": "source:099729f765ca16e9"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/cursor.rs",
+      "identity": "source:50be0a6c21a9adb6"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/dataset.rs",
+      "identity": "source:68baedbb89ffa28f"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/dataset/inspection.rs",
+      "identity": "source:0256bfdfb89dbc52"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/contract.rs",
+      "identity": "source:1c0dc2b9477aa9b4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/error.rs",
+      "identity": "source:c8e96fa9119164b4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/identity.rs",
+      "identity": "source:16bb089bdfebac1a"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/metadata.rs",
+      "identity": "source:1fe508bb0ba201be"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/mod.rs",
+      "identity": "source:97d0de139ab31ff2"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/target.rs",
+      "identity": "source:f1e995ae1f7e3170"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/verify.rs",
+      "identity": "source:a4da75d72b359b54"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/view.rs",
+      "identity": "source:c0b521011405b639"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/wire.rs",
+      "identity": "source:c33349e34bf8113d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/embedding/writer.rs",
+      "identity": "source:e7a6e4ab2aa72bfb"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/event_sink.rs",
+      "identity": "source:06dde97381917c60"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/frozen_terms.rs",
+      "identity": "source:9d73ba6870970982"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/global.rs",
+      "identity": "source:bbf736546130634d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/import.rs",
+      "identity": "source:09acdcc44cac78ec"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/ingest.rs",
+      "identity": "source:b04f0c84dfb362cd"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/ingest/error.rs",
+      "identity": "source:ab1cac2b5bc01495"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mod.rs",
+      "identity": "source:d2b988e0ffe91588"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable.rs",
+      "identity": "source:c2c581ca7cbb0af4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+      "identity": "source:57ff17ef53a819dd"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/bits.rs",
+      "identity": "source:1c09e58c0e79a58b"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/certify.rs",
+      "identity": "source:af5c5872dac82e79"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/container.rs",
+      "identity": "source:f622ee29794420ce"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/dict.rs",
+      "identity": "source:dc003c8e56d84a4c"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/mod.rs",
+      "identity": "source:8790db46180632c0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/side.rs",
+      "identity": "source:c2f76ba2c141e179"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/triples.rs",
+      "identity": "source:4230ffe207be48e1"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pack/view.rs",
+      "identity": "source:4544f20df76ae376"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/admission.rs",
+      "identity": "source:8a09b0ab8926b5ef"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/graph_index.rs",
+      "identity": "source:b6799826cf387e7d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/mod.rs",
+      "identity": "source:1a570fb503439f42"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/provider.rs",
+      "identity": "source:7aa0b2bed0d1f840"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/query.rs",
+      "identity": "source:e31194863cd46cf0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/stack.rs",
+      "identity": "source:06399db5856a0664"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/summary.rs",
+      "identity": "source:42235a1b2f9e4eb4"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/paged/translation.rs",
+      "identity": "source:cfca6f6c499c62ad"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/pipeline_bundle.rs",
+      "identity": "source:86fbadc699466d37"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/build.rs",
+      "identity": "source:27f5b708a4cb3b7c"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/file.rs",
+      "identity": "source:e650600f8afc91b0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/format.rs",
+      "identity": "source:9f59c6635069f233"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/mod.rs",
+      "identity": "source:48243fb234fbcaaf"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query.rs",
+      "identity": "source:d775f4106ea78471"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/changes.rs",
+      "identity": "source:025e8e93534b3a40"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+      "identity": "source:f9bc9526648d8738"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/statistics.rs",
+      "identity": "source:e70b2d9c25da7c7a"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/query/view.rs",
+      "identity": "source:8c1fc0c5f493f100"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/session.rs",
+      "identity": "source:8f305428200ca810"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/session/cache.rs",
+      "identity": "source:4d2a182ff7030765"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/session/statistics.rs",
+      "identity": "source:40fbcbb00193fd07"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/segmented/stack.rs",
+      "identity": "source:b4f48d7f901831f8"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/skolem.rs",
+      "identity": "source:2f7c6662f21fc720"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/source_directory.rs",
+      "identity": "source:2a704c446281111d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/statistics.rs",
+      "identity": "source:e06422180f284243"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/statistics/codec.rs",
+      "identity": "source:4bcbf8c44c1cb05d"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/statistics/source.rs",
+      "identity": "source:0ac3c4f9da6972bf"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/term.rs",
+      "identity": "source:9b82577f216b62e0"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/term/canonical.rs",
+      "identity": "source:ac4eacd5bb79a7cb"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/term_walk.rs",
+      "identity": "source:5f1c23d770cae26f"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/triple.rs",
+      "identity": "source:243c8c2e412928e6"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/triple/read.rs",
+      "identity": "source:c03053a5650b4acf"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/validate.rs",
+      "identity": "source:bb7eaea66da9a620"
+    },
+    {
+      "file": "crates/rdf-core/src/ir/view_accounting.rs",
+      "identity": "source:73adbd92e90469a1"
+    },
+    {
+      "file": "crates/rdf-core/src/lib.rs",
+      "identity": "source:10ee2e7dd7ef4bfa"
+    },
+    {
+      "file": "crates/rdf-core/src/lookaside.rs",
+      "identity": "source:6eaac414a7d3946d"
+    },
+    {
+      "file": "crates/rdf-core/src/loss.rs",
+      "identity": "source:eec1b08d43c072d8"
+    },
+    {
+      "file": "crates/rdf-core/src/model.rs",
+      "identity": "source:9796f6cc72da987c"
+    },
+    {
+      "file": "crates/rdf-core/src/model/traits.rs",
+      "identity": "source:eacf9eece8df76d3"
+    },
+    {
+      "file": "crates/rdf-core/src/named_graph.rs",
+      "identity": "source:e6f36fd8d3d49a0d"
+    },
+    {
+      "file": "crates/rdf-core/src/ownership.rs",
+      "identity": "source:97a29772bcb4d134"
+    },
+    {
+      "file": "crates/rdf-core/src/provenance.rs",
+      "identity": "source:616214617fd8b17d"
+    },
+    {
+      "file": "crates/rdf-core/src/purremb_fixture.rs",
+      "identity": "source:8b2c5f02d311710c"
+    },
+    {
+      "file": "crates/rdf-core/src/query_scope.rs",
+      "identity": "source:60e1a45340147a15"
+    },
+    {
+      "file": "crates/rdf-core/src/query_scope/counters.rs",
+      "identity": "source:ca4658681a98c12e"
+    },
+    {
+      "file": "crates/rdf-core/src/sink.rs",
+      "identity": "source:3dbf8bc5c7c0c322"
+    },
+    {
+      "file": "crates/rdf-core/src/small.rs",
+      "identity": "source:8ee865e659a9b598"
+    },
+    {
+      "file": "crates/rdf-core/src/source.rs",
+      "identity": "source:e2b2aeba9a2caeab"
+    },
+    {
+      "file": "crates/rdf-core/src/sssom.rs",
+      "identity": "source:3fa45adb137d3a59"
+    },
+    {
+      "file": "crates/rdf-core/src/statistics.rs",
+      "identity": "source:4d60a94d1b9c11b6"
+    },
+    {
+      "file": "crates/rdf-core/src/statistics/layered.rs",
+      "identity": "source:63be08418a6ca561"
+    },
+    {
+      "file": "crates/rdf-core/src/store.rs",
+      "identity": "source:57fe7347ed557caf"
+    },
+    {
+      "file": "crates/rdf-core/src/term_fixture.rs",
+      "identity": "source:05d2b56207541454"
+    },
+    {
+      "file": "crates/rdf-core/src/term_writer.rs",
+      "identity": "source:2a1b82441371bb34"
+    },
+    {
+      "file": "crates/rdf-core/src/turtle.rs",
+      "identity": "source:fe4543fce5fcd3db"
+    },
+    {
+      "file": "crates/rdf-core/src/turtle_render.rs",
+      "identity": "source:709dd6553dd0b117"
+    },
+    {
+      "file": "crates/rdf-core/src/view_fixture.rs",
+      "identity": "source:70175dac8f61e9b9"
+    },
+    {
+      "file": "crates/rdf-core/src/xml_escape.rs",
+      "identity": "source:baf0332f6f4f76c1"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/blocks.rs",
+      "identity": "source:cb6bd5b8e27e7bf8"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/case_variants.rs",
+      "identity": "source:5818ac913d151082"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/classes.rs",
+      "identity": "source:74dcda5d902d6a64"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/ecma.rs",
+      "identity": "source:9f3bbdb0a0690a99"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/ecma_emit.rs",
+      "identity": "source:2e99f4629e8e3de2"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/emit.rs",
+      "identity": "source:5716005a78f0586d"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/error.rs",
+      "identity": "source:4812255ee6a452a5"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/mod.rs",
+      "identity": "source:a152a78214f8f902"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/prefilter.rs",
+      "identity": "source:75e5c936696d59ee"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/replace.rs",
+      "identity": "source:99ec35d281259656"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/scan.rs",
+      "identity": "source:bec5f551dab4a499"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xflag.rs",
+      "identity": "source:62c3f5ef5582d628"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/cache.rs",
+      "identity": "source:8b30a7caa9490517"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/compatibility.rs",
+      "identity": "source:4087f372a5672a4c"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs",
+      "identity": "source:6ad7105ca8b303d8"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/compile.rs",
+      "identity": "source:199d4291adecdd48"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs",
+      "identity": "source:d4a8f064ae31cc63"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/dated_names.rs",
+      "identity": "source:405ea39131d23b58"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/match.rs",
+      "identity": "source:c78f0ee4a6143f95"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/mod.rs",
+      "identity": "source:cc7f895b996d3fa4"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/pike.rs",
+      "identity": "source:3d0e514619ca9d0d"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/replace.rs",
+      "identity": "source:6532e000485304ac"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/sets.rs",
+      "identity": "source:6cb428e0435d0bee"
+    },
+    {
+      "file": "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs",
+      "identity": "source:c1461a01127cc29f"
+    },
+    {
+      "file": "crates/rdf-events/src/lib.rs",
+      "identity": "source:cb14fb74856eb674"
+    },
+    {
+      "file": "crates/rdf-wasm/src/async_query.rs",
+      "identity": "source:dc2656f26e86eeb9"
+    },
+    {
+      "file": "crates/rdf-wasm/src/codec.rs",
+      "identity": "source:2eb02d0e54338187"
+    },
+    {
+      "file": "crates/rdf-wasm/src/convert.rs",
+      "identity": "source:88efee9d3a9b69ca"
+    },
+    {
+      "file": "crates/rdf-wasm/src/dataset.rs",
+      "identity": "source:656bbc5baddc532d"
+    },
+    {
+      "file": "crates/rdf-wasm/src/entail.rs",
+      "identity": "source:f71beb9a44ccde72"
+    },
+    {
+      "file": "crates/rdf-wasm/src/factory.rs",
+      "identity": "source:e131157ddb535392"
+    },
+    {
+      "file": "crates/rdf-wasm/src/geo.rs",
+      "identity": "source:3e83f4cdca4f17b0"
+    },
+    {
+      "file": "crates/rdf-wasm/src/host.rs",
+      "identity": "source:ce15be5dff6d59ea"
+    },
+    {
+      "file": "crates/rdf-wasm/src/interleaving.rs",
+      "identity": "source:df075267270d555f"
+    },
+    {
+      "file": "crates/rdf-wasm/src/jsonld.rs",
+      "identity": "source:98a368907e104972"
+    },
+    {
+      "file": "crates/rdf-wasm/src/lib.rs",
+      "identity": "source:fb227626fae62644"
+    },
+    {
+      "file": "crates/rdf-wasm/src/operation.rs",
+      "identity": "source:04813457492f1334"
+    },
+    {
+      "file": "crates/rdf-wasm/src/panic_poison.rs",
+      "identity": "source:bf9e66f4abe97be9"
+    },
+    {
+      "file": "crates/rdf-wasm/src/projection.rs",
+      "identity": "source:bca8ced84e8d4cb8"
+    },
+    {
+      "file": "crates/rdf-wasm/src/protocol.rs",
+      "identity": "source:c797653bc3a2857c"
+    },
+    {
+      "file": "crates/rdf-wasm/src/query.rs",
+      "identity": "source:acf7f2146bbbec55"
+    },
+    {
+      "file": "crates/rdf-wasm/src/shacl.rs",
+      "identity": "source:b7a1146b7a5dc67d"
+    },
+    {
+      "file": "crates/rdf-wasm/src/shadow_stack.rs",
+      "identity": "source:745cc53775441f32"
+    },
+    {
+      "file": "crates/rdf-wasm/src/stream.rs",
+      "identity": "source:77f9e3e3a688696a"
+    },
+    {
+      "file": "crates/rdf-wasm/src/term.rs",
+      "identity": "source:49518acb9847376f"
+    },
+    {
+      "file": "crates/rdf-wasm/src/xpath_regex.rs",
+      "identity": "source:94e2152a80a3702f"
+    },
+    {
+      "file": "crates/rdf-wasm/src/xsd.rs",
+      "identity": "source:93ed04e4f10926a2"
+    },
+    {
+      "file": "crates/rdf/src/bin/capture_sparql_goldens.rs",
+      "identity": "source:ebb1d9adbd271ce8"
+    },
+    {
+      "file": "crates/rdf/src/bin/gen_dict_vectors.rs",
+      "identity": "source:9dea97c527e91808"
+    },
+    {
+      "file": "crates/rdf/src/bin/gen_streamable_vectors.rs",
+      "identity": "source:c1d5ea73f779479d"
+    },
+    {
+      "file": "crates/rdf/src/capture_support.rs",
+      "identity": "source:c4123c014ef0ef12"
+    },
+    {
+      "file": "crates/rdf/src/dataset_io.rs",
+      "identity": "source:d76ae8b313235bc8"
+    },
+    {
+      "file": "crates/rdf/src/direction_json.rs",
+      "identity": "source:36fbe1a6d0a927c4"
+    },
+    {
+      "file": "crates/rdf/src/gts.rs",
+      "identity": "source:aa5014bd005b7f2f"
+    },
+    {
+      "file": "crates/rdf/src/gts_certify.rs",
+      "identity": "source:18ea64b2b8c241cc"
+    },
+    {
+      "file": "crates/rdf/src/gts_compose.rs",
+      "identity": "source:5a548944570a9ce3"
+    },
+    {
+      "file": "crates/rdf/src/gts_core.rs",
+      "identity": "source:8162baadd87fcc7b"
+    },
+    {
+      "file": "crates/rdf/src/gts_dict_vectors.rs",
+      "identity": "source:5d3a9909a345b18c"
+    },
+    {
+      "file": "crates/rdf/src/gts_fixtures.rs",
+      "identity": "source:48016ce37442ca26"
+    },
+    {
+      "file": "crates/rdf/src/gts_import_blobs.rs",
+      "identity": "source:034c9eae1117d6d1"
+    },
+    {
+      "file": "crates/rdf/src/gts_import_graph.rs",
+      "identity": "source:286a44be52864c95"
+    },
+    {
+      "file": "crates/rdf/src/gts_import_sink.rs",
+      "identity": "source:5a33e7fc9e052266"
+    },
+    {
+      "file": "crates/rdf/src/gts_resolve.rs",
+      "identity": "source:4aaa2ed8dc327b57"
+    },
+    {
+      "file": "crates/rdf/src/gts_verify.rs",
+      "identity": "source:e01d4b35c3fd8655"
+    },
+    {
+      "file": "crates/rdf/src/gts_verify/error.rs",
+      "identity": "source:b04ed92ef9b27e18"
+    },
+    {
+      "file": "crates/rdf/src/gts_view.rs",
+      "identity": "source:ddaddcfabee96d5d"
+    },
+    {
+      "file": "crates/rdf/src/gts_write.rs",
+      "identity": "source:26477ce9f4128b14"
+    },
+    {
+      "file": "crates/rdf/src/json_number.rs",
+      "identity": "source:23c8eca5438480ed"
+    },
+    {
+      "file": "crates/rdf/src/lib.rs",
+      "identity": "source:cddd685f2822a1f1"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/codec.rs",
+      "identity": "source:9eb44dd4af980c6c"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/hextuples.rs",
+      "identity": "source:79620399dca1e310"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld.rs",
+      "identity": "source:be9064290f72902c"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/carrier.rs",
+      "identity": "source:5a5dbfc44b1023a4"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/context/compiler.rs",
+      "identity": "source:a8da769c65b8b6dd"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/context/mod.rs",
+      "identity": "source:744d715d3d8239cc"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/context/options.rs",
+      "identity": "source:4f9611209bc51859"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/context/strict.rs",
+      "identity": "source:9d1084db1e5aa5cc"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/derived.rs",
+      "identity": "source:1678b2b7a0ef32e9"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/jsonld/expand.rs",
+      "identity": "source:f25264660d7448b1"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/media_type.rs",
+      "identity": "source:05753a9b34f1ca64"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/mod.rs",
+      "identity": "source:7355731688b17824"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/okf/mod.rs",
+      "identity": "source:5b7525f7b0e42650"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/okf/reader.rs",
+      "identity": "source:b9a952a7ce47b698"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/okf/writer.rs",
+      "identity": "source:fa3e3a0e712f6484"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/parse.rs",
+      "identity": "source:d09ca909e1ed4a62"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/rdfxml.rs",
+      "identity": "source:10c3808ef5f41bd1"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/ser_model.rs",
+      "identity": "source:c760ced7ecde9a46"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/serialize.rs",
+      "identity": "source:34cfae0743a5a26e"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/source_format.rs",
+      "identity": "source:a58450b40ca09085"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/span.rs",
+      "identity": "source:ae252cf87bea4328"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/stream.rs",
+      "identity": "source:643df322fa8a1d15"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/syntax.rs",
+      "identity": "source:16b66290b0f84a47"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/text_parse.rs",
+      "identity": "source:392fa83f2949df45"
+    },
+    {
+      "file": "crates/rdf/src/native_codecs/trix.rs",
+      "identity": "source:874022333aa5410b"
+    },
+    {
+      "file": "crates/rdf/src/native_quads.rs",
+      "identity": "source:e3ef1283c52d37bc"
+    },
+    {
+      "file": "crates/rdf/src/nesting.rs",
+      "identity": "source:7662f1eaca7a428c"
+    },
+    {
+      "file": "crates/rdf/src/projections/carrier.rs",
+      "identity": "source:fd0323a409eea298"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/config.rs",
+      "identity": "source:b5d368750180b9bc"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/engine.rs",
+      "identity": "source:6a9f7dc2e104af38"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/exact.rs",
+      "identity": "source:8742de1527b627b0"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/input.rs",
+      "identity": "source:337a580ecb2dc4cf"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/metadata.rs",
+      "identity": "source:2cd84bfa1938ea36"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/mod.rs",
+      "identity": "source:f4aa2f47d58a3d25"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/model.rs",
+      "identity": "source:6230d6b74fbd0834"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/rdf.rs",
+      "identity": "source:5cabfd5f0b09ffde"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/table.rs",
+      "identity": "source:0626c844d6985e4b"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/terms.rs",
+      "identity": "source:7d1e8d4a889d726e"
+    },
+    {
+      "file": "crates/rdf/src/projections/csvw/writer.rs",
+      "identity": "source:30df8e2b11c07ab3"
+    },
+    {
+      "file": "crates/rdf/src/projections/dataset_description.rs",
+      "identity": "source:c057e68bef716292"
+    },
+    {
+      "file": "crates/rdf/src/projections/dcat_rdf.rs",
+      "identity": "source:b454075df8c47f31"
+    },
+    {
+      "file": "crates/rdf/src/projections/error.rs",
+      "identity": "source:ef7764aac186cafc"
+    },
+    {
+      "file": "crates/rdf/src/projections/json_codec.rs",
+      "identity": "source:44a5ea8235a2779e"
+    },
+    {
+      "file": "crates/rdf/src/projections/loss.rs",
+      "identity": "source:546edaa3b977e686"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/carrier_util.rs",
+      "identity": "source:50b709ee4c25339e"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/csv.rs",
+      "identity": "source:7ce8e14240b655a8"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/cypher.rs",
+      "identity": "source:4f830439c618c9af"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/graphml.rs",
+      "identity": "source:7ad66406a8788382"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/mapping.rs",
+      "identity": "source:12a87249710351a4"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/mod.rs",
+      "identity": "source:d96394971beb7004"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/model.rs",
+      "identity": "source:7b7cc967386f5c27"
+    },
+    {
+      "file": "crates/rdf/src/projections/lpg/stream.rs",
+      "identity": "source:a35c357cd095e115"
+    },
+    {
+      "file": "crates/rdf/src/projections/mod.rs",
+      "identity": "source:c5e166a23ea0f098"
+    },
+    {
+      "file": "crates/rdf/src/projections/obo_graphs/config.rs",
+      "identity": "source:6346b48f94893ccb"
+    },
+    {
+      "file": "crates/rdf/src/projections/obo_graphs/mapping.rs",
+      "identity": "source:85e759368ce66f5d"
+    },
+    {
+      "file": "crates/rdf/src/projections/obo_graphs/mod.rs",
+      "identity": "source:c2d14fcd23251fee"
+    },
+    {
+      "file": "crates/rdf/src/projections/obo_graphs/model.rs",
+      "identity": "source:b8dbdcbd57f3cd14"
+    },
+    {
+      "file": "crates/rdf/src/projections/okf/config.rs",
+      "identity": "source:c36a9f2a8a0b54e5"
+    },
+    {
+      "file": "crates/rdf/src/projections/okf/mapping.rs",
+      "identity": "source:b10dfb5b1326f3b4"
+    },
+    {
+      "file": "crates/rdf/src/projections/okf/mod.rs",
+      "identity": "source:451e1f2ecef29b8d"
+    },
+    {
+      "file": "crates/rdf/src/projections/package.rs",
+      "identity": "source:e1fbed670203636a"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/config.rs",
+      "identity": "source:3b2719c89a116d66"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/croissant.rs",
+      "identity": "source:5d99e21bed5dc2d8"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/datacite.rs",
+      "identity": "source:a1eb3f7ede7d8374"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/dcat.rs",
+      "identity": "source:105a782844ce1d94"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/frictionless.rs",
+      "identity": "source:a20651ee11680774"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/json.rs",
+      "identity": "source:a8f9e364632bfde1"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/jsonld.rs",
+      "identity": "source:9bcd5b021cb7e883"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/mapping.rs",
+      "identity": "source:b87df104ae23e95a"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/mod.rs",
+      "identity": "source:f5a7548162ec2b05"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/model.rs",
+      "identity": "source:150d7a384ef66260"
+    },
+    {
+      "file": "crates/rdf/src/projections/research_object/ro_crate.rs",
+      "identity": "source:0cc3769ab0e3f47a"
+    },
+    {
+      "file": "crates/rdf/src/projections/selection.rs",
+      "identity": "source:dd430dd60b9b7b44"
+    },
+    {
+      "file": "crates/rdf/src/projections/sink.rs",
+      "identity": "source:71164285f5eb5c54"
+    },
+    {
+      "file": "crates/rdf/src/projections/skos/config.rs",
+      "identity": "source:db59402f253db29f"
+    },
+    {
+      "file": "crates/rdf/src/projections/skos/mapping.rs",
+      "identity": "source:f373b044b205156c"
+    },
+    {
+      "file": "crates/rdf/src/projections/skos/mod.rs",
+      "identity": "source:b87e68dd7668f3f5"
+    },
+    {
+      "file": "crates/rdf/src/projections/source_rows.rs",
+      "identity": "source:39de4a8a6708e143"
+    },
+    {
+      "file": "crates/rdf/src/projections/term.rs",
+      "identity": "source:fb53a7d6a5ba03fd"
+    },
+    {
+      "file": "crates/rdf/src/projections/util.rs",
+      "identity": "source:0dca257f1e128e55"
+    },
+    {
+      "file": "crates/rdf/src/projections/void/config.rs",
+      "identity": "source:742f9d48143f78e9"
+    },
+    {
+      "file": "crates/rdf/src/projections/void/mapping.rs",
+      "identity": "source:b65f354455e7e87a"
+    },
+    {
+      "file": "crates/rdf/src/projections/void/mod.rs",
+      "identity": "source:95377ddf7aad6557"
+    },
+    {
+      "file": "crates/rdf/src/statements.rs",
+      "identity": "source:0fb0359ae7b02c40"
+    },
+    {
+      "file": "crates/rdf/src/turtle_normalize.rs",
+      "identity": "source:7c9a75198bb01cd5"
+    },
+    {
+      "file": "crates/rdf/src/ustar.rs",
+      "identity": "source:fa35ed9cecaf9fbe"
+    },
+    {
+      "file": "crates/rdf/src/viz.rs",
+      "identity": "source:a722595011287001"
+    },
+    {
+      "file": "crates/rdf/src/viz/json.rs",
+      "identity": "source:eb3d423ec733f0e6"
+    },
+    {
+      "file": "crates/rdf/src/viz/layout.rs",
+      "identity": "source:a893da44c1674580"
+    },
+    {
+      "file": "crates/rdf/src/viz/scene.rs",
+      "identity": "source:adb833cf64d95e2f"
+    },
+    {
+      "file": "crates/rdf/src/viz/svg.rs",
+      "identity": "source:28613c3a719509c7"
+    },
+    {
+      "file": "crates/retrieval/src/admission.rs",
+      "identity": "source:1921366ebbf05c14"
+    },
+    {
+      "file": "crates/retrieval/src/candidate.rs",
+      "identity": "source:94d3f9cf6ead0510"
+    },
+    {
+      "file": "crates/retrieval/src/canonical.rs",
+      "identity": "source:682210c3d6596fce"
+    },
+    {
+      "file": "crates/retrieval/src/compile.rs",
+      "identity": "source:c1ea31b1c5eb25a5"
+    },
+    {
+      "file": "crates/retrieval/src/document.rs",
+      "identity": "source:4d1c00abd0aea480"
+    },
+    {
+      "file": "crates/retrieval/src/embedding.rs",
+      "identity": "source:45ecf95db6c1e43a"
+    },
+    {
+      "file": "crates/retrieval/src/error.rs",
+      "identity": "source:c2300b3414f70921"
+    },
+    {
+      "file": "crates/retrieval/src/execute.rs",
+      "identity": "source:94334d3b10e55a2c"
+    },
+    {
+      "file": "crates/retrieval/src/executor.rs",
+      "identity": "source:bb821113bfdaadc7"
+    },
+    {
+      "file": "crates/retrieval/src/fixed.rs",
+      "identity": "source:5b229defc69865b1"
+    },
+    {
+      "file": "crates/retrieval/src/fixture.rs",
+      "identity": "source:2d785156decf0ac4"
+    },
+    {
+      "file": "crates/retrieval/src/fuse.rs",
+      "identity": "source:eaaa80c54f1e809a"
+    },
+    {
+      "file": "crates/retrieval/src/fusion_profile.rs",
+      "identity": "source:6d6359e6f7064132"
+    },
+    {
+      "file": "crates/retrieval/src/fusion_stream.rs",
+      "identity": "source:71ae3c54edef3462"
+    },
+    {
+      "file": "crates/retrieval/src/id.rs",
+      "identity": "source:82ac17208aa56906"
+    },
+    {
+      "file": "crates/retrieval/src/iri.rs",
+      "identity": "source:8a1341fc1ec1c29a"
+    },
+    {
+      "file": "crates/retrieval/src/lib.rs",
+      "identity": "source:c1394e2a269377bf"
+    },
+    {
+      "file": "crates/retrieval/src/matching.rs",
+      "identity": "source:71f6ebea6b987123"
+    },
+    {
+      "file": "crates/retrieval/src/plan.rs",
+      "identity": "source:fb3f4ab1ce28bae1"
+    },
+    {
+      "file": "crates/retrieval/src/planner.rs",
+      "identity": "source:74195888c323fb53"
+    },
+    {
+      "file": "crates/retrieval/src/ranked_stream.rs",
+      "identity": "source:ddeb9bb1b6d6202e"
+    },
+    {
+      "file": "crates/retrieval/src/reciprocal_rank.rs",
+      "identity": "source:b3985bfd9ae3b04a"
+    },
+    {
+      "file": "crates/retrieval/src/render.rs",
+      "identity": "source:3e37a8f531f9531c"
+    },
+    {
+      "file": "crates/retrieval/src/request.rs",
+      "identity": "source:a977127f8b2205f8"
+    },
+    {
+      "file": "crates/retrieval/src/scope.rs",
+      "identity": "source:ea4aecafc523ded5"
+    },
+    {
+      "file": "crates/retrieval/src/search.rs",
+      "identity": "source:de18ddcc1ce84833"
+    },
+    {
+      "file": "crates/retrieval/src/statistics.rs",
+      "identity": "source:cf4167b6c4a01319"
+    },
+    {
+      "file": "crates/retrieval/src/union.rs",
+      "identity": "source:a98d761ca688e5c5"
+    },
+    {
+      "file": "crates/shapes/src/class_membership.rs",
+      "identity": "source:6071e570f4d7d484"
+    },
+    {
+      "file": "crates/shapes/src/components.rs",
+      "identity": "source:3c7f97578a88ed12"
+    },
+    {
+      "file": "crates/shapes/src/components/parameters.rs",
+      "identity": "source:ac0b9d9c52f05eb9"
+    },
+    {
+      "file": "crates/shapes/src/constraints.rs",
+      "identity": "source:de249cc44e4110a4"
+    },
+    {
+      "file": "crates/shapes/src/data.rs",
+      "identity": "source:4256b7a060a00a6b"
+    },
+    {
+      "file": "crates/shapes/src/data_view.rs",
+      "identity": "source:c9f8b1456f4e35b3"
+    },
+    {
+      "file": "crates/shapes/src/engine.rs",
+      "identity": "source:ac7587a1a0cc0692"
+    },
+    {
+      "file": "crates/shapes/src/error.rs",
+      "identity": "source:fbf86d43dafa694f"
+    },
+    {
+      "file": "crates/shapes/src/expression.rs",
+      "identity": "source:b15a130eaeb94d94"
+    },
+    {
+      "file": "crates/shapes/src/extension_usage.rs",
+      "identity": "source:ebe0dd9e4706b7d7"
+    },
+    {
+      "file": "crates/shapes/src/footprint.rs",
+      "identity": "source:38208bc6eac55803"
+    },
+    {
+      "file": "crates/shapes/src/footprint/references.rs",
+      "identity": "source:13690d834f2e40f8"
+    },
+    {
+      "file": "crates/shapes/src/free_expression.rs",
+      "identity": "source:4251c6f17aa2c901"
+    },
+    {
+      "file": "crates/shapes/src/function_resolution.rs",
+      "identity": "source:dd96c646ca32b907"
+    },
+    {
+      "file": "crates/shapes/src/graphql.rs",
+      "identity": "source:5021de315db1298a"
+    },
+    {
+      "file": "crates/shapes/src/imports.rs",
+      "identity": "source:f0a309f9a6e344b6"
+    },
+    {
+      "file": "crates/shapes/src/instance.rs",
+      "identity": "source:0f44f7b00e9104c5"
+    },
+    {
+      "file": "crates/shapes/src/json_model.rs",
+      "identity": "source:6d7c15b1d25949c0"
+    },
+    {
+      "file": "crates/shapes/src/json_schema.rs",
+      "identity": "source:533ba33a3472f49f"
+    },
+    {
+      "file": "crates/shapes/src/json_schema/numeric_order.rs",
+      "identity": "source:4944d7f9f7904b2d"
+    },
+    {
+      "file": "crates/shapes/src/json_schema/temporal_order.rs",
+      "identity": "source:0398ca74b8d6795b"
+    },
+    {
+      "file": "crates/shapes/src/lib.rs",
+      "identity": "source:92c9a3ed4cc7fd98"
+    },
+    {
+      "file": "crates/shapes/src/limits.rs",
+      "identity": "source:bbea952a48e33856"
+    },
+    {
+      "file": "crates/shapes/src/linkml.rs",
+      "identity": "source:3fcaae59b3d63e95"
+    },
+    {
+      "file": "crates/shapes/src/linkml/importer.rs",
+      "identity": "source:06dcb14883541df6"
+    },
+    {
+      "file": "crates/shapes/src/linkml/projection.rs",
+      "identity": "source:7ed444305e08057b"
+    },
+    {
+      "file": "crates/shapes/src/lint.rs",
+      "identity": "source:441d0247a92e3f5e"
+    },
+    {
+      "file": "crates/shapes/src/model.rs",
+      "identity": "source:c654d932e33f971a"
+    },
+    {
+      "file": "crates/shapes/src/owl_value_space.rs",
+      "identity": "source:f5459b5acc0dc38e"
+    },
+    {
+      "file": "crates/shapes/src/parallel.rs",
+      "identity": "source:85d2f959dddaf81c"
+    },
+    {
+      "file": "crates/shapes/src/path.rs",
+      "identity": "source:61be48e2c3cd3160"
+    },
+    {
+      "file": "crates/shapes/src/plan.rs",
+      "identity": "source:6c471f860571b0f2"
+    },
+    {
+      "file": "crates/shapes/src/prebinding.rs",
+      "identity": "source:1082411baa61a42d"
+    },
+    {
+      "file": "crates/shapes/src/product/ast.rs",
+      "identity": "source:1f43056f8efa6295"
+    },
+    {
+      "file": "crates/shapes/src/product/ast/ownership.rs",
+      "identity": "source:55d2f9b60a4d8822"
+    },
+    {
+      "file": "crates/shapes/src/product/certified.rs",
+      "identity": "source:dfe9bef4c04ccc10"
+    },
+    {
+      "file": "crates/shapes/src/product/dataset.rs",
+      "identity": "source:97604e58bc379ad7"
+    },
+    {
+      "file": "crates/shapes/src/product/error.rs",
+      "identity": "source:d10298f395631307"
+    },
+    {
+      "file": "crates/shapes/src/product/identity.rs",
+      "identity": "source:94fe477727da1a4f"
+    },
+    {
+      "file": "crates/shapes/src/product/mod.rs",
+      "identity": "source:ae079c26ef0e0a50"
+    },
+    {
+      "file": "crates/shapes/src/product_fixture.rs",
+      "identity": "source:a0a789a5111912bc"
+    },
+    {
+      "file": "crates/shapes/src/profile.rs",
+      "identity": "source:2d463cc070844321"
+    },
+    {
+      "file": "crates/shapes/src/provenance.rs",
+      "identity": "source:db2a95e9e8c8c412"
+    },
+    {
+      "file": "crates/shapes/src/pydantic.rs",
+      "identity": "source:b4c2a25c832f62e5"
+    },
+    {
+      "file": "crates/shapes/src/pydantic/config.rs",
+      "identity": "source:55ac67d1abd995e5"
+    },
+    {
+      "file": "crates/shapes/src/pydantic/linker.rs",
+      "identity": "source:27cb7ff5c74488c0"
+    },
+    {
+      "file": "crates/shapes/src/query_law.rs",
+      "identity": "source:471b99a1fa8b045f"
+    },
+    {
+      "file": "crates/shapes/src/report.rs",
+      "identity": "source:120e8f99e060af00"
+    },
+    {
+      "file": "crates/shapes/src/result_annotations.rs",
+      "identity": "source:566c3206bcdfa160"
+    },
+    {
+      "file": "crates/shapes/src/rules.rs",
+      "identity": "source:0e5d45e07db943e1"
+    },
+    {
+      "file": "crates/shapes/src/schema_catalog.rs",
+      "identity": "source:cf583f26c851590e"
+    },
+    {
+      "file": "crates/shapes/src/schema_import.rs",
+      "identity": "source:6aa795d588608947"
+    },
+    {
+      "file": "crates/shapes/src/schema_surface.rs",
+      "identity": "source:9ec9e4fba43f1a11"
+    },
+    {
+      "file": "crates/shapes/src/shacl_corpora/mod.rs",
+      "identity": "source:822ab10d9a7a19b6"
+    },
+    {
+      "file": "crates/shapes/src/shacl_corpora/node_expr_grading.rs",
+      "identity": "source:570ca7f4421a6063"
+    },
+    {
+      "file": "crates/shapes/src/shacl_corpora/report_grading.rs",
+      "identity": "source:47a3da4cfe474344"
+    },
+    {
+      "file": "crates/shapes/src/shacl_corpora/shacl12.rs",
+      "identity": "source:5af96975d869031d"
+    },
+    {
+      "file": "crates/shapes/src/shape_union.rs",
+      "identity": "source:6d2f36f72753d5bb"
+    },
+    {
+      "file": "crates/shapes/src/shapes.rs",
+      "identity": "source:3dc7e80474e2fc2a"
+    },
+    {
+      "file": "crates/shapes/src/shapes/link.rs",
+      "identity": "source:b03f9888bddc103d"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/admission.rs",
+      "identity": "source:3e5cc536b90f6e2e"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/annotations.rs",
+      "identity": "source:f6d8279a6ea7b317"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/cardinality.rs",
+      "identity": "source:3f768b58c377da92"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/closed_by_types.rs",
+      "identity": "source:bad817c1f9d7243f"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/custom_fn.rs",
+      "identity": "source:e2284e9fa8b27e5a"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/functions.rs",
+      "identity": "source:2c744934079e59ff"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/mod.rs",
+      "identity": "source:36da4bb95036826b"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/node_expr.rs",
+      "identity": "source:1849ea2525cc8858"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/recursion.rs",
+      "identity": "source:594e91400213fd92"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/rule_parse.rs",
+      "identity": "source:3911a273fae6c45b"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/shacl_instance.rs",
+      "identity": "source:91541ec1084f3cdc"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/target_types.rs",
+      "identity": "source:a280699d85c6c4fd"
+    },
+    {
+      "file": "crates/shapes/src/shapes/parser/wellformed.rs",
+      "identity": "source:c30d19623df16c51"
+    },
+    {
+      "file": "crates/shapes/src/shapes/prefixes.rs",
+      "identity": "source:d5380d046cef8533"
+    },
+    {
+      "file": "crates/shapes/src/sparql.rs",
+      "identity": "source:73ab3e770251453e"
+    },
+    {
+      "file": "crates/shapes/src/sparql/coordinates.rs",
+      "identity": "source:070d5d02ffd7ae38"
+    },
+    {
+      "file": "crates/shapes/src/spec/census.rs",
+      "identity": "source:29667dd38e09cbe5"
+    },
+    {
+      "file": "crates/shapes/src/spec/link.rs",
+      "identity": "source:5059828b6d8552cf"
+    },
+    {
+      "file": "crates/shapes/src/spec/mod.rs",
+      "identity": "source:6a821a1a3431b37c"
+    },
+    {
+      "file": "crates/shapes/src/spec/table.rs",
+      "identity": "source:21bc68a958f8351d"
+    },
+    {
+      "file": "crates/shapes/src/spec/vocab.rs",
+      "identity": "source:1fc50d07cb8e3174"
+    },
+    {
+      "file": "crates/shapes/src/srl/depend.rs",
+      "identity": "source:f2f49c5ad7b60947"
+    },
+    {
+      "file": "crates/shapes/src/srl/document.rs",
+      "identity": "source:60e54bfded490a40"
+    },
+    {
+      "file": "crates/shapes/src/srl/eval.rs",
+      "identity": "source:cdc2a2425bf3e006"
+    },
+    {
+      "file": "crates/shapes/src/srl/ir.rs",
+      "identity": "source:aa3152c637ecbcf4"
+    },
+    {
+      "file": "crates/shapes/src/srl/lower.rs",
+      "identity": "source:4b92e98552d97cf4"
+    },
+    {
+      "file": "crates/shapes/src/srl/mod.rs",
+      "identity": "source:84162f4d5b9213b6"
+    },
+    {
+      "file": "crates/shapes/src/srl/reads.rs",
+      "identity": "source:cb0f447298beaf88"
+    },
+    {
+      "file": "crates/shapes/src/srl/sparql_rule.rs",
+      "identity": "source:ce2e0b37f92207b5"
+    },
+    {
+      "file": "crates/shapes/src/srl/syntax.rs",
+      "identity": "source:b0a8e62d595eb4c2"
+    },
+    {
+      "file": "crates/shapes/src/target_eval.rs",
+      "identity": "source:5a7ab1bf71eae56d"
+    },
+    {
+      "file": "crates/shapes/src/term.rs",
+      "identity": "source:1d5e2b47c6c608ba"
+    },
+    {
+      "file": "crates/shapes/src/text_ingest.rs",
+      "identity": "source:f51c9e05afe38ada"
+    },
+    {
+      "file": "crates/shapes/src/typescript.rs",
+      "identity": "source:18a80e5d65870ebb"
+    },
+    {
+      "file": "crates/shapes/src/unique_values.rs",
+      "identity": "source:55e81063b11c2d68"
+    },
+    {
+      "file": "crates/shapes/src/validator_alternatives.rs",
+      "identity": "source:643c3634230fc293"
+    },
+    {
+      "file": "crates/shapes/src/xpath.rs",
+      "identity": "source:f68fc86664bcbee5"
+    },
+    {
+      "file": "crates/shapes/src/xpath/declarations.rs",
+      "identity": "source:d585b9b8117621f3"
+    },
+    {
+      "file": "crates/shex/src/ast.rs",
+      "identity": "source:d3f200072896a3b9"
+    },
+    {
+      "file": "crates/shex/src/error.rs",
+      "identity": "source:63eb34f5b7778339"
+    },
+    {
+      "file": "crates/shex/src/exact.rs",
+      "identity": "source:fd3f702107f10c2a"
+    },
+    {
+      "file": "crates/shex/src/imports.rs",
+      "identity": "source:9a2bbc64e1b2664e"
+    },
+    {
+      "file": "crates/shex/src/lexer.rs",
+      "identity": "source:b9e5f02fb522c099"
+    },
+    {
+      "file": "crates/shex/src/lib.rs",
+      "identity": "source:e9e86496313ab4a4"
+    },
+    {
+      "file": "crates/shex/src/parser.rs",
+      "identity": "source:9a8c4132c8d9b059"
+    },
+    {
+      "file": "crates/shex/src/semact.rs",
+      "identity": "source:0ca8becd3226f59d"
+    },
+    {
+      "file": "crates/shex/src/shapemap.rs",
+      "identity": "source:a6eb09a7db5f8d97"
+    },
+    {
+      "file": "crates/shex/src/shexc.rs",
+      "identity": "source:7bcf76cfa0136108"
+    },
+    {
+      "file": "crates/shex/src/shexj.rs",
+      "identity": "source:3064651eed528e6f"
+    },
+    {
+      "file": "crates/shex/src/statement.rs",
+      "identity": "source:5f8abd8e09aa277c"
+    },
+    {
+      "file": "crates/shex/src/structure.rs",
+      "identity": "source:4c9b3d3bb4bb4136"
+    },
+    {
+      "file": "crates/shex/src/validate.rs",
+      "identity": "source:77c18d539caa53b5"
+    },
+    {
+      "file": "crates/shex/src/validate/error.rs",
+      "identity": "source:2369a0527f718802"
+    },
+    {
+      "file": "crates/shex/src/validate/matcher.rs",
+      "identity": "source:7a4e689d497350e8"
+    },
+    {
+      "file": "crates/shex/src/validate/node.rs",
+      "identity": "source:5dd26dc61260487f"
+    },
+    {
+      "file": "crates/shex/src/validate/pattern.rs",
+      "identity": "source:58499b3d3dfbd16e"
+    },
+    {
+      "file": "crates/slice/src/analysis.rs",
+      "identity": "source:8832b67c96822924"
+    },
+    {
+      "file": "crates/slice/src/artifact.rs",
+      "identity": "source:40b1082393cf9ab9"
+    },
+    {
+      "file": "crates/slice/src/cache.rs",
+      "identity": "source:aa6c946f169bc393"
+    },
+    {
+      "file": "crates/slice/src/catalog.rs",
+      "identity": "source:6dcb9e358e1632cb"
+    },
+    {
+      "file": "crates/slice/src/claim_view.rs",
+      "identity": "source:6e3acc58e8f0acef"
+    },
+    {
+      "file": "crates/slice/src/diagnostics.rs",
+      "identity": "source:5f9d94c72e45b57d"
+    },
+    {
+      "file": "crates/slice/src/dsl_stats_emit.rs",
+      "identity": "source:13c85abeb94cba35"
+    },
+    {
+      "file": "crates/slice/src/error.rs",
+      "identity": "source:044fa66130db1b3b"
+    },
+    {
+      "file": "crates/slice/src/error/json.rs",
+      "identity": "source:bc40fb1e2c9c67a3"
+    },
+    {
+      "file": "crates/slice/src/error/manifest.rs",
+      "identity": "source:99af57221a99edfe"
+    },
+    {
+      "file": "crates/slice/src/error/path.rs",
+      "identity": "source:962e808e270072f7"
+    },
+    {
+      "file": "crates/slice/src/fix_deps.rs",
+      "identity": "source:5d65945ad0431de6"
+    },
+    {
+      "file": "crates/slice/src/json_form.rs",
+      "identity": "source:a0c6fdb1ca4b06a9"
+    },
+    {
+      "file": "crates/slice/src/lib.rs",
+      "identity": "source:7eed6b9bc01a8003"
+    },
+    {
+      "file": "crates/slice/src/list_functions.rs",
+      "identity": "source:5b6ede2d680fcb7a"
+    },
+    {
+      "file": "crates/slice/src/mapping_support.rs",
+      "identity": "source:3a8f6b4b444089a2"
+    },
+    {
+      "file": "crates/slice/src/ownership.rs",
+      "identity": "source:5f137fecafcc7b6a"
+    },
+    {
+      "file": "crates/slice/src/prefix_emit.rs",
+      "identity": "source:92573dede3e24e94"
+    },
+    {
+      "file": "crates/slice/src/prefix_lint.rs",
+      "identity": "source:2c7a4e2d8e2c1544"
+    },
+    {
+      "file": "crates/slice/src/rdf_query.rs",
+      "identity": "source:efd190d3ea74ea80"
+    },
+    {
+      "file": "crates/slice/src/retrieval.rs",
+      "identity": "source:3a8aa16cbe3259da"
+    },
+    {
+      "file": "crates/slice/src/standpoint_emit.rs",
+      "identity": "source:345540c790c39720"
+    },
+    {
+      "file": "crates/slice/src/standpoint_modality.rs",
+      "identity": "source:50818d699447a01a"
+    },
+    {
+      "file": "crates/slice/src/vocab.rs",
+      "identity": "source:0837d8f4435a02de"
+    },
+    {
+      "file": "crates/sparql-algebra/src/algebra.rs",
+      "identity": "source:ad1485ca13f61dce"
+    },
+    {
+      "file": "crates/sparql-algebra/src/ast.rs",
+      "identity": "source:9e24d421560502ee"
+    },
+    {
+      "file": "crates/sparql-algebra/src/error.rs",
+      "identity": "source:a222d331566518bc"
+    },
+    {
+      "file": "crates/sparql-algebra/src/lexer.rs",
+      "identity": "source:02cd2b5f40c1b327"
+    },
+    {
+      "file": "crates/sparql-algebra/src/lib.rs",
+      "identity": "source:d15738ea335a8e0f"
+    },
+    {
+      "file": "crates/sparql-algebra/src/owned.rs",
+      "identity": "source:43a76eb53c2d2294"
+    },
+    {
+      "file": "crates/sparql-algebra/src/parser.rs",
+      "identity": "source:188816978828bed0"
+    },
+    {
+      "file": "crates/sparql-algebra/src/parser/machine.rs",
+      "identity": "source:dc7ece567ddb78a2"
+    },
+    {
+      "file": "crates/sparql-algebra/src/parser/table.rs",
+      "identity": "source:507c51a108958264"
+    },
+    {
+      "file": "crates/sparql-algebra/src/parser/triples.rs",
+      "identity": "source:6c950e6482b030dd"
+    },
+    {
+      "file": "crates/sparql-algebra/src/projection.rs",
+      "identity": "source:76db8595522b3104"
+    },
+    {
+      "file": "crates/sparql-algebra/src/retained_size.rs",
+      "identity": "source:c7a7d020f934ebb5"
+    },
+    {
+      "file": "crates/sparql-algebra/src/scope.rs",
+      "identity": "source:d3ea503e3bea5c76"
+    },
+    {
+      "file": "crates/sparql-algebra/src/serialize.rs",
+      "identity": "source:0d62f1cc6352dea4"
+    },
+    {
+      "file": "crates/sparql-algebra/src/substitute.rs",
+      "identity": "source:bfa23bb747db57f3"
+    },
+    {
+      "file": "crates/sparql-algebra/src/traits.rs",
+      "identity": "source:cc6ba87351956e56"
+    },
+    {
+      "file": "crates/sparql-algebra/src/tree.rs",
+      "identity": "source:6ba9719524743264"
+    },
+    {
+      "file": "crates/sparql-algebra/src/validate.rs",
+      "identity": "source:fab39efef5a5ba17"
+    },
+    {
+      "file": "crates/sparql-algebra/src/walk.rs",
+      "identity": "source:c57b4efcfcd19548"
+    },
+    {
+      "file": "crates/sparql-algebra/src/worklist.rs",
+      "identity": "source:cec30fdfabf2fb32"
+    },
+    {
+      "file": "crates/sparql-conformance/src/bin/community-conformance.rs",
+      "identity": "source:db133bb648e3cf5a"
+    },
+    {
+      "file": "crates/sparql-conformance/src/community.rs",
+      "identity": "source:79f5638abc39a13a"
+    },
+    {
+      "file": "crates/sparql-conformance/src/compare.rs",
+      "identity": "source:4ddf05a7f7692e42"
+    },
+    {
+      "file": "crates/sparql-conformance/src/ledger.rs",
+      "identity": "source:6b1458b12416952e"
+    },
+    {
+      "file": "crates/sparql-conformance/src/lib.rs",
+      "identity": "source:ce1e68ff40f20520"
+    },
+    {
+      "file": "crates/sparql-conformance/src/manifest.rs",
+      "identity": "source:6d1149cfd1edcc58"
+    },
+    {
+      "file": "crates/sparql-conformance/src/mode_restricted.rs",
+      "identity": "source:ec4e577ae4663718"
+    },
+    {
+      "file": "crates/sparql-conformance/src/owl2.rs",
+      "identity": "source:45c4d382541a1add"
+    },
+    {
+      "file": "crates/sparql-conformance/src/owl2_rl.rs",
+      "identity": "source:c210c4a2a0da8b71"
+    },
+    {
+      "file": "crates/sparql-conformance/src/paths.rs",
+      "identity": "source:cdfff08d63ff85eb"
+    },
+    {
+      "file": "crates/sparql-conformance/src/rs_resultset.rs",
+      "identity": "source:b6304321be1e4dde"
+    },
+    {
+      "file": "crates/sparql-conformance/src/run.rs",
+      "identity": "source:c0d4292deb186e2e"
+    },
+    {
+      "file": "crates/sparql-conformance/src/service.rs",
+      "identity": "source:aa2dd0af2bd9fd77"
+    },
+    {
+      "file": "crates/sparql-conformance/src/xfail.rs",
+      "identity": "source:5c091a6704cd35d8"
+    },
+    {
+      "file": "crates/sparql-eval/src/agg_fn.rs",
+      "identity": "source:409fe380e59b1ed4"
+    },
+    {
+      "file": "crates/sparql-eval/src/basic_profile.rs",
+      "identity": "source:d4091e907ca58eae"
+    },
+    {
+      "file": "crates/sparql-eval/src/bgp.rs",
+      "identity": "source:e31b7ca3d9ef6d43"
+    },
+    {
+      "file": "crates/sparql-eval/src/bgp/positive.rs",
+      "identity": "source:a1f8c6c15e531de1"
+    },
+    {
+      "file": "crates/sparql-eval/src/bgp/window.rs",
+      "identity": "source:9fd9e7e83d79276b"
+    },
+    {
+      "file": "crates/sparql-eval/src/binop.rs",
+      "identity": "source:954dcedbc5904b61"
+    },
+    {
+      "file": "crates/sparql-eval/src/blank_scope.rs",
+      "identity": "source:db03d580fae9dc73"
+    },
+    {
+      "file": "crates/sparql-eval/src/candidate_scope.rs",
+      "identity": "source:b9586d63090ea07d"
+    },
+    {
+      "file": "crates/sparql-eval/src/cdt_agg.rs",
+      "identity": "source:abbf48429b097f3f"
+    },
+    {
+      "file": "crates/sparql-eval/src/cdt_fn.rs",
+      "identity": "source:3d2a5079c701d42a"
+    },
+    {
+      "file": "crates/sparql-eval/src/cdt_unfold.rs",
+      "identity": "source:14d3aeea877e75c1"
+    },
+    {
+      "file": "crates/sparql-eval/src/clock.rs",
+      "identity": "source:e3725a3b1562faa2"
+    },
+    {
+      "file": "crates/sparql-eval/src/composite_value.rs",
+      "identity": "source:a283961ae7be910b"
+    },
+    {
+      "file": "crates/sparql-eval/src/construct.rs",
+      "identity": "source:5cd0da811bd138f3"
+    },
+    {
+      "file": "crates/sparql-eval/src/contain.rs",
+      "identity": "source:96b3a4a655bbf679"
+    },
+    {
+      "file": "crates/sparql-eval/src/convert.rs",
+      "identity": "source:076b0867d1b65d1d"
+    },
+    {
+      "file": "crates/sparql-eval/src/dataset_spec.rs",
+      "identity": "source:a5e8610f89cfdaf6"
+    },
+    {
+      "file": "crates/sparql-eval/src/deferred_exists.rs",
+      "identity": "source:f341dfcb00df0377"
+    },
+    {
+      "file": "crates/sparql-eval/src/describe_query.rs",
+      "identity": "source:3197235679c06542"
+    },
+    {
+      "file": "crates/sparql-eval/src/enf.rs",
+      "identity": "source:7cc33a7b1098c20d"
+    },
+    {
+      "file": "crates/sparql-eval/src/engine.rs",
+      "identity": "source:a958adbdc57ce8c1"
+    },
+    {
+      "file": "crates/sparql-eval/src/engine/bounded_workspace.rs",
+      "identity": "source:f19d89d01401e01f"
+    },
+    {
+      "file": "crates/sparql-eval/src/engine/coordinates.rs",
+      "identity": "source:0f391b370b7c079e"
+    },
+    {
+      "file": "crates/sparql-eval/src/engine/graph_build.rs",
+      "identity": "source:53b933a536e68174"
+    },
+    {
+      "file": "crates/sparql-eval/src/engine/prepared_fallible.rs",
+      "identity": "source:a2f58af6cc717e90"
+    },
+    {
+      "file": "crates/sparql-eval/src/error.rs",
+      "identity": "source:f90a935ef0f8fc1d"
+    },
+    {
+      "file": "crates/sparql-eval/src/error/retained_native_failure.rs",
+      "identity": "source:788857355d2aea43"
+    },
+    {
+      "file": "crates/sparql-eval/src/eval.rs",
+      "identity": "source:54e49a509708abfd"
+    },
+    {
+      "file": "crates/sparql-eval/src/evidence_exec.rs",
+      "identity": "source:219fe9d5d4ac3c03"
+    },
+    {
+      "file": "crates/sparql-eval/src/execution.rs",
+      "identity": "source:686cad5e36a8307f"
+    },
+    {
+      "file": "crates/sparql-eval/src/expr.rs",
+      "identity": "source:7a35cd1688bb38c2"
+    },
+    {
+      "file": "crates/sparql-eval/src/extension_env.rs",
+      "identity": "source:92334b2e5e69503a"
+    },
+    {
+      "file": "crates/sparql-eval/src/fallible.rs",
+      "identity": "source:a795d0411c9c06ea"
+    },
+    {
+      "file": "crates/sparql-eval/src/fixture.rs",
+      "identity": "source:8e1a00cd5e6e4c27"
+    },
+    {
+      "file": "crates/sparql-eval/src/geo/error.rs",
+      "identity": "source:0d7e3b9030c34374"
+    },
+    {
+      "file": "crates/sparql-eval/src/geo/functions.rs",
+      "identity": "source:023a73c855c1f1e8"
+    },
+    {
+      "file": "crates/sparql-eval/src/geo/mod.rs",
+      "identity": "source:fb9963368c167b00"
+    },
+    {
+      "file": "crates/sparql-eval/src/geo/relation.rs",
+      "identity": "source:871b8e406b0074b6"
+    },
+    {
+      "file": "crates/sparql-eval/src/governed.rs",
+      "identity": "source:0be45af51829c3d8"
+    },
+    {
+      "file": "crates/sparql-eval/src/governor/ledger.rs",
+      "identity": "source:3b6265e5931fe181"
+    },
+    {
+      "file": "crates/sparql-eval/src/governor/lift.rs",
+      "identity": "source:6a3964314d7c384b"
+    },
+    {
+      "file": "crates/sparql-eval/src/governor/mod.rs",
+      "identity": "source:152fcf7ecf782a9f"
+    },
+    {
+      "file": "crates/sparql-eval/src/governor/soundness.rs",
+      "identity": "source:4c8aa632d0c25164"
+    },
+    {
+      "file": "crates/sparql-eval/src/interned.rs",
+      "identity": "source:ac8c654a24bd1701"
+    },
+    {
+      "file": "crates/sparql-eval/src/join_plan.rs",
+      "identity": "source:771c858f7148e50a"
+    },
+    {
+      "file": "crates/sparql-eval/src/knn/invocation.rs",
+      "identity": "source:921e8a7399d1fb29"
+    },
+    {
+      "file": "crates/sparql-eval/src/knn/metric.rs",
+      "identity": "source:aa7f70a3be219a71"
+    },
+    {
+      "file": "crates/sparql-eval/src/knn/mod.rs",
+      "identity": "source:cdba763996f0bee6"
+    },
+    {
+      "file": "crates/sparql-eval/src/lib.rs",
+      "identity": "source:d290f171fe47deae"
+    },
+    {
+      "file": "crates/sparql-eval/src/list_fn.rs",
+      "identity": "source:5939db44ebf4bb17"
+    },
+    {
+      "file": "crates/sparql-eval/src/modifier.rs",
+      "identity": "source:cbd2556c27f9ec08"
+    },
+    {
+      "file": "crates/sparql-eval/src/modifier/owners.rs",
+      "identity": "source:7dabf653bcdc9644"
+    },
+    {
+      "file": "crates/sparql-eval/src/native_numeric.rs",
+      "identity": "source:a16d23373dc38c5c"
+    },
+    {
+      "file": "crates/sparql-eval/src/parallel.rs",
+      "identity": "source:919951064674e4e1"
+    },
+    {
+      "file": "crates/sparql-eval/src/parsed_value.rs",
+      "identity": "source:9c366eb4c7649717"
+    },
+    {
+      "file": "crates/sparql-eval/src/path.rs",
+      "identity": "source:99afe51970074e34"
+    },
+    {
+      "file": "crates/sparql-eval/src/path_relation.rs",
+      "identity": "source:22760e1a83cbfbb5"
+    },
+    {
+      "file": "crates/sparql-eval/src/plan/mod.rs",
+      "identity": "source:2284e907ed683d20"
+    },
+    {
+      "file": "crates/sparql-eval/src/plan_cache.rs",
+      "identity": "source:15a311feabca792d"
+    },
+    {
+      "file": "crates/sparql-eval/src/plan_memory.rs",
+      "identity": "source:b07927df65cc7d4e"
+    },
+    {
+      "file": "crates/sparql-eval/src/prebind_memo.rs",
+      "identity": "source:b11c063cfdc8f7ed"
+    },
+    {
+      "file": "crates/sparql-eval/src/predicate_use.rs",
+      "identity": "source:0a16325448bd59b3"
+    },
+    {
+      "file": "crates/sparql-eval/src/property_fn.rs",
+      "identity": "source:c95ea180dd9d2f81"
+    },
+    {
+      "file": "crates/sparql-eval/src/property_fn_eval.rs",
+      "identity": "source:327cfe0473978af6"
+    },
+    {
+      "file": "crates/sparql-eval/src/property_fn_plan.rs",
+      "identity": "source:86493e7f79a609ad"
+    },
+    {
+      "file": "crates/sparql-eval/src/protocol.rs",
+      "identity": "source:1c526e5e3666faf4"
+    },
+    {
+      "file": "crates/sparql-eval/src/rdflib.rs",
+      "identity": "source:17b3f4d2cdc0b65d"
+    },
+    {
+      "file": "crates/sparql-eval/src/registry_id.rs",
+      "identity": "source:92fb6f9fcbc1b263"
+    },
+    {
+      "file": "crates/sparql-eval/src/remote.rs",
+      "identity": "source:ed6a478995f2e532"
+    },
+    {
+      "file": "crates/sparql-eval/src/remote_http.rs",
+      "identity": "source:1a0e7910627dc9f5"
+    },
+    {
+      "file": "crates/sparql-eval/src/retained.rs",
+      "identity": "source:412828535f76c3eb"
+    },
+    {
+      "file": "crates/sparql-eval/src/row_checkpoint.rs",
+      "identity": "source:9b244ab78f9b59fb"
+    },
+    {
+      "file": "crates/sparql-eval/src/row_ingest.rs",
+      "identity": "source:33c429b35077c72c"
+    },
+    {
+      "file": "crates/sparql-eval/src/scratch.rs",
+      "identity": "source:b9cd4ae840fe78b2"
+    },
+    {
+      "file": "crates/sparql-eval/src/service.rs",
+      "identity": "source:12947ffbe1425f49"
+    },
+    {
+      "file": "crates/sparql-eval/src/service_endpoints.rs",
+      "identity": "source:cf9f189363dad2f5"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/barrier.rs",
+      "identity": "source:a44608026a877a9e"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/bucket.rs",
+      "identity": "source:5719c43c31144400"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/dictionary.rs",
+      "identity": "source:1256d2696c45b9d5"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/mod.rs",
+      "identity": "source:c3984a09547f4d6d"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/runtime.rs",
+      "identity": "source:5aba70cc40416f71"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/spans.rs",
+      "identity": "source:7b600ca03fa147b0"
+    },
+    {
+      "file": "crates/sparql-eval/src/shapes/window.rs",
+      "identity": "source:cf7aa42ff16dfaf5"
+    },
+    {
+      "file": "crates/sparql-eval/src/solution.rs",
+      "identity": "source:3f2868f63b68510c"
+    },
+    {
+      "file": "crates/sparql-eval/src/stack.rs",
+      "identity": "source:cedb5d4c9411a06c"
+    },
+    {
+      "file": "crates/sparql-eval/src/stack/height.rs",
+      "identity": "source:b7c010d6928ff5d5"
+    },
+    {
+      "file": "crates/sparql-eval/src/stat_agg.rs",
+      "identity": "source:f2f5640f51bb7d36"
+    },
+    {
+      "file": "crates/sparql-eval/src/statement_layer.rs",
+      "identity": "source:db87977e5256a72e"
+    },
+    {
+      "file": "crates/sparql-eval/src/substitute.rs",
+      "identity": "source:31d3f853b4ea7a54"
+    },
+    {
+      "file": "crates/sparql-eval/src/template.rs",
+      "identity": "source:140d58a5d066330b"
+    },
+    {
+      "file": "crates/sparql-eval/src/update.rs",
+      "identity": "source:b1ff5bd8fbb73b66"
+    },
+    {
+      "file": "crates/sparql-eval/src/user_fn.rs",
+      "identity": "source:feb72b00aa639f70"
+    },
+    {
+      "file": "crates/sparql-eval/src/vm/compile.rs",
+      "identity": "source:3edb7b89b41098a0"
+    },
+    {
+      "file": "crates/sparql-eval/src/vm/evidence.rs",
+      "identity": "source:cc6e47862c6d587b"
+    },
+    {
+      "file": "crates/sparql-eval/src/vm/mod.rs",
+      "identity": "source:647f9554bce3d167"
+    },
+    {
+      "file": "crates/sparql-eval/src/wasm_host.rs",
+      "identity": "source:fe91a180ae4ea083"
+    },
+    {
+      "file": "crates/sparql-eval/src/witness.rs",
+      "identity": "source:20012fbbf2f582ed"
+    },
+    {
+      "file": "crates/sparql-eval/src/workspace.rs",
+      "identity": "source:85519fcd720306e2"
+    },
+    {
+      "file": "crates/sparql-eval/src/workspace/array.rs",
+      "identity": "source:17275f2c88089fec"
+    },
+    {
+      "file": "crates/sparql-eval/src/workspace/boxed.rs",
+      "identity": "source:a19a4a9ceeb5d7b7"
+    },
+    {
+      "file": "crates/sparql-eval/src/workspace/ordered.rs",
+      "identity": "source:b342ac2a34b682ca"
+    },
+    {
+      "file": "crates/sparql-eval/src/xpath_regex.rs",
+      "identity": "source:0261e513c99fef52"
+    },
+    {
+      "file": "crates/sparql-results/src/csv.rs",
+      "identity": "source:9bc448d3d1186181"
+    },
+    {
+      "file": "crates/sparql-results/src/error.rs",
+      "identity": "source:1372c67f7120361a"
+    },
+    {
+      "file": "crates/sparql-results/src/error/malformed.rs",
+      "identity": "source:f06c2f4fda3f1809"
+    },
+    {
+      "file": "crates/sparql-results/src/error/namespace.rs",
+      "identity": "source:30892282f1fc367a"
+    },
+    {
+      "file": "crates/sparql-results/src/error/read.rs",
+      "identity": "source:870fd9ba0c3d0947"
+    },
+    {
+      "file": "crates/sparql-results/src/graph.rs",
+      "identity": "source:fb09564099fbffb7"
+    },
+    {
+      "file": "crates/sparql-results/src/json.rs",
+      "identity": "source:eaf0fb57d328df91"
+    },
+    {
+      "file": "crates/sparql-results/src/json_read.rs",
+      "identity": "source:3c808d1fe62dc2b7"
+    },
+    {
+      "file": "crates/sparql-results/src/lib.rs",
+      "identity": "source:7a7b7667a4ca74df"
+    },
+    {
+      "file": "crates/sparql-results/src/model.rs",
+      "identity": "source:9d5b4a62a69e79a0"
+    },
+    {
+      "file": "crates/sparql-results/src/term.rs",
+      "identity": "source:0f450293ec3518c4"
+    },
+    {
+      "file": "crates/sparql-results/src/tsv.rs",
+      "identity": "source:a376bb5ad52545d1"
+    },
+    {
+      "file": "crates/sparql-results/src/xml.rs",
+      "identity": "source:8cc82329f3d885aa"
+    },
+    {
+      "file": "crates/sparql-results/src/xml_read.rs",
+      "identity": "source:f89f77e31cbe41e0"
+    },
+    {
+      "file": "crates/stack/src/lib.rs",
+      "identity": "source:cea49daa54aaac1d"
+    },
+    {
+      "file": "crates/stack/src/platform.rs",
+      "identity": "source:62d8291e727daea5"
+    },
+    {
+      "file": "crates/testkit/src/bench/args.rs",
+      "identity": "source:aef4917142aab510"
+    },
+    {
+      "file": "crates/testkit/src/bench/counter.rs",
+      "identity": "source:02a927e2038f5796"
+    },
+    {
+      "file": "crates/testkit/src/bench/estimates.rs",
+      "identity": "source:09217892e0f050d3"
+    },
+    {
+      "file": "crates/testkit/src/bench/mod.rs",
+      "identity": "source:6caa8bb926fbf4d9"
+    },
+    {
+      "file": "crates/testkit/src/bench/stats.rs",
+      "identity": "source:f768e6bfe13435ea"
+    },
+    {
+      "file": "crates/testkit/src/bench/store.rs",
+      "identity": "source:a22d7c59b72fb316"
+    },
+    {
+      "file": "crates/testkit/src/bin/harness_fixture.rs",
+      "identity": "source:539305fdd4c418ea"
+    },
+    {
+      "file": "crates/testkit/src/bin/harness_print_fixture.rs",
+      "identity": "source:7dfa428b584a9085"
+    },
+    {
+      "file": "crates/testkit/src/bin/wasm_host_fixture.rs",
+      "identity": "source:c2b9393065cac250"
+    },
+    {
+      "file": "crates/testkit/src/error_capture.rs",
+      "identity": "source:081cf7374d947605"
+    },
+    {
+      "file": "crates/testkit/src/exact.rs",
+      "identity": "source:e65c6077207afe35"
+    },
+    {
+      "file": "crates/testkit/src/golden.rs",
+      "identity": "source:5d1cbf57d25170f2"
+    },
+    {
+      "file": "crates/testkit/src/harness.rs",
+      "identity": "source:1775d05c00f24c5f"
+    },
+    {
+      "file": "crates/testkit/src/host.rs",
+      "identity": "source:74d6cc5cc86600e0"
+    },
+    {
+      "file": "crates/testkit/src/jsonschema_metaschemas.rs",
+      "identity": "source:bcc92031796ca3f9"
+    },
+    {
+      "file": "crates/testkit/src/lib.rs",
+      "identity": "source:a2bf5fcb6089d5a2"
+    },
+    {
+      "file": "crates/testkit/src/paths.rs",
+      "identity": "source:d87854c6e6dc16c7"
+    },
+    {
+      "file": "crates/testkit/src/prop/arbitrary.rs",
+      "identity": "source:3efb8d6f95be8583"
+    },
+    {
+      "file": "crates/testkit/src/prop/choices.rs",
+      "identity": "source:65f780949ee64976"
+    },
+    {
+      "file": "crates/testkit/src/prop/collection.rs",
+      "identity": "source:3bddbb015853d21e"
+    },
+    {
+      "file": "crates/testkit/src/prop/mod.rs",
+      "identity": "source:28cd9c981977925a"
+    },
+    {
+      "file": "crates/testkit/src/prop/runner.rs",
+      "identity": "source:4da83f76c0f9d232"
+    },
+    {
+      "file": "crates/testkit/src/prop/sample.rs",
+      "identity": "source:9101c561c4e8ad4f"
+    },
+    {
+      "file": "crates/testkit/src/prop/state_machine.rs",
+      "identity": "source:da1e45bd8f10f4a0"
+    },
+    {
+      "file": "crates/testkit/src/prop/strategy.rs",
+      "identity": "source:11579eb8e17f1a34"
+    },
+    {
+      "file": "crates/testkit/src/prop/string.rs",
+      "identity": "source:5dc19e39459f6d5f"
+    },
+    {
+      "file": "crates/testkit/src/rng.rs",
+      "identity": "source:71d1e639447ada6a"
+    },
+    {
+      "file": "crates/testkit/src/scalars.rs",
+      "identity": "source:0cd74272580413f4"
+    },
+    {
+      "file": "crates/testkit/src/temp.rs",
+      "identity": "source:fc03b64a8724abe3"
+    },
+    {
+      "file": "crates/testkit/src/text.rs",
+      "identity": "source:286297fa6a041b87"
+    },
+    {
+      "file": "crates/testkit/src/ucd.rs",
+      "identity": "source:cae034c7084e635d"
+    },
+    {
+      "file": "crates/testkit/src/vectors.rs",
+      "identity": "source:aa7e8938394f3a01"
+    },
+    {
+      "file": "crates/text/src/analysis.rs",
+      "identity": "source:bd92cb2e0937200b"
+    },
+    {
+      "file": "crates/text/src/character.rs",
+      "identity": "source:9784a9a554f0a5a2"
+    },
+    {
+      "file": "crates/text/src/corpus.rs",
+      "identity": "source:0a5647ac81f1d9e5"
+    },
+    {
+      "file": "crates/text/src/dictionary.rs",
+      "identity": "source:d1b85b79dc7e593f"
+    },
+    {
+      "file": "crates/text/src/dictionary_relation.rs",
+      "identity": "source:02d19ac2d41b1c1f"
+    },
+    {
+      "file": "crates/text/src/error.rs",
+      "identity": "source:30ff37f09f565c29"
+    },
+    {
+      "file": "crates/text/src/fixed.rs",
+      "identity": "source:9a62f33f19878bde"
+    },
+    {
+      "file": "crates/text/src/index.rs",
+      "identity": "source:ce7057253e3b0d82"
+    },
+    {
+      "file": "crates/text/src/index/delta.rs",
+      "identity": "source:1d736bd18e0c74dc"
+    },
+    {
+      "file": "crates/text/src/index/source_digest.rs",
+      "identity": "source:a1aa89b46ca80789"
+    },
+    {
+      "file": "crates/text/src/index/token_streams.rs",
+      "identity": "source:6320cf81e47d13d8"
+    },
+    {
+      "file": "crates/text/src/lib.rs",
+      "identity": "source:cea14e895327180f"
+    },
+    {
+      "file": "crates/text/src/occurrence_dictionary.rs",
+      "identity": "source:35558ca73bbd9208"
+    },
+    {
+      "file": "crates/text/src/phonetic.rs",
+      "identity": "source:4fa10b261fa9633e"
+    },
+    {
+      "file": "crates/text/src/profile.rs",
+      "identity": "source:7873d91153ae916d"
+    },
+    {
+      "file": "crates/text/src/query_workspace.rs",
+      "identity": "source:051457d07cfa4e5d"
+    },
+    {
+      "file": "crates/text/src/ranking.rs",
+      "identity": "source:ad720d7805ec9ce6"
+    },
+    {
+      "file": "crates/text/src/relation.rs",
+      "identity": "source:82b453b3da1d7501"
+    },
+    {
+      "file": "crates/text/src/score.rs",
+      "identity": "source:52e98149b358c2aa"
+    },
+    {
+      "file": "crates/text/src/segment.rs",
+      "identity": "source:a6d6aafd35b9a17b"
+    },
+    {
+      "file": "crates/text/src/segment/artifact.rs",
+      "identity": "source:0e83ed0b8f7342f6"
+    },
+    {
+      "file": "crates/text/src/segment/baseline.rs",
+      "identity": "source:e881ab83299ce1f7"
+    },
+    {
+      "file": "crates/text/src/segment/storage.rs",
+      "identity": "source:a9118402376f948b"
+    },
+    {
+      "file": "crates/text/src/stem.rs",
+      "identity": "source:5d1893fc9eafe2ee"
+    },
+    {
+      "file": "crates/text/src/surface.rs",
+      "identity": "source:674d741852272baa"
+    },
+    {
+      "file": "crates/text/src/surface/delta.rs",
+      "identity": "source:d93384454867c8af"
+    },
+    {
+      "file": "crates/text/src/surface/postings.rs",
+      "identity": "source:5281a41ed15d5e72"
+    },
+    {
+      "file": "crates/text/src/surface/substring.rs",
+      "identity": "source:b3ca02e5d42f341e"
+    },
+    {
+      "file": "crates/text/src/term_bytes.rs",
+      "identity": "source:811b58714a88671b"
+    },
+    {
+      "file": "crates/text/src/unicode.rs",
+      "identity": "source:638e45c0f66936dd"
+    },
+    {
+      "file": "crates/text/src/unicode/grapheme.rs",
+      "identity": "source:71da404b19206ecc"
+    },
+    {
+      "file": "crates/text/src/unicode/sentence.rs",
+      "identity": "source:4bc0652b9a9e1147"
+    },
+    {
+      "file": "crates/text/src/unicode_tables.rs",
+      "identity": "source:38fb680afb4ee91c"
+    },
+    {
+      "file": "crates/validate/src/build.rs",
+      "identity": "source:4be7baffa9b30b52"
+    },
+    {
+      "file": "crates/validate/src/complete.rs",
+      "identity": "source:6c823f244c44f02c"
+    },
+    {
+      "file": "crates/validate/src/entail.rs",
+      "identity": "source:43ec502c2bea38bc"
+    },
+    {
+      "file": "crates/validate/src/expr_selector.rs",
+      "identity": "source:c6fcf91abc277d6b"
+    },
+    {
+      "file": "crates/validate/src/geo.rs",
+      "identity": "source:811ba99715d5b912"
+    },
+    {
+      "file": "crates/validate/src/geo/cover.rs",
+      "identity": "source:75a375dc11fbdd20"
+    },
+    {
+      "file": "crates/validate/src/geo/decode.rs",
+      "identity": "source:1f319c5fc49a79ff"
+    },
+    {
+      "file": "crates/validate/src/geo/encode.rs",
+      "identity": "source:9575c85f30b344f4"
+    },
+    {
+      "file": "crates/validate/src/geo/geometry.rs",
+      "identity": "source:9c61f65ce3786965"
+    },
+    {
+      "file": "crates/validate/src/geo/invocation.rs",
+      "identity": "source:f401045fe5cd4fae"
+    },
+    {
+      "file": "crates/validate/src/geo/operation.rs",
+      "identity": "source:e38a67becd49d560"
+    },
+    {
+      "file": "crates/validate/src/geo/output.rs",
+      "identity": "source:0e5e26d44a04fa40"
+    },
+    {
+      "file": "crates/validate/src/geo/point_index.rs",
+      "identity": "source:0dc40dbb04bd2378"
+    },
+    {
+      "file": "crates/validate/src/geo/profile.rs",
+      "identity": "source:0cd62b77ad16dc09"
+    },
+    {
+      "file": "crates/validate/src/geo/request.rs",
+      "identity": "source:aeb3f1bf88beac5c"
+    },
+    {
+      "file": "crates/validate/src/geo/session.rs",
+      "identity": "source:06f95820121d7fe0"
+    },
+    {
+      "file": "crates/validate/src/governors.rs",
+      "identity": "source:2ce7a7ea42c0e565"
+    },
+    {
+      "file": "crates/validate/src/lib.rs",
+      "identity": "source:0b2b73b3ee6e9e5c"
+    },
+    {
+      "file": "crates/validate/src/model.rs",
+      "identity": "source:b3cbd080fd20bc5a"
+    },
+    {
+      "file": "crates/validate/src/path_syntax.rs",
+      "identity": "source:53a45a78ab23d864"
+    },
+    {
+      "file": "crates/validate/src/product.rs",
+      "identity": "source:bfa5ac3ed8a77736"
+    },
+    {
+      "file": "crates/validate/src/query.rs",
+      "identity": "source:f663e9f5e2c89b65"
+    },
+    {
+      "file": "crates/validate/src/regime.rs",
+      "identity": "source:371ecfe868c968c0"
+    },
+    {
+      "file": "crates/validate/src/regime/schema_vectors.rs",
+      "identity": "source:09e314fff2af41dd"
+    },
+    {
+      "file": "crates/validate/src/rules.rs",
+      "identity": "source:b62dd9cdca046b04"
+    },
+    {
+      "file": "crates/validate/src/shacl.rs",
+      "identity": "source:b80317009f36c156"
+    },
+    {
+      "file": "crates/validate/src/shapes_tools.rs",
+      "identity": "source:455408317a4d5cf4"
+    },
+    {
+      "file": "crates/validate/src/xpath_regex.rs",
+      "identity": "source:27846d493e15800c"
+    },
+    {
+      "file": "crates/wasm-link/src/binary.rs",
+      "identity": "source:a2d0520d0eb8850a"
+    },
+    {
+      "file": "crates/wasm-link/src/error.rs",
+      "identity": "source:00310e9a498db50c"
+    },
+    {
+      "file": "crates/wasm-link/src/lib.rs",
+      "identity": "source:a05acde505a784b1"
+    },
+    {
+      "file": "crates/wasm-link/src/main.rs",
+      "identity": "source:12b706bcdab7ca39"
+    },
+    {
+      "file": "crates/wasm-link/src/rewrite.rs",
+      "identity": "source:b38eb6aeb3b8e37c"
+    },
+    {
+      "file": "crates/wasm-link/src/scan.rs",
+      "identity": "source:4ca4bb512c805ebc"
+    },
+    {
+      "file": "crates/wasm-link/src/template.rs",
+      "identity": "source:a13888928e34ca73"
+    },
+    {
+      "file": "crates/wasm-link/src/verify.rs",
+      "identity": "source:d033d05d486ec2e1"
+    },
+    {
+      "file": "crates/xsd/src/bigint.rs",
+      "identity": "source:a447715ff49bce11"
+    },
+    {
+      "file": "crates/xsd/src/bigint/compat.rs",
+      "identity": "source:472fe04e4c4844fc"
+    },
+    {
+      "file": "crates/xsd/src/bigint/division.rs",
+      "identity": "source:29781046a77c04d8"
+    },
+    {
+      "file": "crates/xsd/src/bigint/ntt.rs",
+      "identity": "source:960f460d25c79bc4"
+    },
+    {
+      "file": "crates/xsd/src/bigint/scratch.rs",
+      "identity": "source:2cab2a772f541955"
+    },
+    {
+      "file": "crates/xsd/src/bigint/storage.rs",
+      "identity": "source:edc018521ee5f91c"
+    },
+    {
+      "file": "crates/xsd/src/binary.rs",
+      "identity": "source:6689751ccb5b68bf"
+    },
+    {
+      "file": "crates/xsd/src/datatype.rs",
+      "identity": "source:2c7ef38dca584f04"
+    },
+    {
+      "file": "crates/xsd/src/decimal_float.rs",
+      "identity": "source:7b69f9e07c0c95d0"
+    },
+    {
+      "file": "crates/xsd/src/exact/binary.rs",
+      "identity": "source:7f9d08f196425424"
+    },
+    {
+      "file": "crates/xsd/src/exact/certified_cost.rs",
+      "identity": "source:11201e750f541a98"
+    },
+    {
+      "file": "crates/xsd/src/exact/cost.rs",
+      "identity": "source:d1f541533feabcd6"
+    },
+    {
+      "file": "crates/xsd/src/exact/decimal.rs",
+      "identity": "source:6338cc079560b0e8"
+    },
+    {
+      "file": "crates/xsd/src/exact/error.rs",
+      "identity": "source:289dd3c256f6dd0b"
+    },
+    {
+      "file": "crates/xsd/src/exact/integer.rs",
+      "identity": "source:4a4d2d71205e9334"
+    },
+    {
+      "file": "crates/xsd/src/exact/mod.rs",
+      "identity": "source:df8b64b42a2c59a3"
+    },
+    {
+      "file": "crates/xsd/src/exact/rational.rs",
+      "identity": "source:ea06383bbd94a324"
+    },
+    {
+      "file": "crates/xsd/src/exact/rational/certified.rs",
+      "identity": "source:1f25fb8460553401"
+    },
+    {
+      "file": "crates/xsd/src/exact/rational/geometry.rs",
+      "identity": "source:b2939c5f56086895"
+    },
+    {
+      "file": "crates/xsd/src/exact/rounding.rs",
+      "identity": "source:18ee772087967f3a"
+    },
+    {
+      "file": "crates/xsd/src/ieee/control.rs",
+      "identity": "source:15ca16b17d66386c"
+    },
+    {
+      "file": "crates/xsd/src/ieee/dyadic.rs",
+      "identity": "source:8db4cd49d2eb8220"
+    },
+    {
+      "file": "crates/xsd/src/ieee/environment.rs",
+      "identity": "source:372395a9c2066984"
+    },
+    {
+      "file": "crates/xsd/src/ieee/mod.rs",
+      "identity": "source:d24ea61b90596fcf"
+    },
+    {
+      "file": "crates/xsd/src/ieee/ratio.rs",
+      "identity": "source:7cfb77d9b61a1f84"
+    },
+    {
+      "file": "crates/xsd/src/ieee/reference.rs",
+      "identity": "source:aa5e17dfaeb27289"
+    },
+    {
+      "file": "crates/xsd/src/ieee/x87.rs",
+      "identity": "source:825a2c300d5ddf02"
+    },
+    {
+      "file": "crates/xsd/src/integer.rs",
+      "identity": "source:9e432c651a9a8519"
+    },
+    {
+      "file": "crates/xsd/src/json_number.rs",
+      "identity": "source:3f2d45c75f1879ff"
+    },
+    {
+      "file": "crates/xsd/src/lib.rs",
+      "identity": "source:8d24a2eb2301c622"
+    },
+    {
+      "file": "crates/xsd/src/math/fixed.rs",
+      "identity": "source:52a4e339b66ccb15"
+    },
+    {
+      "file": "crates/xsd/src/math/fixed/range.rs",
+      "identity": "source:31dc810284d3e7a5"
+    },
+    {
+      "file": "crates/xsd/src/math/fixed/sum.rs",
+      "identity": "source:3888c7c07f364318"
+    },
+    {
+      "file": "crates/xsd/src/math/fixed/transcend.rs",
+      "identity": "source:d159f08fa6227c97"
+    },
+    {
+      "file": "crates/xsd/src/math/floating.rs",
+      "identity": "source:8ee2e02e30613226"
+    },
+    {
+      "file": "crates/xsd/src/math/floating/fast.rs",
+      "identity": "source:395627ea425b87c6"
+    },
+    {
+      "file": "crates/xsd/src/math/floating/packed.rs",
+      "identity": "source:0d1523b902844f44"
+    },
+    {
+      "file": "crates/xsd/src/math/floating/word.rs",
+      "identity": "source:3c9c457960154692"
+    },
+    {
+      "file": "crates/xsd/src/math/matrix.rs",
+      "identity": "source:6616651c61884492"
+    },
+    {
+      "file": "crates/xsd/src/math/mod.rs",
+      "identity": "source:17f3f2faaf6b08ca"
+    },
+    {
+      "file": "crates/xsd/src/math/roots.rs",
+      "identity": "source:c189fe60338e36d9"
+    },
+    {
+      "file": "crates/xsd/src/math/solver.rs",
+      "identity": "source:9a23ae328316d602"
+    },
+    {
+      "file": "crates/xsd/src/math/taylor.rs",
+      "identity": "source:97b0ae9d50c52637"
+    },
+    {
+      "file": "crates/xsd/src/math/taylor/scratch.rs",
+      "identity": "source:c11030a5e23da16a"
+    },
+    {
+      "file": "crates/xsd/src/numeric.rs",
+      "identity": "source:469f240a56cab865"
+    },
+    {
+      "file": "crates/xsd/src/numeric/exact_path.rs",
+      "identity": "source:f29b5f9f6f73b528"
+    },
+    {
+      "file": "crates/xsd/src/ops.rs",
+      "identity": "source:7f770b3686920081"
+    },
+    {
+      "file": "crates/xsd/src/range.rs",
+      "identity": "source:74c684336c4bc79e"
+    },
+    {
+      "file": "crates/xsd/src/range/storage.rs",
+      "identity": "source:b2a3bba366d778ea"
+    },
+    {
+      "file": "crates/xsd/src/rfc3339.rs",
+      "identity": "source:9f59d5246d4f2df3"
+    },
+    {
+      "file": "crates/xsd/src/simple.rs",
+      "identity": "source:91b28340a05b49f0"
+    },
+    {
+      "file": "crates/xsd/src/temporal.rs",
+      "identity": "source:27cb6173c494e438"
+    },
+    {
+      "file": "crates/xsd/src/value.rs",
+      "identity": "source:2631cf3e5922c3cc"
+    },
+    {
+      "file": "crates/xsd/src/wide.rs",
+      "identity": "source:eef588c90091f82b"
+    }
+  ],
+  "capacity_constructor_identity": "source:b793aa72d040bfff",
+  "capacity_constructor_sources": [
+    "crates/rdf-core/build.rs",
+    "crates/rdf-core/src/artifact/container.rs",
+    "crates/rdf-core/src/artifact/identity.rs",
+    "crates/rdf-core/src/backend.rs",
+    "crates/rdf-core/src/binding_pattern.rs",
+    "crates/rdf-core/src/blank_label.rs",
+    "crates/rdf-core/src/bundle.rs",
+    "crates/rdf-core/src/bytes.rs",
+    "crates/rdf-core/src/cdt_blank.rs",
+    "crates/rdf-core/src/collections.rs",
+    "crates/rdf-core/src/content_id.rs",
+    "crates/rdf-core/src/content_store.rs",
+    "crates/rdf-core/src/cover.rs",
+    "crates/rdf-core/src/cover/emit.rs",
+    "crates/rdf-core/src/csv/arch.rs",
+    "crates/rdf-core/src/csv/backend.rs",
+    "crates/rdf-core/src/csv/error.rs",
+    "crates/rdf-core/src/csv/mod.rs",
+    "crates/rdf-core/src/csv/read.rs",
+    "crates/rdf-core/src/csv/scan.rs",
+    "crates/rdf-core/src/csv/write.rs",
+    "crates/rdf-core/src/dataset_view.rs",
+    "crates/rdf-core/src/describe.rs",
+    "crates/rdf-core/src/diagnostic.rs",
+    "crates/rdf-core/src/distance/binary64.rs",
+    "crates/rdf-core/src/distance/build_identity.rs",
+    "crates/rdf-core/src/distance/dispatch.rs",
+    "crates/rdf-core/src/distance/exact.rs",
+    "crates/rdf-core/src/distance/mod.rs",
+    "crates/rdf-core/src/distance/reassociated.rs",
+    "crates/rdf-core/src/distance/shape.rs",
+    "crates/rdf-core/src/evidence.rs",
+    "crates/rdf-core/src/evidence/accepted.rs",
+    "crates/rdf-core/src/evidence/answer.rs",
+    "crates/rdf-core/src/evidence/column.rs",
+    "crates/rdf-core/src/evidence/conversion.rs",
+    "crates/rdf-core/src/evidence/dictionary.rs",
+    "crates/rdf-core/src/evidence/frame.rs",
+    "crates/rdf-core/src/evidence/information.rs",
+    "crates/rdf-core/src/evidence/ledger.rs",
+    "crates/rdf-core/src/evidence/ledger/frame.rs",
+    "crates/rdf-core/src/evidence/ledger/row.rs",
+    "crates/rdf-core/src/evidence/ledger/source.rs",
+    "crates/rdf-core/src/evidence/ledger/terms.rs",
+    "crates/rdf-core/src/evidence/ledger/view.rs",
+    "crates/rdf-core/src/evidence/reason.rs",
+    "crates/rdf-core/src/evidence/record.rs",
+    "crates/rdf-core/src/evidence/standpoint.rs",
+    "crates/rdf-core/src/evidence/workspace.rs",
+    "crates/rdf-core/src/fno.rs",
+    "crates/rdf-core/src/governor.rs",
+    "crates/rdf-core/src/graph.rs",
+    "crates/rdf-core/src/graph_roles.rs",
+    "crates/rdf-core/src/hash.rs",
+    "crates/rdf-core/src/imports.rs",
+    "crates/rdf-core/src/ir/absolute.rs",
+    "crates/rdf-core/src/ir/builder.rs",
+    "crates/rdf-core/src/ir/builder/triple.rs",
+    "crates/rdf-core/src/ir/bundle.rs",
+    "crates/rdf-core/src/ir/canon.rs",
+    "crates/rdf-core/src/ir/canon/state.rs",
+    "crates/rdf-core/src/ir/compare.rs",
+    "crates/rdf-core/src/ir/composite.rs",
+    "crates/rdf-core/src/ir/cursor.rs",
+    "crates/rdf-core/src/ir/dataset.rs",
+    "crates/rdf-core/src/ir/dataset/inspection.rs",
+    "crates/rdf-core/src/ir/embedding/contract.rs",
+    "crates/rdf-core/src/ir/embedding/error.rs",
+    "crates/rdf-core/src/ir/embedding/identity.rs",
+    "crates/rdf-core/src/ir/embedding/metadata.rs",
+    "crates/rdf-core/src/ir/embedding/mod.rs",
+    "crates/rdf-core/src/ir/embedding/target.rs",
+    "crates/rdf-core/src/ir/embedding/verify.rs",
+    "crates/rdf-core/src/ir/embedding/view.rs",
+    "crates/rdf-core/src/ir/embedding/wire.rs",
+    "crates/rdf-core/src/ir/embedding/writer.rs",
+    "crates/rdf-core/src/ir/event_sink.rs",
+    "crates/rdf-core/src/ir/frozen_terms.rs",
+    "crates/rdf-core/src/ir/global.rs",
+    "crates/rdf-core/src/ir/import.rs",
+    "crates/rdf-core/src/ir/ingest.rs",
+    "crates/rdf-core/src/ir/ingest/error.rs",
+    "crates/rdf-core/src/ir/mod.rs",
+    "crates/rdf-core/src/ir/mutable.rs",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs",
+    "crates/rdf-core/src/ir/pack/bits.rs",
+    "crates/rdf-core/src/ir/pack/certify.rs",
+    "crates/rdf-core/src/ir/pack/container.rs",
+    "crates/rdf-core/src/ir/pack/dict.rs",
+    "crates/rdf-core/src/ir/pack/mod.rs",
+    "crates/rdf-core/src/ir/pack/side.rs",
+    "crates/rdf-core/src/ir/pack/triples.rs",
+    "crates/rdf-core/src/ir/pack/view.rs",
+    "crates/rdf-core/src/ir/paged/admission.rs",
+    "crates/rdf-core/src/ir/paged/graph_index.rs",
+    "crates/rdf-core/src/ir/paged/mod.rs",
+    "crates/rdf-core/src/ir/paged/provider.rs",
+    "crates/rdf-core/src/ir/paged/query.rs",
+    "crates/rdf-core/src/ir/paged/stack.rs",
+    "crates/rdf-core/src/ir/paged/summary.rs",
+    "crates/rdf-core/src/ir/paged/translation.rs",
+    "crates/rdf-core/src/ir/pipeline_bundle.rs",
+    "crates/rdf-core/src/ir/segmented/build.rs",
+    "crates/rdf-core/src/ir/segmented/file.rs",
+    "crates/rdf-core/src/ir/segmented/format.rs",
+    "crates/rdf-core/src/ir/segmented/mod.rs",
+    "crates/rdf-core/src/ir/segmented/query.rs",
+    "crates/rdf-core/src/ir/segmented/query/changes.rs",
+    "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+    "crates/rdf-core/src/ir/segmented/query/statistics.rs",
+    "crates/rdf-core/src/ir/segmented/query/view.rs",
+    "crates/rdf-core/src/ir/segmented/session.rs",
+    "crates/rdf-core/src/ir/segmented/session/cache.rs",
+    "crates/rdf-core/src/ir/segmented/session/statistics.rs",
+    "crates/rdf-core/src/ir/segmented/stack.rs",
+    "crates/rdf-core/src/ir/skolem.rs",
+    "crates/rdf-core/src/ir/source_directory.rs",
+    "crates/rdf-core/src/ir/statistics.rs",
+    "crates/rdf-core/src/ir/statistics/codec.rs",
+    "crates/rdf-core/src/ir/statistics/source.rs",
+    "crates/rdf-core/src/ir/term.rs",
+    "crates/rdf-core/src/ir/term/canonical.rs",
+    "crates/rdf-core/src/ir/term_walk.rs",
+    "crates/rdf-core/src/ir/triple.rs",
+    "crates/rdf-core/src/ir/triple/read.rs",
+    "crates/rdf-core/src/ir/validate.rs",
+    "crates/rdf-core/src/ir/view_accounting.rs",
+    "crates/rdf-core/src/lookaside.rs",
+    "crates/rdf-core/src/loss.rs",
+    "crates/rdf-core/src/model.rs",
+    "crates/rdf-core/src/model/traits.rs",
+    "crates/rdf-core/src/named_graph.rs",
+    "crates/rdf-core/src/ownership.rs",
+    "crates/rdf-core/src/provenance.rs",
+    "crates/rdf-core/src/purremb_fixture.rs",
+    "crates/rdf-core/src/query_scope.rs",
+    "crates/rdf-core/src/query_scope/counters.rs",
+    "crates/rdf-core/src/sink.rs",
+    "crates/rdf-core/src/small.rs",
+    "crates/rdf-core/src/source.rs",
+    "crates/rdf-core/src/sssom.rs",
+    "crates/rdf-core/src/statistics.rs",
+    "crates/rdf-core/src/statistics/layered.rs",
+    "crates/rdf-core/src/store.rs",
+    "crates/rdf-core/src/term_fixture.rs",
+    "crates/rdf-core/src/term_writer.rs",
+    "crates/rdf-core/src/turtle.rs",
+    "crates/rdf-core/src/turtle_render.rs",
+    "crates/rdf-core/src/view_fixture.rs",
+    "crates/rdf-core/src/xml_escape.rs",
+    "crates/rdf-core/src/xsd_regex/blocks.rs",
+    "crates/rdf-core/src/xsd_regex/case_variants.rs",
+    "crates/rdf-core/src/xsd_regex/classes.rs",
+    "crates/rdf-core/src/xsd_regex/ecma_emit.rs",
+    "crates/rdf-core/src/xsd_regex/emit.rs",
+    "crates/rdf-core/src/xsd_regex/error.rs",
+    "crates/rdf-core/src/xsd_regex/mod.rs",
+    "crates/rdf-core/src/xsd_regex/prefilter.rs",
+    "crates/rdf-core/src/xsd_regex/replace.rs",
+    "crates/rdf-core/src/xsd_regex/scan.rs",
+    "crates/rdf-core/src/xsd_regex/xflag.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/cache.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/compatibility.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/compile.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/dated_names.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/match.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/mod.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/pike.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/replace.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/sets.rs",
+    "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs"
+  ],
+  "logical_capacity_job": {
+    "copies": 40,
+    "home": "purrdf_lex::allocation::CapacityError::check",
+    "home_package": "purrdf-lex",
+    "matches": [
+      {
+        "file": "crates/rdf-core/src/ir/builder.rs",
+        "in_home": false,
+        "line": 610,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/builder.rs::lookup_hashed",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/builder.rs",
+        "in_home": false,
+        "line": 636,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/builder.rs::lookup_owned_blank",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/builder.rs",
+        "in_home": false,
+        "line": 868,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:68501dd74980d201]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/builder.rs",
+        "in_home": false,
+        "line": 868,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:469fd0ba6adc3424]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/builder.rs",
+        "in_home": false,
+        "line": 2237,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:f9e400eaac2b01f1]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/builder.rs::append_builder_with_memory",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/composite.rs",
+        "in_home": false,
+        "line": 261,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:cff2cf01734ea1d3]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/composite.rs::term_ids",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/composite.rs",
+        "in_home": false,
+        "line": 261,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:d14392e033854316]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/composite.rs::term_ids",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/dataset.rs",
+        "in_home": false,
+        "line": 1371,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:93359fa72451a90c]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/dataset.rs::permutation",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/embedding/wire.rs",
+        "in_home": false,
+        "line": 321,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:9c6128d42cb7a529]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/embedding/wire.rs::header",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/embedding/writer.rs",
+        "in_home": false,
+        "line": 641,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: runtime table capacity is asserted; return the named capacity error [source:8045eb2f4d5285e2]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/embedding/writer.rs::write_matrix",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/embedding/writer.rs",
+        "in_home": false,
+        "line": 716,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: runtime table capacity is asserted; return the named capacity error [source:759fa0c7869386ce]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/embedding/writer.rs::prepare_matrix",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/frozen_terms.rs",
+        "in_home": false,
+        "line": 113,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/frozen_terms.rs",
+        "in_home": false,
+        "line": 116,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/mutable.rs",
+        "in_home": false,
+        "line": 606,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:c4edb708dec6980b]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/mutable.rs::visit_blank_identities",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/mutable.rs",
+        "in_home": false,
+        "line": 606,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:eb9a0b3db238c761]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/mutable.rs::visit_blank_identities",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+        "in_home": false,
+        "line": 114,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:3d42d43948575620]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::new",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+        "in_home": false,
+        "line": 114,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bfcc85921a648621]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::new",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+        "in_home": false,
+        "line": 203,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:c4edb708dec6980b]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/mutable/delta_view.rs",
+        "in_home": false,
+        "line": 203,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:eb9a0b3db238c761]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/event_sink.rs",
+        "in_home": false,
+        "line": 95,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/event_sink.rs::emit",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/global.rs",
+        "in_home": false,
+        "line": 432,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:c1a00658c1ffa4e5]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/global.rs::find",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/global.rs",
+        "in_home": false,
+        "line": 890,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:921e8adc54613316]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/global.rs::value_index",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/ingest.rs",
+        "in_home": false,
+        "line": 588,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/ingest.rs::drive",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/ingest.rs",
+        "in_home": false,
+        "line": 603,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/ingest.rs::drive",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/provider.rs",
+        "in_home": false,
+        "line": 458,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:20664803727b8ebe]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/provider.rs::logical_rdf_byte_len",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/provider.rs",
+        "in_home": false,
+        "line": 458,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:a89aa0bcdd678ca2]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/provider.rs::logical_rdf_byte_len",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/query.rs",
+        "in_home": false,
+        "line": 677,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:77a0de8cadadbe03]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/query.rs::validate_materialization",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/query.rs",
+        "in_home": false,
+        "line": 677,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:2b2967d384636018]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/query.rs::validate_materialization",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/stack.rs",
+        "in_home": false,
+        "line": 467,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:e56729be357eb4f1]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/stack.rs::snapshot_with_head",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/translation.rs",
+        "in_home": false,
+        "line": 113,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:082c3ff94178a18d]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/translation.rs::try_build",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/translation.rs",
+        "in_home": false,
+        "line": 113,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:dbc961a86092a7d3]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/translation.rs::try_build",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/translation.rs",
+        "in_home": false,
+        "line": 196,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:082c3ff94178a18d]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/translation.rs::remap",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/paged/translation.rs",
+        "in_home": false,
+        "line": 196,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:dbc961a86092a7d3]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/paged/translation.rs::remap",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/segmented/build.rs",
+        "in_home": false,
+        "line": 110,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:399173dc809511f8]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/segmented/build.rs::global",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/segmented/build.rs",
+        "in_home": false,
+        "line": 127,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:93bf37ec51519cfd]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/segmented/build.rs::local",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/segmented/build.rs",
+        "in_home": false,
+        "line": 528,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:495627ce45322797]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/segmented/build.rs::map_id",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/segmented/build.rs",
+        "in_home": false,
+        "line": 553,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:93bf37ec51519cfd]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/segmented/build.rs::encode_dataset",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/validate.rs",
+        "in_home": false,
+        "line": 471,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:55afea662f67f62d]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/ir/validate.rs",
+        "in_home": false,
+        "line": 519,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:55afea662f67f62d]"
+        ],
+        "symbol": "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory",
+        "variant": false
+      },
+      {
+        "file": "crates/rdf-core/src/turtle_render.rs",
+        "in_home": false,
+        "line": 254,
+        "package": "purrdf-core",
+        "reasons": [
+          "rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:ae1073a499b2ccac]"
+        ],
+        "symbol": "crates/rdf-core/src/turtle_render.rs::find_iri",
+        "variant": false
+      }
+    ]
+  }
+}

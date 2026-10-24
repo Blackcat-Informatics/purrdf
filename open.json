@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 699,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across",
+  "branch": "paudley/699-preserve-validation-requests-across",
+  "slug": "preserve-validation-requests-across",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/.stage/preserve-validation-requests-across",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "bf85c9174ed293fc1f8ca0b644d690fffa21e429",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across",
+    "branch:paudley/699-preserve-validation-requests-across",
+    "stage:/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/.stage/preserve-validation-requests-across",
+    "issue:/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/.stage/preserve-validation-requests-across/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-23T22:48:45-0600"
+}

@@ -1,0 +1,32 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 14.99s
+     Running tests/change_path_alloc.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/062c75a6ffb1e9eb/out/change_path_alloc-062c75a6ffb1e9eb)
+
+running 2 tests
+expansion allocation samples: [(32, Measurement { allocations: 78, requested_bytes: 51554, retained_bytes: 0, peak_working_bytes: 2888 }), (64, Measurement { allocations: 145, requested_bytes: 103154, retained_bytes: 0, peak_working_bytes: 4232 }), (128, Measurement { allocations: 276, requested_bytes: 206338, retained_bytes: 0, peak_working_bytes: 6920 }), (256, Measurement { allocations: 535, requested_bytes: 412690, retained_bytes: 0, peak_working_bytes: 12296 })]
+
+thread 'change_expansion_allocation_matches_its_pinned_closed_form' (517661) panicked at crates/shapes/tests/change_path_alloc.rs:2278:9:
+assertion `left == right` failed: expanding 32 changed rows allocated 78, and the pinned closed form (4 + 2N + 3·log2 N) says 83. A HIGHER per-row coefficient means the expansion has gone back to walking a chain it rebuilds and re-resolves per changed row; a lower one is welcome and should move these constants
+  Measurement { allocations: 78, requested_bytes: 51554, retained_bytes: 0, peak_working_bytes: 2888 }
+  left: 78
+ right: 83
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test change_expansion_allocation_matches_its_pinned_closed_form ... FAILED
+empty expansion allocation samples: [(32, Measurement { allocations: 14, requested_bytes: 2658, retained_bytes: 0, peak_working_bytes: 1536 }), (64, Measurement { allocations: 17, requested_bytes: 5362, retained_bytes: 0, peak_working_bytes: 3040 }), (128, Measurement { allocations: 20, requested_bytes: 10754, retained_bytes: 0, peak_working_bytes: 6048 }), (256, Measurement { allocations: 23, requested_bytes: 21522, retained_bytes: 0, peak_working_bytes: 12064 })]
+
+thread 'change_expansion_with_no_chain_to_walk_costs_no_path_probe' (517662) panicked at crates/shapes/tests/change_path_alloc.rs:2321:9:
+assertion `left == right` failed: expanding 32 changed rows through an EMPTY chain allocated 14, not the 3 + 3·log2 N this control is pinned at. A per-row term here is the expansion's own, and it would mean the 2 charged per row in change_expansion_allocation_matches_its_pinned_closed_form is no longer the probe it is attributed to
+  Measurement { allocations: 14, requested_bytes: 2658, retained_bytes: 0, peak_working_bytes: 1536 }
+  left: 14
+ right: 18
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... FAILED
+
+failures:
+
+failures:
+    change_expansion_allocation_matches_its_pinned_closed_form
+    change_expansion_with_no_chain_to_walk_costs_no_path_probe
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test change_path_alloc`

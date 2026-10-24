@@ -1,0 +1,24 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/698-evaluate-recursive-shacl-with-explicit/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 13.49s
+     Running tests/custom_node_expressions.rs (/opt/.cargo/c1/d50809a665e6ce/debug/build/purrdf-shapes/c71af43536de13e2/out/custom_node_expressions-c71af43536de13e2)
+
+running 1 test
+test request_severities_survive_native_and_sparql_function_boundaries ... FAILED
+
+failures:
+
+---- request_severities_survive_native_and_sparql_function_boundaries stdout ----
+
+thread 'request_severities_survive_native_and_sparql_function_boundaries' (2006153) panicked at crates/shapes/tests/custom_node_expressions.rs:1495:13:
+assertion `left == right` failed: severity=sh:Warning, data=""
+  left: [("native", true), ("native custom", true), ("SPARQL built-in", false), ("SPARQL custom", false)]
+ right: [("native", true), ("native custom", true), ("SPARQL built-in", true), ("SPARQL custom", true)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    request_severities_survive_native_and_sparql_function_boundaries
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test custom_node_expressions`

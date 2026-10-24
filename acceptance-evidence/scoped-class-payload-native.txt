@@ -1,0 +1,57 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/699-preserve-validation-requests-across/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 35s
+     Running tests/custom_node_expressions.rs (/opt/.cargo/84/5e1b07f22140dc/debug/build/purrdf-shapes/c71af43536de13e2/out/custom_node_expressions-c71af43536de13e2)
+
+running 49 tests
+test a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error ... ok
+test a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbound ... ok
+test a_blank_node_argument_is_an_error_unless_its_parameter_is_optional ... ok
+test a_cardinality_failure_in_a_body_is_a_sparql_error_in_a_report ... ok
+test a_declaration_without_a_body_is_a_load_error ... ok
+test a_declared_builtin_follows_the_same_value_and_error_rule ... ok
+test a_blank_node_argument_is_an_error_under_the_editors_draft_and_an_argument_under_the_working_draft ... ok
+test a_declared_builtin_list_function_is_callable_from_sparql_expr ... ok
+test a_declared_sparql_builtin_is_callable_from_sparql_expr ... ok
+test a_named_parameter_function_has_no_positional_call_form ... ok
+test a_cycle_through_sparql_query_text_is_bounded_too ... ok
+test a_list_parameter_function_resolves_from_sparql_query_text ... ok
+test a_function_called_during_the_rules_fixpoint_sees_the_current_round_s_graph ... ok
+test a_required_parameter_after_an_optional_one_is_a_load_error ... ok
+test a_recursive_function_makes_validation_fail_rather_than_conform ... ok
+test a_registered_function_without_a_focus_graph_refuses_rather_than_answering ... ok
+test a_self_recursive_function_fails_closed_at_the_depth_bound ... ok
+test a_select_body_sees_its_arguments_and_the_focus_graph ... ok
+test a_sparql_expr_body_sees_its_arguments_as_pre_bound_variables ... ok
+test an_optional_parameter_widens_the_arity_range_without_removing_its_bounds ... ok
+test a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed_cause ... ok
+test an_undeclared_builtin_list_function_is_not_registered ... ok
+test an_unparsable_body_is_a_load_error ... ok
+test an_optional_trailing_parameter_may_be_omitted_or_supplied ... ok
+test body_level_processor_failures_are_typed ... ok
+test body_expression_without_a_declaring_class_is_a_load_error ... ok
+test arity_mismatch_at_the_call_site_is_a_load_error ... ok
+test body_reading_an_undeclared_argument_is_a_load_error ... ok
+test callback_allocation_does_not_scale_with_retained_request_payloads ... ok
+test colliding_key_parameters_are_a_load_error ... ok
+test callback_allocation_does_not_copy_static_class_dictionary_payloads ... ok
+test direct_custom_function_calls_bound_argument_allocation_growth ... ok
+test an_unresolvable_shape_in_a_body_is_a_sparql_error ... ok
+test evaluated_function_arguments_keep_optional_indices_and_query_bindings ... ok
+test exact_argument_indices_preserve_the_u64_boundary ... ok
+test list_parameter_function_drives_a_validation_verdict ... ok
+test direct_custom_function_large_result_is_moved_without_a_second_payload_copy ... ok
+test list_parameter_function_returns_its_body_s_value ... ok
+test named_parameter_function_without_a_key_parameter_is_a_load_error ... ok
+test named_parameter_function_evaluates_its_body_under_the_argument_scope ... ok
+test named_shapes_rows_do_not_become_callback_core_data ... ok
+test prepared_and_restored_callback_requests_agree_in_complete_reports ... ok
+test registered_conformance_preserves_the_bindings_actual_shapes_graph ... ok
+test registered_requests_survive_input_drop_and_keep_independent_graphs_and_policies ... ok
+test scoped_bindings_share_work_without_reusing_another_model_or_request ... ok
+test the_focus_node_of_a_sparql_call_is_the_function_s_own_iri ... ok
+test rule_heads_and_conditions_share_the_callback_validation_request ... ok
+test request_severities_survive_native_and_sparql_function_boundaries ... ok
+test callback_request_policy_reaches_serial_and_parallel_focus_chunks ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+

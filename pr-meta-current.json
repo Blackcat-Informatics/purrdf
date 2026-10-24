@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "bf85c9174ed293fc1f8ca0b644d690fffa21e429",
+  "headRefName": "paudley/699-preserve-validation-requests-across",
+  "headRefOid": "6b5abee8b3223f1d1a0ff47311709916fce24824",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 700,
+  "state": "OPEN",
+  "title": "Preserve SHACL validation requests through registered function calls",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/700"
+}
