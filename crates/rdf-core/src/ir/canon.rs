@@ -146,6 +146,7 @@ use std::convert::Infallible;
 mod state;
 pub use state::{DatasetStateDigest, DatasetStateError};
 
+use purrdf_lex::walk::WorkList;
 use sha2::{Digest, Sha256, Sha384};
 
 use super::dataset::{QuadIds, RdfDataset, TermRef};
@@ -1883,6 +1884,29 @@ impl<Id: ViewTermId> IdIssuer<Id> {
     }
 }
 
+/// One suspended n-degree invocation. Child results resume its current path;
+/// none of these owners recursively contains another frame.
+struct NDegreeFrame<Id> {
+    issuer: IdIssuer<Id>,
+    related: std::collections::btree_map::IntoIter<HashHex, Vec<Id>>,
+    data: String,
+    group: Option<NDegreeGroup<Id>>,
+}
+
+struct NDegreeGroup<Id> {
+    permutations: Permutations<Id>,
+    chosen_path: Option<String>,
+    chosen_issuer: Option<IdIssuer<Id>>,
+    candidate: Option<NDegreeCandidate<Id>>,
+}
+
+struct NDegreeCandidate<Id> {
+    issuer: IdIssuer<Id>,
+    path: String,
+    recursion: std::vec::IntoIter<Id>,
+    pending: Option<Id>,
+}
+
 /// Per-run canonicalization state over ONE view.
 ///
 /// Generic over `D: DatasetView` and keyed on `D::Id`: the working tables below are
@@ -2483,8 +2507,131 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn hash_n_degree(
         &mut self,
         identifier: D::Id,
-        mut issuer: IdIssuer<D::Id>,
+        issuer: IdIssuer<D::Id>,
     ) -> Result<(HashHex, IdIssuer<D::Id>), CanonError> {
+        let mut frame = self.n_degree_frame(identifier, issuer)?;
+        let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
+        loop {
+            if let Some(group) = frame.group.as_mut() {
+                if let Some(mut candidate) = group.candidate.take() {
+                    if let Some(related) = candidate.recursion.next() {
+                        // §4.8 step 5.4.5: suspend this path while its child runs.
+                        self.check_stop()?;
+                        let child_issuer = candidate.issuer.clone();
+                        candidate.pending = Some(related);
+                        group.candidate = Some(candidate);
+                        let child = self.n_degree_frame(related, child_issuer)?;
+                        parents.push(frame);
+                        frame = child;
+                        continue;
+                    }
+                    // 5.4.6: first path wins ties, exactly as in permutation order.
+                    if group
+                        .chosen_path
+                        .as_ref()
+                        .is_none_or(|best| candidate.path.as_str() < best.as_str())
+                    {
+                        group.chosen_path = Some(candidate.path);
+                        group.chosen_issuer = Some(candidate.issuer);
+                    }
+                }
+
+                if let Some(perm) = group.permutations.next() {
+                    // Charge after obtaining each permutation, including pruned ones.
+                    self.charge_search()?;
+                    let mut issuer = frame.issuer.clone();
+                    let mut path = String::new();
+                    let mut recursion = Vec::new();
+                    let mut pruned = false;
+                    for related in perm {
+                        self.check_stop()?;
+                        if let Some(id) = self.canonical.issued_for(related) {
+                            path.push_str("_:");
+                            path.push_str(id);
+                        } else {
+                            if !issuer.has(related) {
+                                recursion.push(related);
+                            }
+                            path.push_str("_:");
+                            path.push_str(issuer.issue(related));
+                        }
+                        // 5.4.4.3: discard a partial path that cannot win.
+                        if group.chosen_path.as_ref().is_some_and(|best| {
+                            path.len() >= best.len() && path.as_str() > best.as_str()
+                        }) {
+                            pruned = true;
+                            break;
+                        }
+                    }
+                    if !pruned {
+                        group.candidate = Some(NDegreeCandidate {
+                            issuer,
+                            path,
+                            recursion: recursion.into_iter(),
+                            pending: None,
+                        });
+                    }
+                    continue;
+                }
+
+                // 5.5–5.6: finish this related-hash group and adopt its winner.
+                let group = frame.group.take().expect("the active group is present");
+                frame
+                    .data
+                    .push_str(group.chosen_path.as_deref().unwrap_or(""));
+                if let Some(issuer) = group.chosen_issuer {
+                    frame.issuer = issuer;
+                }
+                continue;
+            }
+
+            if let Some((hash, related)) = frame.related.next() {
+                self.check_stop()?;
+                frame.data.push_str(hash.as_str());
+                frame.group = Some(NDegreeGroup {
+                    permutations: permutations(&related),
+                    chosen_path: None,
+                    chosen_issuer: None,
+                    candidate: None,
+                });
+                continue;
+            }
+
+            let hash = digest_hex(self.hash, frame.data.as_bytes());
+            let Some(mut parent) = parents.pop() else {
+                return Ok((hash, frame.issuer));
+            };
+            let group = parent.group.as_mut().expect("a child has a parent group");
+            let candidate = group
+                .candidate
+                .as_mut()
+                .expect("a child has a suspended candidate");
+            let related = candidate
+                .pending
+                .take()
+                .expect("a child has its related ID");
+            candidate.path.push_str("_:");
+            candidate.path.push_str(candidate.issuer.issue(related));
+            candidate.path.push('<');
+            candidate.path.push_str(hash.as_str());
+            candidate.path.push('>');
+            candidate.issuer = frame.issuer;
+            // 5.4.5.4: prune only after the complete child result is appended.
+            if group.chosen_path.as_ref().is_some_and(|best| {
+                candidate.path.len() >= best.len() && candidate.path.as_str() > best.as_str()
+            }) {
+                group.candidate = None;
+            }
+            frame = parent;
+        }
+    }
+
+    /// Enter §4.8 once. Work and stop checks have the same order at every depth.
+    fn n_degree_frame(
+        &mut self,
+        identifier: D::Id,
+        issuer: IdIssuer<D::Id>,
+    ) -> Result<NDegreeFrame<D::Id>, CanonError> {
         self.charge_search()?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
@@ -2496,93 +2643,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             })?;
         }
 
-        let mut data_to_hash = String::new();
-        // §4.8 step 5: for each related hash, ascending.
-        for (related_hash, related_list) in &hn {
-            self.check_stop()?;
-            data_to_hash.push_str(related_hash.as_str());
-            let mut chosen_path: Option<String> = None;
-            let mut chosen_issuer: Option<IdIssuer<D::Id>> = None;
-
-            // §4.8 step 5.4: every permutation of the related list, identity first.
-            for perm in permutations(related_list) {
-                // Charge the poison budget PER PERMUTATION: a related group of size k
-                // contributes k! permutations, so this — not the recursive-call count —
-                // is the dominant cost on a pathologically symmetric graph (e.g. a
-                // 10-blank clique). Counting it here bounds the actual work.
-                self.charge_search()?;
-                let mut issuer_copy = issuer.clone();
-                let mut path = String::new();
-                let mut recursion: Vec<D::Id> = Vec::new();
-                let mut pruned = false;
-
-                // 5.4.4
-                for related in &perm {
-                    self.check_stop()?;
-                    if let Some(id) = self.canonical.issued_for(*related) {
-                        path.push_str("_:");
-                        path.push_str(id);
-                    } else {
-                        if !issuer_copy.has(*related) {
-                            recursion.push(*related);
-                        }
-                        path.push_str("_:");
-                        path.push_str(issuer_copy.issue(*related));
-                    }
-                    // 5.4.4.3: prune if this partial path can no longer win.
-                    if let Some(best) = &chosen_path
-                        && path.len() >= best.len()
-                        && path.as_str() > best.as_str()
-                    {
-                        pruned = true;
-                        break;
-                    }
-                }
-                if pruned {
-                    continue;
-                }
-
-                // 5.4.5: recurse into newly-seen related blanks in path order.
-                for related in &recursion {
-                    self.check_stop()?;
-                    let (rec_hash, rec_issuer) =
-                        self.hash_n_degree(*related, issuer_copy.clone())?;
-                    path.push_str("_:");
-                    path.push_str(issuer_copy.issue(*related));
-                    path.push('<');
-                    path.push_str(rec_hash.as_str());
-                    path.push('>');
-                    issuer_copy = rec_issuer;
-                    if let Some(best) = &chosen_path
-                        && path.len() >= best.len()
-                        && path.as_str() > best.as_str()
-                    {
-                        pruned = true;
-                        break;
-                    }
-                }
-                if pruned {
-                    continue;
-                }
-
-                // 5.4.6: keep the lexicographically least path (first wins ties).
-                if chosen_path
-                    .as_ref()
-                    .is_none_or(|best| path.as_str() < best.as_str())
-                {
-                    chosen_path = Some(path);
-                    chosen_issuer = Some(issuer_copy);
-                }
-            }
-
-            // 5.5–5.6: fold the winning path and adopt its issuer.
-            data_to_hash.push_str(chosen_path.as_deref().unwrap_or(""));
-            if let Some(winner) = chosen_issuer {
-                issuer = winner;
-            }
-        }
-
-        Ok((digest_hex(self.hash, data_to_hash.as_bytes()), issuer))
+        Ok(NDegreeFrame {
+            issuer,
+            related: hn.into_iter(),
+            data: String::new(),
+            group: None,
+        })
     }
 
     /// §4.8 step 3 + §4.7: for each related blank of `comp` (other than `focus`),
@@ -5527,6 +5593,47 @@ mod tests {
         ));
         assert_eq!(state.blanks, []);
         assert!(state.incident.is_empty());
+    }
+
+    /// Deep n-degree traversal suspends owned issuers without native recursion.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn n_degree_chain_uses_heap_frames_on_a_small_native_stack() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            const COUNT: usize = 256;
+            let mut builder = RdfDatasetBuilder::new();
+            let predicate = iri(&mut builder, "edge");
+            let blanks: Vec<_> = (0..COUNT)
+                .map(|index| {
+                    builder
+                        .intern_blank(&format!("chain{index}"), BlankScope(0))
+                        .unwrap()
+                })
+                .collect();
+            for pair in blanks.windows(2) {
+                builder
+                    .push_quad(pair[0], predicate, pair[1], None)
+                    .unwrap();
+            }
+            let dataset = builder.freeze().unwrap();
+            let mut state = CanonState::new(
+                &*dataset,
+                CanonScope::Dataset,
+                CanonPresentation::Overlay,
+                CanonHash::Sha256,
+            );
+            state.collect_incidence().unwrap();
+            for &blank in &state.blanks {
+                let hash = state.hash_first_degree(blank).unwrap();
+                state.first_degree.insert(blank, hash);
+            }
+            let mut issuer = IdIssuer::new(TEMP_PREFIX);
+            issuer.issue(blanks[0]);
+            let (_, issuer) = state.hash_n_degree(blanks[0], issuer).unwrap();
+            assert_eq!(issuer.order(), blanks);
+            assert!(state.budget < RDFC_CALL_LIMIT - COUNT as u64);
+        })
+        .unwrap();
     }
 
     /// Cancellation reaches the exponential search, rather than only its entry.
