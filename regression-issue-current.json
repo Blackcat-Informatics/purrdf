@@ -1,0 +1,95 @@
+# Issue #690: Restore SHACL caller and product parity after identity catalog integration
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+Track the failing acceptance exposed by the SHACL identity-catalog integration on `paudley/569-design-around-recursive-shacl-validation`. The integration PR is being published at the user's explicit request with its scope frozen. This issue does not waive required checks or close the complete recursive-validation contract in #569.
+
+Observed native qualification:
+
+- `cargo test -p purrdf-core -p purrdf-shapes --lib --no-fail-fast`: core **1398 passed**; shapes **947 passed, 41 failed**.
+- Strict core/shapes/validate/Python all-target Clippy passed with warnings denied before the final test-only pin adjustments.
+- All 18 incremental-footprint differential controls and all 10 carried-analysis controls passed.
+- Actual admission fell to 230 allocations from the old 293 baseline. Its exact pin has been lowered and needs re-execution. Static-root preparation is 18 allocations / 3106 requested / 0 retained / 1674 peak bytes at 1/8/32 retained definitions; its ceilings were tightened and need re-execution.
+
+Required investigation and remediation:
+
+1. Restore schema-import logical round-trip parity: `schema_import::tests::emitted_logical_shapes_round_trip_byte_exactly` reports `schema-applicator-dropped` losses after helper-definition references are emitted. Do not remove the lossless/byte-equality assertions or silently drop applicators.
+2. Preserve compatibility query-admission applicability for retained but unreachable definitions: `shapes::parser::admission::tests::rec_audits_unreached_constraint_declarations_but_not_unrelated_selects` now rejects the legacy unattached constraint. Keep the dated graph-wide and execution-qualified laws distinct; no swallowed query refusal.
+3. Investigate the reifier-message override failure in `engine::complete_reports::rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them`. The test currently annotates a root reference handle after parsing; establish whether the annotation must instead be authored on the actual definition, without weakening per-profile message/severity assertions.
+4. Adapt model-inspection fixtures to original definition/property views while preserving their assertions. Failures include direct parser constraint/path/list inspection, rule conditions and empty rule-head expressions, box-role collection, retained SPARQL provenance, and range-bound inspection. Runtime parity must be checked separately; do not assume all failures are obsolete fixtures.
+5. Reconcile source-occurrence admission's native catalog retention with `dated_product_sources_reconstruct_without_legacy_readmission_or_model_relinking`. Preserve the complete product-source/provenance contract and the prohibition on silently incomplete catalogs.
+6. Complete the already-known explicit recursive mode/solver prerequisite in #569 for the bundled recursive SHACL meta-schema. Three lint-import tests currently fail because that schema is refused without selected recursion semantics; this is an existing unfinished requirement, not newly delivered behavior.
+7. Refresh the stale preparation stage from the actual census and regenerate only the mutable current-stage product through its supported generator. The frozen format-epoch artifact must remain unchanged. Re-run affected census/product checks.
+8. Execute the revised new shared-DAG allocation test at depths 1/8/32. Its initial adjacent-ratio requested-byte assertion incorrectly assumed equal hash-table capacity utilization (112077 bytes at depth 32 versus 27597 at depth 8); the revised guard uses the depth-one linear envelope (3553 bytes per depth). Preserve bounded expansion and the disconnected untouched target.
+
+The complete failing test inventory is recorded in the integration PR's local Stage log `shared-catalog-core-shapes-units.log`; the groups above cover all 41 failures. Acceptance requires the relevant original controls to pass and an explicit mapping for any remaining failure. No ignored tests, raised original allocation ceilings, hook bypasses, or unsupported success claims.
+
+
+## Comments (2)
+
+### paudley — 2026-10-23T20:59:17Z
+
+Complete failing shapes-library test inventory from the native run at PR publication (947 passes, 41 failures):
+
+```
+engine::complete_reports::rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them
+lint::tests::a_data_graph_import_without_an_ontology_type_is_an_info_finding
+lint::tests::an_imported_documents_unanchored_import_names_its_document
+lint::tests::an_unanchored_import_is_listed_and_is_never_a_finding
+product::tests::admit_restores_box_role_vocab
+provenance::tests::provenance_reconstructs_identical_shapes
+rules::tests::a_bare_blank_in_a_triple_rule_head_produces_nothing
+rules::tests::parses_order_deactivated_and_conditions
+schema_import::tests::emitted_logical_shapes_round_trip_byte_exactly
+schema_import::tests::range_bounds_round_trip_exactly
+shapes::parser::admission::tests::dated_product_sources_reconstruct_without_legacy_readmission_or_model_relinking
+shapes::parser::admission::tests::rec_audits_unreached_constraint_declarations_but_not_unrelated_selects
+shapes::tests::a_list_cell_typed_rdf_list_still_walks
+shapes::tests::a_well_formed_list_walks_in_order
+shapes::tests::an_rdf_nil_list_head_is_the_empty_list
+shapes::tests::core_prefixes_import_resolves_registry_only_prefixes
+shapes::tests::literal_and_triple_term_members_walk
+shapes::tests::node_expr_filter_shape
+shapes::tests::test_alternative_path_parses
+shapes::tests::test_and_constraint
+shapes::tests::test_closed_parses
+shapes::tests::test_custom_component_constraint_detected
+shapes::tests::test_in_list_constraint
+shapes::tests::test_inverse_path
+shapes::tests::test_language_in_parses
+shapes::tests::test_max_length_parses
+shapes::tests::test_nested_path_combination_parses
+shapes::tests::test_node_kind_iri
+shapes::tests::test_not_parses
+shapes::tests::test_one_or_more_and_zero_or_one_paths_parse
+shapes::tests::test_or_with_two_predicate_path_members
+shapes::tests::test_pattern_with_flags
+shapes::tests::test_property_pair_constraints_parse
+shapes::tests::test_qualified_value_shape_disjoint_collects_siblings
+shapes::tests::test_qualified_value_shape_parses
+shapes::tests::test_sequence_path_parses
+shapes::tests::test_shape_metadata
+shapes::tests::test_sparql_constraint_parses
+shapes::tests::test_sparql_prefixes_namespace_as_iri
+shapes::tests::test_target_class_and_property_min_max_count
+shapes::tests::test_zero_or_more_path_parses
+```
+
+Core library tests passed all 1398 cases in the same command. This inventory records failures, not waivers.
+
+
+### paudley — 2026-10-23T21:56:00Z
+
+Review and CI repairs are pushed in 96b0ba3d3 and b049fa51c. Main was merged normally in 4397a2336 and has not advanced since. Exact hosted Rust 1.98 MSRV passed after the SCC inference correction.
+
+All three inline review findings are addressed and their threads resolved: the rule target driver retains its fallback model, parser fixtures inspect the original catalog definitions/properties, and product restore initializes custom components and target types before rebuilding private definitions. The repeated planned-constraint lookup was also removed.
+
+The native library run improved from 947 passes/41 failures at publication to 988 passes/one failure. The remaining logical schema round-trip repair then passed all 14 schema-import tests. This clears the original failure inventory through the full run plus the focused repair; it is not a fresh full-suite claim on the new head. Strict Shapes/CLI all-target Clippy passed before the final ordinary-import allocation adjustment, which avoids constructing an extra empty owner.
+
+Compatibility repairs retain the bundled structural meta-schema through the existing depth/stack-bounded evaluator, keep caller-authored recursive-schema refusal, apply legacy pre-binding restrictions to reached constraints, and reconstruct emitted shared schema references. No public recursion mode or fixed-point solver is added. Inspection fixtures retain their original semantic assertions. Assembly evidence now names the actual path implementation, with the same measurement requirements; hosted confirmation remains pending.
+
+Current-head integration/oracle checks, hosted CI and final review are still pending. Issue 569 remains open for its original solver contract. This PR's scope remains frozen; issue 690 remains open until the regressions are actually qualified.
+
+

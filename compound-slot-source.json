@@ -1,0 +1,829 @@
+{
+  "element_names": {
+    "Annotation": "Annotation",
+    "Holder": "Holder",
+    "Node": "Node",
+    "ShapeRef0": "ShapeRef0",
+    "ShapeRef1": "ShapeRef1",
+    "ShapeRef2": "ShapeRef2",
+    "ShapeRef3": "ShapeRef3",
+    "ShapeRef4": "ShapeRef4",
+    "ShapeRef5": "ShapeRef5",
+    "ShapeRef6": "ShapeRef6",
+    "ShapeRef7": "ShapeRef7",
+    "ShapeRef8": "ShapeRef8"
+  },
+  "losses": {
+    "losses": [
+      {
+        "code": "array-contains-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/Node/allOf/0/if/properties/@type/anyOf/1/contains",
+        "note": "This contains sits on a schema the projection renders as no LinkML slot expression, so no has_member states it",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "conditional-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/Node/allOf/0/if",
+        "note": "JSON Schema if/then/else dependent validation has no LinkML 1.11 expression",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/Annotation/additionalProperties/anyOf/4/properties/@value",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any range; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/Node/allOf/0",
+        "note": "This JSON Schema branch has no LinkML anonymous-class expression and is omitted from the class composition",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef0",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef0/anyOf/0/type",
+        "note": "A LinkML anonymous-type expression cannot change the named type's base carrier",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef0/anyOf/1",
+        "note": "This JSON Schema branch has no LinkML anonymous-type constraint",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef2",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef2/anyOf/0/type",
+        "note": "A LinkML anonymous-type expression cannot change the named type's base carrier",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef2/anyOf/1",
+        "note": "This JSON Schema branch has no LinkML anonymous-type constraint",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef3",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef3/anyOf/0/type",
+        "note": "A LinkML anonymous-type expression cannot change the named type's base carrier",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef3/anyOf/1",
+        "note": "This JSON Schema branch has no LinkML anonymous-type constraint",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef4",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef4/anyOf/0/type",
+        "note": "A LinkML anonymous-type expression cannot change the named type's base carrier",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef4/anyOf/1",
+        "note": "This JSON Schema branch has no LinkML anonymous-type constraint",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef6",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef6/anyOf/0/type",
+        "note": "A LinkML anonymous-type expression cannot change the named type's base carrier",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef6/anyOf/1",
+        "note": "This JSON Schema branch has no LinkML anonymous-type constraint",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef7",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef7/anyOf/0/type",
+        "note": "A LinkML anonymous-type expression cannot change the named type's base carrier",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef7/anyOf/1",
+        "note": "This JSON Schema branch has no LinkML anonymous-type constraint",
+        "to": "linkml-1.11"
+      },
+      {
+        "code": "keyword-validation-dropped",
+        "from": "json-schema",
+        "intentional": true,
+        "location": "shapes:linkml subject=#/$defs/ShapeRef8",
+        "note": "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+        "to": "linkml-1.11"
+      }
+    ],
+    "schema_version": 1
+  },
+  "probes": [
+    {
+      "conforms": true,
+      "label": "conforming",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": 2
+      }
+    },
+    {
+      "conforms": true,
+      "label": "some-lone-member",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": 7,
+        "ex:xone": 2
+      }
+    },
+    {
+      "conforms": false,
+      "label": "some-none",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          "a",
+          "b"
+        ],
+        "ex:xone": 2
+      }
+    },
+    {
+      "conforms": false,
+      "label": "node-one-not-integer",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          "a"
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": 2
+      }
+    },
+    {
+      "conforms": false,
+      "label": "and-outside-in",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 3,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": 2
+      }
+    },
+    {
+      "conforms": false,
+      "label": "or-neither",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": "a",
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": 2
+      }
+    },
+    {
+      "conforms": false,
+      "label": "xone-both",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": 1
+      }
+    },
+    {
+      "conforms": true,
+      "label": "xone-other",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": "a",
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": "a"
+      }
+    },
+    {
+      "conforms": false,
+      "label": "not-integer",
+      "value": {
+        "@id": "https://example.org/h",
+        "@type": "ex:Holder",
+        "ex:and": 1,
+        "ex:node": [
+          1,
+          2
+        ],
+        "ex:not": 5,
+        "ex:or": {
+          "@id": "https://example.org/x"
+        },
+        "ex:some": [
+          2,
+          "a"
+        ],
+        "ex:xone": 2
+      }
+    }
+  ],
+  "schema": {
+    "$defs": {
+      "Annotation": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "properties": {
+                "@id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "@id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "@type": {
+                  "type": "string"
+                },
+                "@value": {}
+              },
+              "required": [
+                "@value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
+        "title": "RDF-1.2 statement metadata (reifier annotation)",
+        "type": "object"
+      },
+      "Holder": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:and": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ShapeRef0"
+              },
+              {
+                "$ref": "#/$defs/ShapeRef1"
+              }
+            ]
+          },
+          "ex:node": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ShapeRef2"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/ShapeRef2"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:not": {
+            "allOf": [
+              {
+                "not": {
+                  "$ref": "#/$defs/ShapeRef3"
+                }
+              }
+            ]
+          },
+          "ex:or": {
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ShapeRef4"
+                  },
+                  {
+                    "$ref": "#/$defs/ShapeRef5"
+                  }
+                ]
+              }
+            ]
+          },
+          "ex:some": {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/ShapeRef6"
+                  }
+                ],
+                "type": [
+                  "boolean",
+                  "number",
+                  "object",
+                  "string"
+                ]
+              },
+              {
+                "contains": {
+                  "$ref": "#/$defs/ShapeRef6"
+                },
+                "items": {
+                  "type": [
+                    "boolean",
+                    "number",
+                    "object",
+                    "string"
+                  ]
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
+          "ex:xone": {
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/ShapeRef7"
+                  },
+                  {
+                    "$ref": "#/$defs/ShapeRef8"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "ex:some"
+        ],
+        "type": "object"
+      },
+      "Node": {
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Holder"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Holder"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Holder"
+            }
+          }
+        ],
+        "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "title": "A single discriminated PURRDF instance node",
+        "type": "object"
+      },
+      "ShapeRef0": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "properties": {
+              "@type": {
+                "const": "xsd:integer"
+              },
+              "@value": {
+                "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@value",
+              "@type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef1": {
+        "enum": [
+          1,
+          2
+        ]
+      },
+      "ShapeRef2": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "properties": {
+              "@type": {
+                "const": "xsd:integer"
+              },
+              "@value": {
+                "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@value",
+              "@type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef3": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "properties": {
+              "@type": {
+                "const": "xsd:integer"
+              },
+              "@value": {
+                "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@value",
+              "@type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef4": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "properties": {
+              "@type": {
+                "const": "xsd:integer"
+              },
+              "@value": {
+                "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@value",
+              "@type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef5": {
+        "anyOf": [
+          {
+            "properties": {
+              "@id": {
+                "pattern": "^(?:[^_]|_(?:[^:]|$))",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "@list": {
+                "maxItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "@list"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef6": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "properties": {
+              "@type": {
+                "const": "xsd:integer"
+              },
+              "@value": {
+                "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@value",
+              "@type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef7": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "properties": {
+              "@type": {
+                "const": "xsd:integer"
+              },
+              "@value": {
+                "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "@value",
+              "@type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShapeRef8": {
+        "enum": [
+          "a",
+          1
+        ]
+      }
+    },
+    "$id": "https://example.org/schema/instance.schema.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "properties": {
+          "@context": true,
+          "@graph": {
+            "items": {
+              "$ref": "#/$defs/Node"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "@graph"
+        ],
+        "type": "object"
+      },
+      {
+        "$ref": "#/$defs/Node"
+      }
+    ],
+    "properties": {
+      "@context": true,
+      "@graph": {
+        "items": {
+          "$ref": "#/$defs/Node"
+        },
+        "type": "array"
+      }
+    },
+    "title": "PURRDF instance schema (SHACL-derived, closed-world)",
+    "type": "object"
+  },
+  "yaml": "classes:\n  Annotation:\n    class_uri: ex:Annotation\n    description: Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.\n    extra_slots:\n      allowed: true\n      range_expression:\n        any_of:\n        - range: string\n        - range: double\n        - range: boolean\n        - inlined: true\n          range: InlineDefsAnnotationAdditionalPropertiesAnyOf3Object\n        - inlined: true\n          range: InlineDefsAnnotationAdditionalPropertiesAnyOf4Object\n    title: RDF-1.2 statement metadata (reifier annotation)\n  Holder:\n    attributes:\n      '@annotation':\n        alias: '@annotation'\n        inlined: true\n        range: Annotation\n        required: false\n      '@id':\n        alias: '@id'\n        range: string\n        required: false\n      '@type':\n        alias: '@type'\n        any_of:\n        - range: string\n        - multivalued: true\n          range: string\n        required: false\n      ex:and:\n        alias: ex:and\n        all_of:\n        - any_of:\n          - range: integer\n          - inlined: true\n            range: InlineDefsShapeRef0AnyOf1Object\n        - range: ShapeRef1\n        required: false\n        slot_uri: ex:and\n      ex:node:\n        alias: ex:node\n        any_of:\n        - any_of:\n          - range: integer\n          - inlined: true\n            range: InlineDefsShapeRef2AnyOf1Object\n        - any_of:\n          - range: integer\n          - inlined: true\n            range: InlineDefsShapeRef2AnyOf1Object\n          multivalued: true\n        required: false\n        slot_uri: ex:node\n      ex:not:\n        alias: ex:not\n        all_of:\n        - none_of:\n          - any_of:\n            - range: integer\n            - inlined: true\n              range: InlineDefsShapeRef3AnyOf1Object\n        required: false\n        slot_uri: ex:not\n      ex:or:\n        alias: ex:or\n        all_of:\n        - any_of:\n          - any_of:\n            - range: integer\n            - inlined: true\n              range: InlineDefsShapeRef4AnyOf1Object\n          - inlined: true\n            range: ShapeRef5\n        required: false\n        slot_uri: ex:or\n      ex:some:\n        alias: ex:some\n        any_of:\n        - all_of:\n          - any_of:\n            - range: integer\n            - inlined: true\n              range: InlineDefsShapeRef6AnyOf1Object\n          any_of:\n          - range: boolean\n          - range: double\n          - inlined: true\n            range: InlineDefsHolderPropertiesExSomeAnyOf0Type2Object\n          - range: string\n        - any_of:\n          - range: boolean\n          - range: double\n          - inlined: true\n            range: InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object\n          - range: string\n          has_member:\n            any_of:\n            - range: integer\n            - inlined: true\n              range: InlineDefsShapeRef6AnyOf1Object\n          minimum_cardinality: 1\n          multivalued: true\n        required: true\n        slot_uri: ex:some\n      ex:xone:\n        alias: ex:xone\n        all_of:\n        - exactly_one_of:\n          - any_of:\n            - range: integer\n            - inlined: true\n              range: InlineDefsShapeRef7AnyOf1Object\n          - range: ShapeRef8\n        required: false\n        slot_uri: ex:xone\n    class_uri: ex:Holder\n    extra_slots:\n      allowed: true\n  InlineDefsAnnotationAdditionalPropertiesAnyOf3Object:\n    attributes:\n      '@id':\n        alias: '@id'\n        range: string\n        required: true\n    class_uri: ex:InlineDefsAnnotationAdditionalPropertiesAnyOf3Object\n    extra_slots:\n      allowed: true\n  InlineDefsAnnotationAdditionalPropertiesAnyOf4Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        range: string\n        required: false\n      '@value':\n        alias: '@value'\n        range: string\n        required: true\n    class_uri: ex:InlineDefsAnnotationAdditionalPropertiesAnyOf4Object\n    extra_slots:\n      allowed: true\n  InlineDefsHolderPropertiesExSomeAnyOf0Type2Object:\n    class_uri: ex:InlineDefsHolderPropertiesExSomeAnyOf0Type2Object\n    extra_slots:\n      allowed: true\n  InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object:\n    class_uri: ex:InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef0AnyOf1Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        equals_string: xsd:integer\n        required: true\n      '@value':\n        alias: '@value'\n        pattern: ^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef0AnyOf1Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef2AnyOf1Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        equals_string: xsd:integer\n        required: true\n      '@value':\n        alias: '@value'\n        pattern: ^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef2AnyOf1Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef3AnyOf1Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        equals_string: xsd:integer\n        required: true\n      '@value':\n        alias: '@value'\n        pattern: ^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef3AnyOf1Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef4AnyOf1Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        equals_string: xsd:integer\n        required: true\n      '@value':\n        alias: '@value'\n        pattern: ^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef4AnyOf1Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef5AnyOf0Object:\n    attributes:\n      '@id':\n        alias: '@id'\n        pattern: ^(?:[^_]|_(?:[^:]|$))\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef5AnyOf0Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef5AnyOf1Object:\n    attributes:\n      '@list':\n        alias: '@list'\n        list_elements_ordered: true\n        maximum_cardinality: 0\n        multivalued: true\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef5AnyOf1Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef6AnyOf1Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        equals_string: xsd:integer\n        required: true\n      '@value':\n        alias: '@value'\n        pattern: ^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef6AnyOf1Object\n    extra_slots:\n      allowed: true\n  InlineDefsShapeRef7AnyOf1Object:\n    attributes:\n      '@type':\n        alias: '@type'\n        equals_string: xsd:integer\n        required: true\n      '@value':\n        alias: '@value'\n        pattern: ^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$\n        range: string\n        required: true\n    class_uri: ex:InlineDefsShapeRef7AnyOf1Object\n    extra_slots:\n      allowed: true\n  Node:\n    attributes:\n      '@annotation':\n        alias: '@annotation'\n        inlined: true\n        range: Annotation\n        required: false\n      '@id':\n        alias: '@id'\n        range: string\n        required: false\n      '@type':\n        alias: '@type'\n        any_of:\n        - range: string\n        - multivalued: true\n          range: string\n        required: false\n    class_uri: ex:Node\n    description: 'Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.'\n    extra_slots:\n      allowed: true\n    title: A single discriminated PURRDF instance node\n  ShapeRef5:\n    any_of:\n    - is_a: InlineDefsShapeRef5AnyOf0Object\n    - is_a: InlineDefsShapeRef5AnyOf1Object\n    class_uri: ex:ShapeRef5\n    extra_slots:\n      allowed: true\ndefault_prefix: ex\ndescription: Caller-owned LinkML differential oracle fixture.\nid: https://example.org/schema/linkml\nimports:\n- linkml:types\nmetamodel_version: 1.11.0\nname: Example-Schema\nprefixes:\n  ex: https://example.org/\n  linkml: https://w3id.org/linkml/\ntypes:\n  ShapeRef0:\n    typeof: string\n    uri: ex:ShapeRef0\n  ShapeRef1:\n    any_of:\n    - equals_number: 1\n    - equals_number: 2\n    typeof: double\n    uri: ex:ShapeRef1\n  ShapeRef2:\n    typeof: string\n    uri: ex:ShapeRef2\n  ShapeRef3:\n    typeof: string\n    uri: ex:ShapeRef3\n  ShapeRef4:\n    typeof: string\n    uri: ex:ShapeRef4\n  ShapeRef6:\n    typeof: string\n    uri: ex:ShapeRef6\n  ShapeRef7:\n    typeof: string\n    uri: ex:ShapeRef7\n  ShapeRef8:\n    any_of:\n    - equals_string: a\n    - equals_number: 1\n    typeof: string\n    uri: ex:ShapeRef8\n"
+}

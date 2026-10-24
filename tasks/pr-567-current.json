@@ -1,0 +1,15 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "4507f099503725007914f0a243eb9ff8a66b922e",
+  "headRefName": "paudley/566-unify-native-graph-projection-across",
+  "headRefOid": "af8936e6f22c70dcbc3f3dc1224be887aba51cc5",
+  "isDraft": false,
+  "mergeCommit": {
+    "oid": "ff302c091db9b7aebc497221512549e82a7ab729"
+  },
+  "mergedAt": "2026-10-17T04:58:10Z",
+  "number": 567,
+  "state": "MERGED",
+  "title": "feat(core): project default and named RDF graphs through one API",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/567"
+}

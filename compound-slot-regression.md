@@ -1,0 +1,5 @@
+The final hosted LinkML oracle exposed another existing-caller regression in PR 691 (CI run 40033960962, pytest job 120688914902). The assertion was not merely stale: the generated ShapeRef6 type had only `typeof: string` and lost the integer/object alternatives used by `sh:someValue`. The failure and original fixture are retained in ci-pytest-2443.log, linkml-reference-fixture.json and linkml-value-shapes.yaml.
+
+The bounded repair uses the original catalog definition at a LinkML slot boundary when a named type contains compositions/references that TypeDefinition cannot preserve. It borrows the source body, uses the existing slot renderer and preserves class/enum/ordinary scalar reference carriers. A small inline reference stack detects cycles; physical-stack exhaustion hard-errors. The original official oracle remains unchanged and must pass its original has_member and nine value-shape semantic probes before completion.
+
+This is part of the existing caller-parity regression inventory, not a new format or recursion feature. Issue 690 remains its visible remediation owner; it is not a waiver of this PR's gates.

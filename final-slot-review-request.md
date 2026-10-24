@@ -1,0 +1,7 @@
+@coderabbitai review
+
+Please review the final delta through ea133b288, especially preservation of original slot carriers at shared-reference boundaries, conjunctions and annotations, and bounded expansion. Main d26bc6e64 is already merged normally. Scope remains the published shared-catalog behavior plus its review/caller regressions; the full LFP/GFP solver in #569 remains outside this user-frozen PR.
+
+The latest repair restores the scalar/object and mixed-enum alternatives that named TypeDefinition cannot carry, and avoids the official LinkML 1.11 generator closing a named choice wrapper over an empty local attribute set. It borrows original bodies, reuses the existing slot renderer, preserves named class/ordinary scalar carriers, detects cycles/stack exhaustion and bounds anonymous expression count by source bytes. The one changed exact member pin retains both original alternatives and the existing body/cardinality assertions.
+
+Local checks pass: 41 LinkML library tests, all 139 projection integration tests, strict Shapes all-target Clippy and the full helper/domain hygiene gate. The original Python oracle is unchanged and passes its 16 exact instance probes, 18 located losses, seven renames/reverse imports, eight list, 12 temporal and nine value-shape probes. Normal commit hooks passed; all Cargo calls, including oracle subprocesses and hooks, use the wrapper. The new head's hosted CI is still required before merge.

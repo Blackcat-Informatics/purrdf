@@ -1,0 +1,223 @@
+classes:
+  Annotation:
+    class_uri: ex:Annotation
+    description: Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.
+    extra_slots:
+      allowed: true
+      range_expression:
+        any_of:
+        - range: string
+        - range: double
+        - range: boolean
+        - inlined: true
+          range: InlineDefsAnnotationAdditionalPropertiesAnyOf3Object
+        - inlined: true
+          range: InlineDefsAnnotationAdditionalPropertiesAnyOf4Object
+    title: RDF-1.2 statement metadata (reifier annotation)
+  Holder:
+    attributes:
+      '@annotation':
+        alias: '@annotation'
+        inlined: true
+        range: Annotation
+        required: false
+      '@id':
+        alias: '@id'
+        range: string
+        required: false
+      '@type':
+        alias: '@type'
+        any_of:
+        - range: string
+        - multivalued: true
+          range: string
+        required: false
+      ex:and:
+        alias: ex:and
+        all_of:
+        - range: ShapeRef0
+        - range: ShapeRef1
+        required: false
+        slot_uri: ex:and
+      ex:node:
+        alias: ex:node
+        any_of:
+        - range: ShapeRef2
+        - multivalued: true
+          range: ShapeRef2
+        required: false
+        slot_uri: ex:node
+      ex:not:
+        alias: ex:not
+        all_of:
+        - none_of:
+          - range: ShapeRef3
+        required: false
+        slot_uri: ex:not
+      ex:or:
+        alias: ex:or
+        all_of:
+        - any_of:
+          - range: ShapeRef4
+          - inlined: true
+            range: ShapeRef5
+        required: false
+        slot_uri: ex:or
+      ex:some:
+        alias: ex:some
+        any_of:
+        - all_of:
+          - range: ShapeRef6
+          any_of:
+          - range: boolean
+          - range: double
+          - inlined: true
+            range: InlineDefsHolderPropertiesExSomeAnyOf0Type2Object
+          - range: string
+        - any_of:
+          - range: boolean
+          - range: double
+          - inlined: true
+            range: InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object
+          - range: string
+          has_member:
+            range: ShapeRef6
+          minimum_cardinality: 1
+          multivalued: true
+        required: true
+        slot_uri: ex:some
+      ex:xone:
+        alias: ex:xone
+        all_of:
+        - exactly_one_of:
+          - range: ShapeRef7
+          - range: ShapeRef8
+        required: false
+        slot_uri: ex:xone
+    class_uri: ex:Holder
+    extra_slots:
+      allowed: true
+  InlineDefsAnnotationAdditionalPropertiesAnyOf3Object:
+    attributes:
+      '@id':
+        alias: '@id'
+        range: string
+        required: true
+    class_uri: ex:InlineDefsAnnotationAdditionalPropertiesAnyOf3Object
+    extra_slots:
+      allowed: true
+  InlineDefsAnnotationAdditionalPropertiesAnyOf4Object:
+    attributes:
+      '@type':
+        alias: '@type'
+        range: string
+        required: false
+      '@value':
+        alias: '@value'
+        range: string
+        required: true
+    class_uri: ex:InlineDefsAnnotationAdditionalPropertiesAnyOf4Object
+    extra_slots:
+      allowed: true
+  InlineDefsHolderPropertiesExSomeAnyOf0Type2Object:
+    class_uri: ex:InlineDefsHolderPropertiesExSomeAnyOf0Type2Object
+    extra_slots:
+      allowed: true
+  InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object:
+    class_uri: ex:InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object
+    extra_slots:
+      allowed: true
+  InlineDefsShapeRef5AnyOf0Object:
+    attributes:
+      '@id':
+        alias: '@id'
+        pattern: ^(?:[^_]|_(?:[^:]|$))
+        range: string
+        required: true
+    class_uri: ex:InlineDefsShapeRef5AnyOf0Object
+    extra_slots:
+      allowed: true
+  InlineDefsShapeRef5AnyOf1Object:
+    attributes:
+      '@list':
+        alias: '@list'
+        list_elements_ordered: true
+        maximum_cardinality: 0
+        multivalued: true
+        range: string
+        required: true
+    class_uri: ex:InlineDefsShapeRef5AnyOf1Object
+    extra_slots:
+      allowed: true
+  Node:
+    attributes:
+      '@annotation':
+        alias: '@annotation'
+        inlined: true
+        range: Annotation
+        required: false
+      '@id':
+        alias: '@id'
+        range: string
+        required: false
+      '@type':
+        alias: '@type'
+        any_of:
+        - range: string
+        - multivalued: true
+          range: string
+        required: false
+    class_uri: ex:Node
+    description: 'Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.'
+    extra_slots:
+      allowed: true
+    title: A single discriminated PURRDF instance node
+  ShapeRef5:
+    any_of:
+    - is_a: InlineDefsShapeRef5AnyOf0Object
+    - is_a: InlineDefsShapeRef5AnyOf1Object
+    class_uri: ex:ShapeRef5
+    extra_slots:
+      allowed: true
+default_prefix: ex
+description: Caller-owned LinkML differential oracle fixture.
+id: https://example.org/schema/linkml
+imports:
+- linkml:types
+metamodel_version: 1.11.0
+name: Example-Schema
+prefixes:
+  ex: https://example.org/
+  linkml: https://w3id.org/linkml/
+types:
+  ShapeRef0:
+    typeof: string
+    uri: ex:ShapeRef0
+  ShapeRef1:
+    any_of:
+    - equals_number: 1
+    - equals_number: 2
+    typeof: double
+    uri: ex:ShapeRef1
+  ShapeRef2:
+    typeof: string
+    uri: ex:ShapeRef2
+  ShapeRef3:
+    typeof: string
+    uri: ex:ShapeRef3
+  ShapeRef4:
+    typeof: string
+    uri: ex:ShapeRef4
+  ShapeRef6:
+    typeof: string
+    uri: ex:ShapeRef6
+  ShapeRef7:
+    typeof: string
+    uri: ex:ShapeRef7
+  ShapeRef8:
+    any_of:
+    - equals_string: a
+    - equals_number: 1
+    typeof: string
+    uri: ex:ShapeRef8
+

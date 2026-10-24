@@ -1,0 +1,1 @@
+GATE OK: merge-ready — 3 artifact(s) present in /home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/.stage/design-around-recursive-shacl-validation

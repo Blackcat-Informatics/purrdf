@@ -1,0 +1,288 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 5.90s
+     Running tests/emitter_projections.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/524543f4429d76a1/out/emitter_projections-524543f4429d76a1)
+
+running 139 tests
+test graphql_projects_computed_values ... ok
+test graphql_projects_list_valued_class ... ok
+test graphql_projects_closed_by_types ... ok
+test graphql_projects_iri_pair ... ok
+test graphql_projects_list_valued_datatype ... ok
+test graphql_projects_debug_severity ... ok
+test graphql_projects_max_list_length ... ok
+test graphql_projects_node_expression_target ... ok
+test graphql_projects_node_list ... ok
+test graphql_projects_min_list_length ... ok
+test graphql_projects_path_valued_pairs ... ok
+test graphql_projects_list_valued_node_kind ... ok
+test graphql_projects_member_shape ... ok
+test graphql_projects_reifier_severity ... ok
+test graphql_projects_single_line ... ok
+test graphql_projects_root_class ... ok
+test graphql_projects_subset_of ... ok
+test graphql_projects_some_value ... ok
+test graphql_projects_unique_members ... ok
+test json_schema_projects_closed_by_types ... ok
+test json_schema_projects_computed_values ... ok
+test json_schema_projects_debug_severity ... ok
+test graphql_projects_unique_values_for ... ok
+test graphql_projects_target_where ... ok
+test json_schema_projects_iri_pair ... ok
+test json_schema_projects_list_valued_datatype ... ok
+test json_schema_projects_focus_node_constraints ... ok
+test json_schema_projects_list_valued_class ... ok
+test json_schema_projects_max_list_length ... ok
+test json_schema_projects_list_valued_node_kind ... ok
+test json_schema_projects_min_list_length ... ok
+test json_schema_projects_member_shape ... ok
+test json_schema_projects_node_expression_target ... ok
+test json_schema_projects_path_valued_pairs ... ok
+test json_schema_projects_reifier_severity ... ok
+test json_schema_projects_node_list ... ok
+test json_schema_projects_root_class ... ok
+test json_schema_projects_single_line ... ok
+test json_schema_projects_subset_of ... ok
+test json_schema_projects_some_value ... ok
+test json_schema_projects_target_where ... ok
+test json_schema_projects_unique_values_for ... ok
+test json_schema_projects_unique_members ... ok
+test linkml_projects_computed_values ... ok
+test linkml_projects_closed_by_types ... ok
+test linkml_projects_debug_severity ... ok
+test linkml_projects_iri_pair ... ok
+test linkml_projects_list_valued_datatype ... ok
+test linkml_projects_list_valued_class ... ok
+test linkml_projects_list_valued_node_kind ... ok
+test linkml_projects_max_list_length ... ok
+test linkml_projects_node_expression_target ... ok
+test json_schema_records_shape_based_property_constraints ... FAILED
+test linkml_projects_member_shape ... ok
+test linkml_projects_min_list_length ... ok
+test linkml_projects_path_valued_pairs ... ok
+test linkml_projects_node_list ... ok
+test linkml_projects_single_line ... ok
+test linkml_projects_reifier_severity ... ok
+test linkml_projects_root_class ... ok
+test linkml_projects_target_where ... ok
+test linkml_projects_subset_of ... ok
+test linkml_projects_unique_values_for ... ok
+test linkml_projects_some_value ... FAILED
+test linkml_projects_unique_members ... ok
+test observed::json_schema_closed_by_types_is_recorded_where_declared_closure_projects ... ok
+test observed::json_schema_base_direction_agrees_with_validation ... ok
+test observed::json_schema_and_agrees_with_validation ... ok
+test observed::json_schema_deactivated_property_shape_agrees_with_validation ... ok
+test observed::json_schema_has_value_agrees_with_validation ... ok
+test observed::json_schema_datatypes_agree_with_validation ... ok
+test observed::json_schema_in_lists_intersect ... ok
+test observed::json_schema_language_in_agrees_with_validation ... ok
+test observed::json_schema_case_insensitive_flag_agrees_with_validation ... ok
+test observed::json_schema_list_components_agree_with_validation ... ok
+test observed::json_schema_lengths_agree_with_validation ... ok
+test observed::json_schema_node_agrees_with_validation ... ok
+test observed::json_schema_node_list_components_agree_with_validation ... ok
+test observed::json_schema_node_property_shapes_are_proven_unreachable ... ok
+test observed::json_schema_focus_node_constraints_agree_with_validation ... ok
+test observed::json_schema_not_and_xone_over_a_wider_shape_are_proven_inexpressible ... ok
+test observed::json_schema_node_kinds_agree_with_validation ... ok
+test observed::json_schema_not_agrees_with_validation ... ok
+test observed::json_schema_or_agrees_with_validation ... ok
+test observed::json_schema_numeric_datatypes_agree_with_validation ... ok
+test observed::json_schema_pattern_on_integers_is_proven_inexpressible ... ok
+test observed::json_schema_pattern_agrees_with_validation ... ok
+test observed::json_schema_severity_agrees_with_validation ... ok
+test observed::json_schema_several_values_are_each_judged ... ok
+test observed::json_schema_single_line_agrees_with_validation ... ok
+test observed::json_schema_some_value_agrees_with_validation ... ok
+test observed::json_schema_pattern_on_iris_agrees_with_validation ... ok
+test observed::json_schema_xone_agrees_with_validation ... ok
+test observed::recursive_value_shapes_are_refused_before_schema_projection ... ok
+test pydantic_projects_closed_by_types ... ok
+test pydantic_projects_computed_values ... ok
+test pydantic_projects_debug_severity ... ok
+test pydantic_projects_iri_pair ... ok
+test pydantic_projects_list_valued_class ... ok
+test pydantic_projects_list_valued_datatype ... ok
+test pydantic_projects_list_valued_node_kind ... ok
+test pydantic_projects_max_list_length ... ok
+test pydantic_projects_member_shape ... ok
+test pydantic_projects_min_list_length ... ok
+test pydantic_projects_node_expression_target ... ok
+test pydantic_projects_node_list ... ok
+test pydantic_projects_path_valued_pairs ... ok
+test pydantic_projects_reifier_severity ... ok
+test pydantic_projects_root_class ... ok
+test pydantic_projects_single_line ... ok
+test pydantic_projects_some_value ... ok
+test pydantic_projects_subset_of ... ok
+test pydantic_projects_target_where ... ok
+test pydantic_projects_unique_members ... ok
+test pydantic_projects_unique_values_for ... ok
+test typescript_projects_closed_by_types ... ok
+test typescript_projects_computed_values ... ok
+test typescript_projects_debug_severity ... ok
+test typescript_projects_iri_pair ... ok
+test typescript_projects_list_valued_class ... ok
+test typescript_projects_list_valued_datatype ... ok
+test observed::json_schema_numeric_bounds_agree_with_validation ... ok
+test typescript_projects_max_list_length ... ok
+test typescript_projects_list_valued_node_kind ... ok
+test typescript_projects_member_shape ... ok
+test typescript_projects_min_list_length ... ok
+test typescript_projects_node_expression_target ... ok
+test typescript_projects_path_valued_pairs ... ok
+test typescript_projects_node_list ... ok
+test typescript_projects_reifier_severity ... ok
+test typescript_projects_root_class ... ok
+test typescript_projects_single_line ... ok
+test typescript_projects_subset_of ... ok
+test typescript_projects_some_value ... ok
+test typescript_projects_target_where ... ok
+test typescript_projects_unique_members ... ok
+test typescript_projects_unique_values_for ... ok
+test observed::json_schema_typed_numeric_bounds_agree_with_validation ... ok
+test observed::json_schema_temporal_bounds_agree_with_validation ... ok
+
+failures:
+
+---- json_schema_records_shape_based_property_constraints stdout ----
+
+thread 'json_schema_records_shape_based_property_constraints' (3611190) panicked at crates/shapes/tests/emitter_projections.rs:359:38:
+reference object
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- linkml_projects_some_value stdout ----
+
+thread 'linkml_projects_some_value' (3611207) panicked at crates/shapes/tests/emitter_projections.rs:2332:5:
+assertion `left == right` failed
+  left: null
+ right: [{"inlined":true,"range":"InlineDefsShapeRef0AnyOf0Object"},{"inlined":true,"range":"InlineDefsShapeRef0AnyOf1Object"}]
+
+
+failures:
+    json_schema_records_shape_based_property_constraints
+    linkml_projects_some_value
+
+test result: FAILED. 137 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.89s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test emitter_projections`
+     Running tests/product_refusal.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/2bc0f8c6cb3f1097/out/product_refusal-2bc0f8c6cb3f1097)
+
+running 65 tests
+test accepts_an_empty_shapes_graph ... ok
+test accepts_aggregate_registry_neighbour ... ok
+test accepts_an_unidentified_common_path_neighbour ... ok
+test accepts_class_catalog_neighbour ... ok
+test accepts_base_neighbour ... ok
+test accepts_container_digest_neighbour ... ok
+test accepts_a_pure_shacl_sparql_shapes_graph ... ok
+test accepts_dataset_identity_neighbour ... ok
+test accepts_deactivated_shapes ... ok
+test accepts_declared_functions_alongside_host_natives ... ok
+test accepts_expected_identity_neighbour ... ok
+test accepts_format_version_neighbour ... ok
+test accepts_function_registry_neighbour ... ok
+test accepts_malformed_neighbour ... ok
+test accepts_magic_neighbour ... ok
+test accepts_included_graphs_neighbour ... ok
+test accepts_model_neighbour ... ok
+test accepts_prefixes_neighbour ... ok
+test accepts_profile_neighbour ... ok
+test accepts_resource_neighbour ... ok
+test accepts_property_function_registry_neighbour ... ok
+test accepts_section_digest_neighbour ... ok
+test accepts_shapes_graph_neighbour ... ok
+test accepts_the_same_implementation_build_neighbour ... ok
+test accepts_stage_id_neighbour ... ok
+test accepts_truncated_neighbour ... ok
+test accepts_trailer_neighbour ... ok
+test accepts_writing_an_identified_injected_population_neighbour ... ok
+test accepts_vocabulary_neighbour ... ok
+test accepts_unsupported_capability_neighbour ... ok
+test arbitrary_bytes_behind_the_magic_never_panic ... ok
+test extension_namespace_order_is_configuration_and_relation_namespace_order_is_not ... ok
+test arbitrary_bytes_never_panic ... ok
+test refuses_a_product_prepared_under_another_spec_table ... ok
+test no_turtle_fallback ... ok
+test refuses_aggregate_registry ... ok
+test refuses_another_implementation_build ... ok
+test refuses_base ... ok
+test refuses_class_catalog ... ok
+test refuses_container_digest ... ok
+test refuses_dataset_identity ... ok
+test refuses_expected_identity ... ok
+test refuses_format_version ... ok
+test accepts_depth_limit_neighbour ... ok
+test refuses_function_registry ... ok
+test refuses_magic ... ok
+test refuses_included_graphs ... ok
+test refuses_malformed ... ok
+test refuses_model ... ok
+test refuses_parse_configuration ... ok
+test refuses_prefixes ... ok
+test refuses_profile ... ok
+test refuses_resource ... ok
+test refuses_property_function_registry ... ok
+test refuses_section_digest ... ok
+test refuses_shapes_graph ... ok
+test refuses_stage_id ... ok
+test refuses_truncated ... ok
+test refuses_trailer ... ok
+test refuses_unsupported_capability ... ok
+test refuses_writing_a_product_that_cannot_name_its_implementations ... ok
+test refuses_vocabulary ... ok
+test single_byte_mutations_never_panic ... ok
+test refuses_depth_limit ... ok
+test refusal_labels_emitted_equal_labels_declared ... ok
+
+test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/sparql_node_expressions.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/a9562669e6844c37/out/sparql_node_expressions-a9562669e6844c37)
+
+running 41 tests
+test a_node_with_both_select_and_sparql_expr_is_ambiguous ... ok
+test a_product_restore_keeps_the_authored_spelling ... ok
+test a_call_site_may_carry_the_annotations_an_expression_constraint_reads ... ok
+test a_one_argument_call_may_omit_the_argument_list ... ok
+test a_sparql_based_expression_sees_the_value_node_in_its_scope ... ok
+test a_sparql_ns_operator_with_the_wrong_arity_is_a_load_error ... ok
+test an_undeclared_prefix_in_a_select_expression_is_still_a_load_error ... ok
+test an_unknown_sparql_ns_name_is_a_load_error ... ok
+test a_select_expression_resolves_sh_prefixes_declared_on_the_shape ... ok
+test select_expression_binds_this_to_the_focus_node ... ok
+test select_expression_projecting_two_variables_is_a_load_error ... ok
+test select_expression_that_is_an_ask_is_a_load_error ... ok
+test select_expression_preserves_the_query_s_own_order ... ok
+test select_expression_with_an_unparsable_query_is_a_load_error ... ok
+test select_expression_resolves_prefixed_names_through_sh_prefixes ... ok
+test a_sparql_ns_keyword_function_with_the_wrong_arity_is_a_load_error ... ok
+test sparql_encode_is_encode_for_uri ... ok
+test sparql_expr_and_its_expanded_select_agree ... ok
+test sparql_expr_that_does_not_parse_is_a_load_error ... ok
+test sparql_expr_expression_computes_the_focus_node_uri_length ... ok
+test sparql_ns_aggregate_name_is_a_load_error ... ok
+test sparql_is_triple_recognises_a_constructed_triple_term ... ok
+test sparql_ns_call_resolves_a_plain_function_name ... ok
+test sparql_ns_call_arguments_are_node_expressions ... ok
+test sh_prefixes_is_honoured_beside_the_builtin_declaration ... ok
+test sparql_ns_call_resolves_encode_for_uri ... ok
+test sparql_ns_call_resolves_strlen ... ok
+test sparql_ns_call_resolves_the_unary_minus_operator ... ok
+test sparql_ns_call_resolves_the_in_membership_form ... ok
+test sparql_ns_exists_functional_form_is_a_load_error ... ok
+test sparql_ns_call_resolves_the_if_functional_form ... ok
+test sparql_ns_call_resolves_the_add_operator ... ok
+test sparql_ns_equality_names_all_lower_to_the_same_operator ... ok
+test sparql_object_reads_a_constructed_triple_term ... ok
+test sparql_triple_constructs_an_rdf12_triple_term ... ok
+test sparql_plus_is_the_add_operator ... ok
+test the_list_free_form_accepts_a_structured_argument ... ok
+test the_spelling_aliases_do_not_admit_unknown_names ... ok
+test two_real_function_predicates_on_one_node_are_still_ambiguous ... ok
+test the_empty_and_multi_argument_list_forms_still_parse ... ok
+test the_builtin_sparql_expr_declaration_loads_and_evaluates_natively ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: 1 target failed:
+    `-p purrdf-shapes --test emitter_projections`

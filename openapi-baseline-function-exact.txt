@@ -1,0 +1,33 @@
+fn openapi_doc(defs: &Map<String, Value>) -> Value {
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PURRDF",
+            "version": crate::VERSION
+        },
+        "paths": {
+            "/entities/{id}": {
+                "get": {
+                    "summary": "Fetch a single PURRDF entity by id",
+                    "parameters": [{
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    }],
+                    "responses": {
+                        "200": {
+                            "description": "The requested entity as a JSON-LD node.",
+                            "content": {
+                                "application/ld+json": {
+                                    "schema": { "type": "object" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": { "schemas": crate::json_model::object(defs.clone()) }
+    })
+}

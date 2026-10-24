@@ -1,0 +1,4 @@
+usage: ghprsq [--stage-dir PATH] [squash-notes-file]
+  --stage-dir  which .stage/<slug>/ this merge is about.
+               Required with multiple runs or a name that does not
+               identify the branch. Must be in this worktree.

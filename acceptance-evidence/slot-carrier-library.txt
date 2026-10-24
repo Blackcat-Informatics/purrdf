@@ -1,0 +1,49 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 2m 23s
+     Running unittests src/lib.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/66ba366adbf8b1a5/out/purrdf_shapes-66ba366adbf8b1a5)
+
+running 41 tests
+test linkml::importer::tests::malformed_native_references_and_identity_collisions_fail_closed ... ok
+test linkml::importer::tests::has_member_on_a_list_is_contains_and_on_a_single_value_is_recorded ... ok
+test linkml::importer::tests::accepted_native_omissions_are_located_and_malformed_fields_fail_closed ... ok
+test linkml::projection::tests::absolute_property_uses_the_longest_matching_caller_prefix ... ok
+test linkml::projection::tests::annotated_object_choices_preserve_inline_and_referenced_classes ... ok
+test linkml::importer::tests::renamed_package_verifies_reports_and_reconstructs_source_predicates ... ok
+test linkml::projection::tests::class_planning_reserves_safe_names_and_bounds_collision_fallback ... ok
+test linkml::projection::tests::cyclic_compound_slot_references_fail_instead_of_expanding ... ok
+test linkml::importer::tests::native_classes_slots_types_and_enums_import_deterministically ... ok
+test linkml::projection::tests::every_slot_resource_limit_fails_before_unbounded_work ... ok
+test linkml::projection::tests::compound_reference_diamonds_refuse_before_unbounded_output_growth ... ok
+test linkml::projection::tests::exact_projection_is_deterministic_reversible_and_lossless ... ok
+test linkml::projection::tests::lossy_projection_records_the_closed_profile_at_exact_locations ... ok
+test linkml::projection::tests::expressions_and_array_contract_are_carried_on_the_public_document ... ok
+test linkml::projection::tests::malformed_names_requiredness_and_vocabularies_fail_closed ... ok
+test linkml::projection::tests::nested_unsafe_slots_keep_requiredness_and_use_the_same_planner ... ok
+test linkml::projection::tests::object_choices_do_not_promote_scalar_or_enum_references_to_classes ... ok
+test linkml::projection::tests::rehomes_are_exact_loss_accounted_and_stale_hints_fail_closed ... ok
+test linkml::projection::tests::referenced_compound_members_keep_scalar_and_object_alternatives ... ok
+test linkml::projection::tests::safe_input_matches_the_committed_byte_golden ... ok
+test linkml::projection::tests::reserved_carriers_and_semantic_identity_collisions_are_explicit ... ok
+test linkml::projection::tests::sanitizer_borrows_valid_locals_and_owns_replacements ... ok
+test linkml::projection::tests::slot_name_seed_has_lexical_namespace_ties_and_bounded_names ... ok
+test linkml::projection::tests::slot_name_seed_separates_syntax_identity_and_caller_rehomes ... ok
+test linkml::projection::tests::sanitizer_collisions_have_one_lexical_direct_owner ... ok
+test linkml::projection::tests::unsafe_slots_follow_rename_skip_and_fail_policies ... ok
+test linkml::tests::an_ncname_is_exactly_the_production_and_not_a_unicode_property ... ok
+test linkml::tests::canonical_codec_preserves_unknown_fields_and_is_byte_stable ... ok
+test linkml::projection::tests::ncname_sanitizer_is_total_valid_and_deterministic ... ok
+test linkml::tests::config_requires_caller_identity_vocabulary_and_docs ... ok
+test linkml::tests::document_value_round_trips_through_canonical_yaml ... ok
+test linkml::tests::parser_accepts_distinct_keys_beside_the_refused_repeat ... ok
+test linkml::tests::parser_accepts_structured_prefixes_without_erasing_extensions ... ok
+test linkml::tests::parser_rejects_invalid_fixed_dialect_envelopes ... ok
+test linkml::tests::parser_rejects_yaml_semantics_that_are_not_json_compatible ... ok
+test linkml::tests::programmatic_documents_enforce_the_same_depth_limit_as_yaml ... ok
+test linkml::tests::programmatic_documents_refuse_a_repeated_key_and_accept_distinct_keys ... ok
+test linkml::tests::the_zero_width_joiners_are_name_characters_in_both_positions ... ok
+test linkml::tests::yaml_writer_preserves_marker_keys_and_number_lexemes ... ok
+test linkml::importer::tests::emitted_package_verifies_artifacts_and_imports_without_helpers ... ok
+test linkml::projection::tests::slot_planning_is_independent_of_property_insertion_order ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 953 filtered out; finished in 0.06s
+

@@ -1,0 +1,2 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 30.91s

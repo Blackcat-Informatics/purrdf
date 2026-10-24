@@ -1,0 +1,105 @@
+{
+  "issue": 569,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Design around recursive SHACL validation",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 387,
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "state": "CLOSED"
+    },
+    {
+      "number": 402,
+      "title": "SHACL dated profile selection and complete validation reports (additive)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 345,
+      "title": "perf(sparql-eval): remove the per-query execution setup allocations on the SHACL change path",
+      "state": "CLOSED"
+    },
+    {
+      "number": 323,
+      "title": "perf(sparql-eval,shapes): audit SHACL validation allocation profile on the change path",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 131,
+      "title": "feat(rdf-core): define a deterministic mmap-native embedding companion format (.purremb)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 91,
+      "title": "sparql-eval: native (Rust-closure) user-function registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 317,
+      "title": "perf(shapes): restore prepared SHACL products across processes without reparsing",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 188,
+      "title": "SEP-0006 LATERAL surface syntax",
+      "state": "CLOSED"
+    },
+    {
+      "number": 384,
+      "title": "Build a portable adversarial SHACL suite and contribute missing W3C tests",
+      "state": "OPEN"
+    },
+    {
+      "number": 179,
+      "title": "SPARQL evaluation budgets: fuel/deadline/row-cap governors in EvalOptions with a typed budget-exhausted outcome",
+      "state": "CLOSED"
+    },
+    {
+      "number": 105,
+      "title": "feat(rdf): unify JSON-LD/YAML-LD into the native format registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 167,
+      "title": "Expose OWL-RL materialize in the python library",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 20,
+    "performance": 3,
+    "correctness": 1,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/569-design-around-recursive-shacl-validation"
+  },
+  "coverage": [
+    "issue #569 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Design', 'around', 'recursive']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #569 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #569: 0",
+    "requirement candidates: 0 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 1 URL(s)"
+  ]
+}

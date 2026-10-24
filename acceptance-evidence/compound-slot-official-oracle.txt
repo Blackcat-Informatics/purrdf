@@ -1,0 +1,205 @@
+uv sync --project bindings/python --locked --no-install-project
+Resolved 107 packages in 35ms
+Checked 104 packages in 1ms
+uv run --project bindings/python --no-sync python crates/shapes/tests/linkml_oracle.py
+Traceback (most recent call last):
+  File "/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes/tests/linkml_oracle.py", line 609, in <module>
+    main()
+    ~~~~^^
+  File "/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes/tests/linkml_oracle.py", line 596, in main
+    _assert_value_shapes(payload["value_shapes"])
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes/tests/linkml_oracle.py", line 572, in _assert_value_shapes
+    raise AssertionError(
+    ...<3 lines>...
+    )
+AssertionError: value-shape probe 'conforming': SHACL=True, LinkML=False
+generated={
+  "additionalProperties": false,
+  "description": "",
+  "properties": {
+    "@annotation": {
+      "$ref": "#/$defs/Annotation"
+    },
+    "@id": {
+      "type": "string"
+    },
+    "@type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "ex:and": {
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/InlineDefsShapeRef0AnyOf1Object"
+            }
+          ]
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "ex:node": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/InlineDefsShapeRef2AnyOf1Object"
+            }
+          ]
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "$ref": "#/$defs/InlineDefsShapeRef2AnyOf1Object"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "ex:not": {
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "$ref": "#/$defs/InlineDefsShapeRef3AnyOf1Object"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ex:or": {
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/InlineDefsShapeRef4AnyOf1Object"
+                }
+              ]
+            },
+            {
+              "$ref": "#/$defs/ShapeRef5"
+            }
+          ]
+        }
+      ]
+    },
+    "ex:some": {
+      "anyOf": [
+        {
+          "allOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/InlineDefsShapeRef6AnyOf1Object"
+                }
+              ]
+            }
+          ],
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/InlineDefsHolderPropertiesExSomeAnyOf0Type2Object"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/InlineDefsHolderPropertiesExSomeAnyOf1ItemsType2Object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    },
+    "ex:xone": {
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/InlineDefsShapeRef7AnyOf1Object"
+                }
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "required": [
+    "ex:some"
+  ],
+  "title": "Holder",
+  "type": "object"
+}
+make: *** [Makefile:455: linkml-oracle] Error 1

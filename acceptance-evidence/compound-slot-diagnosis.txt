@@ -1,0 +1,1 @@
+[(['ex:or'], "{'@id': 'https://example.org/x'} is not valid under any of the given schemas")]

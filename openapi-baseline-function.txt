@@ -1,0 +1,40 @@
+3773:fn openapi_doc(defs: &Map<String, Value>) -> Value {
+3774-    json!({
+3775-        "openapi": "3.1.0",
+3776-        "info": {
+3777-            "title": "PURRDF",
+3778-            "version": crate::VERSION
+3779-        },
+3780-        "paths": {
+3781-            "/entities/{id}": {
+3782-                "get": {
+3783-                    "summary": "Fetch a single PURRDF entity by id",
+3784-                    "parameters": [{
+3785-                        "name": "id",
+3786-                        "in": "path",
+3787-                        "required": true,
+3788-                        "schema": { "type": "string" }
+3789-                    }],
+3790-                    "responses": {
+3791-                        "200": {
+3792-                            "description": "The requested entity as a JSON-LD node.",
+3793-                            "content": {
+3794-                                "application/ld+json": {
+3795-                                    "schema": { "type": "object" }
+3796-                                }
+3797-                            }
+3798-                        }
+3799-                    }
+3800-                }
+3801-            }
+3802-        },
+3803-        "components": { "schemas": crate::json_model::object(defs.clone()) }
+3804-    })
+3805-}
+3806-
+3807-// ── The `@annotation` fragment (statement metadata) ─────────────────────
+3808-
+3809-/// The shared `$defs/Annotation` object schema: free-form statement metadata.
+3810-///
+3811-/// Permissive by design: statement metadata may carry any RDF value — node refs
+3812-/// (`{"@id":..}`), scalars, or typed literals (`{"@value":..,"@type":..}`).

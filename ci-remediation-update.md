@@ -1,0 +1,9 @@
+Review and CI repairs are pushed in 96b0ba3d3 and b049fa51c. Main was merged normally in 4397a2336 and has not advanced since. Exact hosted Rust 1.98 MSRV passed after the SCC inference correction.
+
+All three inline review findings are addressed and their threads resolved: the rule target driver retains its fallback model, parser fixtures inspect the original catalog definitions/properties, and product restore initializes custom components and target types before rebuilding private definitions. The repeated planned-constraint lookup was also removed.
+
+The native library run improved from 947 passes/41 failures at publication to 988 passes/one failure. The remaining logical schema round-trip repair then passed all 14 schema-import tests. This clears the original failure inventory through the full run plus the focused repair; it is not a fresh full-suite claim on the new head. Strict Shapes/CLI all-target Clippy passed before the final ordinary-import allocation adjustment, which avoids constructing an extra empty owner.
+
+Compatibility repairs retain the bundled structural meta-schema through the existing depth/stack-bounded evaluator, keep caller-authored recursive-schema refusal, apply legacy pre-binding restrictions to reached constraints, and reconstruct emitted shared schema references. No public recursion mode or fixed-point solver is added. Inspection fixtures retain their original semantic assertions. Assembly evidence now names the actual path implementation, with the same measurement requirements; hosted confirmation remains pending.
+
+Current-head integration/oracle checks, hosted CI and final review are still pending. Issue 569 remains open for its original solver contract. This PR's scope remains frozen; issue 690 remains open until the regressions are actually qualified.

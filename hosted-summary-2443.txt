@@ -1,0 +1,130 @@
+FAILURE    simd-asm  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120700097499
+SUCCESS    test  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120698872063
+SKIPPED    Deploy to GitHub Pages  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033961129/job/120693370314
+SUCCESS    conformance  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120693351570
+SUCCESS    CodeQL  https://github.com/Blackcat-Informatics/purrdf/runs/120689026254
+SKIPPED    native-profile-admission  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688959254
+SKIPPED    simd-asm-projection  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688962537
+SUCCESS    aarch64  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915146
+FAILURE    simd-asm-config (x86_64)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915220
+FAILURE    simd-asm-config (x86_64-v3)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915365
+SUCCESS    conformance (python)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915143
+SUCCESS    conformance (shapes)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915076
+SUCCESS    python-publisher  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915085
+SUCCESS    avx512-sde  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915162
+SUCCESS    test (integration-1)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915029
+SUCCESS    test (integration-2)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915130
+SUCCESS    test (integration-3)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915025
+SUCCESS    test (integration-4)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915250
+SUCCESS    test (integration-5)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915024
+SUCCESS    projection-oracles  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915005
+SUCCESS    cross-arch-riscv64 (determinism-more-workers)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914779
+SUCCESS    cross-arch-riscv64 (determinism-one-worker)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914972
+SUCCESS    cross-arch-riscv64 (suites)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915254
+SUCCESS    windows-mtime  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914867
+FAILURE    simd-asm-config (aarch64-neoverse-v1)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915242
+SUCCESS    wasm-exec  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915453
+SUCCESS    geo-determinism  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914627
+SUCCESS    wasm-schema-oracles  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915151
+SUCCESS    simd-asm-config (wasm32)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915326
+SUCCESS    msrv  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914841
+FAILURE    simd-asm-config (x86_64-v4)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915238
+FAILURE    simd-asm-config (aarch64)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914939
+SUCCESS    wasm-package  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914824
+SUCCESS    conformance (sparql)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914750
+SUCCESS    simd-asm-config (wasm32-simd128)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914858
+SUCCESS    conformance (core)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915142
+SUCCESS    miri  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915127
+IN_PROGRESS cross-arch  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914798
+SUCCESS    wasm  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914783
+SUCCESS    test (lib)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915040
+SUCCESS    cross-arch-riscv64 (determinism-serial)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914937
+SUCCESS    doc  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914796
+SUCCESS    capi  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914789
+SUCCESS    test (doc)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914968
+FAILURE    pytest  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914902
+SUCCESS    workspace  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915211
+SKIPPED    native-profile  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688916886
+SKIPPED    native-profile-comparison  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688916887
+SUCCESS    Build The PurRDF Book  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033961129/job/120688771911
+SUCCESS    Analyze (python)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033956203/job/120688759985
+SUCCESS    Analyze (c-cpp)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033956203/job/120688760030
+SUCCESS    Analyze (rust)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033956203/job/120688759964
+SUCCESS    Analyze (actions)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033956203/job/120688760272
+SUCCESS    Analyze (javascript-typescript)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033956203/job/120688759725
+SUCCESS    WASM coordinate ownership and host isolation  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033954884/job/120688750435
+SUCCESS    Native query_coordinates  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033954884/job/120688750514
+SUCCESS    Native exact_governance  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033954884/job/120688750136
+SUCCESS    Native rule_coordinates  https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033954884/job/120688750249
+SUCCESS    CodeRabbit
+state: fail
+# PR #691 failed CI logs
+
+## simd-asm
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120700097499
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120700097499.log
+40: 2026-10-23T23:03:11.0404880Z ##[endgroup]
+41: 2026-10-23T23:03:11.0565300Z ##[error]Process completed with exit code 1.
+42: 2026-10-23T23:03:11.0761220Z Cleaning up orphan processes
+
+## simd-asm-config (x86_64)
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915220
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120688915220.log
+555: 2026-10-23T22:51:43.0964493Z make: *** [Makefile:718: simd-asm] Error 1
+556: 2026-10-23T22:51:43.0979615Z ##[error]Process completed with exit code 2.
+557: 2026-10-23T22:51:43.1043253Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+558: 2026-10-23T22:51:43.1043578Z with:
+
+## simd-asm-config (x86_64-v3)
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915365
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120688915365.log
+577: 2026-10-23T22:57:37.4129898Z make: *** [Makefile:718: simd-asm] Error 1
+578: 2026-10-23T22:57:37.4145802Z ##[error]Process completed with exit code 2.
+579: 2026-10-23T22:57:37.4242795Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+580: 2026-10-23T22:57:37.4243213Z with:
+
+## simd-asm-config (aarch64-neoverse-v1)
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915242
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120688915242.log
+798: 2026-10-23T22:59:59.3564289Z make: *** [Makefile:718: simd-asm] Error 1
+799: 2026-10-23T22:59:59.3598801Z ##[error]Process completed with exit code 2.
+800: 2026-10-23T22:59:59.3698623Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+801: 2026-10-23T22:59:59.3699039Z with:
+
+## simd-asm-config (x86_64-v4)
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688915238
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120688915238.log
+578: 2026-10-23T22:58:10.7613024Z make: *** [Makefile:718: simd-asm] Error 1
+579: 2026-10-23T22:58:10.7630549Z ##[error]Process completed with exit code 2.
+580: 2026-10-23T22:58:10.7725161Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+581: 2026-10-23T22:58:10.7725577Z with:
+
+## simd-asm-config (aarch64)
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914939
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120688914939.log
+798: 2026-10-23T23:03:00.3469037Z make: *** [Makefile:718: simd-asm] Error 1
+799: 2026-10-23T23:03:00.3497254Z ##[error]Process completed with exit code 2.
+800: 2026-10-23T23:03:00.3615199Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+801: 2026-10-23T23:03:00.3615749Z with:
+
+## pytest
+https://github.com/Blackcat-Informatics/purrdf/actions/runs/40033960962/job/120688914902
+
+.stage/design-around-recursive-shacl-validation/ci-logs/github-job-120688914902.log
+897: 2026-10-23T22:57:16.2465741Z 
+898: 2026-10-23T22:57:16.2466110Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+899: 2026-10-23T22:57:16.2467022Z 
+900: 2026-10-23T22:57:16.2550020Z ##[group]Run make pydantic-oracle
+938: 2026-10-23T23:04:14.2834152Z     raise AssertionError(f"the has_member expression lost its ranges: {member!r}")
+939: 2026-10-23T23:04:14.2835266Z AssertionError: the has_member expression lost its ranges: {'range': 'ShapeRef6'}
+940: 2026-10-23T23:04:14.4607116Z make: *** [Makefile:455: linkml-oracle] Error 1
+941: 2026-10-23T23:04:14.4623724Z ##[error]Process completed with exit code 2.
+942: 2026-10-23T23:04:14.4742960Z Post job cleanup.
+943: 2026-10-23T23:04:14.5586945Z [command]/usr/bin/git version
+

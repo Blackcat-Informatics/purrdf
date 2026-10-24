@@ -1,0 +1,58 @@
+{
+  "assignees": [
+    {
+      "id": "MDQ6VXNlcjUyNzU1NQ==",
+      "login": "paudley",
+      "name": "Patrick Audley",
+      "databaseId": 527555
+    }
+  ],
+  "author": {
+    "id": "MDQ6VXNlcjMzNzQxODM=",
+    "is_bot": false,
+    "login": "sanmai-NL",
+    "name": "Sander Maijers"
+  },
+  "body": "Main goal is avoiding panicking and secondarily, define the engine's behavior.\n\nSee https://labra.weso.es/pdf/2026_sheval_DMKG26.pdf",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc25vlQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "@sanmai-NL Thanks for surfacing this!  It found three quite real bugs for us.",
+      "createdAt": "2026-10-17T08:11:23Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/569#issuecomment-6231584661",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc2_PvQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Thanks for the pointer! The sheval paper, and its companion *Common Foundations for Recursive Shape Languages* (KR'26, arXiv:2604.20946), are exactly the framing this needs. Here's what we found.\n\n**Current behaviour: a silent drop**\n\nPurRDF doesn't loop on recursive shapes, but what it does instead is worse. When the parser meets a shape that is already being parsed, it substitutes an empty stand-in (`crates/shapes/src/shapes.rs`, `parse_node_shape` / `parse_inline_shape`) and skips nested `sh:property` cycles. An empty shape conforms to everything, so recursion is unfolded exactly once and then always passes. The cut-off is decided by the shapes graph, never the data, so it matches none of LFP, GFP or SMS. A minimal case:\n\n```turtle\nex:Person a sh:NodeShape ; sh:targetNode ex:a ;\n  sh:property [ sh:path ex:name ; sh:minCount 1 ] ,\n              [ sh:path ex:knows ; sh:node ex:Person ] .\n# data: ex:a ex:name \"A\" ; ex:knows ex:b .   (ex:b has no name)\n```\n\n`ex:a` must fail under every semantics, but by our reading of the code, it conforms today. A dense mutually recursive catalog may also unfold every simple path at parse time. We also haven't yet ruled out a native stack overflow on a very deep non-cyclic `sh:node` chain. The re-entry guards we do have (`sh:filterShape` / `sh:exists` / `sh:nodeByExpression`, depth 64; node-expression cycles) fail closed with errors rather than panicking.\n\nSHACL 1.2 Core (WD 2026-10-14, \u00a76.6.3) still leaves recursion undefined and lets processors \"support recursion scenarios or produce a failure\". A silent wrong answer is neither.\n\n**Proposal**\n\n1. **Static analysis at prepare time.** Build the \u00a76.6.3 \"refers\" graph over every shape-expecting parameter, including the 1.2 additions `sh:memberShape`, `sh:reifierShape`, `sh:someValue` and `sh:targetWhere`. Label each edge with its polarity:\n   - *negative*: `sh:not`, `sh:qualifiedMaxCount`;\n   - *both*: `sh:xone` and disjoint qualified siblings.\n\n   Then compute strongly connected components (SCCs). Our ShEx crate already does this (Tarjan SCC + `NegatedCycle`).\n2. **Explicit semantics, no silent default.** Add a validation option `recursion: Lfp | Gfp`:\n   - Non-recursive shapes graphs are unaffected.\n   - A recursive graph with no selection gets a structured failure naming the cycle.\n   - Negation through recursion (non-stratified) is always a structured failure, so nstrat1/2 and cons1/2 are refused.\n3. **One fixpoint evaluator for both semantics.** Shapes in a cycle get parsed once and referenced by id, with no stand-ins. Each SCC is evaluated by Kleene iteration over (focus, shape) pairs, seeded all-false for LFP or all-true for GFP, with lower strata frozen. Only the seed differs (the paper's LFP/GFP duality, Prop. 1). A pairs \u00d7 iterations budget turns pathological inputs into a resource-exhaustion failure, which \u00a76.6.1 permits, rather than a hang.\n4. **No panics.** Bound or iterate the nesting depth in the parser, the evaluator and ShEx. Extend our never-panic proptests with random recursive/negated catalogs under all three modes. Add a deep-chain test on a small stack.\n5. **Our own spec shapes.** `shacl-shacl.ttl` is itself recursive, so the shapes-graph well-formedness check will select GFP explicitly. Cyclic shapes graphs are legal, and nested shapes will finally be checked beyond one level.\n\n**Testing**\n\nWe plan to port all 17 sheval cases, with expectations per mode:\n- example 2, bsep1\u20134, reach1\u20132, safe1\u20132, nstrat1\u20132, cons1\u20132, fresh, dual1\u20132, norec1\u20132;\n- plus the regression above;\n- plus \"neighbour\" cases that must still be accepted: a diamond without a cycle, recursion through `sh:or` only, and a lower-stratum `sh:not`;\n- plus an LFP/GFP duality property test.\n\nOnce this lands we'd like to add a PurRDF runner to sheval and bring the results to the data-shapes WG discussion of \u00a76.6.3. Feedback on the polarity table, particularly `sh:targetWhere` and qualified counts, is very welcome.\n",
+      "createdAt": "2026-10-17T08:20:55Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/569#issuecomment-6231674813",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-17T07:31:17Z",
+  "labels": [],
+  "milestone": null,
+  "number": 569,
+  "state": "OPEN",
+  "title": "Design around recursive SHACL validation",
+  "updatedAt": "2026-10-17T08:20:55Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/569"
+}

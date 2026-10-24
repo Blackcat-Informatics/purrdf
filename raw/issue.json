@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjMzNzQxODM=",
+    "is_bot": false,
+    "login": "sanmai-NL",
+    "name": "Sander Maijers"
+  },
+  "body": "Main goal is avoiding panicking and secondarily, define the engine's behavior.\n\nSee https://labra.weso.es/pdf/2026_sheval_DMKG26.pdf",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-17T07:31:17Z",
+  "labels": [],
+  "milestone": null,
+  "number": 569,
+  "state": "OPEN",
+  "title": "Design around recursive SHACL validation",
+  "updatedAt": "2026-10-17T07:31:17Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/569"
+}

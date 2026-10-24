@@ -1,0 +1,1065 @@
+rdf_folder: RDF
+shacl_folder: SHACL
+shex_technologies: 
+  - rudof
+  - shex_s
+  - jena_shex
+shacl_technologies: 
+  - pyshacl
+  - shacl_s
+  - jena_shacl
+  - shacl_tq
+  - rudof
+shex_folder: ShEx
+results_folder: results
+tests:
+    - name: bsep1_shex
+      data_graph: sa1.ttl
+      shex_file: sa1.shex
+      engine: shex
+      description: Separation test for sa1 (ShEx)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+      shapes:
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &bsep1_shex_sms_models
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *bsep1_shex_sms_models
+    - name: bsep1_shacl
+      data_graph: sa1.ttl
+      shapes_graph: sa1.shapes.ttl
+      engine: shacl
+      description: Separation test for sa1
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+      shapes:
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &bsep1_shacl_sms_models
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *bsep1_shacl_sms_models
+    - name: bsep2_shex
+      data_graph: sa2.ttl
+      shex_file: sa2.shex
+      engine: shex
+      description: Separation test for sa2 (ShEx)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes:
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &bsep2_shex_sms_models
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing:
+                - node: ":b"
+                  shape: ":S"
+            - passing:
+                - node: ":b"
+                  shape: ":S"
+              failing:
+                - node: ":a"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *bsep2_shex_sms_models
+    - name: bsep2_shacl
+      data_graph: sa2.ttl
+      shapes_graph: sa2.shapes.ttl
+      engine: shacl
+      description: |
+        Separation test for sa2
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes:
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &bsep2_shacl_sms_models
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing:
+                - node: ":b"
+                  shape: ":S"
+            - passing:
+                - node: ":b"
+                  shape: ":S"
+              failing:
+                - node: ":a"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *bsep2_shacl_sms_models
+    - name: bsep3_shex
+      data_graph: sa3.ttl
+      shex_file: sa3.shex
+      engine: shex
+      description: Separation test - sa3 (ShEx)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":a"
+          shape: ":S"
+        - node: ":b"
+          shape: ":S"
+      expected_results: &bsep3_expected
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &bsep3_sms_models
+            - passing: []
+              failing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+              failing:
+                - node: ":b"
+                  shape: ":S"
+            - passing:
+                - node: ":b"
+                  shape: ":S"
+              failing:
+                - node: ":a"
+                  shape: ":S"
+            - passing:
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *bsep3_sms_models
+    - name: bsep3_shacl
+      data_graph: sa3.ttl
+      shapes_graph: sa3.shapes.ttl
+      engine: shacl
+      description: Separation test for SA3
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":a"
+          shape: ":S"
+        - node: ":b"
+          shape: ":S"
+      expected_results: *bsep3_expected
+    - name: bsep4_shex
+      data_graph: sa4.ttl
+      shex_file: sa4.shex
+      engine: shex
+      description: Separation test - sa4 (ShEx)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":a"
+          shape: ":S"
+        - node: ":b"
+          shape: ":S"
+      expected_results: *bsep3_expected
+    - name: bsep4_shacl
+      data_graph: sa4.ttl
+      shapes_graph: sa4.shapes.ttl
+      engine: shacl
+      description:
+        Separation test - sa4 (SHACL)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":a"
+          shape: ":S"
+        - node: ":b"
+          shape: ":S"
+      expected_results: *bsep3_expected
+    - name: reach1_shex
+      data_graph: reach1.ttl
+      shex_file: reach1.shex
+      engine: shex
+      description: Separation test - reach1 (ShEx)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+        - ":c"
+        - ":d"
+      shapes:
+        - ":R"
+      expected_results: &reach1_expected
+        lfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":R"
+                - node: ":b"
+                  shape: ":R"
+              failing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+        gfp:
+          models:
+            - passing:
+                - node: ":a"
+                  shape: ":R"
+                - node: ":b"
+                  shape: ":R"
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+              failing: []
+        brave:
+          quantifier: any
+          models: &reach1_sms_models
+            - passing:
+                - node: ":a"
+                  shape: ":R"
+                - node: ":b"
+                  shape: ":R"
+              failing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+            - passing:
+                - node: ":a"
+                  shape: ":R"
+                - node: ":b"
+                  shape: ":R"
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *reach1_sms_models
+    - name: reach1_shacl
+      data_graph: reach1.ttl
+      shapes_graph: reach1.shapes.ttl
+      engine: shacl
+      description: Separation test - reach1 (SHACL)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+        - ":c"
+        - ":d"
+      shapes:
+        - ":R"
+      expected_results: *reach1_expected
+    - name: reach2
+      data_graph: reach2.ttl
+      shapes_graph: reach2.shapes.ttl
+      engine: shacl
+      description: Separation test - reach2 (SHACL)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":c"
+          shape: ":R"
+        - node: ":d"
+          shape: ":R"
+      expected_results: &reach2_expected
+        lfp:
+          models:
+            - passing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+              failing: []
+        gfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+        brave:
+          quantifier: any
+          models: &reach2_sms_models
+            - passing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+              failing: []
+            - passing: []
+              failing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+        cautious:
+          quantifier: all
+          models: *reach2_sms_models
+    - name: reach2
+      data_graph: reach2.ttl
+      shex_file: reach2.shex
+      engine: shex
+      description: Separation test - reach2 (ShEx)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":c"
+          shape: ":R"
+        - node: ":d"
+          shape: ":R"
+      expected_results: *reach2_expected
+    - name: safe1_shex
+      data_graph: safe1.ttl
+      shex_file: safe1.shex
+      engine: shex
+      description: Separation test - Safe-1 (ShEx)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":c"
+          shape: ":S"
+        - node: ":d"
+          shape: ":S"
+      expected_results: &safe1_expected
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing:
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &safe1_sms_models
+            - passing: []
+              failing:
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+            - passing:
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *safe1_sms_models
+    - name: safe1_shacl
+      data_graph: safe1.ttl
+      shapes_graph: safe1.shapes.ttl
+      engine: shacl
+      description: Separation test - Safe-1 (SHACL)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":c"
+          shape: ":S"
+        - node: ":d"
+          shape: ":S"
+      expected_results: *safe1_expected
+    - name: safe2_shex
+      data_graph: safe2.ttl
+      shex_file: safe2.shex
+      engine: shex
+      description: Separation test - safe2 (ShEx)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":c"
+          shape: ":R"
+        - node: ":d"
+          shape: ":R"
+      expected_results: &safe2_expected
+        lfp:
+          models:
+            - passing: []
+              failing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+        gfp:
+          models:
+            - passing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+              failing: []
+        brave:
+          quantifier: any
+          models: &safe2_sms_models
+            - passing: []
+              failing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+            - passing:
+                - node: ":c"
+                  shape: ":R"
+                - node: ":d"
+                  shape: ":R"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *safe2_sms_models
+    - name: safe2_shacl
+      data_graph: safe2.ttl
+      shapes_graph: safe2.shapes.ttl
+      engine: shacl
+      description: Separation test - safe2 (SHACL)
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":c"
+          shape: ":R"
+        - node: ":d"
+          shape: ":R"
+      expected_results: *safe2_expected
+    - name: nstrat1_shex
+      data_graph: nostratnocycle.ttl
+      shex_file: nostratnocycle.shex
+      engine: shex
+      description: Feature test - Non-stratified negation without cyclic data -- nostratnocycle (ShEx)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+        - ":c"
+        - ":d"
+        - ":e"
+      shapes:
+        - ":S"
+      expected_results: &nstrat1_expected
+        non_stratified:
+          conforms: false
+    - name: nstrat1_shacl
+      data_graph: nostratnocycle.ttl
+      shapes_graph: nostratnocycle.shapes.ttl
+      engine: shacl
+      description: Feature test - Non-stratified negation without cyclic data -- nostratnocycle (SHACL)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+        - ":c"
+        - ":d"
+        - ":e"
+      shapes:
+        - ":S"
+      expected_results: *nstrat1_expected
+    - name: nstrat2_shex
+      data_graph: nostratcycle.ttl
+      shex_file: nostratcycle.shex
+      engine: shex
+      description: Feature test - Non-stratified negation with cyclic data -- nostratcycle (ShEx)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes:
+        - ":S"
+      expected_results: *nstrat1_expected
+    - name: nstrat2_shacl
+      data_graph: nostratcycle.ttl
+      shapes_graph: nostratcycle.shapes.ttl
+      engine: shacl
+      description: Feature test - Non-stratified negation with cyclic data -- nostratcycle (SHACL)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes:
+        - ":S"
+      expected_results: *nstrat1_expected
+    - name: cons1_shex
+      data_graph: consistency1.ttl
+      shex_file: consistency1.shex
+      engine: shex
+      description: Feature test - Consistency1 (ShEx)
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+      shapes:
+        - ":S"
+        - ":S1"
+      expected_results: &cons_expected
+        unsatisfiable_selector:
+          conforms: false
+    - name: cons1_shacl
+      data_graph: consistency1.ttl
+      shapes_graph: consistency1.shapes.ttl
+      engine: shacl
+      description: Consistency test 1
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+      shapes:
+        - ":S"
+        - ":S1"
+      expected_results: *cons_expected
+    - name: cons2_shex
+      data_graph: consistency2.ttl
+      shex_file: consistency2.shex
+      engine: shex
+      description: Consistency test 2
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes:
+        - ":S"
+        - ":S1"
+      expected_results: *cons_expected
+    - name: cons2_shacl
+      data_graph: consistency2.ttl
+      shapes_graph: consistency2.shapes.ttl
+      engine: shacl
+      description: Consistency test 2
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes:
+        - ":S"
+        - ":S1"
+      expected_results: *cons_expected
+    - name: fresh_shex
+      data_graph: fresh.ttl
+      shex_file: fresh.shex
+      engine: shex
+      description: Fresh Constant Support
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":d"
+          shape: ":S"
+      expected_results: &fresh_expected
+        lfp:
+          models:
+            - passing:
+                - node: ":d"
+                  shape: ":S"
+              failing: []
+        gfp:
+          models:
+            - passing:
+                - node: ":d"
+                  shape: ":S"
+              failing: []
+        brave:
+          quantifier: any
+          models: &fresh_sms_models
+            - passing:
+                - node: ":d"
+                  shape: ":S"
+              failing: []
+        cautious:
+          quantifier: all
+          models: *fresh_sms_models
+    - name: fresh_shacl
+      data_graph: fresh.ttl
+      shapes_graph: fresh.shapes.ttl
+      engine: shacl
+      description: Fresh Constant Support
+      default_prefix: "http://example.org/"
+      pairs:
+        - node: ":d"
+          shape: ":S"
+      expected_results: *fresh_expected
+    - name: dual1_shex
+      data_graph: dual1.ttl
+      shex_file: dual1.shex
+      engine: shex
+      description: Example with duality
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":d"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        brave:
+          quantifier: any
+          models: &dual1_shex_sms_models
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        cautious:
+          quantifier: all
+          models: *dual1_shex_sms_models
+    - name: dual1_shacl
+      data_graph: dual1.ttl
+      shapes_graph: dual1.shapes.ttl
+      engine: shacl
+      description: Duality example 1 in SHACL
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":d"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        brave:
+          quantifier: any
+          models: &dual1_shacl_sms_models
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+            - passing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+        cautious:
+          quantifier: all
+          models: *dual1_shacl_sms_models
+    - name: dual2_shex
+      data_graph: dual2.ttl
+      shex_file: dual2.shex
+      engine: shex
+      description: Duality example 2
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":d"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+        brave:
+          quantifier: any
+          models: &dual2_shex_sms_models
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+        cautious:
+          quantifier: all
+          models: *dual2_shex_sms_models
+    - name: dual2_shacl
+      data_graph: dual2.ttl
+      shapes_graph: dual2.shapes.ttl
+      engine: shacl
+      description: Duality example 2 SHACL
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":d"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models:
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+        gfp:
+          models:
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+        brave:
+          quantifier: any
+          models: &dual2_shacl_sms_models
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":S"
+                - node: ":d"
+                  shape: ":S"
+              failing: 
+                - node: ":c"
+                  shape: ":S"
+        cautious:
+          quantifier: all
+          models: *dual2_shacl_sms_models
+    - name: norec1_shex
+      data_graph: norec1.ttl
+      shex_file: norec1.shex
+      engine: shex
+      description: Non recursive example 1
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models: &norec1_shex_lfp
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":a"
+                  shape: ":T"
+              failing: []
+        gfp: 
+          models: *norec1_shex_lfp
+        brave:
+          quantifier: any
+          models: *norec1_shex_lfp
+        cautious:
+          quantifier: all
+          models: *norec1_shex_lfp
+    - name: norec1_shacl
+      data_graph: norec1.ttl
+      shapes_graph: norec1.shapes.ttl
+      engine: shacl
+      description: Non recursive example 1 SHACL
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models: &norec1_shacl_lfp
+            - passing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":a"
+                  shape: ":T"
+              failing: []
+        gfp:
+          models: *norec1_shacl_lfp
+        brave:
+          quantifier: any
+          models: *norec1_shacl_lfp
+        cautious:
+          quantifier: all
+          models: *norec1_shacl_lfp
+    - name: norec2_shex
+      data_graph: norec2.ttl
+      shex_file: norec2.shex
+      engine: shex
+      description: Non recursive example 2
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models: &norec2_shex_lfp
+            - passing: 
+                - node: ":b"
+                  shape: ":S"
+                - node: ":a"
+                  shape: ":T"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":T"
+        gfp: 
+          models: *norec2_shex_lfp
+        brave:
+          quantifier: any
+          models: *norec2_shex_lfp
+        cautious:
+          quantifier: all
+          models: *norec2_shex_lfp
+    - name: norec2_shacl
+      data_graph: norec2.ttl
+      shapes_graph: norec2.shapes.ttl
+      engine: shacl
+      description: Non recursive example 2 SHACL
+      default_prefix: "http://example.org/"
+      nodes:
+        - ":a"
+        - ":b"
+      shapes: 
+        - ":S"
+      expected_results:
+        lfp:
+          models: &norec2_shacl_lfp
+            - passing: 
+                - node: ":b"
+                  shape: ":S"
+                - node: ":a"
+                  shape: ":T"
+              failing: 
+                - node: ":a"
+                  shape: ":S"
+                - node: ":b"
+                  shape: ":T"
+        gfp:
+          models: *norec2_shacl_lfp
+        brave:
+          quantifier: any
+          models: *norec2_shacl_lfp
+        cautious:
+          quantifier: all
+          models: *norec2_shacl_lfp

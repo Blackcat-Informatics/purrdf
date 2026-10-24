@@ -1,0 +1,2740 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 2m 23s
+     Running tests/blank_focus_relation_prebinding.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/df6cf19483d455c1/out/blank_focus_relation_prebinding-df6cf19483d455c1)
+
+running 3 tests
+test a_blank_focus_node_reaches_a_relation_bound_in_an_optional_arm ... ok
+test a_blank_focus_node_reaches_a_relation_bound_in_a_sub_select ... ok
+test a_blank_focus_node_reaches_a_relation_bound_in_an_exists_below_the_core ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/box_role_alloc.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/5d9837cd358ebb9f/out/box_role_alloc-5d9837cd358ebb9f)
+
+running 5 tests
+test a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path ... ok
+test box_roles_are_pinned_for_path_nested_and_reifier_shapes ... ok
+test conforming_box_role_validation_has_no_growth_term_in_focus_count ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test violating_box_role_validation_still_stamps_every_role ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/catalog_product.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/f121c95cae227324/out/catalog_product-f121c95cae227324)
+
+running 5 tests
+test product_identity_changes_with_the_exported_root_set ... ok
+test products_keep_declarations_when_no_shape_root_is_exported ... ok
+test a_product_keeps_definitions_reached_only_through_an_exported_root ... ok
+test products_keep_same_named_definitions_in_distinct_retained_domains ... ok
+test products_preserve_same_named_function_bodies_in_their_original_domains ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/catalog_references.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/297cea21ea357d72/out/catalog_references-297cea21ea357d72)
+
+running 10 tests
+test exported_flat_reference_keeps_its_original_model_domain ... ok
+test metadata_returns_native_missing_definition_and_function_body_refusals ... ok
+test computed_targets_and_unique_grouping_retain_their_function_domain ... ok
+test parsed_computed_shape_index_releases_its_owner_with_the_model ... ok
+test recursive_expression_declaration_releases_its_owner_with_the_model ... ok
+test same_named_functions_evaluate_their_original_domain_bodies ... ok
+test standalone_function_keeps_its_model_after_the_factory_is_dropped ... ok
+test metadata_follows_references_without_activating_unused_catalog_definitions ... ok
+test nested_same_named_domains_keep_both_function_and_relation_inventory ... ok
+test catalog_chain_keeps_conformance_reporting_and_owner_after_export ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/change_footprint.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/f94056896a651b33/out/change_footprint-f94056896a651b33)
+
+running 18 tests
+test a_reclassifying_delta_moves_no_verdict_because_statements_are_projected ... ok
+test a_binding_without_a_snapshot_has_no_change_to_expand ... ok
+test a_reifier_gained_for_a_required_reification_expands_the_focus_node ... ok
+test a_reifier_lost_for_a_required_reification_expands_the_focus_node ... ok
+test a_reifier_gained_under_a_reifier_shape_expands_the_focus_node ... ok
+test a_shapes_graph_of_forward_paths_stays_bounded ... ok
+test a_property_shape_without_reification_ignores_a_reifier_declaration ... ok
+test a_suppressed_reifier_declaration_is_in_the_change_set ... ok
+test an_added_annotation_is_in_the_change_set_under_its_own_subject ... ok
+test a_foreign_snapshot_is_refused ... ok
+test an_added_reifier_declaration_is_in_the_change_set ... ok
+test a_sparql_constraint_reports_an_unreadable_footprint ... ok
+test expanding_a_change_on_a_projected_delta_binding_still_answers ... ok
+test computed_value_nodes_bound_what_they_can_and_report_what_they_cannot ... ok
+test evaluated_targets_report_an_unbounded_footprint_and_a_class_target_does_not ... ok
+test expanding_a_change_on_an_unprojected_delta_binding_is_refused ... ok
+test the_expansion_is_ordered_and_deduplicated ... ok
+test the_expansion_is_a_superset_of_every_verdict_the_change_moves ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/change_path_alloc.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/062c75a6ffb1e9eb/out/change_path_alloc-062c75a6ffb1e9eb)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.02s
+
+     Running tests/class_plan_totality.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/f473767cc9fc721c/out/class_plan_totality-f473767cc9fc721c)
+
+running 6 tests
+test a_target_class_absent_from_the_data_graph_is_an_empty_target_set ... ok
+test an_in_list_admits_a_value_the_data_graph_interns ... ok
+test an_unsatisfiable_has_value_still_reports_a_violation ... ok
+test an_in_list_with_no_interned_members_still_reports_a_violation ... ok
+test a_class_absent_from_the_data_graph_still_reports_a_violation ... ok
+test a_shape_reached_only_through_the_shape_index_is_planned ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/closed_by_types.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/3ce52ba2e62ae78c/out/closed_by_types-3ce52ba2e62ae78c)
+
+running 8 tests
+test one_index_is_shared_and_holds_the_collected_properties ... ok
+test node_references_are_followed_and_complex_paths_permit_nothing ... ok
+test every_type_of_the_value_node_contributes ... ok
+test ignored_properties_are_honoured_under_by_types ... ok
+test subclass_links_are_read_from_the_shapes_graph ... ok
+test the_shapes_own_properties_count_only_when_a_type_reaches_the_shape ... ok
+test target_class_is_followed_only_from_a_declared_class ... ok
+test superclass_shapes_permit_under_by_types_and_not_under_true ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/closed_property_shape.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/d0710bc30d992d2d/out/closed_property_shape-d0710bc30d992d2d)
+
+running 10 tests
+test closed_property_shape_checks_value_nodes_only ... ok
+test closed_property_shape_conforms_when_every_predicate_is_permitted ... ok
+test closed_property_shape_over_a_sequence_path_checks_the_end_of_the_path ... ok
+test closed_property_shape_reports_each_unpermitted_triple_at_a_value_node ... ok
+test closed_property_shape_over_an_inverse_path_checks_the_nodes_pointing_at_the_focus ... ok
+test closed_property_shape_over_zero_or_more_includes_the_focus_node_itself ... ok
+test closed_property_shape_reports_per_value_node_and_triple ... ok
+test closed_result_path_roles_describe_the_offending_predicate ... ok
+test closed_property_shape_reports_the_same_result_under_each_dated_law ... ok
+test by_types_on_a_property_shape_collects_through_the_value_nodes_types ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/complete_reports.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b71f19671f322a16/out/complete_reports-b71f19671f322a16)
+
+running 24 tests
+test complete_core_validation_spends_no_sparql_fuel ... ok
+test deliberate_shared_source_retains_shared_blank_identity ... ok
+test changed_constraint_cannot_inherit_a_source_occurrence ... ok
+test complete_governor_refusal_is_typed_and_each_call_has_fresh_fuel ... ok
+test bounded_complete_routes_use_the_same_source_evidence_and_refuse_foreign_ids ... ok
+test duplicate_public_root_identity_is_refused_before_complete_binding ... ok
+test equal_graph_bytes_from_independent_acquisitions_do_not_share_identity ... ok
+test equal_queries_retain_distinct_actual_source_constraints ... ok
+test independent_equal_blank_labels_have_distinct_source_acquisitions ... ok
+test native_data_blanks_keep_scoped_identity_without_shapes_blanks ... ok
+test nested_rdf12_blanks_keep_independent_original_scopes ... ok
+test identical_fresh_blank_spellings_from_four_query_acquisitions_remain_distinct ... ok
+test nested_source_refusal_survives_a_later_conforming_some_value ... ok
+test isomorphic_report_only_blanks_do_not_authorize_changed_source_identity ... ok
+test prepared_binding_and_egress_retain_sources_after_input_drop ... ok
+test projected_and_shapes_graph_bindings_retain_actual_source_identity ... ok
+test query_minted_blanks_cannot_impersonate_retained_shape_blanks ... ok
+test recursive_details_keep_their_own_source_constraints ... ok
+test repeated_detail_query_acquisitions_mint_distinct_blanks ... ok
+test sequence_inverse_path_nodes_are_minted_without_source_correspondence ... ok
+test result_multiplicity_survives_complete_collection_and_emission ... ok
+test restored_product_reconstructs_evidence_without_changing_carried_bytes ... ok
+test warm_complete_core_allocation_count_has_no_per_focus_growth ... ok
+test fresh_query_identity_is_stable_across_focus_execution ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/component_class_blank_chains.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/a9d8fc7f82ed78a1/out/component_class_blank_chains-a9d8fc7f82ed78a1)
+
+running 5 tests
+test a_blank_only_cycle_terminates ... ok
+test a_blank_intermediate_registers_the_component ... ok
+test a_blank_component_type_registers_the_component ... ok
+test a_blank_validator_chain_is_an_ask_validator ... ok
+test a_dead_end_blank_registers_nothing ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/component_parameters.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/f470f9718cdd990c/out/component_parameters-f470f9718cdd990c)
+
+running 15 tests
+test imported_native_validator_binds_as_a_superseded_alternative ... ok
+test malformed_parameter_declarations_fail_at_load ... ok
+test multiple_parameters_reject_duplicates_even_when_another_required_value_is_absent ... ok
+test native_component_declarations_preserve_every_repeatable_constraint_family ... FAILED
+test imported_bare_native_declaration_binds_to_native_execution ... ok
+test one_validator_is_selected_for_each_parameter_instance ... ok
+test optional_and_required_parameters_control_instantiation ... ok
+test a_parameter_colliding_with_the_shape_context_still_validates ... ok
+test repeated_parameter_values_preserve_rdf12_term_identity ... FAILED
+test applicable_scope_validator_takes_precedence_over_generic_fallback ... ok
+test repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints ... FAILED
+test parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not ... ok
+test vocabulary_declarations_preserve_all_fifteen_property_constraints ... FAILED
+test validator_declarations_enforce_attachment_kind_and_query_datatype ... ok
+test repeated_single_parameter_validators_apply_conjunctively_in_every_scope ... FAILED
+
+failures:
+
+---- native_component_declarations_preserve_every_repeatable_constraint_family stdout ----
+
+thread 'native_component_declarations_preserve_every_repeatable_constraint_family' (3550787) panicked at crates/shapes/tests/component_parameters.rs:388:33:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- repeated_parameter_values_preserve_rdf12_term_identity stdout ----
+
+thread 'repeated_parameter_values_preserve_rdf12_term_identity' (3550791) panicked at crates/shapes/tests/component_parameters.rs:232:5:
+assertion `left == right` failed
+  left: 1
+ right: 4
+
+---- repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints stdout ----
+
+thread 'repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints' (3550793) panicked at crates/shapes/tests/component_parameters.rs:309:5:
+assertion `left == right` failed
+  left: 1
+ right: 2
+
+---- vocabulary_declarations_preserve_all_fifteen_property_constraints stdout ----
+
+thread 'vocabulary_declarations_preserve_all_fifteen_property_constraints' (3550795) panicked at crates/shapes/tests/component_parameters.rs:51:5:
+assertion `left == right` failed
+  left: 0
+ right: 15
+
+---- repeated_single_parameter_validators_apply_conjunctively_in_every_scope stdout ----
+
+thread 'repeated_single_parameter_validators_apply_conjunctively_in_every_scope' (3550792) panicked at crates/shapes/tests/component_parameters.rs:149:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+
+
+failures:
+    native_component_declarations_preserve_every_repeatable_constraint_family
+    repeated_parameter_values_preserve_rdf12_term_identity
+    repeated_single_parameter_validators_apply_conjunctively_in_every_scope
+    repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints
+    vocabulary_declarations_preserve_all_fifteen_property_constraints
+
+test result: FAILED. 10 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test component_parameters`
+     Running tests/conformance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b4bc4e3273fd12eb/out/conformance-b4bc4e3273fd12eb)
+
+running 1 test
+test conformance_corpus ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/conformance_memo.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/96121c647d5e9e26/out/conformance_memo-96121c647d5e9e26)
+
+running 3 tests
+test a_named_inner_shape_is_evaluated_once_for_a_shared_value_node ... ok
+test an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_is_reachable ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/constraint_annotations.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/8240082bf08110eb/out/constraint_annotations-8240082bf08110eb)
+
+running 22 tests
+test a_reifier_deactivates_one_constraint_and_leaves_its_sibling_active ... ok
+test a_qualified_bound_takes_its_own_annotation ... ok
+test a_reifier_message_set_reaches_the_result_whole ... ok
+test a_reifier_severity_and_message_beat_the_shapes ... ok
+test a_reifier_on_one_value_of_a_multi_valued_parameter_reaches_that_value_only ... ok
+test a_restored_preparation_takes_the_request_set ... ok
+test an_annotation_on_a_non_parameter_statement_is_refused_and_on_a_parameter_applies ... ok
+test a_warning_only_report_follows_the_set_and_echoes_it ... ok
+test an_empty_or_non_iri_set_is_refused_and_a_named_one_is_accepted ... ok
+test an_annotation_on_an_unasserted_triple_term_changes_nothing ... ok
+test an_annotation_on_sh_flags_reaches_the_pattern_constraint ... ok
+test an_ill_typed_annotation_value_is_refused_and_a_well_typed_one_applies ... ok
+test an_sh_property_statement_grades_its_reach_below_the_constraints_own_annotation ... ok
+test deactivating_an_sh_property_statement_drops_that_reach_only ... ok
+test annotations_survive_the_prepared_product ... ok
+test debug_and_custom_severities_block_only_when_listed ... ok
+test conflicting_reifier_annotations_are_refused_and_agreeing_ones_load ... ok
+test debug_and_trace_results_conform_by_default_and_warning_does_not ... ok
+test every_shape_message_reaches_the_result_with_its_language_tag ... ok
+test nested_conformance_checks_judge_against_the_same_set ... ok
+test the_reifier_shape_constraint_takes_its_annotations ... ok
+test a_deactivated_sparql_constraint_produces_nothing ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/core_parameter_cardinality.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/38cb6e649a43475e/out/core_parameter_cardinality-38cb6e649a43475e)
+
+running 12 tests
+test distinct_lexical_terms_are_not_merged_by_value_equality ... ok
+test cardinality_diagnostic_is_independent_of_statement_order ... ok
+test inherited_and_list_referenced_roles_enforce_metadata ... ok
+test declaration_singletons_are_checked_before_activation ... ok
+test malformed_parameter_path_cannot_hide_an_extra_value ... ok
+test native_singletons_reject_multiple_distinct_values ... ok
+test optional_requires_a_boolean_term_in_every_declaration_kind ... ok
+test optional_accepts_every_xsd_boolean_lexical_form ... ok
+test repeated_property_shapes_validate_both_paths ... ok
+test unrelated_rdf_metadata_is_not_a_shacl_declaration ... ok
+test repeatable_core_parameters_keep_each_constraint ... FAILED
+test named_graph_repetitions_count_distinct_rdf_objects ... FAILED
+
+failures:
+
+---- repeatable_core_parameters_keep_each_constraint stdout ----
+
+thread 'repeatable_core_parameters_keep_each_constraint' (3550843) panicked at crates/shapes/tests/core_parameter_cardinality.rs:239:34:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- named_graph_repetitions_count_distinct_rdf_objects stdout ----
+
+thread 'named_graph_repetitions_count_distinct_rdf_objects' (3550839) panicked at crates/shapes/tests/core_parameter_cardinality.rs:280:46:
+index out of bounds: the len is 0 but the index is 0
+
+
+failures:
+    named_graph_repetitions_count_distinct_rdf_objects
+    repeatable_core_parameters_keep_each_constraint
+
+test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test core_parameter_cardinality`
+     Running tests/custom_node_expressions.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/c71af43536de13e2/out/custom_node_expressions-c71af43536de13e2)
+
+running 39 tests
+test a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error ... ok
+test a_blank_node_argument_is_an_error_unless_its_parameter_is_optional ... ok
+test a_blank_node_argument_is_an_error_under_the_editors_draft_and_an_argument_under_the_working_draft ... ok
+test a_declaration_without_a_body_is_a_load_error ... ok
+test a_cardinality_failure_in_a_body_is_a_sparql_error_in_a_report ... ok
+test a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbound ... ok
+test a_declared_builtin_follows_the_same_value_and_error_rule ... ok
+test a_declared_builtin_list_function_is_callable_from_sparql_expr ... ok
+test a_cycle_through_sparql_query_text_is_bounded_too ... ok
+test a_declared_sparql_builtin_is_callable_from_sparql_expr ... ok
+test a_named_parameter_function_has_no_positional_call_form ... ok
+test a_list_parameter_function_resolves_from_sparql_query_text ... ok
+test a_recursive_function_makes_validation_fail_rather_than_conform ... ok
+test a_registered_function_without_a_focus_graph_refuses_rather_than_answering ... ok
+test a_required_parameter_after_an_optional_one_is_a_load_error ... ok
+test a_self_recursive_function_fails_closed_at_the_depth_bound ... FAILED
+test a_select_body_sees_its_arguments_and_the_focus_graph ... FAILED
+test a_function_called_during_the_rules_fixpoint_sees_the_current_round_s_graph ... ok
+test a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed_cause ... ok
+test a_sparql_expr_body_sees_its_arguments_as_pre_bound_variables ... FAILED
+test an_optional_parameter_widens_the_arity_range_without_removing_its_bounds ... ok
+test an_unparsable_body_is_a_load_error ... ok
+test an_optional_trailing_parameter_may_be_omitted_or_supplied ... FAILED
+test body_expression_without_a_declaring_class_is_a_load_error ... ok
+test arity_mismatch_at_the_call_site_is_a_load_error ... ok
+test body_level_processor_failures_are_typed ... ok
+test an_undeclared_builtin_list_function_is_not_registered ... ok
+test colliding_key_parameters_are_a_load_error ... ok
+test body_reading_an_undeclared_argument_is_a_load_error ... ok
+test direct_custom_function_calls_bound_argument_allocation_growth ... ok
+test evaluated_function_arguments_keep_optional_indices_and_query_bindings ... ok
+test exact_argument_indices_preserve_the_u64_boundary ... ok
+test list_parameter_function_returns_its_body_s_value ... FAILED
+test direct_custom_function_large_result_is_moved_without_a_second_payload_copy ... ok
+test named_parameter_function_evaluates_its_body_under_the_argument_scope ... FAILED
+test named_parameter_function_without_a_key_parameter_is_a_load_error ... ok
+test list_parameter_function_drives_a_validation_verdict ... ok
+test an_unresolvable_shape_in_a_body_is_a_sparql_error ... ok
+test the_focus_node_of_a_sparql_call_is_the_function_s_own_iri ... ok
+
+failures:
+
+---- a_self_recursive_function_fails_closed_at_the_depth_bound stdout ----
+
+thread 'a_self_recursive_function_fails_closed_at_the_depth_bound' (3550866) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_select_body_sees_its_arguments_and_the_focus_graph stdout ----
+
+thread 'a_select_body_sees_its_arguments_and_the_focus_graph' (3550865) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_sparql_expr_body_sees_its_arguments_as_pre_bound_variables stdout ----
+
+thread 'a_sparql_expr_body_sees_its_arguments_as_pre_bound_variables' (3550867) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- an_optional_trailing_parameter_may_be_omitted_or_supplied stdout ----
+
+thread 'an_optional_trailing_parameter_may_be_omitted_or_supplied' (3550869) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- list_parameter_function_returns_its_body_s_value stdout ----
+
+thread 'list_parameter_function_returns_its_body_s_value' (3550883) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- named_parameter_function_evaluates_its_body_under_the_argument_scope stdout ----
+
+thread 'named_parameter_function_evaluates_its_body_under_the_argument_scope' (3550884) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+
+failures:
+    a_select_body_sees_its_arguments_and_the_focus_graph
+    a_self_recursive_function_fails_closed_at_the_depth_bound
+    a_sparql_expr_body_sees_its_arguments_as_pre_bound_variables
+    an_optional_trailing_parameter_may_be_omitted_or_supplied
+    list_parameter_function_returns_its_body_s_value
+    named_parameter_function_evaluates_its_body_under_the_argument_scope
+
+test result: FAILED. 33 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test custom_node_expressions`
+     Running tests/datatype_lexical_forms.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/8bab90bf6e3186b3/out/datatype_lexical_forms-8bab90bf6e3186b3)
+
+running 10 tests
+test a_language_tagged_string_matches_rdf_lang_string_only ... ok
+test datatypes_without_a_modelled_lexical_space_keep_conforming ... ok
+test a_date_time_stamp_requires_a_timezone ... ok
+test ill_formed_dates_violate_and_well_formed_ones_conform ... ok
+test ill_formed_date_times_violate_and_well_formed_ones_conform ... ok
+test ill_formed_durations_violate_and_well_formed_ones_conform ... ok
+test ill_formed_times_violate_and_well_formed_ones_conform ... ok
+test ill_formed_gregorian_fragments_violate_and_well_formed_ones_conform ... ok
+test ill_formed_binary_values_violate_and_well_formed_ones_conform ... ok
+test the_already_checked_datatypes_keep_their_verdicts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/dated_execution.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/c5af58b486f1bb61/out/dated_execution-c5af58b486f1bb61)
+
+running 17 tests
+test a_dated_admission_refusal_inside_a_function_body_still_fails_the_validation ... ok
+test current_limits_admit_warm_programs_and_actual_target_failures_remain_native_typed ... ok
+test a_reached_udf_admission_capsule_wins_its_paired_native_query_diagnostic ... ok
+test current_source_preflight_applies_without_targets_and_does_not_reuse_another_law ... ok
+test dated_quoted_flag_admission_does_not_inherit_a_warm_other_law ... ok
+test dated_some_value_still_suppresses_an_ordinary_semantic_candidate_failure ... ok
+test dated_governors_cover_target_binding_and_outrank_native_query_refusals ... ok
+test each_dated_bundle_reaches_free_complete_and_every_binding_door ... ok
+test both_bundles_retain_constant_dynamic_and_replacement_query_laws_on_warm_requests ... ok
+test incompatible_override_is_refused_before_document_parsing_and_has_a_valid_neighbor ... ok
+test legacy_native_wrapper_keeps_its_law_over_shape_options ... ok
+test legacy_native_wrapper_keeps_current_limits_over_warmed_shape_options ... ok
+test existential_conformance_does_not_discard_a_reached_function_policy_refusal ... ok
+test public_global_rule_execution_audits_original_query_even_for_an_empty_join ... ok
+test product_admit_rebuild_and_expectation_doors_reconstruct_the_current_bundle ... ok
+test values_is_refused_only_when_it_mentions_a_pre_bound_variable_under_the_draft_law ... ok
+test canonical_focus_errors_keep_the_actual_typed_cause_across_input_orders ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/deactivation_closure.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/25a1ef7db90db6d4/out/deactivation_closure-25a1ef7db90db6d4)
+
+running 6 tests
+test a_second_reifier_stating_sh_deactivated_is_refused_when_either_value_is_an_expression ... ok
+test a_reifier_deactivated_property_edge_keeps_its_path_in_a_property_shapes_closed_set ... ok
+test one_expression_node_on_two_reifiers_is_refused ... ok
+test a_reifier_deactivated_property_edge_keeps_its_path_in_the_closed_set ... ok
+test constant_deactivations_never_fail_and_agree_across_member_orders ... ok
+test a_deactivation_expression_fails_the_validation_whatever_the_member_order ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/emitter_projections.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/524543f4429d76a1/out/emitter_projections-524543f4429d76a1)
+
+running 139 tests
+test graphql_projects_iri_pair ... ok
+test graphql_projects_debug_severity ... ok
+test graphql_projects_list_valued_datatype ... ok
+test graphql_projects_list_valued_class ... ok
+test graphql_projects_closed_by_types ... ok
+test graphql_projects_max_list_length ... ok
+test graphql_projects_list_valued_node_kind ... ok
+test graphql_projects_computed_values ... ok
+test graphql_projects_min_list_length ... ok
+test graphql_projects_node_expression_target ... ok
+test graphql_projects_path_valued_pairs ... ok
+test graphql_projects_reifier_severity ... ok
+test graphql_projects_node_list ... ok
+test graphql_projects_root_class ... ok
+test graphql_projects_member_shape ... FAILED
+test graphql_projects_single_line ... ok
+test graphql_projects_subset_of ... ok
+test graphql_projects_target_where ... ok
+test graphql_projects_some_value ... ok
+test graphql_projects_unique_members ... ok
+test graphql_projects_unique_values_for ... ok
+test json_schema_projects_closed_by_types ... ok
+test json_schema_projects_computed_values ... ok
+test json_schema_projects_debug_severity ... ok
+test json_schema_projects_iri_pair ... ok
+test json_schema_projects_list_valued_class ... ok
+test json_schema_projects_list_valued_datatype ... ok
+test json_schema_projects_focus_node_constraints ... ok
+test json_schema_projects_list_valued_node_kind ... ok
+test json_schema_projects_max_list_length ... ok
+test json_schema_projects_member_shape ... FAILED
+test json_schema_projects_min_list_length ... ok
+test json_schema_projects_node_expression_target ... ok
+test json_schema_projects_path_valued_pairs ... ok
+test json_schema_projects_node_list ... FAILED
+test json_schema_projects_reifier_severity ... ok
+test json_schema_projects_root_class ... ok
+test json_schema_projects_single_line ... ok
+test json_schema_projects_subset_of ... ok
+test json_schema_projects_target_where ... ok
+test json_schema_projects_some_value ... FAILED
+test json_schema_projects_unique_values_for ... ok
+test json_schema_projects_unique_members ... ok
+test linkml_projects_closed_by_types ... ok
+test linkml_projects_computed_values ... ok
+test linkml_projects_debug_severity ... ok
+test linkml_projects_iri_pair ... ok
+test json_schema_records_shape_based_property_constraints ... FAILED
+test linkml_projects_list_valued_datatype ... ok
+test linkml_projects_list_valued_class ... ok
+test linkml_projects_list_valued_node_kind ... ok
+test linkml_projects_max_list_length ... ok
+test linkml_projects_member_shape ... ok
+test linkml_projects_min_list_length ... ok
+test linkml_projects_node_expression_target ... ok
+test linkml_projects_reifier_severity ... ok
+test linkml_projects_path_valued_pairs ... ok
+test linkml_projects_node_list ... ok
+test linkml_projects_root_class ... ok
+test linkml_projects_single_line ... ok
+test linkml_projects_subset_of ... ok
+test linkml_projects_target_where ... ok
+test observed::json_schema_a_recursive_value_shape_is_inlined_once ... FAILED
+test linkml_projects_some_value ... FAILED
+test linkml_projects_unique_values_for ... ok
+test linkml_projects_unique_members ... ok
+test observed::json_schema_and_agrees_with_validation ... ok
+test observed::json_schema_base_direction_agrees_with_validation ... ok
+test observed::json_schema_closed_by_types_is_recorded_where_declared_closure_projects ... ok
+test observed::json_schema_deactivated_property_shape_agrees_with_validation ... ok
+test observed::json_schema_has_value_agrees_with_validation ... ok
+test observed::json_schema_datatypes_agree_with_validation ... ok
+test observed::json_schema_in_lists_intersect ... ok
+test observed::json_schema_language_in_agrees_with_validation ... ok
+test observed::json_schema_case_insensitive_flag_agrees_with_validation ... ok
+test observed::json_schema_list_components_agree_with_validation ... ok
+test observed::json_schema_lengths_agree_with_validation ... ok
+test observed::json_schema_node_agrees_with_validation ... ok
+test observed::json_schema_node_property_shapes_are_proven_unreachable ... ok
+test observed::json_schema_focus_node_constraints_agree_with_validation ... ok
+test observed::json_schema_node_list_components_agree_with_validation ... ok
+test observed::json_schema_not_and_xone_over_a_wider_shape_are_proven_inexpressible ... ok
+test observed::json_schema_node_kinds_agree_with_validation ... ok
+test observed::json_schema_not_agrees_with_validation ... ok
+test observed::json_schema_or_agrees_with_validation ... ok
+test observed::json_schema_pattern_on_integers_is_proven_inexpressible ... ok
+test observed::json_schema_numeric_datatypes_agree_with_validation ... ok
+test observed::json_schema_pattern_agrees_with_validation ... ok
+test observed::json_schema_several_values_are_each_judged ... ok
+test observed::json_schema_severity_agrees_with_validation ... ok
+test observed::json_schema_single_line_agrees_with_validation ... ok
+test observed::json_schema_some_value_agrees_with_validation ... ok
+test observed::json_schema_pattern_on_iris_agrees_with_validation ... ok
+test observed::json_schema_xone_agrees_with_validation ... ok
+test pydantic_projects_closed_by_types ... ok
+test pydantic_projects_computed_values ... ok
+test pydantic_projects_debug_severity ... ok
+test pydantic_projects_iri_pair ... ok
+test pydantic_projects_list_valued_class ... ok
+test pydantic_projects_list_valued_datatype ... ok
+test pydantic_projects_list_valued_node_kind ... ok
+test pydantic_projects_max_list_length ... ok
+test pydantic_projects_member_shape ... ok
+test pydantic_projects_min_list_length ... ok
+test pydantic_projects_node_expression_target ... ok
+test pydantic_projects_node_list ... FAILED
+test pydantic_projects_path_valued_pairs ... ok
+test pydantic_projects_reifier_severity ... ok
+test pydantic_projects_root_class ... ok
+test pydantic_projects_single_line ... ok
+test pydantic_projects_some_value ... FAILED
+test pydantic_projects_subset_of ... ok
+test pydantic_projects_target_where ... ok
+test pydantic_projects_unique_members ... ok
+test pydantic_projects_unique_values_for ... ok
+test typescript_projects_closed_by_types ... ok
+test typescript_projects_computed_values ... ok
+test typescript_projects_debug_severity ... ok
+test typescript_projects_iri_pair ... ok
+test observed::json_schema_numeric_bounds_agree_with_validation ... ok
+test typescript_projects_list_valued_class ... ok
+test typescript_projects_list_valued_datatype ... ok
+test typescript_projects_list_valued_node_kind ... ok
+test typescript_projects_max_list_length ... ok
+test typescript_projects_member_shape ... FAILED
+test typescript_projects_node_expression_target ... ok
+test typescript_projects_min_list_length ... ok
+test typescript_projects_path_valued_pairs ... ok
+test typescript_projects_node_list ... FAILED
+test typescript_projects_reifier_severity ... ok
+test typescript_projects_root_class ... ok
+test typescript_projects_single_line ... ok
+test typescript_projects_subset_of ... ok
+test typescript_projects_some_value ... FAILED
+test typescript_projects_target_where ... ok
+test typescript_projects_unique_members ... ok
+test typescript_projects_unique_values_for ... ok
+test observed::json_schema_typed_numeric_bounds_agree_with_validation ... ok
+test observed::json_schema_temporal_bounds_agree_with_validation ... ok
+
+failures:
+
+---- graphql_projects_member_shape stdout ----
+
+thread 'graphql_projects_member_shape' (3551072) panicked at crates/shapes/tests/emitter_projections.rs:964:5:
+assertion `left == right` failed
+  left: [("additional-properties-validation-narrowed", "#/$defs/Holder"), ("additional-properties-validation-narrowed", "#/$defs/Holder/properties/ex:subject/anyOf/0"), ("additional-properties-validation-narrowed", "#/$defs/Holder/properties/ex:subject/anyOf/1"), ("custom-scalar-validation-delegated", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"), ("intersection-validation-delegated", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/allOf"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/@annotation"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/@id"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/@type"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/ex:subject"), ("singleton-list-coercion-widened", "#/$defs/Holder/properties/@type/anyOf/1"), ("singleton-list-coercion-widened", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list")]
+ right: [("additional-properties-validation-narrowed", "#/$defs/Holder"), ("additional-properties-validation-narrowed", "#/$defs/Holder/properties/ex:subject/anyOf/0"), ("additional-properties-validation-narrowed", "#/$defs/Holder/properties/ex:subject/anyOf/1"), ("additional-properties-validation-narrowed", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0"), ("additional-properties-validation-narrowed", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1"), ("array-cardinality-validation-dropped", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list/maxItems"), ("custom-scalar-validation-delegated", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list/items"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/@annotation"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/@id"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/@type"), ("nullable-presence-validation-widened", "#/$defs/Holder/properties/ex:subject"), ("singleton-list-coercion-widened", "#/$defs/Holder/properties/@type/anyOf/1"), ("singleton-list-coercion-widened", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list"), ("singleton-list-coercion-widened", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list"), ("string-validation-dropped", "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0/properties/@id/pattern")]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- json_schema_projects_member_shape stdout ----
+
+thread 'json_schema_projects_member_shape' (3551094) panicked at crates/shapes/tests/emitter_projections.rs:906:5:
+assertion `left == right` failed
+  left: {"$comment":"a sh:memberShape constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"items":{"allOf":[{"$ref":"#/$defs/ShapeRef0"}]},"type":"array"}},"required":["@list"],"type":"object"}]}
+ right: {"$comment":"a sh:memberShape constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"items":{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]},"type":"array"}},"required":["@list"],"type":"object"}]}
+
+---- json_schema_projects_node_list stdout ----
+
+thread 'json_schema_projects_node_list' (3551097) panicked at crates/shapes/tests/emitter_projections.rs:1086:5:
+assertion `left == right` failed
+  left: [{"anyOf":[{"not":{"properties":{"@id":{"const":"http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"}},"required":["@id"]},"properties":{"rdf:first":{"allOf":[{"type":["boolean","number","object","string"]},{"allOf":[{"$ref":"#/$defs/ShapeRef0"}]}]},"rdf:rest":{"anyOf":[{"properties":{"@list":{"items":{"allOf":[{"$ref":"#/$defs/ShapeRef0"}]},"maxItems":2,"type":"array","uniqueItems":true}},"required":["@list"],"type":"object"},{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"}]}},"required":["rdf:first","rdf:rest"],"type":"object"}]}]
+ right: [{"anyOf":[{"not":{"properties":{"@id":{"const":"http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"}},"required":["@id"]},"properties":{"rdf:first":{"allOf":[{"type":["boolean","number","object","string"]},{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]}]},"rdf:rest":{"anyOf":[{"properties":{"@list":{"items":{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]},"maxItems":2,"type":"array","uniqueItems":true}},"required":["@list"],"type":"object"},{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"}]}},"required":["rdf:first","rdf:rest"],"type":"object"}]}]
+
+---- json_schema_projects_some_value stdout ----
+
+thread 'json_schema_projects_some_value' (3551102) panicked at crates/shapes/tests/emitter_projections.rs:2193:5:
+assertion `left == right` failed
+  left: [{"allOf":[{"$ref":"#/$defs/ShapeRef0"}]}]
+ right: [{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]}]
+
+---- json_schema_records_shape_based_property_constraints stdout ----
+
+thread 'json_schema_records_shape_based_property_constraints' (3551107) panicked at crates/shapes/tests/emitter_projections.rs:4294:5:
+assertion `left == right` failed
+  left: null
+ right: "the property shapes of a value shape of ex:subject were dropped"
+
+---- observed::json_schema_a_recursive_value_shape_is_inlined_once stdout ----
+
+thread 'observed::json_schema_a_recursive_value_shape_is_inlined_once' (3551129) panicked at crates/shapes/tests/emitter_projections.rs:3230:54:
+shapes graph: Recursion(RecursionRefusal { members: ["<https://example.org/IntShape>"], edges: [RecursionDependency { source: "<https://example.org/IntShape>", target: "<https://example.org/IntShape>", parameter: "http://www.w3.org/ns/shacl#or", polarity: Positive }] })
+
+---- linkml_projects_some_value stdout ----
+
+thread 'linkml_projects_some_value' (3551124) panicked at crates/shapes/tests/emitter_projections.rs:2296:5:
+assertion `left == right` failed: {"alias":"ex:subject","any_of":[{"all_of":[{"all_of":[{"range":"ShapeRef0"}]}],"any_of":[{"range":"boolean"},{"range":"double"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Type2Object"},{"range":"string"}]},{"any_of":[{"range":"boolean"},{"range":"double"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ItemsType2Object"},{"range":"string"}],"has_member":{"all_of":[{"range":"ShapeRef0"}]},"minimum_cardinality":1,"multivalued":true}],"required":true,"slot_uri":"ex:subject"}
+  left: {"all_of":[{"range":"ShapeRef0"}]}
+ right: {"any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf1Object"}]}
+
+---- pydantic_projects_node_list stdout ----
+
+thread 'pydantic_projects_node_list' (3551197) panicked at crates/shapes/tests/emitter_projections.rs:1146:5:
+assertion `left == right` failed
+  left: [("intersection-validation-widened", "#/$defs/Holder/allOf"), ("intersection-validation-widened", "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf"), ("intersection-validation-widened", "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf/1/allOf"), ("intersection-validation-widened", "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:rest/anyOf/0/properties/@list/items/allOf")]
+ right: [("intersection-validation-widened", "#/$defs/Holder/allOf"), ("intersection-validation-widened", "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf")]
+
+---- pydantic_projects_some_value stdout ----
+
+thread 'pydantic_projects_some_value' (3551246) panicked at crates/shapes/tests/emitter_projections.rs:2240:5:
+    subject: Annotated[Annotated[ShapeRef0, BeforeValidator(_purrdf_requires({"allOf": [{"$ref": "#/$defs/ShapeRef0"}]}, _PURRDF_DEFS))], BeforeValidator(_purrdf_requires({"allOf": [{"allOf": [{"$ref": "#/$defs/ShapeRef0"}]}]}, _PURRDF_DEFS))] | Annotated[Annotated[list[StrictBool | Annotated[StrictFloat, Field(allow_inf_nan=False)] | StrictInt | dict[StrictStr, Any] | StrictStr], Field(min_length=1)], BeforeValidator(_purrdf_requires({"contains": {"allOf": [{"$ref": "#/$defs/ShapeRef0"}]}}, _PURRDF_DEFS))] = Field(alias="ex:subject")
+
+---- typescript_projects_member_shape stdout ----
+
+thread 'typescript_projects_member_shape' (3551307) panicked at crates/shapes/tests/emitter_projections.rs:919:5:
+assertion `left == right` failed
+  left: Some("export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (ShapeRef0)[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n")
+ right: Some("export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (({\n                  readonly \"@id\": string;\n                  readonly [key: string]: JsonValue;\n                } | {\n                  readonly \"@list\": readonly [];\n                  readonly [key: string]: JsonValue;\n                }))[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n")
+
+---- typescript_projects_node_list stdout ----
+
+thread 'typescript_projects_node_list' (3551310) panicked at crates/shapes/tests/emitter_projections.rs:1103:5:
+assertion `left == right` failed
+  left: Some("export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly [key: string]: JsonValue;\n} & {\n      readonly \"rdf:first\": ((boolean | number | string | {\n            readonly [key: string]: JsonValue;\n          }) & ShapeRef0);\n      readonly \"rdf:rest\": ({\n            readonly \"@list\": (readonly (ShapeRef0)[] & { readonly \"0\"?: ShapeRef0; readonly \"2\"?: never });\n            readonly [key: string]: JsonValue;\n          } | {\n            readonly \"@id\": string;\n            readonly [key: string]: JsonValue;\n          });\n      readonly [key: string]: JsonValue;\n    });\n")
+ right: Some("export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly [key: string]: JsonValue;\n} & {\n      readonly \"rdf:first\": ((boolean | number | string | {\n            readonly [key: string]: JsonValue;\n          }) & ({\n              readonly \"@id\": string;\n              readonly [key: string]: JsonValue;\n            } | {\n              readonly \"@list\": readonly [];\n              readonly [key: string]: JsonValue;\n            }));\n      readonly \"rdf:rest\": ({\n            readonly \"@list\": (readonly (({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    }))[] & { readonly \"0\"?: ({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    }); readonly \"2\"?: never });\n            readonly [key: string]: JsonValue;\n          } | {\n            readonly \"@id\": string;\n            readonly [key: string]: JsonValue;\n          });\n      readonly [key: string]: JsonValue;\n    });\n")
+
+---- typescript_projects_some_value stdout ----
+
+thread 'typescript_projects_some_value' (3551315) panicked at crates/shapes/tests/emitter_projections.rs:2213:5:
+export type Holder = ({
+  readonly "@annotation"?: Annotation;
+  readonly "@id"?: string;
+  readonly "@type"?: (string | readonly (string)[]);
+  readonly "ex:subject": (((boolean | number | string | {
+        readonly [key: string]: JsonValue;
+      }) & ShapeRef0) | (readonly ((boolean | number | string | {
+            readonly [key: string]: JsonValue;
+          }))[] & { readonly "0": (boolean | number | string | {
+            readonly [key: string]: JsonValue;
+          }) }));
+  readonly [key: string]: JsonValue;
+} & ({
+    readonly "@annotation"?: Annotation;
+    readonly "@id"?: string;
+    readonly "@type"?: (string | readonly (string)[]);
+    readonly [key: string]: JsonValue;
+  } & ShapeRef1));
+
+
+
+failures:
+    graphql_projects_member_shape
+    json_schema_projects_member_shape
+    json_schema_projects_node_list
+    json_schema_projects_some_value
+    json_schema_records_shape_based_property_constraints
+    linkml_projects_some_value
+    observed::json_schema_a_recursive_value_shape_is_inlined_once
+    pydantic_projects_node_list
+    pydantic_projects_some_value
+    typescript_projects_member_shape
+    typescript_projects_node_list
+    typescript_projects_some_value
+
+test result: FAILED. 127 passed; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test emitter_projections`
+     Running tests/evaluated_targets.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/8de7bdd4a8d065d6/out/evaluated_targets-8de7bdd4a8d065d6)
+
+running 28 tests
+test a_class_declared_only_in_the_data_graph_triggers_no_implicit_target ... ok
+test a_data_graph_sh_shape_statement_makes_its_subject_a_focus_node ... ok
+test a_class_that_is_a_shape_only_by_its_parameters_gets_no_implicit_target ... ok
+test a_narrowed_where_target_agrees_with_the_full_scan ... ok
+test a_property_shape_that_is_a_class_targets_its_instances ... ok
+test a_rule_fires_at_an_explicit_shape_target ... ok
+test a_function_call_target_node_targets_its_output ... ok
+test a_select_node_expression_target_selects_its_output_nodes ... ok
+test a_candidate_is_checked_against_a_sparql_target_by_its_select ... ok
+test a_consistent_ask_and_select_validate_on_the_candidate_path ... ok
+test a_sh_shape_statement_in_a_shared_graph_can_name_a_blank_shape ... ok
+test a_sh_shape_statement_can_name_a_shape_reached_only_through_another ... ok
+test a_shape_class_targets_the_instances_of_its_subclasses ... ok
+test a_sh_shape_statement_naming_no_shape_targets_nothing ... ok
+test a_shape_that_is_not_a_class_gets_no_implicit_target ... ok
+test a_sparql_target_with_two_ask_values_is_refused ... ok
+test a_sparql_target_ask_must_be_an_ask_that_meets_the_prebinding_restrictions ... ok
+test a_sparql_target_ask_answers_for_a_node_the_data_graph_does_not_hold ... ok
+test a_where_target_ranges_over_the_nodes_of_the_data_graph_triple_terms_included ... ok
+test a_where_constraint_that_does_not_count_against_conformance_narrows_nothing ... ok
+test an_implicit_class_target_follows_shacl_instances_in_the_shapes_graph ... ok
+test an_ill_formed_node_expression_target_is_refused_and_the_well_formed_one_targets ... ok
+test explicit_shape_targets_union_with_declared_targets ... ok
+test a_sparql_target_with_an_ask_validates_as_its_select_does ... ok
+test extension_usage_reads_the_sparql_inside_a_target_node_expression ... ok
+test function_resolution_reports_the_calls_inside_targets ... ok
+test unique_values_for_compares_the_explicit_shape_targets ... ok
+test an_inconsistent_ask_and_select_are_refused_on_the_candidate_path ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/exact_numeric_ranges.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/10ae95477b18f29b/out/exact_numeric_ranges-10ae95477b18f29b)
+
+running 3 tests
+test an_ill_typed_numeric_literal_violates_beside_its_well_formed_neighbour ... ok
+test decimal_ranges_are_exact_past_eighteen_digits ... ok
+test integer_ranges_are_exact_at_any_size ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/execution_scope.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/1e33515a433fbd7b/out/execution_scope-1e33515a433fbd7b)
+
+running 5 tests
+test a_service_in_a_constraint_query_is_refused_at_load_with_or_without_a_scope ... ok
+test replacing_the_ambient_context_takes_every_scope_off_the_thread_and_puts_it_back ... ok
+test rule_application_polls_the_stop_signal_between_focus_nodes ... ok
+test the_stop_signal_is_polled_between_focus_nodes_of_a_validation_with_no_sparql ... ok
+test a_service_target_is_refused_at_load_with_or_without_a_source_and_a_local_target_answers ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/exists_relation_prebinding.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/fd77a5daad250098/out/exists_relation_prebinding-fd77a5daad250098)
+
+running 8 tests
+test exists_over_a_bound_only_relation ... ok
+test a_filter_of_this_beneath_the_seed ... ok
+test a_bind_of_this_over_a_free_capable_relation ... ok
+test a_bind_of_this_over_a_bound_only_relation ... ok
+test exists_over_a_free_capable_relation ... ok
+test not_exists_over_a_bound_only_relation ... ok
+test not_exists_over_a_free_capable_relation ... ok
+test not_exists_with_the_call_after_an_atom ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/foreign_value_nodes.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/38bf2106f9f83f8b/out/foreign_value_nodes-38bf2106f9f83f8b)
+
+running 2 tests
+test the_target_node_is_really_absent_from_the_data_graph ... ok
+test constraints_decide_foreign_value_nodes_by_term_equality ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/function_body_relation.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/e1a062c037d03e93/out/function_body_relation-e1a062c037d03e93)
+
+running 26 tests
+test a_cycle_between_a_function_body_and_a_shape_terminates ... ok
+test a_declared_namespace_makes_an_unregistered_iri_under_it_a_hard_error ... ok
+test a_declared_namespace_reaches_a_sparql_constraint_body ... ok
+test a_function_called_from_two_branches_is_walked_both_times ... ok
+test a_body_naming_no_registered_relation_is_ordinary_data ... ok
+test a_function_body_reaches_a_registered_relation ... ok
+test a_select_inside_a_custom_function_body_is_reported ... ok
+test a_registered_iri_reaches_its_relation_from_a_sparql_constraint_body ... ok
+test a_select_nested_in_a_union_operand_is_reported ... ok
+test a_registered_iri_under_a_declared_namespace_still_reaches_its_relation ... ok
+test a_site_this_environment_cannot_read_is_reported_with_its_reason ... ok
+test a_sibling_iri_sharing_a_registered_prefix_stays_ordinary_data ... ok
+test a_sparql_rule_takes_a_declared_namespace_and_still_answers_without_one ... ok
+test an_inline_filter_shape_s_sparql_is_reported_like_a_named_one_s ... ok
+test extension_usage_does_not_claim_a_merely_same_prefixed_sibling ... ok
+test extension_usage_names_the_declaration_a_predicate_sits_in ... ok
+test extension_usage_reads_component_validators_and_inline_nested_shapes ... ok
+test extension_usage_reports_whether_a_function_body_reaches_its_relation ... ok
+test a_registered_iri_outside_predicate_position_is_not_a_call ... ok
+test the_same_graph_under_an_empty_environment_reads_completely ... ok
+test extension_usage_walks_every_sparql_bearing_construct ... ok
+test without_a_registry_the_same_body_is_ordinary_data ... ok
+test without_the_declaration_the_same_constraint_body_is_ordinary_data ... ok
+test an_incomplete_index_declared_from_a_function_body_refuses_the_verdict ... ok
+test without_the_declaration_the_same_iri_is_ordinary_data ... ok
+test every_remaining_door_takes_a_declared_namespace_and_still_answers_without_one ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/governor_inheritance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/47599c9b08d5762a/out/governor_inheritance-47599c9b08d5762a)
+
+running 5 tests
+test an_ungoverned_validation_is_unchanged ... ok
+test a_governor_trip_inside_a_function_body_still_fails_the_validation ... ok
+test shacl_sparql_constraints_inherit_governors ... ok
+test an_exhausted_validation_never_reports_a_verdict ... ok
+test governed_focus_fanout_has_schedule_independent_evidence ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests/host_entry_points.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/531b6c2ed614834f/out/host_entry_points-531b6c2ed614834f)
+
+running 11 tests
+test a_term_argument_is_an_n_triples_term_or_an_absolute_iri ... ok
+test a_labelled_blank_node_reads_the_scope ... ok
+test a_scope_binding_that_could_never_be_read_is_refused ... ok
+test a_sparql_expr_node_evaluates_natively_with_its_prefixes ... ok
+test run_rules_over_a_shapes_graph_is_the_shacl_engine_run ... ok
+test run_rules_over_an_srl_rule_set_is_the_srl_engine_run ... ok
+test the_inference_graph_and_its_proof_render_deterministically ... ok
+test the_term_generating_round_limit_is_exact ... ok
+test lint_certifies_the_sparql_expr_declaration_clean_and_binds_it_natively ... ok
+test lint_reports_a_malformed_graph_and_not_its_well_formed_neighbour ... ok
+test lint_supersedes_what_shacl_1_2_core_makes_well_formed ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/large_schema_emission.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/78fc74dbf6d35936/out/large_schema_emission-78fc74dbf6d35936)
+
+running 5 tests
+test all_three_emitters_keep_the_shared_depth_refusal_and_accept_its_neighbor ... ok
+test a_yaml_alias_expansion_is_bounded_by_the_input ... ok
+test a_schema_past_65536_definitions_and_properties_imports ... ok
+test a_schema_past_sixteen_mebibytes_emits_in_every_language_deterministically ... ok
+test ontology_width_and_coverage_past_the_old_caps_emit_in_all_three_languages has been running for over 60 seconds
+test ontology_width_and_coverage_past_the_old_caps_emit_in_all_three_languages ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.42s
+
+     Running tests/logical_shape_arguments.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/6d2bc3655166671c/out/logical_shape_arguments-6d2bc3655166671c)
+
+running 14 tests
+test node_over_node_shape_wrapping_a_property_shape ... ok
+test node_over_named_property_shape ... ok
+test and_over_property_shape_member ... ok
+test not_over_anonymous_property_shape ... ok
+test not_over_named_property_shape ... ok
+test not_over_node_shape_wrapping_a_property_shape ... ok
+test qualified_value_shape_that_is_a_property_shape ... ok
+test or_over_property_shape_members ... ok
+test reifier_shape_that_is_a_property_shape ... ok
+test reifier_shape_reached_through_sh_node ... ok
+test xone_over_property_shape_members ... ok
+test xone_reports_the_node_matching_both_members ... ok
+test not_over_anonymous_property_shape_on_the_prepared_change_path ... ok
+test node_over_anonymous_property_shape ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/loss_ledger_golden.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/013d72f66b8c21fb/out/loss_ledger_golden-013d72f66b8c21fb)
+
+running 3 tests
+test golden_shapes_ledger_is_sound ... ok
+test shapes_loss_ledger_has_not_drifted ... ok
+test shapes_loss_ledger_schema_version_is_pinned ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/loss_ledger_soundness.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/e0d19613a3cc14f5/out/loss_ledger_soundness-e0d19613a3cc14f5)
+
+running 13 tests
+test closed_by_types_records_its_declared_code_and_closed_true_does_not ... ok
+test complete_green_with_the_correct_expected_codes ... ok
+test complete_red_via_result_core_names_the_missing_code ... ok
+test complete_red_when_a_real_recorded_code_is_omitted - should panic ... ok
+test lossless_shape_compiles_with_empty_ledger ... ok
+test computed_values_record_their_declared_codes ... ok
+test iri_valued_pairs_record_their_declared_codes ... ok
+test rejected_pattern_is_a_typed_emission_failure ... ok
+test path_valued_pairs_and_subset_of_record_declared_codes ... ok
+test sound_green_for_real_compile_output ... ok
+test unique_values_for_records_its_declared_code ... ok
+test shacl12_constraints_record_declared_codes ... ok
+test category_pattern_translates_without_a_dialect_loss ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/matched_leaf_prebinding.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/383610a1b6b9fe9d/out/matched_leaf_prebinding-383610a1b6b9fe9d)
+
+running 7 tests
+test minus_remains_forbidden_at_the_shacl_loader ... ok
+test missing_property_optional_and_controls_report_only_the_two_missing_nodes ... ok
+test optional_and_minus_answer_alike_on_every_lane ... ok
+test cached_rebinding_uses_each_exact_focus_in_optional_and_nested_modifiers ... ok
+test graph_name_only_bindings_are_local_in_optional_and_exists_scopes ... ok
+test every_focus_kind_keeps_its_identity_in_nested_matched_positions ... ok
+test predicates_and_nested_predicates_rebind_and_non_iris_match_nothing ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/named_graph_view.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/37c16f6d0bbd6445/out/named_graph_view-37c16f6d0bbd6445)
+
+running 8 tests
+test collection_and_object_readers_honor_the_selected_default_graph ... ok
+test construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids ... ok
+test every_prepared_pattern_reads_only_the_selected_graph ... ok
+test metadata_in_an_invisible_graph_does_not_allocate_a_base_row_dedup_table ... ok
+test blank_empty_and_absent_graphs_are_selected_without_leaking_the_source ... ok
+test explicit_materialization_contains_exactly_the_projected_selected_graph ... ok
+test shape_only_class_terms_preserve_the_selection_after_dictionary_supplementation ... ok
+test core_classes_paths_and_sparql_return_the_same_complete_report_as_an_owned_graph ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/native_xpath.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/6612bafa321630a9/out/native_xpath-6612bafa321630a9)
+
+running 29 tests
+test a_node_expression_resource_refusal_aborts_and_the_neighbour_evaluates ... ok
+test alternating_laws_and_failed_admission_preserve_the_actual_warm_program ... ok
+test change_path_fallback_runs_sparql_regex_under_the_selected_law ... ok
+test change_path_resource_refusal_raises_and_the_neighbour_is_admitted ... ok
+test change_path_validates_core_patterns_under_the_selected_law ... ok
+test constant_dynamic_regex_and_replace_share_native_query_selection ... ok
+test copy_on_write_validation_options_preserve_the_original_cache_owner ... ok
+test a_rules_resource_refusal_aborts_and_the_neighbour_runs ... ok
+test every_binding_route_retains_the_selected_pattern_law ... ok
+test every_rule_language_infers_under_each_selected_law ... ok
+test global_rules_preserve_native_laws_and_reached_operational_refusals ... ok
+test governed_native_validation_keeps_budget_and_pattern_refusals_distinct ... ok
+test governed_target_and_constraint_queries_share_one_budget_without_partial_findings ... ok
+test adversary_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine ... ok
+test native_backreferences_reach_every_focus_door_without_changing_legacy ... ok
+test native_operational_failure_aborts_nested_boolean_constraints ... ok
+test node_expressions_evaluate_under_each_selected_law ... ok
+test quoted_flag_obeys_the_selected_dated_law ... ok
+test rules_entailment_constructs_under_the_selected_law_and_aborts_on_refusal ... ok
+test selected_execution_preserves_prepared_product_bytes_and_restore_provenance ... ok
+test some_value_query_failure_is_discarded_when_a_later_value_conforms ... ok
+test some_value_query_resource_refusal_survives_a_later_conforming_value ... ok
+test sparql_function_children_inherit_native_patterns_and_refusals ... ok
+test strict_source_preflight_checks_untargeted_declarations ... ok
+test target_binding_uses_the_selected_law_before_acquiring_focus_nodes ... ok
+test text_graphs_validate_under_each_selected_law ... ok
+test counted_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine ... ok
+test large_finite_facets_preserve_complete_shacl_findings_under_both_laws ... ok
+test a_backreference_blowup_pattern_shape_still_refuses_beside_a_conforming_neighbour ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.07s
+
+     Running tests/never_panic.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/1192cf153bc7056d/out/never_panic-1192cf153bc7056d)
+
+running 21 tests
+test deep_built_models_refuse_preparation_on_a_small_stack ... ok
+test disjoint_qualified_siblings_contribute_the_opposite_count_polarity ... ok
+test import_json_schema_never_panics ... ok
+test cyclic_node_expression_graph_is_hard_error ... ok
+test import_linkml_never_panics ... ok
+test lower_stratum_negation_is_not_recursive ... ok
+test parse_linkml_never_panics ... ok
+test parse_shapes_never_panics_raw ... ok
+test long_recursive_catalog_is_analyzed_before_model_expansion ... ok
+test preparation_refusal_cannot_become_an_empty_path_or_product ... ok
+test recursion_analysis_uses_all_shapes_including_parameter_declarations ... ok
+test recursion_failure_names_component_parameters_and_polarity ... ok
+test recursive_component_refusal_is_independent_of_statement_order ... ok
+test recursive_shape_references_are_failures_instead_of_empty_shapes ... ok
+test shallow_path_copy_and_drop_add_no_work_list_allocations ... ok
+test shared_named_sub_expression_is_not_a_cycle ... ok
+test shared_shape_references_are_not_cycles ... ok
+test stack_refusal_is_not_a_conformance_or_validation_report ... ok
+test parse_shapes_never_panics_structured ... ok
+test deep_acyclic_paths_and_expressions_refuse_before_stack_exhaustion ... ok
+test deep_acyclic_shape_loading_refuses_before_native_stack_exhaustion ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/node_expr_reference.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/225246c15d1f3e5c/out/node_expr_reference-225246c15d1f3e5c)
+
+running 2 tests
+test every_arm_declares_the_contract_its_clause_defines ... FAILED
+test production_evaluation_matches_the_reference_interpreter ... FAILED
+
+failures:
+
+---- every_arm_declares_the_contract_its_clause_defines stdout ----
+
+thread 'every_arm_declares_the_contract_its_clause_defines' (3553806) panicked at crates/shapes/tests/node_expr_reference.rs:1439:5:
+the every-arm fixture reaches no expression of ["Arg", "Call::Builtin", "Call::Sparql", "Call::UserDefined", "Concat", "ConformsToShape", "Constant", "Count", "CustomCall", "Distinct", "Empty", "Exists", "Filter", "FindFirst", "FlatMap", "If", "InstancesOf", "Intersection", "Limit", "List", "MatchAll", "Max", "Min", "NodesMatching", "Offset", "OrderBy", "Path", "PathValues", "Remove", "Select", "Sum", "This", "Union", "Var"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- production_evaluation_matches_the_reference_interpreter stdout ----
+
+thread 'production_evaluation_matches_the_reference_interpreter' (3553807) panicked at crates/shapes/tests/node_expr_reference.rs:1193:9:
+property `production_evaluation_matches_the_reference_interpreter` failed after 0 passing case(s): ex:Holder carries no sh:expression
+minimal failing input: World { edges: [], types: [], focus: 0, expr: Const(Node(0)) }
+choice sequence (hex, for Choices::from_hex): 00000000000000000000
+seed: 0x736861636c313221 (21 shrink(s)); rerun the same cases with PURRDF_PROP_SEED=0x736861636c313221
+
+
+failures:
+    every_arm_declares_the_contract_its_clause_defines
+    production_evaluation_matches_the_reference_interpreter
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test node_expr_reference`
+     Running tests/node_expressions.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/7e8274af2a0a6972/out/node_expressions-7e8274af2a0a6972)
+
+running 53 tests
+test a_computed_shape_argument_that_names_no_shape_is_an_error ... FAILED
+test a_computed_shape_argument_must_produce_exactly_one_iri ... FAILED
+test a_list_expression_member_may_still_not_be_a_blank_node ... ok
+test a_list_expression_member_may_be_a_triple_term ... FAILED
+test a_path_expression_with_sh_nodes_and_a_focus_node_is_refused ... ok
+test a_list_parameter_function_body_producing_two_nodes_is_an_evaluation_failure ... FAILED
+test a_shape_operand_that_is_not_a_shape_fails_the_load_at_every_kind ... ok
+test a_triple_term_flows_through_the_expression_language_as_a_value ... FAILED
+test an_af_path_expression_walks_from_each_of_its_sh_nodes ... FAILED
+test an_unrecognised_shnex_term_on_an_expression_node_is_refused ... ok
+test annotations_and_application_vocabulary_on_an_expression_node_still_load ... ok
+test both_spellings_of_one_kind_on_one_node_is_ambiguous ... ok
+test concat_preserves_operand_order_and_duplicates ... FAILED
+test a_key_the_selected_kind_does_not_read_is_refused_rather_than_dropped ... ok
+test conforms_to_shape_accepts_a_computed_shape_argument ... FAILED
+test conforms_to_shape_reports_the_conformance_of_one_node ... FAILED
+test conforms_to_shape_still_refuses_a_named_shape_that_does_not_exist ... ok
+test empty_expression_yields_no_nodes ... FAILED
+test distinct_keeps_first_occurrences_by_term_equality ... FAILED
+test a_sparql_function_argument_producing_two_nodes_is_an_evaluation_failure ... FAILED
+test an_argument_that_produces_no_node_reaches_sparql_as_unbound ... FAILED
+test filter_shape_preserves_input_order_and_duplicates ... FAILED
+test find_first_and_match_all_accept_the_empty_shape_but_not_an_undefined_iri ... FAILED
+test find_first_yields_nothing_when_no_node_conforms ... FAILED
+test find_first_returns_the_first_conforming_node ... FAILED
+test flat_map_defaults_its_input_to_the_focus_node ... FAILED
+test flat_map_rebinds_the_focus_per_input_node ... FAILED
+test instances_of_includes_subclass_instances ... FAILED
+test instances_of_takes_a_computed_class_expression ... FAILED
+test list_expression_preserves_authored_order ... FAILED
+test match_all_against_a_declared_shape_still_answers_false_for_non_conforming_nodes ... FAILED
+test node_by_expression_naming_a_missing_shape_fails_the_load_even_with_no_targets ... ok
+test match_all_is_true_only_when_every_node_conforms ... FAILED
+test node_by_expression_reports_its_own_constraint_component ... ok
+test node_by_expression_resolves_named_shapes_through_lists_and_branches ... ok
+test node_by_expression_checks_a_repeated_shape_once ... ok
+test node_by_expression_still_loads_for_named_shapes_and_computed_expressions ... ok
+test path_values_walks_from_the_context_focus ... FAILED
+test path_values_multi_valued_focus_is_a_failure ... FAILED
+test nodes_matching_selects_every_conforming_node_of_the_graph ... FAILED
+test path_values_walks_from_a_computed_focus ... FAILED
+test remove_uses_term_equality_not_value_equality ... FAILED
+test remove_drops_the_named_nodes_preserving_order ... FAILED
+test sh_and_shnex_paging_spellings_agree ... FAILED
+test sh_and_shnex_ordering_spellings_agree ... FAILED
+test sh_and_shnex_spellings_produce_identical_results ... FAILED
+test two_different_kinds_on_one_node_is_ambiguous ... ok
+test triple_term_expression_yields_a_triple_term ... FAILED
+test var_unbound_name_yields_no_nodes ... FAILED
+test var_focus_node_resolves_to_the_focus ... FAILED
+test the_same_five_expressions_load_when_the_keys_are_spelled_consistently ... ok
+test var_value_resolves_to_the_value_node_under_test ... ok
+test the_same_five_kinds_still_load_when_the_operand_really_is_a_shape ... ok
+
+failures:
+
+---- a_computed_shape_argument_that_names_no_shape_is_an_error stdout ----
+
+thread 'a_computed_shape_argument_that_names_no_shape_is_an_error' (3553810) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_computed_shape_argument_must_produce_exactly_one_iri stdout ----
+
+thread 'a_computed_shape_argument_must_produce_exactly_one_iri' (3553809) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_list_expression_member_may_be_a_triple_term stdout ----
+
+thread 'a_list_expression_member_may_be_a_triple_term' (3553812) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_list_parameter_function_body_producing_two_nodes_is_an_evaluation_failure stdout ----
+
+thread 'a_list_parameter_function_body_producing_two_nodes_is_an_evaluation_failure' (3553814) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_triple_term_flows_through_the_expression_language_as_a_value stdout ----
+
+thread 'a_triple_term_flows_through_the_expression_language_as_a_value' (3553818) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- an_af_path_expression_walks_from_each_of_its_sh_nodes stdout ----
+
+thread 'an_af_path_expression_walks_from_each_of_its_sh_nodes' (3553819) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- concat_preserves_operand_order_and_duplicates stdout ----
+
+thread 'concat_preserves_operand_order_and_duplicates' (3553824) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- conforms_to_shape_accepts_a_computed_shape_argument stdout ----
+
+thread 'conforms_to_shape_accepts_a_computed_shape_argument' (3553825) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- conforms_to_shape_reports_the_conformance_of_one_node stdout ----
+
+thread 'conforms_to_shape_reports_the_conformance_of_one_node' (3553826) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- empty_expression_yields_no_nodes stdout ----
+
+thread 'empty_expression_yields_no_nodes' (3553829) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- distinct_keeps_first_occurrences_by_term_equality stdout ----
+
+thread 'distinct_keeps_first_occurrences_by_term_equality' (3553828) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_sparql_function_argument_producing_two_nodes_is_an_evaluation_failure stdout ----
+
+thread 'a_sparql_function_argument_producing_two_nodes_is_an_evaluation_failure' (3553817) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- an_argument_that_produces_no_node_reaches_sparql_as_unbound stdout ----
+
+thread 'an_argument_that_produces_no_node_reaches_sparql_as_unbound' (3553820) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- filter_shape_preserves_input_order_and_duplicates stdout ----
+
+thread 'filter_shape_preserves_input_order_and_duplicates' (3553830) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- find_first_and_match_all_accept_the_empty_shape_but_not_an_undefined_iri stdout ----
+
+thread 'find_first_and_match_all_accept_the_empty_shape_but_not_an_undefined_iri' (3553831) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- find_first_yields_nothing_when_no_node_conforms stdout ----
+
+thread 'find_first_yields_nothing_when_no_node_conforms' (3553833) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- find_first_returns_the_first_conforming_node stdout ----
+
+thread 'find_first_returns_the_first_conforming_node' (3553832) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- flat_map_defaults_its_input_to_the_focus_node stdout ----
+
+thread 'flat_map_defaults_its_input_to_the_focus_node' (3553834) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- flat_map_rebinds_the_focus_per_input_node stdout ----
+
+thread 'flat_map_rebinds_the_focus_per_input_node' (3553835) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- instances_of_includes_subclass_instances stdout ----
+
+thread 'instances_of_includes_subclass_instances' (3553836) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- instances_of_takes_a_computed_class_expression stdout ----
+
+thread 'instances_of_takes_a_computed_class_expression' (3553837) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- list_expression_preserves_authored_order stdout ----
+
+thread 'list_expression_preserves_authored_order' (3553838) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- match_all_against_a_declared_shape_still_answers_false_for_non_conforming_nodes stdout ----
+
+thread 'match_all_against_a_declared_shape_still_answers_false_for_non_conforming_nodes' (3553839) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- match_all_is_true_only_when_every_node_conforms stdout ----
+
+thread 'match_all_is_true_only_when_every_node_conforms' (3553840) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- path_values_walks_from_the_context_focus stdout ----
+
+thread 'path_values_walks_from_the_context_focus' (3553849) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- path_values_multi_valued_focus_is_a_failure stdout ----
+
+thread 'path_values_multi_valued_focus_is_a_failure' (3553847) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- nodes_matching_selects_every_conforming_node_of_the_graph stdout ----
+
+thread 'nodes_matching_selects_every_conforming_node_of_the_graph' (3553846) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- path_values_walks_from_a_computed_focus stdout ----
+
+thread 'path_values_walks_from_a_computed_focus' (3553848) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- remove_uses_term_equality_not_value_equality stdout ----
+
+thread 'remove_uses_term_equality_not_value_equality' (3553851) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- remove_drops_the_named_nodes_preserving_order stdout ----
+
+thread 'remove_drops_the_named_nodes_preserving_order' (3553850) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sh_and_shnex_paging_spellings_agree stdout ----
+
+thread 'sh_and_shnex_paging_spellings_agree' (3553853) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sh_and_shnex_ordering_spellings_agree stdout ----
+
+thread 'sh_and_shnex_ordering_spellings_agree' (3553852) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sh_and_shnex_spellings_produce_identical_results stdout ----
+
+thread 'sh_and_shnex_spellings_produce_identical_results' (3553854) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- triple_term_expression_yields_a_triple_term stdout ----
+
+thread 'triple_term_expression_yields_a_triple_term' (3553857) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- var_unbound_name_yields_no_nodes stdout ----
+
+thread 'var_unbound_name_yields_no_nodes' (3553860) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- var_focus_node_resolves_to_the_focus stdout ----
+
+thread 'var_focus_node_resolves_to_the_focus' (3553859) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+
+failures:
+    a_computed_shape_argument_must_produce_exactly_one_iri
+    a_computed_shape_argument_that_names_no_shape_is_an_error
+    a_list_expression_member_may_be_a_triple_term
+    a_list_parameter_function_body_producing_two_nodes_is_an_evaluation_failure
+    a_sparql_function_argument_producing_two_nodes_is_an_evaluation_failure
+    a_triple_term_flows_through_the_expression_language_as_a_value
+    an_af_path_expression_walks_from_each_of_its_sh_nodes
+    an_argument_that_produces_no_node_reaches_sparql_as_unbound
+    concat_preserves_operand_order_and_duplicates
+    conforms_to_shape_accepts_a_computed_shape_argument
+    conforms_to_shape_reports_the_conformance_of_one_node
+    distinct_keeps_first_occurrences_by_term_equality
+    empty_expression_yields_no_nodes
+    filter_shape_preserves_input_order_and_duplicates
+    find_first_and_match_all_accept_the_empty_shape_but_not_an_undefined_iri
+    find_first_returns_the_first_conforming_node
+    find_first_yields_nothing_when_no_node_conforms
+    flat_map_defaults_its_input_to_the_focus_node
+    flat_map_rebinds_the_focus_per_input_node
+    instances_of_includes_subclass_instances
+    instances_of_takes_a_computed_class_expression
+    list_expression_preserves_authored_order
+    match_all_against_a_declared_shape_still_answers_false_for_non_conforming_nodes
+    match_all_is_true_only_when_every_node_conforms
+    nodes_matching_selects_every_conforming_node_of_the_graph
+    path_values_multi_valued_focus_is_a_failure
+    path_values_walks_from_a_computed_focus
+    path_values_walks_from_the_context_focus
+    remove_drops_the_named_nodes_preserving_order
+    remove_uses_term_equality_not_value_equality
+    sh_and_shnex_ordering_spellings_agree
+    sh_and_shnex_paging_spellings_agree
+    sh_and_shnex_spellings_produce_identical_results
+    triple_term_expression_yields_a_triple_term
+    var_focus_node_resolves_to_the_focus
+    var_unbound_name_yields_no_nodes
+
+test result: FAILED. 17 passed; 36 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test node_expressions`
+     Running tests/ontology_schema_surface.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/564c5f48f0936596/out/ontology_schema_surface-564c5f48f0936596)
+
+running 29 tests
+test a_restricted_property_is_judged_on_its_class_outside_its_domain ... ok
+test a_subclass_projects_an_inherited_disjunction_its_owner_cannot ... ok
+test all_language_emitter_outputs_are_byte_deterministic ... ok
+test an_external_shape_cell_reports_xml_approximation_at_its_actual_validator ... ok
+test a_subclass_shape_is_not_overridden_by_an_inherited_disjunction ... ok
+test direct_shacl_shapes_stay_authoritative_over_restrictions ... ok
+test every_language_emitter_carries_the_projection_or_records_its_loss ... ok
+test every_schema_cell_that_admits_xml_reports_unchecked_representation ... ok
+test compilation_manifest_and_emitters_are_deterministic ... ok
+test graphql_names_literal_enumerations_beside_their_array_form ... ok
+test iri_only_ontologies_report_no_class_expressions ... ok
+test iri_only_output_changes_only_in_owl_property_values_and_precision ... ok
+test iri_only_output_matches_its_golden ... ok
+test facets_on_a_defined_datatype_restrict_its_definition ... ok
+test manifest_reports_every_form_with_its_outcome_and_provenance ... ok
+test json_schema_projection_judges_projected_instances ... ok
+test ontology_property_surface_reaches_every_language_emitter ... ok
+test ontology_with_every_anonymous_class_expression_compiles ... ok
+test public_member_count_shapes_do_not_claim_an_xml_exclusion ... FAILED
+test relation_carries_restriction_provenance_and_precision ... ok
+test reported_outcomes_match_every_emitter_on_an_agent_provenance_slice ... ok
+test shaped_only_mode_excludes_every_component ... ok
+test ontology_complete_output_reads_back_through_every_importer ... ok
+test universal_restriction_to_owl_nothing_forbids_the_property ... ok
+test unrepresented_components_are_named_on_the_class_definition ... ok
+test xml_exclusion_controls_keep_their_exact_shape_coverage ... ok
+test thousands_of_restricted_classes_on_shared_properties_scale_linearly ... ok
+test a_four_thousand_deep_subclass_chain_compiles_and_validates ... ok
+test a_gene_ontology_sized_tree_references_inherited_restrictions ... ok
+
+failures:
+
+---- public_member_count_shapes_do_not_claim_an_xml_exclusion stdout ----
+
+thread 'public_member_count_shapes_do_not_claim_an_xml_exclusion' (3553896) panicked at crates/shapes/tests/ontology_schema_surface.rs:2120:48:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    public_member_count_shapes_do_not_claim_an_xml_exclusion
+
+test result: FAILED. 28 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 58.19s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test ontology_schema_surface`
+     Running tests/owl_value_semantics.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/866c4df3140887bd/out/owl_value_semantics-866c4df3140887bd)
+
+running 29 tests
+test a_datatype_range_admits_the_node_a_has_value_gives_it ... ok
+test a_datatype_range_keeps_its_literals_and_takes_nodes ... ok
+test a_class_disjoint_with_rdfs_literal_rejects_literals_exactly ... ok
+test a_hash_namespace_gives_the_schema_a_fragment_free_id ... ok
+test a_cross_kind_has_value_or_has_self_is_read_by_owl_2_full ... ok
+test a_named_class_range_takes_a_literal_as_an_approximation ... ok
+test a_facet_over_an_integer_admits_every_integer_datatype_within_it ... ok
+test a_node_value_meets_an_object_property_data_range ... ok
+test a_subclass_of_the_empty_union_admits_no_instance ... ok
+test a_decimal_range_or_filler_admits_every_decimal_value_whatever_its_tag ... ok
+test an_object_property_over_a_datatype_takes_its_literals ... ok
+test a_universal_over_owl_thing_takes_a_literal_and_is_projected ... ok
+test a_string_filler_admits_the_string_datatypes_derived_from_it ... ok
+test cardinalities_beyond_64_bits_are_read_not_refused ... ok
+test an_object_property_restricted_to_a_data_range_takes_its_literals ... ok
+test empty_single_and_repeated_boolean_members_are_read_by_their_meaning ... ok
+test class_fillers_of_a_property_that_takes_literals_admit_literals ... ok
+test graphql_names_a_nested_type_apart_from_a_colliding_class ... ok
+test every_property_takes_well_typed_literals_and_rejects_ill_typed_ones ... ok
+test empty_fillers_and_ranges_admit_no_value ... ok
+test owl_time_durations_take_bare_integer_years ... ok
+test literals_an_object_property_takes_are_admitted_on_every_class_carrying_it ... ok
+test qudt_datatype_properties_over_classes_are_read_by_owl_2_full ... ok
+test prov_o_annotation_and_object_property_punning_compiles ... ok
+test shacl_datatypes_stay_judged_by_tag ... ok
+test self_restricted_and_xml_admitting_cells_are_approximations ... ok
+test the_complement_of_a_restriction_that_always_holds_admits_no_instance ... ok
+test string_facets_hold_of_every_string_datatype_literal ... ok
+test an_enumeration_and_a_has_value_match_every_literal_of_an_equal_value ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running tests/pattern_emission.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b433b2d55c80f988/out/pattern_emission-b433b2d55c80f988)
+
+running 2 tests
+test emitted_patterns_preserve_their_languages_in_unicode_ecmascript ... ok
+test i_flag_patterns_carry_xpath_case_variants_in_unicode_ecmascript ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/prebinding_above_hidden_columns.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/c339d18d7d45f3e1/out/prebinding_above_hidden_columns-c339d18d7d45f3e1)
+
+running 13 tests
+test a_filter_above_a_sub_select_dropping_this_reads_the_focus_node ... ok
+test a_select_expression_after_group_by_reads_the_focus_node ... ok
+test a_bind_above_a_sub_select_dropping_this_reads_the_focus_node ... ok
+test an_exists_body_expression_reads_the_focus_node_and_the_filtered_row ... ok
+test an_optional_condition_reads_the_focus_node ... ok
+test having_at_the_top_level_reads_the_focus_node ... ok
+test an_order_by_after_group_by_reads_the_focus_node ... ok
+test an_order_by_beneath_the_seed_reads_the_focus_node ... ok
+test having_at_the_top_level_reads_the_focus_node_in_a_select_validator ... ok
+test having_in_a_sub_select_dropping_this_reads_the_focus_node ... ok
+test having_exists_matches_the_focus_node ... ok
+test having_in_a_sub_select_reads_the_focus_node ... ok
+test unfold_reads_the_focus_node_above_and_beneath ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/prebinding_lanes.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/3ecf2ad0e0417f25/out/prebinding_lanes-3ecf2ad0e0417f25)
+
+running 3 tests
+test sh_expression_holds_value_to_the_rule_this_is_held_to ... ok
+test a_prepared_execution_answers_alike_across_runs_and_its_memo ... ok
+test every_pre_binding_lane_answers_every_query_shape_alike ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/product_api_compat.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/e858d8197b137189/out/product_api_compat-e858d8197b137189)
+
+running 9 tests
+test node_expr_match_is_exhaustive_and_reachable ... ok
+test product_dimension_match_is_exhaustive_and_reachable ... ok
+test constraint_match_is_exhaustive_and_reachable ... ok
+test product_restore_match_is_exhaustive_and_reachable ... ok
+test property_shape_is_still_a_bare_literal ... ok
+test shape_is_still_a_bare_literal ... ok
+test validator_provenance_match_is_exhaustive_and_reachable ... ok
+test shapes_still_builds_via_default_then_field_assignment ... ok
+test public_constructors_keep_their_signatures ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/product_carried_analysis.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/5e96b4b116d10679/out/product_carried_analysis-5e96b4b116d10679)
+
+running 10 tests
+test a_valid_but_underived_arrangement_is_not_refused_as_malformed ... ok
+test a_carried_analysis_the_identity_does_not_pin_is_refused ... ok
+test an_analysis_that_is_not_an_arrangement_of_its_own_slots_is_refused ... ok
+test a_restore_uses_the_carried_analysis_verbatim ... ok
+test an_untouched_repack_still_admits ... ok
+test rebuild_ignores_the_carried_analysis ... ok
+test parsing_admitting_and_rebuilding_agree ... ok
+test an_admitted_product_constrains_exactly_as_a_fresh_parse_does ... ok
+test the_ast_section_ends_with_the_class_analysis ... ok
+test a_rearranged_analysis_is_refused ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/product_corpus_equivalence.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/27f4cd88eee23e4d/out/product_corpus_equivalence-27f4cd88eee23e4d)
+
+running 1 test
+test product_corpus_equivalence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+     Running tests/product_determinism.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/ed74b35b105db142/out/product_determinism-ed74b35b105db142)
+
+running 8 tests
+test encode_is_byte_deterministic ... ok
+test encode_decode_encode_is_idempotent ... ok
+test regenerate_the_prepared_product_fixture ... ignored, writes a committed artifact; run by name when the format or the stage id moved
+test frozen_product_bytes ... ok
+test encode_is_stable_across_independent_parses ... ok
+test the_frozen_format_epoch_product_stays_readable ... ok
+test the_frozen_format_epoch_product_is_refused_then_rebuilt ... ok
+test frozen_golden_admits ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/product_model_census.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/ebb3d718c5d46fae/out/product_model_census-ebb3d718c5d46fae)
+
+running 28 tests
+test detector_self_tests::a_field_type_change_alone_moves_the_stage_id ... ok
+test detector_self_tests::a_new_variant_reaches_the_census_rows_and_the_stage_id ... ok
+test detector_self_tests::aliases_do_not_hide_a_reachable_type ... ok
+test detector_self_tests::an_ambiguous_reachable_name_is_refused - should panic ... ok
+test detector_self_tests::an_ambiguous_unreachable_name_is_not_refused ... ok
+test detector_self_tests::an_opaque_field_type_is_refused - should panic ... ok
+test detector_self_tests::an_undeclared_reachable_type_is_flagged ... ok
+test detector_self_tests::cfg_test_items_are_invisible_to_the_census ... ok
+test detector_self_tests::doc_comments_and_formatting_do_not_move_the_stage_id ... ok
+test detector_self_tests::malformed_source_fails_loudly - should panic ... ok
+test detector_self_tests::ordinary_field_types_are_read_not_refused ... ok
+test detector_self_tests::tuple_and_unit_variants_are_censused ... ok
+test detector_self_tests::variant_order_moves_the_stage_id ... ok
+test reformatting_the_class_walk_does_not_move_the_stage_id ... ok
+test census_rows_carry_every_variant_and_field ... ok
+test census_closure_is_complete ... ok
+test constraint_variants_are_the_spec_table_component_rows ... ok
+test stage_id_changes_when_a_capability_table_changes ... ok
+test report_cache_is_censused_but_not_carried_by_the_stage ... ok
+test stage_id_changes_when_a_rule_variant_is_added ... ok
+test stage_id_changes_when_a_variant_is_added ... ok
+test stage_id_changes_when_the_preamble_gains_a_field ... ok
+test stage_id_changes_when_the_class_reachability_rule_changes ... ok
+test stage_id_changes_when_the_spec_table_changes ... ok
+test stage_id_matches_shipped_constant ... ok
+test stage_id_depends_on_the_profile_id ... ok
+test report_cache_exclusion_is_exact_and_model_fields_still_move_the_stage ... ok
+test stage_id_is_reproducible_and_its_preimage_is_readable ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.26s
+
+     Running tests/product_rdf12_identity.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/413d0ecf05f72950/out/product_rdf12_identity-413d0ecf05f72950)
+
+running 7 tests
+test dir_lang_string_rtl_survives ... ok
+test dir_lang_string_ltr_survives ... ok
+test one_blank_shape_stays_one ... ok
+test quoted_triple_target_identity_survives ... ok
+test quoted_triple_constraint_value_survives ... ok
+test lang_tagged_literal_with_subtags_survives ... ok
+test nested_blank_property_shapes_stay_distinct ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/product_refusal.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/2bc0f8c6cb3f1097/out/product_refusal-2bc0f8c6cb3f1097)
+
+running 65 tests
+test accepts_aggregate_registry_neighbour ... ok
+test accepts_an_empty_shapes_graph ... ok
+test accepts_an_unidentified_common_path_neighbour ... ok
+test accepts_class_catalog_neighbour ... ok
+test accepts_container_digest_neighbour ... ok
+test accepts_dataset_identity_neighbour ... ok
+test accepts_base_neighbour ... ok
+test accepts_deactivated_shapes ... ok
+test accepts_depth_limit_neighbour ... FAILED
+test accepts_expected_identity_neighbour ... ok
+test accepts_format_version_neighbour ... ok
+test accepts_function_registry_neighbour ... ok
+test accepts_magic_neighbour ... ok
+test accepts_malformed_neighbour ... ok
+test accepts_included_graphs_neighbour ... ok
+test accepts_model_neighbour ... ok
+test accepts_prefixes_neighbour ... ok
+test accepts_profile_neighbour ... ok
+test accepts_property_function_registry_neighbour ... ok
+test accepts_resource_neighbour ... ok
+test accepts_section_digest_neighbour ... ok
+test accepts_shapes_graph_neighbour ... ok
+test accepts_stage_id_neighbour ... ok
+test accepts_the_same_implementation_build_neighbour ... ok
+test accepts_trailer_neighbour ... ok
+test accepts_truncated_neighbour ... ok
+test accepts_vocabulary_neighbour ... ok
+test accepts_writing_an_identified_injected_population_neighbour ... ok
+test arbitrary_bytes_behind_the_magic_never_panic ... ok
+test arbitrary_bytes_never_panic ... ok
+test extension_namespace_order_is_configuration_and_relation_namespace_order_is_not ... ok
+test no_turtle_fallback ... FAILED
+test accepts_declared_functions_alongside_host_natives ... ok
+test accepts_unsupported_capability_neighbour ... ok
+test refuses_a_product_prepared_under_another_spec_table ... ok
+test accepts_a_pure_shacl_sparql_shapes_graph ... ok
+test refuses_another_implementation_build ... ok
+test refuses_aggregate_registry ... ok
+test refuses_base ... ok
+test refuses_container_digest ... ok
+test refuses_class_catalog ... ok
+test refuses_depth_limit ... FAILED
+test refuses_dataset_identity ... ok
+test refuses_expected_identity ... ok
+test refuses_format_version ... ok
+test refuses_magic ... ok
+test refuses_function_registry ... ok
+test refuses_included_graphs ... ok
+test refuses_malformed ... ok
+test refuses_model ... ok
+test refuses_parse_configuration ... ok
+test refuses_prefixes ... ok
+test refuses_resource ... ok
+test refuses_profile ... ok
+test refuses_property_function_registry ... ok
+test refuses_section_digest ... ok
+test refuses_shapes_graph ... ok
+test refuses_stage_id ... ok
+test refuses_truncated ... ok
+test refuses_trailer ... ok
+test refuses_unsupported_capability ... FAILED
+test refuses_writing_a_product_that_cannot_name_its_implementations ... ok
+test refuses_vocabulary ... ok
+test single_byte_mutations_never_panic ... ok
+test refusal_labels_emitted_equal_labels_declared ... FAILED
+
+failures:
+
+---- accepts_depth_limit_neighbour stdout ----
+
+thread 'accepts_depth_limit_neighbour' (3556508) panicked at crates/shapes/tests/product_refusal.rs:2063:5:
+assertion `left == right` failed: the retained definition and exported root each gain one tag
+  left: 207
+ right: 208
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- no_turtle_fallback stdout ----
+
+thread 'no_turtle_fallback' (3556532) panicked at crates/shapes/tests/product_refusal.rs:1945:9:
+assertion `left == right` failed: one index, no functions, global owner 0/index 0, initialized index with one bare definition
+  left: [1, 0, 2, 0, 0, 0, 1, 2, 0, 0]
+ right: [1, 0, 2, 0, 0, 0, 1, 1, 0, 0]
+
+---- refuses_depth_limit stdout ----
+
+thread 'refuses_depth_limit' (3556541) panicked at crates/shapes/tests/product_refusal.rs:2063:5:
+assertion `left == right` failed: the retained definition and exported root each gain one tag
+  left: 207
+ right: 208
+
+---- refuses_unsupported_capability stdout ----
+
+thread 'refuses_unsupported_capability' (3556559) panicked at crates/shapes/tests/product_refusal.rs:1945:9:
+assertion `left == right` failed: one index, no functions, global owner 0/index 0, initialized index with one bare definition
+  left: [1, 0, 2, 0, 0, 0, 1, 2, 0, 0]
+ right: [1, 0, 2, 0, 0, 0, 1, 1, 0, 0]
+
+---- refusal_labels_emitted_equal_labels_declared stdout ----
+
+thread 'refusal_labels_emitted_equal_labels_declared' (3556533) panicked at crates/shapes/tests/product_refusal.rs:1945:9:
+assertion `left == right` failed: one index, no functions, global owner 0/index 0, initialized index with one bare definition
+  left: [1, 0, 2, 0, 0, 0, 1, 2, 0, 0]
+ right: [1, 0, 2, 0, 0, 0, 1, 1, 0, 0]
+
+
+failures:
+    accepts_depth_limit_neighbour
+    no_turtle_fallback
+    refusal_labels_emitted_equal_labels_declared
+    refuses_depth_limit
+    refuses_unsupported_capability
+
+test result: FAILED. 60 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test product_refusal`
+     Running tests/product_reuse_semantics.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/47508db46b24f057/out/product_reuse_semantics-47508db46b24f057)
+
+running 13 tests
+test a_parsed_preparation_reports_a_parsed_provenance ... ok
+test a_rebuilt_preparation_names_the_product_and_its_seam ... ok
+test a_second_binding_reuses_the_cache_the_first_binding_warmed ... FAILED
+test a_restored_preparation_compiles_no_pattern_until_one_is_reached ... FAILED
+test an_admitted_preparation_names_the_product_it_came_from ... ok
+test a_restored_preparation_rebinds_targets_exactly_as_a_parse_does ... ok
+test binding_one_restored_preparation_to_many_datasets_shares_one_shape_tree ... ok
+test every_binding_shares_the_preparations_provenance ... ok
+test cloning_a_restored_preparation_shares_its_shape_tree ... ok
+test one_restored_preparation_rebinds_targets_per_dataset ... ok
+test provenance_survives_cloning_and_binding ... ok
+test ten_validations_from_one_restored_preparation_agree_byte_for_byte ... ok
+test ten_validations_over_independently_parsed_data_agree_byte_for_byte ... ok
+
+failures:
+
+---- a_second_binding_reuses_the_cache_the_first_binding_warmed stdout ----
+
+thread 'a_second_binding_reuses_the_cache_the_first_binding_warmed' (3556569) panicked at crates/shapes/tests/product_reuse_semantics.rs:179:5:
+the fixture must carry at least one sh:pattern, or every assertion about the lazy regex cache is vacuous
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_restored_preparation_compiles_no_pattern_until_one_is_reached stdout ----
+
+thread 'a_restored_preparation_compiles_no_pattern_until_one_is_reached' (3556567) panicked at crates/shapes/tests/product_reuse_semantics.rs:179:5:
+the fixture must carry at least one sh:pattern, or every assertion about the lazy regex cache is vacuous
+
+
+failures:
+    a_restored_preparation_compiles_no_pattern_until_one_is_reached
+    a_second_binding_reuses_the_cache_the_first_binding_warmed
+
+test result: FAILED. 11 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test product_reuse_semantics`
+     Running tests/product_wasm.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/26d4c747c67f38e9/out/product_wasm-26d4c747c67f38e9)
+
+running 9 tests
+test member_shape_001_on_this_target ... ok
+test closed_by_types_003_on_this_target ... ok
+test unique_values_for_001_on_this_target ... ok
+test encoding_matches_the_committed_bytes_on_this_target ... ok
+test node_expr_concat_on_this_target ... ok
+test encode_open_admit_validate_on_this_target ... ok
+test the_committed_golden_restores_on_this_target ... ok
+test srl_eval_filter_01_on_this_target ... ok
+test merged_vocabularies_load_and_validate_on_this_target ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/profile_admission.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/c507e517113f17b7/out/profile_admission-c507e517113f17b7)
+
+running 15 tests
+test actual_function_admission_cause_survives_erasure_with_its_private_fields ... ok
+test a_parameter_named_like_optional_context_remains_required ... ok
+test aggregate_order_expressions_are_audited ... ok
+test aggregate_operands_cannot_hide_restrictions_under_either_dated_law ... ok
+test assignments_use_actual_role_bindings ... ok
+test identities_are_exact_and_name_each_required_edition ... ok
+test genuinely_unbound_bodies_follow_each_dated_scope_and_keep_legacy_behavior ... ok
+test function_and_target_parameters_have_their_own_projection_and_values_policy ... ok
+test local_values_differs_by_date_and_prebound_values_are_refused ... ok
+test minus_has_optional_and_not_exists_neighbors ... ok
+test optional_rec_context_is_restricted_for_assignment_but_not_projection ... ok
+test projection_and_unfold_aliases_cannot_assign_a_potential_binding ... ok
+test every_role_refuses_service_and_admits_a_local_graph ... ok
+test rec_subqueries_project_role_bindings_and_draft_allows_hidden_bindings ... ok
+test wrong_query_form_has_a_typed_refusal_and_correct_form_neighbor ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/property_monotonicity.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/86778b278a91c971/out/property_monotonicity-86778b278a91c971)
+
+running 2 tests
+test shapes_detect_violations ... ok
+test conformance_is_monotone_under_data_addition ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/property_references.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b656c7a76d964c2f/out/property_references-b656c7a76d964c2f)
+
+running 7 tests
+test missing_projection_definitions_return_the_original_native_refusal ... ok
+test a_deactivated_property_edge_still_permits_its_path_in_closed_shapes ... ok
+test nested_property_references_preserve_child_focus_path_and_serialized_report ... ok
+test property_edge_overrides_stay_below_original_constraint_annotations ... ok
+test catalog_references_project_object_and_member_definitions_without_losing_constraints ... ok
+test shared_dag_admission_keeps_one_body_per_identity ... ok
+test authored_aliases_preserve_shaped_property_coverage ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/property_shape_provenance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/df113fd1aa2cb6ce/out/property_shape_provenance-df113fd1aa2cb6ce)
+
+running 5 tests
+test property_sources_match_the_declaring_graph_nodes ... FAILED
+test nested_property_source_preserves_ancestor_box_roles ... ok
+test reifier_constraint_sources_use_the_property_declaration ... ok
+test imported_properties_have_distinct_deterministic_source_identities ... ok
+test sparql_current_shape_is_the_property_in_every_validation_entry ... ok
+
+failures:
+
+---- property_sources_match_the_declaring_graph_nodes stdout ----
+
+thread 'property_sources_match_the_declaring_graph_nodes' (3556621) panicked at crates/shapes/tests/property_shape_provenance.rs:57:57:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    property_sources_match_the_declaring_graph_nodes
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test property_shape_provenance`
+     Running tests/relation_incompleteness.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/3e06668afcd63cf9/out/relation_incompleteness-3e06668afcd63cf9)
+
+running 1 test
+test a_relation_declaring_its_index_not_whole_is_refused_and_a_whole_one_validates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/result_annotations.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b59a82d815b8ddb2/out/result_annotations-b59a82d815b8ddb2)
+
+running 13 tests
+test a_query_a_node_never_runs_is_refused ... ok
+test a_report_property_as_annotation_is_refused_and_an_application_property_loads ... ok
+test a_var_name_that_is_no_sparql_variable_is_refused_and_a_bare_name_loads ... ok
+test an_annotation_needs_exactly_one_iri_property ... ok
+test a_prepared_product_keeps_the_annotations ... ok
+test a_sparql_constraint_copies_the_bound_variable_and_the_control_carries_nothing ... ok
+test an_ask_validator_annotation_reads_this_and_value ... ok
+test an_unknown_term_on_an_annotation_node_is_refused ... ok
+test a_select_validator_copies_bindings_including_a_parameter ... ok
+test shacl_js_is_refused_as_not_shacl_1_2 ... ok
+test an_unbound_variable_takes_the_defaults ... ok
+test the_property_local_name_is_the_default_variable ... ok
+test describe_and_update_are_refused_wherever_the_loader_reads_and_load_elsewhere ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/rule_capacity_limits.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/1af3e20778a76602/out/rule_capacity_limits-1af3e20778a76602)
+
+running 7 tests
+test a_divergent_rule_set_is_refused_by_a_term_limit_with_the_capacity_limits_raised ... ok
+test a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm ... ok
+test arena_refusals_name_a_host_usable_remedy ... ok
+test the_join_step_limit_names_its_knob_and_its_neighbour_completes ... ok
+test a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_join_step_limit ... ok
+test a_thousand_node_transitive_closure_completes_natively_through_both_frontends ... ok
+test a_divergent_shape_rule_is_refused_by_the_round_limit_not_the_join_step_limit ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.70s
+
+     Running tests/rule_coordinates.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/c976773745f3485a/out/rule_coordinates-c976773745f3485a)
+
+running 2 tests
+test parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal ... ok
+test shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/rules_conformance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/5fcd5ff28895d125/out/rules_conformance-5fcd5ff28895d125)
+
+running 3 tests
+test entail_dataset_composes_project_then_apply_rules ... ok
+test sh_order_is_order_independent_over_the_closure ... ok
+test rules_conformance ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.66s
+
+     Running tests/rules_engine.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b104e5a037406eb1/out/rules_engine-b104e5a037406eb1)
+
+running 36 tests
+test a_class_condition_brings_its_superclasses ... ok
+test a_known_rule_processor_loads_and_an_unknown_one_is_refused ... ok
+test a_derived_triple_explains_itself ... ok
+test a_rule_set_entailment_runs_only_that_sets_rules_before_validation ... ok
+test a_bound_template_runs_and_a_missing_parameter_is_refused ... ok
+test a_rule_set_entailment_runs_the_included_rule_sets ... ok
+test a_rule_set_selects_its_rules ... ok
+test a_stratifiable_negation_evaluates_and_a_cycle_through_one_is_refused_by_name ... ok
+test a_transitive_closure_over_a_chain_is_complete ... ok
+test an_ill_formed_element_rule_is_refused ... ok
+test a_rule_set_as_an_entailment_value_is_read_by_the_editors_draft_alone ... ok
+test an_iterating_blank_minting_rule_reports_its_limit ... ok
+test an_undeclared_rule_set_include_is_refused_at_load_under_every_regime ... ok
+test an_undefined_entailment_regime_still_signals_a_failure ... ok
+test an_untyped_subject_of_has_rule_is_not_a_rule_set_to_either_reader ... ok
+test data_blocks_join_the_inference_graph ... ok
+test a_data_bounded_counter_completes_under_the_default ... ok
+test element_readings_infer_what_their_producers_do ... ok
+test element_rules_lower_filters_assignments_blanks_and_triple_terms ... ok
+test empty_construct_preserves_the_neighbouring_rule ... ok
+test global_rules_run_without_a_focus_node ... ok
+test not_data_matches_the_base_graph_only ... ok
+test now_is_one_point_in_time_per_evaluation ... ok
+test opaque_shacl_producers_preserve_multirow_fresh_templates ... ok
+test rule_nodes_are_checked_against_the_census ... ok
+test rule_set_include_cycles_resolve_to_their_closure ... ok
+test rules_entailment_beside_a_rule_set_executes_every_rule ... ok
+test rules_entailment_runs_the_rules_before_validation ... ok
+test same_order_rules_run_concurrently_and_orders_run_in_sequence ... ok
+test several_rule_set_entailments_execute_together_as_one_rule_set ... ok
+test source_rules_are_tracked_on_request ... ok
+test temporary_triples_are_visible_then_deleted ... ok
+test an_unbounded_counter_is_refused_at_the_round_limit ... ok
+test the_term_generating_round_limit_is_the_callers ... ok
+test deep_countdowns_complete_under_the_default_limits ... ok
+test an_exponential_rule_set_is_refused_at_the_generated_term_budget ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.50s
+
+     Running tests/rules_serialization_roundtrip.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/81ea2e8be623803f/out/rules_serialization_roundtrip-81ea2e8be623803f)
+
+running 1 test
+test sparql_rule_entailment_roundtrips_through_text_serialization ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/scope_profiles.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/4134e1810aaafa94/out/scope_profiles-4134e1810aaafa94)
+
+running 2 tests
+test optional_exists_paths_and_projected_subqueries_remain_legal_constraints ... ok
+test legal_sparql_constructs_have_explicit_shacl_rejection_controls ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/shacl_shacl_differential.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/49951b02c8312503/out/shacl_shacl_differential-49951b02c8312503)
+
+running 1 test
+test purrdf_refuses_exactly_what_shacl_shacl_flags ... FAILED
+
+failures:
+
+---- purrdf_refuses_exactly_what_shacl_shacl_flags stdout ----
+
+thread 'purrdf_refuses_exactly_what_shacl_shacl_flags' (3557703) panicked at crates/shapes/tests/shacl_shacl_differential.rs:589:6:
+shacl-shacl.ttl loads as a shapes graph: Recursion(RecursionRefusal { members: ["<http://www.w3.org/ns/shacl-shacl#PathNodeShape>", "<http://www.w3.org/ns/shacl-shacl#PathShape>", "_:gts_0000000000000000000000003F", "_:gts_0000000000000000000000003J", "_:gts_0000000000000000000000003K", "_:gts_0000000000000000000000003M"], edges: [RecursionDependency { source: "<http://www.w3.org/ns/shacl-shacl#PathNodeShape>", target: "_:gts_0000000000000000000000003J", parameter: "http://www.w3.org/ns/shacl#xone", polarity: Both }, RecursionDependency { source: "<http://www.w3.org/ns/shacl-shacl#PathNodeShape>", target: "_:gts_0000000000000000000000003K", parameter: "http://www.w3.org/ns/shacl#xone", polarity: Both }, RecursionDependency { source: "<http://www.w3.org/ns/shacl-shacl#PathShape>", target: "_:gts_0000000000000000000000003F", parameter: "http://www.w3.org/ns/shacl#property", polarity: Positive }, RecursionDependency { source: "_:gts_0000000000000000000000003F", target: "<http://www.w3.org/ns/shacl-shacl#PathNodeShape>", parameter: "http://www.w3.org/ns/shacl#node", polarity: Positive }, RecursionDependency { source: "_:gts_0000000000000000000000003J", target: "<http://www.w3.org/ns/shacl-shacl#PathShape>", parameter: "http://www.w3.org/ns/shacl#memberShape", polarity: Positive }, RecursionDependency { source: "_:gts_0000000000000000000000003K", target: "_:gts_0000000000000000000000003M", parameter: "http://www.w3.org/ns/shacl#property", polarity: Positive }, RecursionDependency { source: "_:gts_0000000000000000000000003M", target: "<http://www.w3.org/ns/shacl-shacl#PathShape>", parameter: "http://www.w3.org/ns/shacl#memberShape", polarity: Positive }] })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    purrdf_refuses_exactly_what_shacl_shacl_flags
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test shacl_shacl_differential`
+     Running tests/shape_catalog.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/5a531e9ca6986d70/out/shape_catalog-5a531e9ca6986d70)
+
+running 7 tests
+test function_domain_admission_has_no_per_declaration_allocation ... ok
+test missing_catalog_identity_retains_the_original_term_without_clone_allocation ... ok
+test catalog_admission_allocation_growth_and_retained_reference_execution ... ok
+test static_root_preparation_does_not_copy_unreferenced_catalog_bodies ... ok
+test catalog_root_export_and_clone_share_constraint_bodies ... ok
+test shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth ... ok
+test identity_reference_report_retains_caller_path_role_vocabulary ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/shape_deactivation_expression.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/f99923c3d9a4009f/out/shape_deactivation_expression-f99923c3d9a4009f)
+
+running 13 tests
+test a_constant_value_that_is_no_boolean_is_refused_at_load ... ok
+test a_json_schema_records_a_node_expression_deactivation_as_a_loss ... ok
+test a_constraint_node_s_deactivation_loss_names_its_shape ... ok
+test a_node_expression_deactivates_an_expression_constraint_where_it_yields_true ... ok
+test a_json_schema_records_a_constraint_s_node_expression_deactivation_as_a_loss ... ok
+test a_node_expression_deactivates_a_property_shape_at_the_focus_nodes_where_it_yields_true ... ok
+test a_node_expression_deactivates_the_shape_at_the_focus_nodes_where_it_yields_true ... ok
+test a_shape_deactivated_by_an_expression_is_ignored_where_another_shape_refers_to_it ... ok
+test a_node_expression_deactivates_a_sparql_based_constraint_where_it_yields_true ... ok
+test an_expression_that_does_not_yield_one_boolean_is_a_failure ... ok
+test a_reifier_node_expression_deactivates_the_constraint_where_it_yields_true ... ok
+test the_working_draft_validates_a_boolean_constraint_deactivation_and_refuses_an_expression ... ok
+test each_law_reads_a_node_expression_sh_deactivated_where_its_text_defines_one ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/shapes_graph_well_formed_report.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/8f40fde2e3accebb/out/shapes_graph_well_formed_report-8f40fde2e3accebb)
+
+running 4 tests
+test a_report_no_validation_produced_states_nothing ... ok
+test every_report_states_the_shapes_graph_well_formed ... ok
+test every_validation_reports_the_mandatory_diagnostic_beside_its_results ... ok
+test lint_always_reports_an_empty_in_or_xone_list_by_rule_id ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/shapes_graph_wellformedness.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/abad8b165057515d/out/shapes_graph_wellformedness-abad8b165057515d)
+
+running 72 tests
+test a_blank_sparql_function_is_refused_and_a_named_one_loads ... ok
+test a_class_list_is_a_disjunction_and_separate_values_a_conjunction ... ok
+test a_datatype_list_projects_to_json_schema_any_of ... ok
+test a_focus_node_absent_from_the_data_reaches_itself_along_a_reflexive_path ... ok
+test a_failure_inside_some_value_propagates_unless_a_value_conforms ... ok
+test a_literal_box_role_is_refused_and_an_iri_role_loads ... ok
+test a_literal_class_or_target_is_refused_and_the_iri_loads ... ok
+test a_literal_node_kind_is_refused_and_the_iri_loads ... ok
+test a_datatype_list_is_a_disjunction ... ok
+test a_literal_sh_shape_value_is_refused_and_an_iri_one_targets ... ok
+test a_literal_pair_value_is_refused_and_an_iri_path_loads ... ok
+test a_malformed_blank_pair_path_is_refused_and_a_well_formed_one_loads ... ok
+test a_member_shape_with_a_path_is_refused_and_a_node_shape_loads ... ok
+test a_min_count_on_a_node_shape_is_refused_and_on_a_property_shape_loads ... ok
+test a_misspelled_parameter_is_refused_and_the_real_one_loads ... ok
+test a_minus_expression_without_sh_nodes_is_refused ... ok
+test a_non_boolean_single_line_is_refused_and_a_boolean_loads ... ok
+test a_node_kind_list_is_a_disjunction_of_basic_kinds ... ok
+test a_non_integer_count_is_refused_and_an_integer_one_loads ... ok
+test a_parameter_declarations_default_value_loads_and_its_values_is_refused ... ok
+test a_one_valued_boolean_is_well_typed_and_is_not_true ... ok
+test a_path_node_with_a_second_form_is_refused_and_one_form_loads ... ok
+test a_path_valued_less_than_on_a_node_shape_is_refused_and_on_a_property_shape_loads ... ok
+test a_reifier_annotation_deactivates_its_constraint_and_a_non_validating_one_loads ... ok
+test a_repeated_message_language_is_ill_formed_and_one_per_language_loads ... ok
+test a_sequence_path_disjoint_is_evaluated_as_the_sequence ... ok
+test a_custom_target_the_engine_cannot_compute_is_refused_typed ... ok
+test a_sequence_path_less_than_orders_against_the_reached_nodes ... ok
+test a_select_function_body_with_two_solutions_fails_the_call ... ok
+test a_shacl_js_constraint_is_a_typed_refusal_and_its_sparql_equivalent_validates ... ok
+test a_shape_with_every_non_validating_property_loads_and_validates_unchanged ... ok
+test a_shacl_js_validator_is_ill_formed_and_its_ask_equivalent_validates ... ok
+test a_string_closed_flag_is_refused_and_boolean_true_closes ... ok
+test a_string_deactivation_is_refused_and_boolean_true_deactivates ... ok
+test a_structured_target_node_is_evaluated_from_the_shape_and_an_iri_is_a_constant ... ok
+test a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule ... ok
+test a_validator_of_a_non_component_owner_is_judged_by_the_class_rules ... ok
+test an_entailment_regime_is_refused_and_the_graph_without_it_loads ... ok
+test an_ill_formed_list_is_refused_and_a_well_formed_one_loads ... ok
+test an_ill_typed_root_class_is_refused_and_iris_load ... ok
+test an_inverse_path_equals_is_evaluated_as_the_inverse ... ok
+test an_af_graph_with_functions_rules_and_node_expressions_loads_and_runs ... ok
+test an_other_iri_closed_value_is_refused_and_by_types_evaluates ... ok
+test an_unknown_term_on_a_node_expression_is_refused_and_an_annotation_loads ... ok
+test debug_severity_is_reported_without_blocking_and_warning_blocks ... ok
+test default_value_on_a_node_shape_is_refused_and_on_a_property_shape_it_computes ... ok
+test declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire ... ok
+test every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal ... ok
+test iri_valued_property_pairs_answer_as_before ... FAILED
+test list_lengths_are_checked_and_a_non_list_value_gets_a_result ... ok
+test root_class_admits_the_root_and_its_subclasses_only ... ok
+test root_class_is_reflexive_without_any_hierarchy ... ok
+test root_class_list_admits_any_root ... ok
+test select_expressions_and_target_types_answer_to_the_prebinding_restrictions ... ok
+test shape_class_targets_its_instances_and_a_blank_one_is_refused ... ok
+test single_line_false_admits_a_line_break ... ok
+test single_line_true_reports_each_literal_with_a_line_break ... ok
+test some_value_needs_one_conforming_value_and_reports_once_without_a_value ... ok
+test some_value_on_a_node_shape_judges_the_focus_node ... ok
+test subset_of_on_a_node_shape_judges_the_focus_node ... ok
+test subset_of_reports_each_value_outside_the_reached_nodes ... ok
+test target_where_selects_the_conforming_nodes_and_target_class_the_instances ... ok
+test the_af_minus_expression_and_shnex_remove_answer_identically ... ok
+test the_empty_target_node_targets_nothing_and_an_iri_targets ... ok
+test triple_term_is_a_node_kind ... ok
+test two_flags_and_a_non_literal_pattern_are_refused_and_one_string_pattern_loads ... ok
+test two_values_are_refused_and_one_loads ... ok
+test unique_members_and_member_shape_report_their_details ... ok
+test values_on_a_non_iri_path_is_refused_and_on_an_iri_path_it_computes ... ok
+test a_service_in_any_executed_shacl_sparql_query_is_refused ... ok
+test ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them ... ok
+test a_function_body_violating_prebinding_is_refused_only_where_a_call_executes_it ... ok
+
+failures:
+
+---- iri_valued_property_pairs_answer_as_before stdout ----
+
+thread 'iri_valued_property_pairs_answer_as_before' (3557848) panicked at crates/shapes/tests/shapes_graph_wellformedness.rs:2017:58:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    iri_valued_property_pairs_answer_as_before
+
+test result: FAILED. 71 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test shapes_graph_wellformedness`
+     Running tests/shared_shapes_dataset.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/89d995b1560324ca/out/shared_shapes_dataset-89d995b1560324ca)
+
+running 3 tests
+test the_accessor_returns_the_same_allocation_it_was_built_from ... ok
+test exposing_the_dataset_leaves_prefix_resolution_alone ... ok
+test the_text_entry_point_retains_its_parsed_dataset ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/shared_validation_views.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/e98e7d146aeace09/out/shared_validation_views-e98e7d146aeace09)
+
+running 9 tests
+test prepared_probe_plans_preserve_graph_patterns_and_union_duplicates ... ok
+test borrowed_projection_matches_native_and_deduplicates_statement_layers ... ok
+test prepared_delta_binding_observes_suppression_and_new_values_without_freezing_base ... ok
+test independently_scoped_composite_targets_remain_distinct ... ok
+test property_pair_constraints_borrow_every_shared_carrier_without_materialization ... ok
+test validation_handle_budget_is_admitted_before_mapping ... ok
+test prepared_sparql_constraints_probe_the_shared_graph_union ... ok
+test same_document_blank_target_and_current_shape_keep_their_identity ... ok
+test sparql_statement_projection_deduplicates_without_flattening_shapes_graph ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/sparql_argument_failures.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/3f2689a80b1865f4/out/sparql_argument_failures-3f2689a80b1865f4)
+
+running 4 tests
+test sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal ... FAILED
+test sparql_argument_failures_follow_the_same_path_in_dated_validation ... ok
+test sparql_node_calls_mask_catchable_argument_failures ... ok
+test sparql_node_calls_preserve_unmasked_failures_and_empty_branches ... ok
+
+failures:
+
+---- sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal stdout ----
+thread 'sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal' panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+
+failures:
+    sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test sparql_argument_failures`
+     Running tests/sparql_node_expressions.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/a9562669e6844c37/out/sparql_node_expressions-a9562669e6844c37)
+
+running 41 tests
+test a_call_site_may_carry_the_annotations_an_expression_constraint_reads ... FAILED
+test a_one_argument_call_may_omit_the_argument_list ... FAILED
+test a_product_restore_keeps_the_authored_spelling ... FAILED
+test a_sparql_ns_keyword_function_with_the_wrong_arity_is_a_load_error ... FAILED
+test a_sparql_ns_operator_with_the_wrong_arity_is_a_load_error ... ok
+test an_undeclared_prefix_in_a_select_expression_is_still_a_load_error ... ok
+test an_unknown_sparql_ns_name_is_a_load_error ... ok
+test select_expression_binds_this_to_the_focus_node ... FAILED
+test a_select_expression_resolves_sh_prefixes_declared_on_the_shape ... FAILED
+test select_expression_projecting_two_variables_is_a_load_error ... ok
+test select_expression_preserves_the_query_s_own_order ... FAILED
+test select_expression_that_is_an_ask_is_a_load_error ... ok
+test select_expression_resolves_prefixed_names_through_sh_prefixes ... FAILED
+test select_expression_with_an_unparsable_query_is_a_load_error ... ok
+test sparql_encode_is_encode_for_uri ... FAILED
+test sparql_expr_and_its_expanded_select_agree ... FAILED
+test sparql_expr_expression_computes_the_focus_node_uri_length ... FAILED
+test sparql_expr_that_does_not_parse_is_a_load_error ... ok
+test sparql_is_triple_recognises_a_constructed_triple_term ... FAILED
+test sparql_ns_aggregate_name_is_a_load_error ... ok
+test sparql_ns_call_arguments_are_node_expressions ... FAILED
+test sparql_ns_call_resolves_a_plain_function_name ... FAILED
+test sparql_ns_call_resolves_encode_for_uri ... FAILED
+test sparql_ns_call_resolves_strlen ... FAILED
+test sparql_ns_call_resolves_the_add_operator ... FAILED
+test sparql_ns_call_resolves_the_if_functional_form ... FAILED
+test sparql_ns_call_resolves_the_in_membership_form ... FAILED
+test sparql_ns_call_resolves_the_unary_minus_operator ... FAILED
+test sparql_ns_equality_names_all_lower_to_the_same_operator ... FAILED
+test sparql_ns_exists_functional_form_is_a_load_error ... ok
+test sparql_object_reads_a_constructed_triple_term ... FAILED
+test sparql_plus_is_the_add_operator ... FAILED
+test sparql_triple_constructs_an_rdf12_triple_term ... FAILED
+test a_node_with_both_select_and_sparql_expr_is_ambiguous ... ok
+test the_empty_and_multi_argument_list_forms_still_parse ... FAILED
+test the_list_free_form_accepts_a_structured_argument ... FAILED
+test the_spelling_aliases_do_not_admit_unknown_names ... ok
+test two_real_function_predicates_on_one_node_are_still_ambiguous ... ok
+test a_sparql_based_expression_sees_the_value_node_in_its_scope ... ok
+test the_builtin_sparql_expr_declaration_loads_and_evaluates_natively ... ok
+test sh_prefixes_is_honoured_beside_the_builtin_declaration ... ok
+
+failures:
+
+---- a_call_site_may_carry_the_annotations_an_expression_constraint_reads stdout ----
+
+thread 'a_call_site_may_carry_the_annotations_an_expression_constraint_reads' (3557894) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_one_argument_call_may_omit_the_argument_list stdout ----
+
+thread 'a_one_argument_call_may_omit_the_argument_list' (3557896) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_product_restore_keeps_the_authored_spelling stdout ----
+
+thread 'a_product_restore_keeps_the_authored_spelling' (3557897) panicked at crates/shapes/tests/sparql_node_expressions.rs:890:9:
+the restored shape keeps its expression constraint
+
+---- a_sparql_ns_keyword_function_with_the_wrong_arity_is_a_load_error stdout ----
+
+thread 'a_sparql_ns_keyword_function_with_the_wrong_arity_is_a_load_error' (3557900) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- select_expression_binds_this_to_the_focus_node stdout ----
+
+thread 'select_expression_binds_this_to_the_focus_node' (3557904) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- a_select_expression_resolves_sh_prefixes_declared_on_the_shape stdout ----
+
+thread 'a_select_expression_resolves_sh_prefixes_declared_on_the_shape' (3557898) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- select_expression_preserves_the_query_s_own_order stdout ----
+
+thread 'select_expression_preserves_the_query_s_own_order' (3557905) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- select_expression_resolves_prefixed_names_through_sh_prefixes stdout ----
+
+thread 'select_expression_resolves_prefixed_names_through_sh_prefixes' (3557907) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_encode_is_encode_for_uri stdout ----
+
+thread 'sparql_encode_is_encode_for_uri' (3557911) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_expr_and_its_expanded_select_agree stdout ----
+
+thread 'sparql_expr_and_its_expanded_select_agree' (3557912) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_expr_expression_computes_the_focus_node_uri_length stdout ----
+
+thread 'sparql_expr_expression_computes_the_focus_node_uri_length' (3557913) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_is_triple_recognises_a_constructed_triple_term stdout ----
+
+thread 'sparql_is_triple_recognises_a_constructed_triple_term' (3557915) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_arguments_are_node_expressions stdout ----
+
+thread 'sparql_ns_call_arguments_are_node_expressions' (3557917) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_a_plain_function_name stdout ----
+
+thread 'sparql_ns_call_resolves_a_plain_function_name' (3557918) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_encode_for_uri stdout ----
+
+thread 'sparql_ns_call_resolves_encode_for_uri' (3557919) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_strlen stdout ----
+
+thread 'sparql_ns_call_resolves_strlen' (3557920) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_the_add_operator stdout ----
+
+thread 'sparql_ns_call_resolves_the_add_operator' (3557921) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_the_if_functional_form stdout ----
+
+thread 'sparql_ns_call_resolves_the_if_functional_form' (3557922) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_the_in_membership_form stdout ----
+
+thread 'sparql_ns_call_resolves_the_in_membership_form' (3557923) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_call_resolves_the_unary_minus_operator stdout ----
+
+thread 'sparql_ns_call_resolves_the_unary_minus_operator' (3557924) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_ns_equality_names_all_lower_to_the_same_operator stdout ----
+
+thread 'sparql_ns_equality_names_all_lower_to_the_same_operator' (3557925) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_object_reads_a_constructed_triple_term stdout ----
+
+thread 'sparql_object_reads_a_constructed_triple_term' (3557927) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_plus_is_the_add_operator stdout ----
+
+thread 'sparql_plus_is_the_add_operator' (3557928) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- sparql_triple_constructs_an_rdf12_triple_term stdout ----
+
+thread 'sparql_triple_constructs_an_rdf12_triple_term' (3557929) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- the_empty_and_multi_argument_list_forms_still_parse stdout ----
+
+thread 'the_empty_and_multi_argument_list_forms_still_parse' (3557932) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+---- the_list_free_form_accepts_a_structured_argument stdout ----
+
+thread 'the_list_free_form_accepts_a_structured_argument' (3557933) panicked at crates/shapes/tests/support/turtle.rs:94:5:
+assertion `left == right` failed: the fixture must declare exactly one sh:expression
+  left: 0
+ right: 1
+
+
+failures:
+    a_call_site_may_carry_the_annotations_an_expression_constraint_reads
+    a_one_argument_call_may_omit_the_argument_list
+    a_product_restore_keeps_the_authored_spelling
+    a_select_expression_resolves_sh_prefixes_declared_on_the_shape
+    a_sparql_ns_keyword_function_with_the_wrong_arity_is_a_load_error
+    select_expression_binds_this_to_the_focus_node
+    select_expression_preserves_the_query_s_own_order
+    select_expression_resolves_prefixed_names_through_sh_prefixes
+    sparql_encode_is_encode_for_uri
+    sparql_expr_and_its_expanded_select_agree
+    sparql_expr_expression_computes_the_focus_node_uri_length
+    sparql_is_triple_recognises_a_constructed_triple_term
+    sparql_ns_call_arguments_are_node_expressions
+    sparql_ns_call_resolves_a_plain_function_name
+    sparql_ns_call_resolves_encode_for_uri
+    sparql_ns_call_resolves_strlen
+    sparql_ns_call_resolves_the_add_operator
+    sparql_ns_call_resolves_the_if_functional_form
+    sparql_ns_call_resolves_the_in_membership_form
+    sparql_ns_call_resolves_the_unary_minus_operator
+    sparql_ns_equality_names_all_lower_to_the_same_operator
+    sparql_object_reads_a_constructed_triple_term
+    sparql_plus_is_the_add_operator
+    sparql_triple_constructs_an_rdf12_triple_term
+    the_empty_and_multi_argument_list_forms_still_parse
+    the_list_free_form_accepts_a_structured_argument
+
+test result: FAILED. 15 passed; 26 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test sparql_node_expressions`
+     Running tests/sparql_path_alloc.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/64cc11f05b25638d/out/sparql_path_alloc-64cc11f05b25638d)
+
+running 8 tests
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.47s
+
+     Running tests/sparql_prefixes.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/81a159800d8acab4/out/sparql_prefixes-81a159800d8acab4)
+
+running 10 tests
+test a_query_with_prefixes_does_not_use_the_implicit_declarations ... ok
+test a_malformed_reached_declaration_is_refused ... ok
+test a_prefix_in_one_query_literal_does_not_reach_another_query ... ok
+test an_unreached_conflict_is_not_read ... ok
+test a_conflicting_prefix_is_refused_and_an_agreeing_one_loads ... ok
+test a_shapes_graph_declaration_supplies_a_query_without_prefixes ... ok
+test a_redeclared_document_prefix_falls_back_to_its_last_binding ... ok
+test the_prefixes_path_follows_version_iris_and_imports ... ok
+test the_prefixes_path_reaches_declarations_on_each_hop ... ok
+test each_law_collects_prefixes_along_its_own_path ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/spec_census.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/ff61d1f989885f67/out/spec_census-ff61d1f989885f67)
+
+running 5 tests
+test sites_follow_the_class ... ok
+test census_counts_per_class_are_pinned ... ok
+test every_declared_vocabulary_term_is_classified ... ok
+test every_model_constant_is_classified ... ok
+test the_census_classifies_nothing_outside_the_two_universes_but_shacl_js ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/spec_linker.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/b2b7e8f707dd0f85/out/spec_linker-b2b7e8f707dd0f85)
+
+running 39 tests
+test a_bodiless_non_builtin_in_the_sh_namespace_is_refused ... ok
+test a_bodiless_custom_function_is_refused ... ok
+test a_builtin_component_given_validators_binds_natively ... ok
+test a_builtin_declaration_stating_a_foreign_parameter_is_a_signature_mismatch ... ok
+test a_builtin_declaration_keying_a_non_key_parameter_is_a_signature_mismatch ... ok
+test a_builtin_function_declared_as_a_component_is_a_kind_mismatch ... ok
+test a_builtin_component_declared_as_a_function_is_a_kind_mismatch ... ok
+test a_builtin_with_validators_and_a_foreign_parameter_is_a_signature_mismatch ... ok
+test a_builtin_redefined_as_a_sparql_function_is_a_duplicate_definition ... ok
+test a_builtin_function_given_a_body_is_a_duplicate_definition ... ok
+test a_custom_components_javascript_validator_is_ill_formed_reached_or_not ... ok
+test a_custom_key_of_its_own_evaluates ... ok
+test a_component_that_is_also_a_shape_plays_both_roles ... ok
+test a_bodied_custom_function_loads_and_evaluates ... ok
+test a_custom_list_function_named_by_a_builtin_key_is_refused ... ok
+test a_list_builtin_declared_as_named_is_a_kind_mismatch ... ok
+test a_custom_key_that_is_a_builtin_key_is_refused ... ok
+test a_javascript_validator_on_a_builtin_is_ill_formed_under_every_attachment ... ok
+test a_selected_validator_calling_an_unknown_function_fails_validation ... ok
+test a_list_builtin_declared_as_list_binds_and_evaluates ... ok
+test a_query_on_a_builtin_component_itself_is_a_duplicate_definition ... ok
+test a_validator_on_a_plain_shape_is_refused ... ok
+test a_semantic_statement_on_a_builtin_declaration_is_refused ... ok
+test a_validator_on_a_native_component_is_a_superseded_alternative ... ok
+test colliding_custom_keys_are_refused_and_distinct_keys_load ... ok
+test a_validator_on_unique_values_for_is_a_superseded_alternative ... ok
+test an_ill_formed_alternative_on_a_builtin_is_refused ... ok
+test every_call_site_names_what_it_bound_to ... ok
+test every_declared_component_is_a_row_and_the_gap_is_exactly_pinned ... ok
+test the_bare_builtin_component_declaration_binds_natively ... ok
+test the_builtin_sparql_expr_declaration_loads ... ok
+test every_declared_function_binds_with_its_declared_signature ... ok
+test the_merged_vocabulary_loads_with_no_shape ... ok
+test the_sparql_expr_declaration_indexes_nothing ... ok
+test the_table_renders_every_row_deterministically ... ok
+test the_merged_vocabulary_indexes_and_registers_nothing ... ok
+test the_unique_values_for_declaration_binds_natively ... ok
+test lint_reports_superseded_alternatives_without_findings ... ok
+test a_prebinding_violation_is_refused_only_where_the_query_executes ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/srl_language.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/4fd7712ea1727632/out/srl_language-4fd7712ea1727632)
+
+running 26 tests
+test multi_character_terminals_must_be_contiguous ... ok
+test a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused ... ok
+test builtins_are_srls_list ... ok
+test paths_expand_and_annotations_need_one_triple ... ok
+test lang_dir_and_version ... ok
+test the_version_announcement_is_made_early ... ok
+test triple_rl_keeps_statement_roles_and_scoped_blank_identity ... ok
+test declarations_and_rule_blocks_interleave_freely ... ok
+test a_negation_sees_only_earlier_variables ... ok
+test triple_carrier_runs_the_public_rl_program_without_quad_storage ... ok
+test an_assigned_blank_node_is_fresh_per_solution ... ok
+test an_assigned_variable_joins_a_later_pattern ... ok
+test independent_guarded_components_preserve_both_blank_mints ... ok
+test computed_assignment_values_reach_negative_patterns ... ok
+test triple_term_dependencies_are_exact ... ok
+test an_empty_head_generates_nothing ... ok
+test stages_are_typed ... ok
+test imports_resolve_through_the_callers_resolver ... ok
+test a_non_rdf_head_instantiation_is_refused ... ok
+test a_variable_triple_term_head_is_run_once ... ok
+test check_resolves_imports_from_the_table ... ok
+test a_rule_nesting_triple_terms_every_round_is_refused_by_stratification ... ok
+test data_block_blank_nodes_are_standardized_apart ... ok
+test check_answers_each_level_and_refuses_by_stage ... ok
+test numeric_and_boolean_terms ... ok
+test a_closure_deeper_than_the_floor_completes ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+
+     Running tests/subclass_of_in_shapes_graph.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/82d742f36173cfa8/out/subclass_of_in_shapes_graph-82d742f36173cfa8)
+
+running 7 tests
+test a_mutation_snapshot_binding_follows_the_shapes_graph_and_keeps_its_change_path ... ok
+test a_blank_off_every_iri_path_creates_no_membership ... ok
+test a_blank_intermediate_in_the_shapes_graph_connects_iri_classes ... ok
+test a_shapes_graph_subclass_triple_is_not_data ... ok
+test sh_class_follows_the_shapes_graph_only_when_on ... ok
+test blank_chains_and_cycles_in_the_shapes_graph_compose_and_terminate ... ok
+test a_class_target_reached_through_the_shapes_graph_fires_only_when_on ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/target_discovery.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/443e529473dd63c2/out/target_discovery-443e529473dd63c2)
+
+running 4 tests
+test missing_mandatory_targets_preserve_discovered_shapes_without_focus_nodes ... ok
+test plain_targets_discover_untyped_node_and_standalone_property_shapes ... ok
+test parameterized_targets_discover_untyped_node_and_standalone_property_shapes ... ok
+test calendar_constructor_filters_preserve_sparql_target_focus_nodes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/target_parameters.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/528556cf1d4bd3e4/out/target_parameters-528556cf1d4bd3e4)
+
+running 7 tests
+test repeated_target_parameter_values_are_errors_even_on_inactive_instances ... ok
+test missing_mandatory_target_parameter_contributes_no_focus_nodes ... ok
+test target_optional_metadata_requires_one_boolean ... ok
+test target_parameter_values_cannot_be_blank_nodes ... ok
+test omitted_optional_target_parameter_stays_unbound ... ok
+test false_optional_markers_and_absent_metadata_keep_target_parameters_mandatory ... ok
+test supplied_optional_target_parameter_filters_the_focus_set ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/text_dataset_path_equivalence.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/6d2e3e9942f3a5f7/out/text_dataset_path_equivalence-6d2e3e9942f3a5f7)
+
+running 16 tests
+test cardinality_min_max_count_agrees ... ok
+test and_or_xone_logical_constraints_agree ... ok
+test datatype_and_pattern_constraints_agree ... ok
+test multi_focus_determinism_agrees ... ok
+test inverse_path_agrees ... ok
+test node_shape_recursion_agrees ... ok
+test reifier_shape_over_rdf12_triple_term_agrees ... ok
+test sh_class_target_objects_of_agrees ... ok
+test empty_data_and_shapes_agree ... ok
+test subclass_closure_agrees ... ok
+test target_class_min_count_conforming_agrees ... ok
+test target_class_min_count_violation_agrees ... ok
+test target_node_explicit_agrees ... ok
+test target_subjects_objects_of_agrees ... ok
+test sparql_constraint_agrees ... ok
+test sparql_target_agrees ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/unique_values_for.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/46fcf26c5efcee8f/out/unique_values_for-46fcf26c5efcee8f)
+
+running 11 tests
+test a_list_of_properties_compares_the_whole_tuple ... ok
+test a_node_with_no_values_for_any_property_gets_no_result ... ok
+test a_property_shape_compares_its_value_nodes_with_its_targets ... ok
+test a_shape_reached_through_sh_node_keeps_its_own_targets ... ok
+test an_ill_typed_parameter_is_refused_and_iris_load ... ok
+test every_target_sharing_a_value_is_reported_and_a_non_target_is_not_compared ... ok
+test changing_one_focus_nodes_value_revalidates_another ... ok
+test values_are_compared_as_whole_sets ... ok
+test the_prepared_focus_node_apis_compare_against_the_full_target_set ... ok
+test literal_matching_is_exact ... ok
+test a_property_shape_without_targets_has_nothing_to_collide_with ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/values_default_compliance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/ea17558d054457d3/out/values_default_compliance-ea17558d054457d3)
+
+running 18 tests
+test a_literal_expected_predicate_is_refused_and_an_iri_loads ... ok
+test a_derived_triple_a_rule_also_infers_is_kept ... ok
+test a_parameter_declarations_default_value_is_documentation ... ok
+test a_prepared_product_carries_computed_values ... ok
+test a_rule_s_own_sh_deactivated_is_a_boolean ... ok
+test a_rule_runs_at_the_focus_nodes_where_its_shape_is_not_deactivated_by_an_expression ... ok
+test default_value_applies_only_when_the_value_set_is_empty ... ok
+test a_deleted_derived_triple_takes_its_reifier_with_it ... ok
+test default_value_is_not_added_when_values_produced_a_node ... ok
+test default_value_is_a_derived_value_for_the_rules ... ok
+test extension_usage_reads_the_sparql_inside_computed_values ... ok
+test function_resolution_reports_the_calls_inside_computed_values ... ok
+test a_property_shape_deactivated_by_an_expression_derives_nothing_at_that_focus_node ... ok
+test sht_compliance_is_manifest_metadata_and_changes_nothing ... ok
+test values_is_evaluated_at_the_focus_node_and_its_output_is_checked ... ok
+test values_adds_the_expression_output_to_the_path_values ... ok
+test expected_predicate_makes_the_derived_triples_visible_to_the_rule ... ok
+test sh_compliance_is_not_a_shacl_term_and_is_refused ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/view_graph_membership.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/0cd210fd853b4b6f/out/view_graph_membership-0cd210fd853b4b6f)
+
+running 1 test
+test shacl_views_answer_membership_like_their_enumeration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vocabulary_import_invariance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/d11ff6ee9b9330e0/out/vocabulary_import_invariance-d11ff6ee9b9330e0)
+
+running 3 tests
+test the_offset_normalization_hides_only_the_offset ... ok
+test the_vocabulary_alone_indexes_and_registers_nothing ... ok
+test merging_the_vocabulary_changes_no_answer ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.40s
+
+     Running tests/w3c12_conformance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/3e0972d63ea39127/out/w3c12_conformance-3e0972d63ea39127)
+
+running 29 tests
+test a_stale_unlisted_file_delta_is_refused ... ok
+test comparator_order_and_cardinality ... ok
+test comparator_is_exact_term_equality ... ok
+test a_spec_contradicted_entry_is_reported_failed_with_its_rationale ... ok
+test engine_spells_a_whole_computed_decimal_with_a_point ... ok
+test a_listed_entry_is_never_amended ... ok
+test every_planned_inventory_id_passes ... ok
+test the_claimed_classes_are_the_union_over_the_shacl_root ... ok
+test the_grader_grades_result_annotations_both_ways ... ok
+test spec_contradicted_entries_fail_unamended ... ok
+test the_grader_grades_the_source_shape_both_ways ... ok
+test the_entries_resting_on_post_wd_text_need_the_editors_draft_law ... ok
+test the_suite_commit_is_the_vendored_one ... ok
+test the_grader_grades_sh_detail_where_it_is_stated ... ok
+test earl_agrees_with_scoreboard ... ok
+test w3c12_class_lines_cover_the_scope ... ok
+test w3c12_earl_is_deterministic_and_carries_no_date ... ok
+test w3c12_earl_keys_equal_wg_page_keys ... ok
+test w3c12_earl_outcomes_equal_the_unamended_grades ... ok
+test w3c12_earl_report_is_written_when_configured ... ok
+test w3c12_earl_subject_and_assertor_are_exact ... ok
+test w3c12_earl_support_behaviour ... ok
+test w3c12_proposed_entries_are_excluded_from_earl ... ok
+test w3c_shacl12_conformance ... ok
+test the_shacl_root_scope_is_pinned ... ok
+test xfail_ledger_is_empty ... ok
+test unlisted_file_deltas_are_exact ... ok
+test validator_001_passes_in_both_suites_with_no_import_supplied ... ok
+test w3c_shacl12_unlisted_vendored_files ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/w3c_conformance.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/979558f261c0ebb6/out/w3c_conformance-979558f261c0ebb6)
+
+running 12 tests
+test the_2017_suite_commit_is_the_vendored_one ... ok
+test spec_contradicted_entries_fail_unamended ... ok
+test w3c_2017_earl_covers_the_subset_and_nothing_else ... ok
+test w3c_2017_earl_report_is_written_when_configured ... ok
+test w3c_2017_earl_is_deterministic_and_carries_no_date ... ok
+test w3c_2017_earl_support_behaviour ... ok
+test w3c_2017_subset_is_the_vendored_entries ... ok
+test w3c_shacl_conformance ... ok
+test w3c_2017_earl_matches_wg_inventory ... ok
+test w3c_2017_earl_subject_and_assertor_are_exact ... ok
+test w3c_shacl_proposed_unincluded_files ... ok
+test earl_agrees_with_scoreboard ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/xpath_bundle.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-shapes/af0cf711592b5cec/out/xpath_bundle-af0cf711592b5cec)
+
+running 4 tests
+test current_source_limits_are_not_replaced_by_a_bundles_default ... ok
+test incompatible_override_is_typed_and_the_same_law_is_an_admitted_neighbor ... ok
+test grammar_differences_are_executed_by_the_selected_native_home ... ok
+test dated_bundles_resolve_to_their_native_laws_and_finite_limits ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 14 targets failed:
+    `-p purrdf-shapes --test component_parameters`
+    `-p purrdf-shapes --test core_parameter_cardinality`
+    `-p purrdf-shapes --test custom_node_expressions`
+    `-p purrdf-shapes --test emitter_projections`
+    `-p purrdf-shapes --test node_expr_reference`
+    `-p purrdf-shapes --test node_expressions`
+    `-p purrdf-shapes --test ontology_schema_surface`
+    `-p purrdf-shapes --test product_refusal`
+    `-p purrdf-shapes --test product_reuse_semantics`
+    `-p purrdf-shapes --test property_shape_provenance`
+    `-p purrdf-shapes --test shacl_shacl_differential`
+    `-p purrdf-shapes --test shapes_graph_wellformedness`
+    `-p purrdf-shapes --test sparql_argument_failures`
+    `-p purrdf-shapes --test sparql_node_expressions`

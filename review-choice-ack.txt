@@ -1,0 +1,17 @@
+
+
+@paudley The supplied code addresses this finding. `is_object_choice` now permits annotation keywords and resolves local alias branches through the guarded, cached element-kind resolver. Only `Class` targets qualify.
+
+The added tests cover annotated `anyOf`/`oneOf`, retained inline fields, class aliases, and scalar/enum exclusions. I have not independently run the reported tests or Clippy checks.
+
+---
+
+> 📝 I couldn't check this conversation for new learnings, so no new learning was saved.
+
+
+
+✅ Review thread resolved.
+
+<sub><i>You are interacting with an AI system.</i></sub>
+
+<!-- This is an auto-generated reply by CodeRabbit -->

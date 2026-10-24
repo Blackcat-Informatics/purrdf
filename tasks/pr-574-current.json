@@ -1,0 +1,15 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "aa4ae5c133bb10203203fe98f061649cf31ed055",
+  "headRefName": "paudley/572-model-the-xsd-anyuri-value-space-in-the",
+  "headRefOid": "2845023147548b7bc6a6264149d4239e2caf99ed",
+  "isDraft": false,
+  "mergeCommit": {
+    "oid": "298edd98d87641094c6b3e947894820748cf3e48"
+  },
+  "mergedAt": "2026-10-17T09:58:33Z",
+  "number": 574,
+  "state": "MERGED",
+  "title": "fix(xsd): make finite length-space exhaustion sound",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/574"
+}

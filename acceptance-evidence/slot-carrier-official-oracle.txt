@@ -1,0 +1,5 @@
+uv sync --project bindings/python --locked --no-install-project
+Resolved 107 packages in 4ms
+Checked 104 packages in 2ms
+uv run --project bindings/python --no-sync python crates/shapes/tests/linkml_oracle.py
+LinkML oracle: exact $defs and 16 instance probes agree; 18 located losses, 7 verified slot renames, reverse SHACL imports, and representable widening probes pass; 8 SHACL list-component probes agree; 12 temporal range-bound probes agree; 9 SHACL value-shape probes agree through has_member, whose non-scalar drop the generator alone makes on 1

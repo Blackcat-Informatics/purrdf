@@ -1,0 +1,64 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling utf8parse v0.2.2
+   Compiling colorchoice v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/text)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/entail)
+   Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.0
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/hnsw)
+   Compiling anstyle-parse v1.0.0
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/geo)
+   Compiling anstream v1.0.0
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/columnar)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/mime)
+   Compiling clap_builder v4.6.0
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/json)
+   Compiling quote v1.0.46
+   Compiling syn v2.0.118
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/retrieval)
+   Compiling clap_derive v4.6.1
+   Compiling clap v4.6.1
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/569-design-around-recursive-shacl-validation/crates/cli)
+    Finished `test` profile [optimized] target(s) in 1m 27s
+     Running tests/shacl_cli.rs (/opt/.cargo/87/ed41b13ee29d4e/debug/build/purrdf-cli/99c5e04e98782b85/out/shacl_cli-99c5e04e98782b85)
+
+running 29 tests
+test a_restored_product_reaches_the_same_change_verdict_as_a_parsed_document ... ok
+test a_selector_that_names_nothing_is_a_usage_error ... ok
+test a_packed_product_verifies_explains_and_validates_identically ... ok
+test accepts_pack_without_box_role_vocab_neighbour ... ok
+test a_corrupt_product_is_refused_with_its_dimension ... ok
+test an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time ... ok
+test a_validate_run_says_where_its_shapes_came_from ... ok
+test diff_refuses_two_stdins ... ok
+test diff_names_the_changed_configuration_and_its_carried_model ... ok
+test diff_of_identical_products_reports_nothing_and_exits_zero ... ok
+test explain_reports_the_box_role_vocab_pack_recorded ... ok
+test different_box_role_vocab_namespaces_pack_to_different_identities ... ok
+test explain_reports_the_shapes_graph_pack_recorded ... ok
+test packing_an_unresolved_import_is_refused_and_an_in_graph_one_packs ... ok
+test packing_with_box_role_vocab_agrees_with_validating_the_document_with_box_role_vocab ... ok
+test accepts_pack_without_shapes_graph_neighbour ... ok
+test packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_import ... ok
+test packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_with_shapes_graph ... ok
+test rebuild_is_refused_against_a_shapes_document ... ok
+test packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document ... ok
+test diff_works_on_a_product_with_an_unrecognized_stage_id ... ok
+test rebuild_rescues_a_product_whose_stage_id_this_build_does_not_know ... ok
+test rebuild_on_a_current_product_matches_admit ... ok
+test the_identity_explain_prints_is_the_identity_expect_identity_accepts ... ok
+test rebuild_still_honours_expect_identity ... ok
+test the_shapes_parse_flags_are_refused_against_a_product ... ok
+test validating_a_product_against_its_own_identity_changes_nothing ... ok
+test valid_import_configurations_still_pack_and_round_trip ... ok
+test validating_a_product_that_is_not_the_expected_one_is_refused ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
