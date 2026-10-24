@@ -39,6 +39,7 @@ fn logical_members_keep_distinct_original_models_with_equal_shape_names() {
         let accepting = export("sh:IRI");
         let refusing = export("sh:BlankNode");
         assert_eq!(accepting.id, refusing.id);
+        let ambient_owner = accepting.owner.clone();
         let bodies = [&accepting, &refusing].map(|shape| {
             shape
                 .owner
@@ -51,45 +52,82 @@ fn logical_members_keep_distinct_original_models_with_equal_shape_names() {
         // Also exercise actual unowned bodies, whose equal names have no
         // shared catalog guaranteeing equal meaning.
         for [accepting, refusing] in [[accepting, refusing], bodies] {
-            for focus in ["http://example.org/focus", "http://example.org/foreign"] {
-                let focus = Term::NamedNode(NamedNode::new_unchecked(focus));
-                assert!(conforms(&data, &focus, &accepting).unwrap());
-                assert!(!conforms(&data, &focus, &refusing).unwrap());
-                for reverse in [false, true] {
-                    for (operation, expected) in [
-                        (Constraint::And as fn(Vec<Shape>) -> Constraint, false),
-                        (Constraint::Or, true),
-                        (Constraint::Xone, true),
-                    ] {
-                        let mut members = vec![accepting.clone(), refusing.clone()];
-                        if reverse {
-                            members.reverse();
-                        }
-                        let mut root = accepting.clone();
-                        root.id = Term::NamedNode(NamedNode::from("http://example.org/Root"));
-                        root.owner = None;
-                        root.constraints = vec![operation(members)];
-                        assert_eq!(
-                            conforms(&data, &focus, &root).unwrap(),
-                            expected,
-                            "{declaration}, {focus}, reverse={reverse}, {:?}",
-                            root.constraints
-                        );
-                        let results = validate_shape(&data, &focus, &root).unwrap();
-                        assert_eq!(results.is_empty(), expected);
-                        if !expected {
-                            assert_eq!(results.len(), 1);
-                            assert_eq!(results[0].focus_node, focus);
-                            assert_eq!(results[0].source_shape, root.id);
+            for owner in [None, ambient_owner.clone()] {
+                for focus in ["http://example.org/focus", "http://example.org/foreign"] {
+                    let focus = Term::NamedNode(NamedNode::new_unchecked(focus));
+                    assert!(conforms(&data, &focus, &accepting).unwrap());
+                    assert!(!conforms(&data, &focus, &refusing).unwrap());
+                    for reverse in [false, true] {
+                        for (operation, expected) in [
+                            (Constraint::And as fn(Vec<Shape>) -> Constraint, false),
+                            (Constraint::Or, true),
+                            (Constraint::Xone, true),
+                        ] {
+                            let mut members = vec![accepting.clone(), refusing.clone()];
+                            if reverse {
+                                members.reverse();
+                            }
+                            let mut root = accepting.clone();
+                            root.id = Term::NamedNode(NamedNode::from("http://example.org/Root"));
+                            root.owner = owner.clone();
+                            root.constraints = vec![operation(members)];
                             assert_eq!(
-                                results[0].source_constraint_component.as_str(),
-                                purrdf_iri::vocab::sh::AND_CONSTRAINT_COMPONENT
+                                conforms(&data, &focus, &root).unwrap(),
+                                expected,
+                                "{declaration}, {focus}, reverse={reverse}, {:?}",
+                                root.constraints
                             );
+                            let results = validate_shape(&data, &focus, &root).unwrap();
+                            assert_eq!(results.is_empty(), expected);
+                            if !expected {
+                                assert_eq!(results.len(), 1);
+                                assert_eq!(results[0].focus_node, focus);
+                                assert_eq!(results[0].source_shape, root.id);
+                                assert_eq!(
+                                    results[0].source_constraint_component.as_str(),
+                                    purrdf_iri::vocab::sh::AND_CONSTRAINT_COMPONENT
+                                );
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/// An exported handle's local deactivation is part of the evaluated body.
+#[test]
+fn equal_named_handles_keep_local_deactivation_distinct() {
+    let parsed = parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         <http://example.org/Shared> a sh:NodeShape ; sh:nodeKind sh:BlankNode .",
+        None,
+    )
+    .unwrap();
+    let refusing = parsed.node_shapes[0].clone();
+    drop(parsed);
+    let mut inactive = refusing.clone();
+    inactive.deactivated = true;
+    let dataset = parse_turtle_to_dataset(
+        "<http://example.org/focus> <http://example.org/p> <http://example.org/o> .",
+        None,
+    )
+    .unwrap();
+    let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+    let focus = Term::NamedNode(NamedNode::from("http://example.org/focus"));
+    assert!(!conforms(&data, &focus, &refusing).unwrap());
+    assert!(conforms(&data, &focus, &inactive).unwrap());
+    for members in [
+        vec![refusing.clone(), inactive.clone()],
+        vec![inactive, refusing.clone()],
+    ] {
+        let mut root = refusing.clone();
+        root.id = Term::NamedNode(NamedNode::from("http://example.org/Root"));
+        root.owner = None;
+        root.constraints = vec![Constraint::Xone(members)];
+        assert!(conforms(&data, &focus, &root).unwrap());
+        assert!(validate_shape(&data, &focus, &root).unwrap().is_empty());
     }
 }
 
