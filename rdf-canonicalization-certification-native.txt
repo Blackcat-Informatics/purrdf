@@ -1,0 +1,89 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling cmov v0.5.4
+   Compiling inout v0.2.2
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/geo-kernel)
+   Compiling ctutils v0.4.2
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/ed25519)
+   Compiling universal-hash v0.6.1
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/sparql-algebra)
+   Compiling polyval v0.7.3
+   Compiling visual-hashing v1.0.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling ghash v0.6.0
+   Compiling quote v1.0.46
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/jsonschema)
+   Compiling rayon v1.12.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/gts)
+   Compiling syn v2.0.118
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 2m 26s
+     Running tests/gts_certify.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-rdf/59cb1fb2385f8dab/out/gts_certify-59cb1fb2385f8dab)
+
+running 17 tests
+test certificate_canonical_cbor_round_trips_and_is_deterministic ... ok
+test certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepted ... ok
+test broken_seam_is_detected_without_erroring ... ok
+test accretive_tail_after_pack_chains_cleanly_across_the_seam ... ok
+test compose_chains_matching_certificates_and_rejects_mismatched_ones ... ok
+test content_mutation_breaks_refold_equivalence ... ok
+test faithful_repack_verifies_all_ok ... ok
+test dropping_the_carried_suppression_flips_suppressions_ok_to_false ... ok
+test manifestation_typed_content_node_mutation_is_not_masked_by_projection ... ok
+test quad_suppression_commutes_through_compaction ... ok
+test missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds ... ok
+test torn_tail_prev_breaks_seam_chain_ok_without_erroring ... ok
+test term_suppression_commutes_through_compaction ... ok
+test signatures_survive_two_repacks_and_key_rotation ... ok
+test codec_recompression_preserves_refold_equivalence ... ok
+test verify_compaction_accepts_large_non_symmetric_content ... ok
+test verify_compaction_fails_closed_on_symmetric_poison_content ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.25s
+
+     Running tests/rdf12_canon_profile.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-rdf/4a72b15a487a1329/out/rdf12_canon_profile-4a72b15a487a1329)
+
+running 12 tests
+test a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph ... ok
+test a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph ... ok
+test a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation ... ok
+test a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells ... ok
+test flat_view_leaves_an_ordinary_quad_unchanged ... ok
+test a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells ... ok
+test a_spelled_reifier_co_canonicalizes_with_the_row_it_spells ... ok
+test the_corpus_digest_matches_the_constant_a_consumer_pins ... ok
+test the_profile_identity_is_readable_from_the_api ... ok
+test no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation ... ok
+test the_corpus_pairs_hold_their_declared_relations ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+     Running tests/rdfc_w3c.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-rdf/d41d08a877810329/out/rdfc_w3c-d41d08a877810329)
+
+running 6 tests
+test w3c_inventory ... ok
+test w3c_rdfc10_shard_2 ... ok
+test w3c_rdfc10_shard_0 ... ok
+test w3c_rdfc10_shard_1 ... ok
+test w3c_rdfc10_shard_3 ... ok
+test w3c_rdfc10_heavy_offgate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+

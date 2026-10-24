@@ -1,0 +1,9 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 46.94s
+     Running tests/shared_views.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-core/42f4ff29291d82e1/out/shared_views-42f4ff29291d82e1)
+
+running 1 test
+test per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.00s
+

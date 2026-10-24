@@ -1,0 +1,13 @@
+Propagate canonicalization refusals through identity APIs
+
+Remove the parallel trusted panic APIs and retain the native canonicalization
+cause through carrier and proof identities, structural comparisons, flat output
+and the final host boundary. Share the fallible GTS public/verifier path and the
+owned/view carrier digest implementation. This is a v4 API break without a
+compatibility shim; successful canonical bytes and refusal ordering are preserved.
+
+Selected native qualification passes 294 cases, and the one documented JS Error
+boundary case passes against the optimized release package. Strict production
+and changed fixture/benchmark consumer checks pass. One unrelated existing
+large-compaction case remains ignored. Parent search-budget/default, UDF and
+Datalog requirements remain open.

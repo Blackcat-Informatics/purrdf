@@ -1,0 +1,77 @@
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 4.99s
+     Running unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-entail/693b46d37b5b3d8a/out/purrdf_entail-693b46d37b5b3d8a)
+
+running 23 tests
+test explain::tests::a_class_assertion_keeps_the_instance_and_the_chain ... ok
+test explain::tests::a_justification_is_sufficient_and_minimal ... ok
+test explain::tests::a_forged_proof_does_not_check ... ok
+test explain::tests::a_derived_conclusion_carries_a_checkable_derivation ... ok
+test explain::tests::a_non_minimal_subset_fails_the_minimality_check ... ok
+test explain::tests::an_asserted_axiom_justifies_itself ... ok
+test explain::tests::an_asserted_conclusion_is_explained_as_given ... ok
+test explain::tests::a_named_graph_conclusion_is_explained_in_its_own_graph ... ok
+test explain::tests::an_insufficient_subset_fails_the_sufficiency_check ... ok
+test explain::tests::an_unentailed_axiom_is_refused_rather_than_justified_emptily ... ok
+test explain::tests::an_existential_rule_elsewhere_in_the_table_does_not_refuse_the_conclusion ... ok
+test explain::tests::justification_identity_preserves_the_original_canonicalization_refusal ... ok
+test explain::tests::the_decision_count_is_the_measured_cost ... ok
+test owl_dl::proof::tests::of_ontology_refuses_a_reserved_vocabulary_ontology_as_a_value ... ok
+test owl_dl::proof::tests::prove_consistency_refuses_a_reserved_vocabulary_ontology_as_a_value ... ok
+test owl_dl::proof::tests::the_input_identity_is_the_canonical_ontology_and_not_the_clause_set ... ok
+test explain::tests::a_chase_proof_digest_addresses_its_content ... ok
+test reasoner::proof::tests::a_service_proof_refuses_a_reserved_vocabulary_checking_ontology_as_a_value ... ok
+test reasoner::proof::tests::extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value ... ok
+test reasoner::tests::with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value ... ok
+test explain::tests::the_justification_digest_addresses_its_content ... ok
+test reasoner::proof::tests::every_service_proof_digest_is_frozen ... ok
+test explain::tests::an_underivable_conclusion_is_refused ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 797 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-rdf/30d0f23aaf263267/out/purrdf_rdf-30d0f23aaf263267)
+
+running 10 tests
+test native_quads::tests::multi_source_folded_freeze_standardizes_blanks_apart ... ok
+test native_quads::tests::multi_source_flat_freeze_standardizes_blanks_apart ... ok
+test native_quads::tests::quads_roundtrip_through_dataset ... ok
+test native_quads::tests::canonical_flat_nquads_with_returns_the_original_refusal ... ok
+test native_quads::tests::statement_layer_keeps_its_graph_through_the_flat_roundtrip ... ok
+test native_quads::tests::source_scope_preserves_terminal_identity_and_refuses_wraparound ... ok
+test native_quads::tests::try_canonicalize_flat_view_admits_an_ordinary_dataset ... ok
+test native_quads::tests::canonical_flat_nquads_is_deterministic_and_flattens_statement_layer ... ok
+test native_quads::tests::single_source_canonical_bytes_unchanged_across_delegate ... ok
+test native_quads::tests::try_canonicalize_flat_view_refuses_reserved_vocabulary_as_a_value ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 618 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-sparql-conformance/c1c17daccb33f14a/out/purrdf_sparql_conformance-c1c17daccb33f14a)
+
+running 24 tests
+test compare::numeric_value_tests::a_different_datatype_still_mismatches ... ok
+test compare::numeric_value_tests::a_different_value_still_mismatches ... ok
+test compare::numeric_value_tests::a_non_numeric_lexical_difference_still_mismatches ... ok
+test compare::numeric_value_tests::same_datatype_value_equal_numerics_match ... ok
+test compare::tests::a_case_with_no_error_expectation_gets_its_diagnostic_back_unchanged ... ok
+test compare::tests::an_expected_failure_is_not_satisfied_by_a_run_that_succeeded ... ok
+test compare::tests::blank_node_relabelling_is_isomorphic ... ok
+test compare::tests::compare_solutions_ordered_flag_threads_through ... ok
+test compare::tests::cross_row_bijection_rejects_row_local_relabelling ... ok
+test compare::tests::cross_row_global_relabelling_is_equal ... ok
+test compare::tests::equal_labels_from_different_source_scopes_remain_distinct ... ok
+test compare::tests::graph_comparison_retains_the_original_canonicalization_refusal ... ok
+test compare::tests::iri_cannot_collide_with_literal ... ok
+test compare::tests::lax_cardinality_accepts_only_the_declared_multiplicity_range ... ok
+test compare::tests::an_expected_error_file_grades_the_diagnostic_it_names ... ok
+test compare::tests::literal_field_boundaries_do_not_collide ... ok
+test compare::term_walk_tests::interning_agrees_with_its_recursive_reference_on_generated_values ... ok
+test compare::tests::ordered_comparison_is_position_sensitive ... ok
+test compare::tests::lax_cardinality_preserves_global_blank_coreference_and_count_correspondence ... ok
+test compare::tests::shared_blank_across_columns_is_distinguished_from_two_distinct_blanks ... ok
+test compare::tests::term_position_is_not_normalized_away ... ok
+test compare::tests::solution_comparison_never_treats_a_refusal_as_a_reduced_mismatch ... ok
+test compare::tests::unbound_solution_multiplicity_is_observable ... ok
+test compare::term_walk_tests::a_hundred_thousand_level_value_interns_on_a_128_kib_thread ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.06s
+

@@ -1,0 +1,115 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 59.86s
+     Running unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 102 tests
+test ir::canon::state::tests::frozen_canonical_payloads_match_independent_typed_preimages ... ok
+test ir::canon::state::tests::genuine_branching_refuses_its_search_budget_and_has_an_admitted_neighbor ... ok
+test ir::canon::tests::a_flat_reifier_slot_renders_identically_whether_interned_or_literal ... ok
+test ir::canon::tests::a_graph_scoped_refusal_does_not_spread_to_a_neighbouring_graph ... ok
+test ir::canon::tests::a_literally_asserted_sentinel_row_folds_into_the_flat_annotation_row_it_denotes ... ok
+test ir::canon::tests::a_literally_asserted_sentinel_row_folds_into_the_reifier_it_denotes ... ok
+test ir::canon::tests::a_literally_asserted_sentinel_row_folds_into_the_flat_reifier_row_it_denotes ... ok
+test ir::canon::tests::all_ground_fast_path_sorts_quads ... ok
+test ir::canon::tests::annotation_shows_in_canon ... ok
+test ir::canon::tests::a_spelled_row_and_the_row_it_spells_canonicalize_identically ... ok
+incident/full-record transposition comparisons: 90
+test ir::canon::state::tests::incident_transpositions_match_every_record_and_restore_labels ... ok
+test ir::canon::tests::any_iri_in_the_reserved_namespace_is_refused_not_only_the_two_sentinels ... ok
+test ir::canon::tests::blank_count_counts_distinct_including_nested ... ok
+test ir::canon::tests::canonical_relabel_covers_a_declaration_only_blank_graph ... ok
+test ir::canon::tests::canonical_relabel_propagates_canonicalization_refusals ... ok
+test ir::canon::tests::canonical_relabel_is_idempotent_and_isomorphism_preserving ... ok
+test ir::canon::tests::canonical_relabel_output_labels_are_exactly_the_c14n_set ... ok
+test ir::canon::tests::canonicalization_is_idempotent_over_its_own_output ... ok
+test ir::canon::tests::check_admissible_agrees_with_the_canonicalizer_on_both_answers ... ok
+
+thread 'ir::canon::tests::canonicalization_rejects_a_reader_that_discards_its_resolution_failure' (2626428) panicked at crates/rdf-core/src/ir/canon.rs:1340:13:
+DatasetView read_error must retain a failed resolution
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ir::canon::tests::check_admissible_flat_view_refuses_a_view_that_faults_mid_run ... ok
+test ir::canon::tests::canonicalization_rejects_a_reader_that_discards_its_resolution_failure - should panic ... ok
+test ir::canon::tests::controlled_canonicalization_preserves_read_failures ... ok
+test ir::canon::tests::controlled_canonicalization_preserves_complete_bytes_and_labels ... ok
+test ir::canon::tests::controlled_canonicalization_stops_before_source_admission ... ok
+test ir::canon::tests::controlled_canonicalization_unwinds_during_component_collection ... ok
+test ir::canon::tests::controlled_canonicalization_unwinds_during_rdf12_output ... ok
+test ir::canon::tests::different_wiring_differs ... ok
+test ir::canon::tests::empty_dataset_canonicalizes_to_empty ... ok
+test ir::canon::tests::flat_entry_points_refuse_reserved_vocabulary_typed_and_admit_a_neighbouring_iri ... ok
+test ir::canon::tests::flat_presentation_refuses_the_same_near_misses_the_overlay_does ... ok
+test ir::canon::tests::flat_graph_scope_is_flat_dataset_scope_composed_with_projection ... ok
+test ir::canon::tests::controlled_canonicalization_unwinds_inside_permutation_search ... ok
+test ir::canon::tests::graph_scoped_canonicalization_is_idempotent_over_its_own_output ... ok
+test ir::canon::tests::literal_forms_are_verbatim ... ok
+test ir::canon::tests::isomorphic_blank_relabeling_is_byte_equal ... ok
+test ir::canon::tests::permutations_are_lexicographic_identity_first ... ok
+test ir::canon::tests::graph_scoped_canonicalization_matches_the_named_graph_projection ... ok
+test ir::canon::tests::nested_triple_term_symmetry_resolves_deterministically ... ok
+test ir::canon::tests::public_overlay_entry_points_return_reserved_vocabulary ... ok
+test ir::canon::tests::reifier_count_shows_in_canon ... ok
+test ir::canon::tests::self_loop_canonicalizes ... ok
+test ir::canon::tests::reserved_vocabulary_is_reported_ahead_of_the_poison_budget ... ok
+test ir::canon::tests::symmetric_ring_resolves_deterministically ... ok
+test ir::canon::tests::the_flat_dedup_law_covers_sentinel_and_real_predicate_base_quads_without_a_native_row ... ok
+test ir::canon::tests::the_flat_dedup_law_covers_all_three_spellings_combined ... ok
+test ir::canon::tests::the_flat_dedup_law_emits_a_doubly_spelled_row_exactly_once ... ok
+test ir::canon::tests::the_flat_dedup_law_holds_for_sentinel_and_real_predicate_base_quads_in_a_named_graph ... ok
+test ir::canon::tests::the_flat_presentation_lowers_the_statement_layer_to_ordinary_quads ... ok
+test ir::canon::tests::the_flat_entry_points_are_the_view_core_at_rdfdataset ... ok
+test ir::canon::tests::the_fold_is_shape_exact_and_its_near_misses_still_refuse ... ok
+test ir::canon::tests::the_overlay_presentation_is_byte_identical_to_its_pre_axis_output ... ok
+test ir::canon::tests::the_profile_identity_and_the_reserved_namespace_are_consistent ... ok
+test ir::canon::tests::the_overlays_own_sentinels_do_not_trip_the_sweep ... ok
+test ir::canon::tests::the_reported_violation_is_the_least_one_not_the_first_encountered ... ok
+test ir::canon::tests::the_reserved_namespace_is_refused_in_every_position ... ok
+test ir::canon::tests::try_canonicalize_flat_view_refuses_a_view_already_failed_before_the_drain ... ok
+test ir::canon::tests::try_canonicalize_flat_view_accepts_both_rdfdataset_and_arc_rdfdataset ... ok
+test ir::canon::tests::try_canonicalize_flat_view_refuses_a_view_that_faults_mid_run_and_publishes_nothing ... ok
+test ir::canon::tests::try_flat_digest_view_hashes_the_flat_canonical_document ... ok
+test ir::canon::tests::xsd_string_is_bare_and_directional_literal_renders ... ok
+test ir::canon::tests::view_pack_failures_keep_original_read_causes_and_checkpoint_fields ... ok
+test ir::compare::tests::annotation_difference_is_not_isomorphic ... ok
+test ir::compare::tests::blank_bijection_same_structure_different_labels_is_isomorphic ... ok
+test ir::compare::tests::blank_different_wiring_is_not_isomorphic ... ok
+test ir::compare::tests::dataset_diff_reports_counts_and_verdict ... ok
+test ir::compare::tests::differing_ground_iri_is_not_isomorphic ... ok
+test ir::compare::tests::directional_literal_difference_is_not_isomorphic ... ok
+test ir::compare::tests::identical_ground_datasets_are_isomorphic ... ok
+test ir::compare::tests::reserved_vocabulary_comparison_returns_the_native_refusal ... ok
+test ir::compare::tests::reifier_count_difference_is_not_isomorphic ... ok
+test ir::compare::tests::two_blanks_relabeled_is_isomorphic ... ok
+test ir::compare::tests::symmetric_ring_relabeled_is_isomorphic ... ok
+test ir::canon::state::tests::discrete_refinement_uses_one_search_node_and_a_zero_node_budget_refuses ... ok
+test ir::pipeline_bundle::core_tests::a_clone_taken_before_accumulate_keeps_its_own_memo ... ok
+test ir::pipeline_bundle::core_tests::the_pipeline_root_is_frozen ... ok
+test ir::pipeline_bundle::core_tests::the_pipeline_root_names_every_iri_graph_including_a_declared_empty_one ... ok
+test ir::pipeline_bundle::core_tests::containment_refuses_each_layer_and_admits_the_single_graph_twin ... ok
+test ir::pipeline_bundle::core_tests::the_residue_leaf_separates_the_default_graph_from_a_blank_named_one ... ok
+test ir::pipeline_bundle::core_tests::the_root_discriminates_a_declaration_the_bundle_digest_cannot_see ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_annotation_rows_for_one_graph_rebuild_only_the_page_that_holds_them ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_default_graph_rows_rebuild_only_the_default_graph_page ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_graph_membership_matches_its_enumeration ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_graph_seam_matches_the_filtered_stream_on_a_flat_carrier ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_drops_an_iri_named_graph_and_keeps_the_neighbouring_blank_named_one ... ok
+test ir::pipeline_bundle::tests::accumulate_disturbing_a_pinned_graph_hard_fails ... ok
+test ir::pipeline_bundle::tests::accumulate_named_graph_is_additive_and_pins ... ok
+test ir::pipeline_bundle::tests::canonical_refusal_retains_native_cause_without_large_result_slots ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_reifier_rows_for_one_graph_rebuild_only_the_page_that_holds_them ... ok
+test ir::pipeline_bundle::tests::digest_excludes_runtime_ids_public_projection_only ... ok
+test ir::pipeline_bundle::tests::accumulating_a_graphs_statement_layer_leaves_a_pinned_graph_alone ... ok
+test ir::pipeline_bundle::tests::digest_is_sensitive_to_a_blob ... ok
+test ir::pipeline_bundle::tests::digest_is_sensitive_to_a_lookaside_resource ... ok
+test ir::pipeline_bundle::tests::digest_is_sensitive_to_the_public_provenance ... ok
+test ir::pipeline_bundle::tests::digest_is_sensitive_to_the_dataset ... ok
+test ir::pipeline_bundle::tests::digest_is_stable_across_handle_attach_and_detach ... ok
+test ir::pipeline_bundle::tests::graph_digest_distinguishes_graphs_and_is_isolated ... ok
+test ir::pipeline_bundle::tests::new_bundle_exposes_parts_and_empty_handles ... ok
+test ir::pipeline_bundle::tests::graph_digest_ignores_another_graphs_statement_layer ... ok
+test ir::pipeline_bundle::tests::owned_carrier_identity_returns_scoped_canonicalization_refusals ... ok
+test ir::pipeline_bundle::tests::pin_handle_matching_digest_succeeds ... ok
+test ir::pipeline_bundle::tests::pin_handle_mismatched_digest_hard_fails ... ok
+test ir::canon::tests::try_canonicalize_flat_view_refuses_budget_exhaustion_and_a_large_neighbour_stays_green ... ok
+
+test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 1298 filtered out; finished in 0.72s
+

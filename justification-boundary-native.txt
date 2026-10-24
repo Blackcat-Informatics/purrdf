@@ -1,0 +1,11 @@
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/validate)
+    Finished `test` profile [optimized] target(s) in 13.09s
+     Running unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-validate/1198129e5a72a06f/out/purrdf_validate-1198129e5a72a06f)
+
+running 3 tests
+test regime::tests::justify_refuses_a_reserved_vocabulary_justification_as_a_value ... ok
+test regime::tests::justify_still_admits_the_ordinary_taxonomy ... ok
+test regime::tests::justify_re_decides_both_halves_of_its_claim ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 247 filtered out; finished in 0.00s
+

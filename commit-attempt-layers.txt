@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against 0c14dc377a83 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+pre-commit: check-layers failed:
+  FAIL: `purrdf-sparql-conformance` -> `purrdf-hash` is not listed; an edge to the root is always allowed, so add it to `purrdf-sparql-conformance`'s row to keep the table exact
+pre-commit: the staged snapshot fails the gates above; fix and re-stage.

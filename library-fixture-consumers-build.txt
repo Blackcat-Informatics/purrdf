@@ -1,0 +1,5 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 08s
+  Executable unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-columnar/0f17d8c952566d68/out/purrdf_columnar-0f17d8c952566d68)
+  Executable unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-shapes/66ba366adbf8b1a5/out/purrdf_shapes-66ba366adbf8b1a5)
+  Executable unittests src/lib.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-sparql-eval/4092c1abdaae10b1/out/purrdf_sparql_eval-4092c1abdaae10b1)

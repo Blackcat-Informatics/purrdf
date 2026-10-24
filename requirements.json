@@ -1,0 +1,61 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 28,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Actual reserved-vocabulary and symmetric search-budget refusals are returned as",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 30,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Production consumers retain the original refusal through their native error",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 32,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Existing RDFC/profile, shared/faulting views, reconstruction/certification,",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 35,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Remove obsolete public exports/docs and update all in-repository callers.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B5",
+      "line": 37,
+      "rules": [
+        "modal",
+        "list-under-requirement-heading"
+      ],
+      "text": "- Strict workspace/real-caller compilation, required normal hooks and gates,",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

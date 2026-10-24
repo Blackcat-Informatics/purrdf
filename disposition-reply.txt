@@ -1,0 +1,11 @@
+{
+  "completed": [
+    "github:inline:PRRC_kwDOTKq-Ms8AAAABBGBGpg"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "dispositions": "/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/.stage/remove-panicking-canonicalization-apis/review-dispositions.json"
+  }
+}

@@ -1,0 +1,9 @@
+✔ isomorphic refusal crosses the wasm boundary as a JavaScript Error (21.976067ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 594.155723

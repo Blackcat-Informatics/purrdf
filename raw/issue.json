@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Result\n\nRemove the public trusted-caller canonicalization APIs that convert native RDFC\nrefusals into panics. Keep one fallible production implementation and propagate\nits original typed failures through every in-repository caller. This is a v4 API\ncleanup: remove obsolete entry points rather than adding compatibility shims or\ndeprecation staging.\n\nThis is one complete behavior extracted from #489. Caller-selected/removable\ncanonical-search budgets and exact configuration/work identities, dataset-state\nsearch options, heap-framed UDF evaluation and explicit Datalog logical defaults\nremain mandatory in that parent. This child does not close or replace #489.\n\n## Implementation boundary\n\nThe existing try_canonicalize family already preserves native reserved-vocabulary,\nsearch-budget, stop and source-read errors. Remove the parallel panicking wrapper\nfamily and CanonState::run, route callers directly through those fallible homes,\nand change producer signatures/outer typed errors wherever propagation requires\nit. Cover dataset/view/graph/digest entry points and consumers that mint content\nor proof identities. Never replace an input-triggered failure with expect,\nunwrap, a formatted String, a fabricated digest or partial success in shipping\ncode. Successful canonical bytes, labels, hash selection and admission priority\nremain unchanged.\n\n## Acceptance\n\n- Actual reserved-vocabulary and symmetric search-budget refusals are returned as\n  typed values by every applicable remaining public canonicalization path.\n- Production consumers retain the original refusal through their native error\n  chain; healthy neighbors preserve exact canonical output and identity bytes.\n- Existing RDFC/profile, shared/faulting views, reconstruction/certification,\n  reasoning/proof and actual host controls qualify affected callers. Ordinary\n  semantics run natively; release WASM builds prove portability.\n- Remove obsolete public exports/docs and update all in-repository callers.\n  No input-driven panic wrapper, silent fallback or compatibility layer remains.\n- Strict workspace/real-caller compilation, required normal hooks and gates,\n  hosted checks and independent current-head review qualify ghprsq integration;\n  verify archive/closure and supported cleanup.\n\nBudget four hours of active engineering/local qualification, hosted waits\nexcluded. No upstream dependency or external repository work is authorized.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-24T16:56:41Z",
+  "labels": [],
+  "milestone": null,
+  "number": 704,
+  "state": "OPEN",
+  "title": "Remove panicking canonicalization APIs and propagate native refusals",
+  "updatedAt": "2026-10-24T16:56:41Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/704"
+}

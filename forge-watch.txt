@@ -1,0 +1,9 @@
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+PR #707 — paudley/704-remove-panicking-canonicalization-apis
+CI: pass
+Blockers: 0; unavailable sources: 0
+Watch: changed
+Evidence: /home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/.stage/remove-panicking-canonicalization-apis/status.json

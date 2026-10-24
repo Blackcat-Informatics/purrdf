@@ -1,0 +1,122 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/704-remove-panicking-canonicalization-apis/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 10.10s
+     Running tests/cdt_blank_identity.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-core/3e68075d2ebc5efa/out/cdt_blank_identity-3e68075d2ebc5efa)
+
+running 12 tests
+test a_rewritten_composite_keeps_iri_elements_in_their_canonical_form ... ok
+test a_consistent_renaming_holds_across_repeats_and_nesting ... ok
+test a_renaming_spanning_the_literal_boundary_is_isomorphic ... ok
+test a_consistent_renaming_inside_a_composite_literal_is_isomorphic ... ok
+test an_embedded_blank_node_counts_as_a_blank_node ... ok
+test conflating_across_the_literal_boundary_is_not_isomorphic ... ok
+test canonical_relabel_leaves_no_dangling_embedded_label ... ok
+test canonical_relabel_is_idempotent_over_embedded_blanks ... ok
+test ground_content_still_counts ... ok
+test splitting_an_embedded_blank_node_is_not_isomorphic ... ok
+test the_canonical_form_carries_issued_labels_inside_the_literal ... ok
+test skolemization_round_trips_over_an_embedded_blank ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset_state_digest.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-core/eaaf6d25d2c24b17/out/dataset_state_digest-eaaf6d25d2c24b17)
+
+running 25 tests
+test legacy_canonical_form_omits_an_empty_named_declaration ... ok
+test legacy_flat_digest_erases_ordinary_reifier_roles ... ok
+test oracle_has_one_mapping_across_graphs_nested_and_composite_terms ... ok
+test legacy_flat_digest_erases_ordinary_annotation_roles ... ok
+test per_graph_digests_do_not_enforce_a_global_bijection ... ok
+test operational_failures_never_certify_partial_state ... ok
+test workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors ... ok
+test repeated_same_role_rows_are_set_semantic_before_refinement ... ok
+test named_graphs_from_each_role_are_part_of_state_even_without_a_declaration_iterator ... ok
+test role_coexistence_and_empty_graph_kinds_remain_distinct ... ok
+test oracle_accepts_global_relabeling_and_insertion_permutations ... ok
+test exact_literal_lexical_datatype_language_and_direction_bytes_participate ... ok
+test oracle_distinguishes_same_color_connected_and_disconnected_cycles ... ok
+test interchangeable_empty_blank_declarations_do_not_require_factorial_search ... ok
+test scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles ... ok
+test complete_state_agrees_across_production_view_carriers ... ok
+test exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors ... ok
+test authored_reserved_namespace_iris_remain_ordinary_terms ... ok
+test capacity_and_invalid_datatype_refusals_have_ready_neighbors ... ok
+test nonautomorphic_same_color_orbits_are_not_pruned ... ok
+anchored workspace: admitted=1470478 observed_peak=266950
+interchangeable workspace: admitted=19860029 observed_peak=2716237
+test capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocations ... ok
+nested CDT duplicate=false: admitted=400706 observed_peak=36657
+nested CDT duplicate=true: admitted=410370 observed_peak=36657
+test high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbors ... ok
+test exhaustive_three_node_states_match_global_bijection_oracle ... ok
+test refinable_connected_cycle_finishes_without_exhausting_search_work ... ok
+test disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.46s
+
+     Running tests/shared_views.rs (/opt/.cargo/1a/28e7a13427fee6/debug/build/purrdf-core/42f4ff29291d82e1/out/shared_views-42f4ff29291d82e1)
+
+running 61 tests
+test a_carrier_and_a_separate_composite_share_one_retention_and_keep_their_own_work ... ok
+test a_carrier_and_a_separate_reader_release_one_base_under_either_drop_order ... ok
+test a_declared_graph_that_owns_rows_is_charged_once ... ok
+test a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers ... ok
+test a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers ... ok
+test a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers ... ok
+test a_delta_rides_the_view_carrier_without_compaction ... ok
+test a_removed_rows_terms_are_not_charged_to_the_snapshot ... ok
+test a_selection_backed_carrier_keeps_its_owners_resident_in_the_ledger ... ok
+test a_graph_selection_filters_every_layer_and_keeps_the_names_it_chose ... ok
+test a_selection_places_binds_and_retains_like_any_other_source ... ok
+test accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched ... ok
+test a_shared_ledger_does_not_move_per_view_admission ... ok
+test adding_reifier_classifies_only_rows_in_the_same_graph ... ok
+test accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers ... ok
+test a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them ... ok
+test an_oversized_delta_is_refused_before_the_freeze_and_counts_no_work ... ok
+test admission_limits_cover_sources_payload_rows_terms_and_derived_graph_text ... ok
+test an_undersized_budget_refuses_the_view_carrier_and_admits_its_adequate_twin ... ok
+test appending_named_sources_accumulates_every_freeze_and_copied_term ... ok
+test blanks_referenced_only_inside_composite_literals_stay_independent ... ok
+test appending_a_co_referent_source_over_a_standardized_scope_still_matches_from_scratch ... ok
+test canonical_identity_is_byte_equal_over_flat_composite_and_delta_views ... ok
+test composite_literals_are_charged_with_the_blanks_they_embed ... ok
+test composite_literals_rebind_external_nested_and_triple_term_references ... ok
+test content_equal_views_with_different_fingerprints_publish_equal_identities ... ok
+test a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart ... ok
+test converting_between_carriers_carries_every_sidecar_handle_and_identity ... ok
+test cumulative_admission_refuses_an_oversized_append_and_admits_its_twin ... ok
+test declaration_only_graphs_are_charged_before_the_snapshot_freezes_them ... ok
+test cross_type_isomorphism_compares_a_composite_against_a_flat_dataset ... ok
+test declaration_only_projection_and_named_blank_scope_do_not_collide ... ok
+test deleting_one_declaration_keeps_unrelated_annotation_only_records_in_their_table ... ok
+test composite_probes_yield_each_source_in_order_once ... ok
+test delta_sources_compose_without_materialization_and_keep_all_declarations ... ok
+test every_term_shape_is_charged_as_the_freeze_interns_it ... ok
+test flat_and_view_carriers_agree_on_every_identity_they_publish ... ok
+test graph_projection_deduplicates_within_and_between_sources ... ok
+test flat_canon_agrees_across_every_fallible_dataset_view_wrapper ... ok
+test appending_sources_one_at_a_time_composes_what_the_whole_list_composes ... ok
+test language_tags_are_charged_folded_as_the_freeze_interns_them ... ok
+test large_mutable_claims_freeze_with_the_snapshot_limits ... ignored, large native compaction acceptance; run explicitly with a memory ceiling
+test infallible_views_certify_ready_before_and_after_a_full_read ... ok
+test independent_occurrences_and_shared_contributions_have_explicit_blank_identity ... ok
+test materialized_bytes_ignore_operational_counter_changes ... ok
+test mutable_freeze_obeys_caller_limits_and_preserves_the_effective_rdf ... ok
+test one_base_shared_by_two_carriers_is_retained_exactly_once ... ok
+test delta_composite_and_selection_probe_order_is_frozen ... ok
+test per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection ... ok
+test retention_is_released_by_the_last_reader_under_either_drop_order ... ok
+test reusing_source_owners_does_not_carry_a_previous_views_literal_rebinding ... ok
+test repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed ... ok
+test selecting_a_graph_the_composite_does_not_hold_is_refused_and_its_neighbour_is_not ... ok
+test source_local_integer_collision_does_not_alias_typed_values ... ok
+test shared_ownership_drops_explicitly_and_clones_do_not_copy_dictionaries_or_maps ... ok
+test statement_rows_remove_and_reinsert_without_resurrection_or_duplicates ... ok
+test suppression_counts_every_native_table_occurrence_and_reclassification_deduplicates ... ok
+test two_distinct_bases_each_report_their_own_retention ... ok
+test the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise ... ok
+test prepared_composite_probes_reuse_plans_across_rows_and_graph_placements ... ok
+test the_modal_constructors_are_the_endpoints_of_the_per_source_binding ... ok
+
+test result: ok. 60 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
