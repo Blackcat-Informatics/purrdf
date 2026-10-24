@@ -46,11 +46,6 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
             2 => StatisticsStream::Annotations,
             _ => return Err(SegmentedError::Corrupt("invalid source directory stream")),
         };
-        if bytes[37..40] != [0; 3] {
-            return Err(SegmentedError::Corrupt(
-                "nonzero source directory reserved bytes",
-            ));
-        }
         Ok(crate::ir::source_directory::SourceRecord {
             digest: bytes[..32].try_into().expect("fixed source digest"),
             ordinal: crate::bytes::read_u32_le(&bytes, 32).expect("fixed source ordinal"),
@@ -63,29 +58,33 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
         end: usize,
         work: &mut crate::source::SourceDifferenceWork,
     ) -> Result<purrdf_hash::multiset::Multiset256, Self::Error> {
-        if end == 0 {
-            self.session.ready()?;
-            return Ok(purrdf_hash::multiset::Multiset256::default());
-        }
-        let bytes = self
-            .session
-            .fixed_record::<{ crate::ir::source_directory::RECORD_BYTES }>(
-                self.stream,
-                format::SOURCE_DIRECTORY,
-                (end - 1) as u64,
-            )?;
-        work.members += 1;
-        let population =
-            u128::from_le_bytes(*bytes[40..].first_chunk().expect("fixed source population"));
-        if population != end as u128 {
+        use crate::ir::source_directory::CHECKPOINT_ROWS;
+
+        if end > self.len()? {
             return Err(SegmentedError::Corrupt(
-                "false source directory prefix population",
+                "source directory prefix outside section",
             ));
         }
-        Ok(purrdf_hash::multiset::Multiset256::from_parts(
-            bytes[56..].try_into().expect("fixed source prefix"),
-            population,
-        ))
+        let checkpoint = end / CHECKPOINT_ROWS;
+        let start = checkpoint * CHECKPOINT_ROWS;
+        let mut prefix = if checkpoint == 0 {
+            purrdf_hash::multiset::Multiset256::default()
+        } else {
+            let sum = self.session.fixed_record::<32>(
+                self.session.header.source_checkpoints,
+                format::SOURCE_CHECKPOINTS,
+                (checkpoint - 1) as u64,
+            )?;
+            purrdf_hash::multiset::Multiset256::from_parts(sum, start as u128)
+        };
+        for index in start..end {
+            let record = self.record(index)?;
+            prefix
+                .insert(record.digest)
+                .map_err(|_| SegmentedError::AddressExhausted)?;
+            work.members += 1;
+        }
+        Ok(prefix)
     }
 }
 

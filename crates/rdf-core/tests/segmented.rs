@@ -347,12 +347,12 @@ fn reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot()
     ];
     let (image, ids) = build(&values, (1_u64 << 54) + 19);
     let mut previous_profile = image.bytes().to_vec();
-    previous_profile[7] = b'2';
-    purrdf_core::bytes::put_u32_le(&mut previous_profile, 8, 2).unwrap();
+    previous_profile[7] = b'4';
+    purrdf_core::bytes::put_u32_le(&mut previous_profile, 8, 4).unwrap();
     assert!(matches!(
         SegmentedImage::certify(previous_profile),
         Err(SegmentedError::Corrupt(
-            "unsupported segmented format/profile"
+            "unsupported segmented format/profile; regenerate the image from RDF input"
         ))
     ));
     assert_eq!(

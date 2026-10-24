@@ -13,8 +13,8 @@ use purrdf_lex::walk::WorkList;
 
 use crate::{StatisticsStream, source::SourceDifferenceWork};
 
-const CHECKPOINT_ROWS: usize = 32;
-pub(crate) const RECORD_BYTES: usize = 88;
+pub(crate) const CHECKPOINT_ROWS: usize = 32;
+pub(crate) const RECORD_BYTES: usize = 37;
 
 pub(crate) fn first_differing_bit(a: &[u8; 32], b: &[u8; 32]) -> Option<u16> {
     (0_u16..)
@@ -164,11 +164,14 @@ impl SourceDirectory {
         self.records.len()
     }
 
-    /// Persist a sorted physical address and its exact inclusive prefix. Full
+    pub(crate) fn checkpoint_sums(&self) -> impl ExactSizeIterator<Item = &[u8; 32]> {
+        self.checkpoints.iter().map(Multiset256::sum)
+    }
+
+    /// Persist sorted digests and physical addresses without implied populations. Full
     /// certification compares these bytes with metadata rebuilt from RDF rows.
     pub(crate) fn encode_records(&self, start: usize, output: &mut [u8]) {
         assert!(output.len().is_multiple_of(RECORD_BYTES));
-        let mut prefix = self.prefix(start, &mut SourceDifferenceWork::default());
         for (index, bytes) in output
             .as_chunks_mut::<RECORD_BYTES>()
             .0
@@ -176,9 +179,6 @@ impl SourceDirectory {
             .enumerate()
         {
             let record = self.records[start + index];
-            prefix
-                .insert(record.digest)
-                .expect("directory population fits u128");
             bytes[..32].copy_from_slice(&record.digest);
             bytes[32..]
                 .first_chunk_mut::<4>()
@@ -189,12 +189,6 @@ impl SourceDirectory {
                 StatisticsStream::Reifiers => 1,
                 StatisticsStream::Annotations => 2,
             };
-            bytes[37..40].fill(0);
-            bytes[40..]
-                .first_chunk_mut::<16>()
-                .expect("fixed source population")
-                .copy_from_slice(&prefix.population().to_le_bytes());
-            bytes[56..].copy_from_slice(prefix.sum());
         }
     }
 
