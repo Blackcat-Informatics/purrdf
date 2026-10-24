@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "0c14dc377a838c7802031e633efa120cd5adc8d1",
+  "headRefName": "fix/cargo-cache-reader-lease",
+  "headRefOid": "9d250bdae9a97670658f374b6a4896701a2fc6ee",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 706,
+  "state": "OPEN",
+  "title": "Hold assembly artifacts through cache reclamation",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/706"
+}
