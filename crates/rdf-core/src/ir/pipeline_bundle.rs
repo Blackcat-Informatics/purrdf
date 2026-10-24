@@ -1039,7 +1039,8 @@ impl<H> PipelineBundle<H> {
     /// # Errors
     ///
     /// [`PipelineBundleError::HandleDigestMismatch`] if the pinned digest disagrees
-    /// with the backing graph.
+    /// with the backing graph; [`PipelineBundleError::Canonicalization`] if
+    /// canonicalization refuses that graph.
     }
 
     /// Detach the typed handle for `graph`, returning it if present. Detaching does
@@ -1085,7 +1086,8 @@ impl<H> PipelineBundle<H> {
     ///
     /// [`PipelineBundleError::GraphContainment`] if `graph_quads` reaches outside
     /// `graph`; [`PipelineBundleError::HandleDigestMismatch`] if folding `graph_quads`
-    /// would shift an already-pinned graph's digest.
+    /// would shift an already-pinned graph's digest;
+    /// [`PipelineBundleError::Canonicalization`] if a graph refuses canonicalization.
     pub fn accumulate_named_graph(
         &mut self,
         graph: impl Into<HandleKey>,
