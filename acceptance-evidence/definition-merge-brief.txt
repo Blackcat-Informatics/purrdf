@@ -1,0 +1,6 @@
+checks     /home/paudley/Active/purrdf/.worktrees/694-verify-and-preserve-original-model/.stage/verify-and-preserve-original-model/pr-checks.txt   state=pending
+comments   /home/paudley/Active/purrdf/.worktrees/694-verify-and-preserve-original-model/.stage/verify-and-preserve-original-model/pr-comments.md  (1)
+# PR #695 failed CI logs
+
+No failed checks in this snapshot.
+

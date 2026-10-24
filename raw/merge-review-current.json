@@ -1,0 +1,1 @@
+{"data":{"repository":{"pullRequest":{"headRefOid":"de2095b46b4e69fa4e95099575fad89e1e3a831a","baseRef":{"target":{"oid":"6c9c66fcf3790d5fdb9fa62e857c4e6f544aad8f"}},"potentialMergeCommit":{"oid":"69077f350981a0c44425b5429d3e08253cc4d2ee","tree":{"oid":"baa4fca159ce3acfab5559c5cbffa142c0626d2c"}},"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}

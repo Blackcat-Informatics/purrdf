@@ -1,0 +1,113 @@
+{
+  "projection": "Mechanical UI/comments removed; technical feedback, coverage metadata and provenance preserved.",
+  "pages": [
+    [
+      {
+        "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/comments/6378700624",
+        "html_url": "https://github.com/Blackcat-Informatics/purrdf/pull/695#issuecomment-6378700624",
+        "issue_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/695",
+        "id": 6378700624,
+        "node_id": "IC_kwDOTKq-Ms8AAAABfDM_UA",
+        "user": {
+          "login": "coderabbitai[bot]",
+          "id": 136622811,
+          "node_id": "BOT_kgDOCCSy2w",
+          "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+          "html_url": "https://github.com/apps/coderabbitai",
+          "followers_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/followers",
+          "following_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/following{/other_user}",
+          "gists_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/subscriptions",
+          "organizations_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/orgs",
+          "repos_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/repos",
+          "events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/received_events",
+          "type": "Bot",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "created_at": "2026-10-24T02:22:25Z",
+        "updated_at": "2026-10-24T02:32:31Z",
+        "body": "\n\n\n\n\n\nNo actionable comments were generated in the recent review.\n\n<details>\n<summary><strong><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/info.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Recent review info</strong></summary>\n<dl>\n<dd>\n\n<details>\n<summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Run configuration</strong></summary>\n<dl>\n<dd>\n\n- **Source mode**: Auto\n- **Repository**: Unavailable\n- **Branch**: Unavailable\n- **File**: No configuration file from this repository applied\n- **Commit**: Unavailable\n- **Layers**: Organization UI\n- **Review profile**: CHILL\n- **Plan**: Advanced\n- **Run ID**: `64bf1296-5ee6-4f51-aac6-f16166172a1a`\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/git-commit-horizontal.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Commits</strong></summary>\n<dl>\n<dd>\n\nReviewing files that changed from the base of the PR and between e3eb29225d3fda035613345fb90e0a047e85f45e and cd42aa245d7bf8d34e588dc83f573dee504fc2fc.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/file-plus-corner.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Files selected for processing: 2</strong></summary>\n<dl>\n<dd>\n\n* `crates/shapes/src/constraints.rs`\n* `crates/shapes/tests/catalog_references.rs`\n\n</dd>\n</dl>\n</details>\n\n**Included review availability:** This review used your included allowance. 7 included reviews remain after this review. Your included PR review attempts over the past 7 days set your current allowance at 10 reviews per hour.\n\n</dd>\n</dl>\n</details>\n\n\n\n\n\n\n\n\n<details>\n<summary><strong>\ud83d\udcdd Summary</strong></summary>\n<dl>\n<dd>\n\n\n\n## Summary by CodeRabbit\n\n* **Bug Fixes**\n  * Validation results now correctly reflect each shape\u2019s definition, even when different shapes have the same identifier.\n  * Results remain accurate after the original parsed data is released, and combined-shape checks behave consistently regardless of member order.\n\n\nThe conformance memo key now includes shape and domain identity. Regression tests check that shapes with equal IDs but different definitions retain distinct conformance and validation results, including through logical constraints and after the parse result is dropped.\n\n**Changes: SHACL memoization identity**\n\n|Layer / File(s)|Summary|\n|:---|:---|\n|**Memo key identity** <br> `crates/shapes/src/constraints.rs`|Memoization keys now include the shape term and a domain identity: the owning model\u2019s identity, or the shape body\u2019s identity when unowned. Focus identity and recursion depth remain part of the key.|\n|**Identity regression coverage** <br> `crates/shapes/tests/catalog_references.rs`|Tests compare shapes with equal IDs and opposing node-kind constraints. They check conformance and validation, including `And`, `Or`, and `Xone` in both member orders, and verify behavior after dropping the parse result.|\n\n\n<strong>Priority: <picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/priority-normal-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Normal</strong>\n\n**Estimated code review effort:** 2 (Simple) | ~12 minutes\n\n\n**Change:** Bug fix\n\n\n**Possibly related issues**\n- Issue 694, \u201cVerify and preserve original-model identity in SHACL conformance memoization\u201d: this change keys memoized results by original model identity or unowned shape-body identity.\n- Issue 690, \u201cAcceptance problems exposed by the SHACL identity-catalog integration\u201d: this change addresses the memoization identity behavior described in the issue, but does not cover its remaining recursion, caller, or host contracts.\n\n**Possibly related PRs**\n- [Blackcat-Informatics/purrdf#691](https://github.com/Blackcat-Informatics/purrdf/pull/691): retains original SHACL definition and function domains through `ModelOwner`; this change uses that domain distinction in memoization.\n\n</dd>\n</dl>\n</details>\n\n\n<details>\n<summary><strong>Merge Risk:</strong> <strong><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/risk-low-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Low</strong> \u00b7 up to <code>cd42a</code></summary>\n<dl>\n<dd>\n\n\n<!-- final_review_risk_label\n**Merge Risk:** **\ud83d\udd35 Low** \u00b7 up to `cd42a`\n-->\n<!-- final_review_risk_coverage:{\"sourceCommitId\":\"cd42aa245d7bf8d34e588dc83f573dee504fc2fc\",\"coveredCommitId\":\"cd42aa245d7bf8d34e588dc83f573dee504fc2fc\",\"kind\":\"reviewed\"} -->\n\nValidation can return an incorrect result for this narrow programmatic shape composition. The change is mergeable with awareness of that limitation.\n\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Security architecture risk:</strong> <strong><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/risk-unassessed-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Minimal</strong> \u00b7 up to <code>cd42a</code></summary>\n<dl>\n<dd>\n\n\n\n\nThe change narrows validation-result reuse without adding access or execution authority. An existing ownership edge case remains, but the change does not introduce or worsen it.\n\n**Retained concerns**\nNo architecture-level concerns identified.\n\n<details>\n<summary><strong>Security review details</strong></summary>\n<dl>\n<dd>\n\n**Security Blast Radius**\n- _observed_ \u2014 The demonstrated outcome is a conformance verdict or validation report for caller-supplied shapes and focus nodes. The inspected change does not establish an application authorization bypass or tenant-level exposure.\n\n**Trust Boundaries and Controls**\n- _observed_ \u2014 The added domain discriminator prevents equal shape names in different owner domains from selecting the same cached answer. The borrowed Term retains value-based named-node equality and hashing; it does not use the term reference's address as the shape name.\n\n**Resilience and Maintainability Implications**\n- _observed_ \u2014 Memo state is created per evaluation call and is worker-local. Recursion depth remains part of the key, and no provisional result is inserted before recursive traversal completes. Repeated calls do not reuse a previous call's addresses or verdicts.\n\n</dd>\n</dl>\n</details>\n\n\n</dd>\n</dl>\n</details>\n\n\n<details>\n<summary><strong>Pre-merge checks: <sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Passed\" title=\"Passed\"></picture></sup> 3 \u00b7 <sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-failed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Failed\" title=\"Failed\"></picture></sup> 2</strong></summary>\n<dl>\n<dd>\n\n<strong><sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-failed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Failed\" title=\"Failed\"></picture></sup> Failed checks: 2 warnings</strong>\n\n|      Check name     |                                              Status                                              | Explanation                                                                                                                                                                                               | Resolution                                                                         |\n| :----------------- | :----------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |\n| Linked Issues check | ![Warning](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-warning.svg) | The implementation addresses `#694`. `MemoKey` now scopes named-shape answers by the owning model address and uses the unowned body address. It borrows the shape `Term`. The regression covers equal name\u2026 | Complete the hosted acceptance checks for `#694` and resolve any failures.           |\n|  Docstring Coverage | ![Warning](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-warning.svg) | Docstring coverage is 33.33% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 3 functions across 2 files.                | Write docstrings for the functions missing them to satisfy the coverage threshold. |\n\n<details>\n<summary><strong><sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Passed\" title=\"Passed\"></picture></sup> Passed checks: 3 passed</strong></summary>\n<dl>\n<dd>\n\n|         Check name         |                                             Status                                             | Explanation                                                                                                                                                                                               |\n| :------------------------ | :--------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |\n|         Title check        | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The title clearly summarizes the main change: preserving original SHACL model identity in conformance memoization.                                                                                        |\n|      Description check     | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The description directly explains the memoization collision, the domain-based fix, regression coverage, validation results, and issue scope.                                                              |\n| Out of Scope Changes check | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The diff changes only conformance memo keying and adds a focused regression in `crates/shapes/tests/catalog_references.rs`. The test directly verifies the linked collision scenario and report behavior\u2026 |\n\n<details>\n<summary><strong>Full details: Out of Scope Changes check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nThe diff changes only conformance memo keying and adds a focused regression in `crates/shapes/tests/catalog_references.rs`. The test directly verifies the linked collision scenario and report behavior. No unrelated production behavior, public API, wire format, evaluator, or semantic feature change is shown.\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Full details: Linked Issues check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nThe implementation addresses `#694`. `MemoKey` now scopes named-shape answers by the owning model address and uses the unowned body address. It borrows the shape `Term`. The regression covers equal named and blank declarations, exported and unowned bodies, both logical-member orders, interned and foreign focus nodes, owner lifetime after parsing, and report fields. The PR description reports the focused native, allocation, report, strict Clippy, and hook checks as passing. Hosted acceptance remains pending, although `#694` requires hosted checks before the fix is complete.\n\n**Resolution**\n\nComplete the hosted acceptance checks for `#694` and resolve any failures.\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n\n\n\n\n",
+        "author_association": "NONE",
+        "reactions": {
+          "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/comments/6378700624/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "performed_via_github_app": {
+          "id": 347564,
+          "client_id": "Iv1.6aaafe4fe882736b",
+          "slug": "coderabbitai",
+          "node_id": "A_kwHOB96YWc4ABU2s",
+          "owner": {
+            "login": "coderabbitai",
+            "id": 132028505,
+            "node_id": "O_kgDOB96YWQ",
+            "avatar_url": "https://avatars.githubusercontent.com/u/132028505?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/coderabbitai",
+            "html_url": "https://github.com/coderabbitai",
+            "followers_url": "https://api.github.com/users/coderabbitai/followers",
+            "following_url": "https://api.github.com/users/coderabbitai/following{/other_user}",
+            "gists_url": "https://api.github.com/users/coderabbitai/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/coderabbitai/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/coderabbitai/subscriptions",
+            "organizations_url": "https://api.github.com/users/coderabbitai/orgs",
+            "repos_url": "https://api.github.com/users/coderabbitai/repos",
+            "events_url": "https://api.github.com/users/coderabbitai/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/coderabbitai/received_events",
+            "type": "Organization",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "name": "coderabbitai",
+          "description": "# Transforming Code Reviews with AI\r\n\r\n## Features\r\n\r\n**Automated Reviews**: Continuous reviews of the pull requests including incremental commits. \r\n\r\n**Summarization**: Generates high-level summary and a technical walkthrough of the PR changes.\u00a0\r\n\r\n**Line-by-line review**: Provides line-by-line suggestions committable with one click.\r\n\r\n**Codebase verification**:  Verifies the impact on the overall codebase and identifies missing changes.\r\n\r\n**Insights into your code**:  Ask any questions on your codebase within the pull request \r\n\r\n**Chat about your code** : Chat with the bot around your code.\u00a0The more you chat, the smarter it gets.\r\n\r\n**Issue Validation**:  Validates the PR against the linked issues and identifies other related issues\u00a0\r\n\r\n\r\n\r\n",
+          "external_url": "https://coderabbit.ai?utm_source=cr_app&utm_medium=github",
+          "html_url": "https://github.com/apps/coderabbitai",
+          "created_at": "2023-06-14T15:47:27Z",
+          "updated_at": "2026-10-22T09:20:52Z",
+          "permissions": {
+            "actions": "read",
+            "checks": "write",
+            "contents": "write",
+            "discussions": "read",
+            "issues": "write",
+            "members": "read",
+            "merge_queues": "read",
+            "metadata": "read",
+            "pull_requests": "write",
+            "statuses": "write",
+            "workflows": "write"
+          },
+          "events": [
+            "issues",
+            "issue_comment",
+            "label",
+            "membership",
+            "merge_group",
+            "organization",
+            "pull_request",
+            "pull_request_review",
+            "pull_request_review_comment",
+            "pull_request_review_thread",
+            "release",
+            "repository",
+            "team"
+          ]
+        },
+        "minimized": null
+      }
+    ]
+  ]
+}

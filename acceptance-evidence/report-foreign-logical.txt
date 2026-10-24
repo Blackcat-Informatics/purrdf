@@ -1,0 +1,60 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/694-verify-and-preserve-original-model/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 8.23s
+     Running tests/complete_reports.rs (/opt/.cargo/dd/bbe4003bfba95a/debug/build/purrdf-shapes/b71f19671f322a16/out/complete_reports-b71f19671f322a16)
+
+running 24 tests
+test complete_core_validation_spends_no_sparql_fuel ... ok
+test changed_constraint_cannot_inherit_a_source_occurrence ... ok
+test complete_governor_refusal_is_typed_and_each_call_has_fresh_fuel ... ok
+test bounded_complete_routes_use_the_same_source_evidence_and_refuse_foreign_ids ... ok
+test deliberate_shared_source_retains_shared_blank_identity ... ok
+test duplicate_public_root_identity_is_refused_before_complete_binding ... ok
+test equal_graph_bytes_from_independent_acquisitions_do_not_share_identity ... ok
+test independent_equal_blank_labels_have_distinct_source_acquisitions ... ok
+test equal_queries_retain_distinct_actual_source_constraints ... ok
+test isomorphic_report_only_blanks_do_not_authorize_changed_source_identity ... ok
+test native_data_blanks_keep_scoped_identity_without_shapes_blanks ... ok
+test nested_rdf12_blanks_keep_independent_original_scopes ... ok
+test nested_source_refusal_survives_a_later_conforming_some_value ... ok
+test identical_fresh_blank_spellings_from_four_query_acquisitions_remain_distinct ... ok
+test prepared_binding_and_egress_retain_sources_after_input_drop ... ok
+test projected_and_shapes_graph_bindings_retain_actual_source_identity ... ok
+test query_minted_blanks_cannot_impersonate_retained_shape_blanks ... ok
+test recursive_details_keep_their_own_source_constraints ... ok
+test repeated_detail_query_acquisitions_mint_distinct_blanks ... ok
+test result_multiplicity_survives_complete_collection_and_emission ... ok
+test restored_product_reconstructs_evidence_without_changing_carried_bytes ... ok
+test sequence_inverse_path_nodes_are_minted_without_source_correspondence ... ok
+test warm_complete_core_allocation_count_has_no_per_focus_growth ... ok
+test fresh_query_identity_is_stable_across_focus_execution ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/foreign_value_nodes.rs (/opt/.cargo/dd/bbe4003bfba95a/debug/build/purrdf-shapes/38bf2106f9f83f8b/out/foreign_value_nodes-38bf2106f9f83f8b)
+
+running 2 tests
+test the_target_node_is_really_absent_from_the_data_graph ... ok
+test constraints_decide_foreign_value_nodes_by_term_equality ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/logical_shape_arguments.rs (/opt/.cargo/dd/bbe4003bfba95a/debug/build/purrdf-shapes/6d2bc3655166671c/out/logical_shape_arguments-6d2bc3655166671c)
+
+running 14 tests
+test node_over_anonymous_property_shape ... ok
+test and_over_property_shape_member ... ok
+test node_over_node_shape_wrapping_a_property_shape ... ok
+test node_over_named_property_shape ... ok
+test not_over_named_property_shape ... ok
+test not_over_anonymous_property_shape ... ok
+test or_over_property_shape_members ... ok
+test not_over_anonymous_property_shape_on_the_prepared_change_path ... ok
+test qualified_value_shape_that_is_a_property_shape ... ok
+test not_over_node_shape_wrapping_a_property_shape ... ok
+test reifier_shape_that_is_a_property_shape ... ok
+test reifier_shape_reached_through_sh_node ... ok
+test xone_over_property_shape_members ... ok
+test xone_reports_the_node_matching_both_members ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

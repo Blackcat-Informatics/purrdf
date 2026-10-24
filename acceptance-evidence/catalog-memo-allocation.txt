@@ -1,0 +1,46 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/694-verify-and-preserve-original-model/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 6.59s
+     Running tests/catalog_references.rs (/opt/.cargo/dd/bbe4003bfba95a/debug/build/purrdf-shapes/297cea21ea357d72/out/catalog_references-297cea21ea357d72)
+
+running 11 tests
+test exported_flat_reference_keeps_its_original_model_domain ... ok
+test catalog_chain_keeps_conformance_reporting_and_owner_after_export ... ok
+test metadata_returns_native_missing_definition_and_function_body_refusals ... ok
+test computed_targets_and_unique_grouping_retain_their_function_domain ... ok
+test metadata_follows_references_without_activating_unused_catalog_definitions ... ok
+test logical_members_keep_distinct_original_models_with_equal_shape_names ... ok
+test nested_same_named_domains_keep_both_function_and_relation_inventory ... ok
+test parsed_computed_shape_index_releases_its_owner_with_the_model ... ok
+test same_named_functions_evaluate_their_original_domain_bodies ... ok
+test recursive_expression_declaration_releases_its_owner_with_the_model ... ok
+test standalone_function_keeps_its_model_after_the_factory_is_dropped ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/change_path_alloc.rs (/opt/.cargo/dd/bbe4003bfba95a/debug/build/purrdf-shapes/062c75a6ffb1e9eb/out/change_path_alloc-062c75a6ffb1e9eb)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.24s
+
+     Running tests/conformance_memo.rs (/opt/.cargo/dd/bbe4003bfba95a/debug/build/purrdf-shapes/96121c647d5e9e26/out/conformance_memo-96121c647d5e9e26)
+
+running 3 tests
+test a_named_inner_shape_is_evaluated_once_for_a_shared_value_node ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_is_reachable ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
