@@ -69,10 +69,13 @@
 //!
 //! Native ownership now retains unchanged immutable schemas through unions and
 //! projections, instead of cloning their columns and allocating another outer
-//! control. The current expression cost is79 per focus node, six fewer across
-//! its two scalar calls; ASK is77. The governed costs are56/97/64/104. Existing
+//! control. The current expression cost is 79 per focus node, six fewer across
+//! its two scalar calls; ASK is 77. The governed costs are 56/97/64/103. Existing
 //! filtered schemas still construct their exact admitted layout before birth.
-//! The entry constants and every N/2N/4N closed-form assertion are unchanged.
+//! Borrowed delta-view IRI lookup removes one focus resolution copy from each
+//! expression's path-values evaluation and four setup copies from its governed
+//! change expansion. Its entry constant is now 37; every N/2N/4N closed-form
+//! assertion still uses exact equality, with no tolerance.
 //!
 //! # What a run does not pay for
 //!
@@ -474,16 +477,18 @@ struct SparqlCase {
     /// three, whatever their query text — which is the reading that says this is
     /// the ENTRY's own cost (the `GovernorState`, the scope guard, the expansion's
     /// return at the opacity check, and the evidence read back afterwards) and not
-    /// the query's. The one surface whose footprint is boundable measures **41**,
+    /// the query's. The one surface whose footprint is boundable measures **37**,
     /// and it is the one taking the other lane: its expansion really walks the
     /// change instead of returning at that check. It was 39 until every shapes
     /// graph's footprint gained the `sh:shape` read (SHACL 1.2 Core, "Explicit
     /// shape targets": a data-graph `n sh:shape <shape>` makes `n` a focus node),
-    /// whose predicate the walking expansion resolves once — one allocation on a
-    /// delta-backed view, which builds the owned term it looks up. It was 40 until
+    /// whose predicate the walking expansion resolves once — formerly one
+    /// allocation on a delta-backed view to build the owned term. It was 40 until
     /// the walking expansion also asked whether the change moves a data-graph
     /// `sh:shapesGraph` link (SHACL 1.2 Core section 6.4, which changes the shapes
-    /// graph itself): the same one owned-term lookup, of that predicate.
+    /// graph itself): the same one owned-term lookup, of that predicate. Borrowed
+    /// delta lookup then removed four fixed spelling copies from this expansion;
+    /// its predicates no longer construct owned terms merely to ask for an IRI.
     ///
     /// Per case rather than shared for exactly that reason. A single number would
     /// have to be wrong for one of the two lanes, and a number loose enough to
@@ -593,8 +598,8 @@ const CASES: &[SparqlCase] = &[
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
         per_focus_node: 79,
-        governed_per_focus_node: 104,
-        governed_entry: 41,
+        governed_per_focus_node: 103,
+        governed_entry: 37,
         footprint_is_boundable: true,
         results_per_violation: 1,
     },
