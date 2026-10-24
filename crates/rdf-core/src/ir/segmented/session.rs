@@ -8,11 +8,10 @@ use crate::hash::{
     hash_of, hash_table_allocation_bound, hash_table_retained_bound, reserve_table_with_memory,
 };
 use hashbrown::HashTable;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::dataset_view::{
     DatasetView, FallibleDatasetView, GraphMatch, TermGuard, ViewOperationStatus,
-    WorkspaceReservation as _,
 };
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
@@ -280,11 +279,44 @@ impl Drop for SegmentedReservation {
 }
 
 #[derive(Debug)]
+struct DecodedPayload {
+    records: DecodedRecords,
+    reservation: SegmentedReservation,
+}
+
+impl DecodedPayload {
+    fn new(records: DecodedRecords, mut reservation: SegmentedReservation) -> Self {
+        let actual = records.arena.capacity() as u64
+            + (records.entries.capacity() * size_of::<(GlobalTermId, core::ops::Range<usize>)>())
+                as u64;
+        reservation.shrink(actual);
+        Self {
+            records,
+            reservation,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct CachedBlock {
     encoded: Vec<u8>,
-    decoded: Option<DecodedRecords>,
+    decoded: OnceLock<DecodedPayload>,
     dictionary_range: Option<(u64, u64)>,
     reservation: SegmentedReservation,
+}
+
+impl CachedBlock {
+    fn records(&self) -> Option<&DecodedRecords> {
+        self.decoded.get().map(|payload| &payload.records)
+    }
+
+    fn retained_charge(&self) -> u64 {
+        self.reservation.bytes()
+            + self
+                .decoded
+                .get()
+                .map_or(0, |payload| payload.reservation.bytes())
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct CacheKey {
@@ -658,7 +690,7 @@ fn checkpoint<I>(
             .cache
             .iter()
             .filter(|entry| Arc::strong_count(&entry.block) == 1)
-            .map(|entry| entry.block.reservation.bytes())
+            .map(|entry| entry.block.retained_charge())
             .sum(),
         peak_bytes: residency.peak,
         evictions: state.evictions,
@@ -830,6 +862,7 @@ impl SegmentedOperation {
                 statistics: [Stream::default(); 4],
                 effective_directory: Stream::default(),
                 source_checkpoints: Stream::default(),
+                overflow: Stream::default(),
                 flags: 0,
                 source_union: purrdf_hash::multiset::Multiset256::default(),
             },
@@ -1053,6 +1086,54 @@ impl SegmentedSession {
         result
     }
 
+    fn read_authenticated(
+        &self,
+        state: &mut State,
+        slot: u64,
+        output: &mut [u8],
+    ) -> Result<(), SegmentedError> {
+        if slot >= self.receipt.block_count
+            || output.len() as u64 != u64::from(self.receipt.block_bytes)
+        {
+            return Err(SegmentedError::Corrupt(
+                "invalid authenticated page request",
+            ));
+        }
+        let position = slot
+            .checked_mul(u64::from(self.receipt.block_bytes))
+            .ok_or(SegmentedError::AddressExhausted)?;
+        self.request(state, position, output)?;
+        let mut digest = format::leaf_digest(slot, output);
+        let mut node = self
+            .receipt
+            .leaf_count
+            .checked_add(slot)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let data_bytes = self
+            .receipt
+            .block_count
+            .checked_mul(u64::from(self.receipt.block_bytes))
+            .ok_or(SegmentedError::AddressExhausted)?;
+        while node > 1 {
+            let position = (node ^ 1)
+                .checked_mul(32)
+                .and_then(|n| n.checked_add(data_bytes))
+                .ok_or(SegmentedError::AddressExhausted)?;
+            let mut sibling = [0; 32];
+            self.request(state, position, &mut sibling)?;
+            digest = if node & 1 == 0 {
+                format::node_digest(&digest, &sibling)
+            } else {
+                format::node_digest(&sibling, &digest)
+            };
+            node /= 2;
+        }
+        if digest != self.receipt.root {
+            return Err(SegmentedError::Corrupt("block/index authentication failed"));
+        }
+        Ok(())
+    }
+
     fn block(&self, slot: u64) -> Result<Arc<CachedBlock>, SegmentedError> {
         self.ready()?;
         if slot >= self.receipt.block_count {
@@ -1128,46 +1209,15 @@ impl SegmentedSession {
         // Admitted cache capacity can consume the room previously left for
         // this block. Reclaim against the actual combined live layouts.
         self.make_room(&mut state, charge, true)?;
-        let mut reservation = self.budget.reserve(charge)?;
+        let reservation = self.budget.reserve(charge)?;
         let mut bytes = vec![
             0_u8;
             usize::try_from(self.receipt.block_bytes)
                 .map_err(|_| SegmentedError::AddressExhausted)?
         ];
         let result = (|| {
-            let position = slot
-                .checked_mul(encoded)
-                .ok_or(SegmentedError::AddressExhausted)?;
-            self.request(&mut state, position, &mut bytes)?;
-            let mut digest = format::leaf_digest(slot, &bytes);
-            let mut node = self
-                .receipt
-                .leaf_count
-                .checked_add(slot)
-                .ok_or(SegmentedError::AddressExhausted)?;
-            let data_bytes = self
-                .receipt
-                .block_count
-                .checked_mul(encoded)
-                .ok_or(SegmentedError::AddressExhausted)?;
-            while node > 1 {
-                let sibling_position = (node ^ 1)
-                    .checked_mul(32)
-                    .and_then(|v| v.checked_add(data_bytes))
-                    .ok_or(SegmentedError::AddressExhausted)?;
-                let mut sibling = [0_u8; 32];
-                self.request(&mut state, sibling_position, &mut sibling)?;
-                digest = if node & 1 == 0 {
-                    format::node_digest(&digest, &sibling)
-                } else {
-                    format::node_digest(&sibling, &digest)
-                };
-                node /= 2;
-            }
-            if digest != self.receipt.root {
-                return Err(SegmentedError::Corrupt("block/index authentication failed"));
-            }
-            let (decode_bytes, scratch_bytes) = if in_dictionary {
+            self.read_authenticated(&mut state, slot, &mut bytes)?;
+            let (decode_bytes, scratch_bytes) = if in_dictionary && bytes[0] == format::DICTIONARY {
                 (
                     format::decode_memory_bytes(&bytes, self.header.records_per_block, decoded)?,
                     format::decode_scratch_bytes(&bytes, self.header.records_per_block, decoded)?,
@@ -1179,22 +1229,31 @@ impl SegmentedSession {
                 .checked_add(scratch_bytes)
                 .ok_or(SegmentedError::AddressExhausted)?;
             self.make_room(&mut state, additional, false)?;
-            reservation.resize(
-                charge
-                    .checked_add(decode_bytes)
-                    .ok_or(SegmentedError::AddressExhausted)?,
-            )?;
+            let payload_reservation = self.budget.reserve(decode_bytes)?;
             let scratch = self.budget.reserve(scratch_bytes)?;
             let decoded_records = match bytes[0] {
                 format::DICTIONARY if slot != 0 => Some(DecodedRecords::decode(
                     &bytes,
                     self.header.records_per_block,
                     decoded,
+                    self.header.overflow,
+                    |slot, page| self.read_authenticated(&mut state, slot, page),
                 )?),
                 _ => None,
             };
             drop(scratch);
-            let dictionary_range = if in_dictionary {
+            let dictionary_range = if in_dictionary && bytes[0] == format::SPANNED_DICTIONARY {
+                let (id, span) = format::overflow_descriptor(&bytes, self.header.overflow)?;
+                if u64::from(span.bytes) > self.header.max_owned_term_bytes {
+                    return Err(SegmentedError::Corrupt("overflow term exceeds owned bound"));
+                }
+                Some((
+                    id.index(),
+                    id.index()
+                        .checked_add(1)
+                        .ok_or(SegmentedError::AddressExhausted)?,
+                ))
+            } else if in_dictionary {
                 let records = decoded_records.as_ref().ok_or(SegmentedError::Corrupt(
                     "forward dictionary block kind changed",
                 ))?;
@@ -1209,20 +1268,15 @@ impl SegmentedSession {
             } else {
                 None
             };
-            let actual = encoded
-                + overhead
-                + decoded_records.as_ref().map_or(0, |records| {
-                    u64::try_from(records.arena.capacity()).expect("local arena capacity fits u64")
-                        + u64::try_from(
-                            records.entries.capacity()
-                                * size_of::<(GlobalTermId, core::ops::Range<usize>)>(),
-                        )
-                        .expect("local entries capacity fits u64")
-                });
-            reservation.shrink(actual);
+            let decoded = OnceLock::new();
+            if let Some(records) = decoded_records {
+                decoded
+                    .set(DecodedPayload::new(records, payload_reservation))
+                    .map_err(|_| SegmentedError::Corrupt("dictionary payload initialized twice"))?;
+            }
             Ok(Arc::new(CachedBlock {
                 encoded: bytes,
-                decoded: decoded_records,
+                decoded,
                 dictionary_range,
                 reservation,
             }))
@@ -1274,7 +1328,112 @@ impl SegmentedSession {
         }
     }
 
+    fn materialize_overflow(&self, block: &CachedBlock) -> Result<(), SegmentedError> {
+        self.ready()?;
+        let mut state = lock_read_state(&self.state);
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        if block.records().is_some() {
+            return Ok(());
+        }
+        let result: Result<(), SegmentedError> = (|| {
+            let bytes =
+                format::decode_memory_bytes(&block.encoded, 1, self.header.max_owned_term_bytes)?;
+            let scratch_bytes = u64::from(self.header.block_bytes);
+            self.make_room(
+                &mut state,
+                bytes
+                    .checked_add(scratch_bytes)
+                    .ok_or(SegmentedError::AddressExhausted)?,
+                false,
+            )?;
+            let reservation = self.budget.reserve(bytes)?;
+            let scratch = self.budget.reserve(scratch_bytes)?;
+            let records = DecodedRecords::decode(
+                &block.encoded,
+                1,
+                self.header.max_owned_term_bytes,
+                self.header.overflow,
+                |slot, page| self.read_authenticated(&mut state, slot, page),
+            )?;
+            format::decode_term(records.key(0))?;
+            drop(scratch);
+            block
+                .decoded
+                .set(DecodedPayload::new(records, reservation))
+                .map_err(|_| SegmentedError::Corrupt("dictionary payload initialized twice"))?;
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            state.error.get_or_insert_with(|| error.clone());
+        }
+        result
+    }
+
+    fn compare_key(
+        &self,
+        id: GlobalTermId,
+        key: &[u8],
+    ) -> Result<core::cmp::Ordering, SegmentedError> {
+        let (block, index) = self.term_page(id)?;
+        if let Some(records) = block.records() {
+            return Ok(records.key(index).cmp(key));
+        }
+        let (_, span) = format::overflow_descriptor(&block.encoded, self.header.overflow)?;
+        let mut state = lock_read_state(&self.state);
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        let result: Result<core::cmp::Ordering, SegmentedError> = (|| {
+            self.make_room(&mut state, u64::from(self.header.block_bytes), false)?;
+            let _scratch = self.budget.reserve(u64::from(self.header.block_bytes))?;
+            let mut consumed = 0;
+            let mut ordering = None;
+            let completed = format::visit_overflow(
+                span,
+                self.header.overflow,
+                self.header.block_bytes as usize,
+                |slot, page| self.read_authenticated(&mut state, slot, page),
+                |chunk| {
+                    let count = chunk.len().min(key.len() - consumed);
+                    let compared = chunk[..count].cmp(&key[consumed..consumed + count]);
+                    consumed += count;
+                    if compared != core::cmp::Ordering::Equal {
+                        ordering = Some(compared);
+                    } else if consumed == key.len() && consumed < span.bytes as usize {
+                        ordering = Some(core::cmp::Ordering::Greater);
+                    }
+                    if ordering.is_some() {
+                        core::ops::ControlFlow::Break(())
+                    } else {
+                        core::ops::ControlFlow::Continue(())
+                    }
+                },
+            )?;
+            match (completed, ordering) {
+                (core::ops::ControlFlow::Break(()), Some(ordering)) => Ok(ordering),
+                (core::ops::ControlFlow::Continue(()), None) => {
+                    Ok((span.bytes as usize).cmp(&key.len()))
+                }
+                _ => Err(SegmentedError::Corrupt("inconsistent overflow comparison")),
+            }
+        })();
+        if let Err(error) = &result {
+            state.error.get_or_insert_with(|| error.clone());
+        }
+        result
+    }
+
     fn term_block(&self, id: GlobalTermId) -> Result<(Arc<CachedBlock>, usize), SegmentedError> {
+        let (block, index) = self.term_page(id)?;
+        if block.records().is_none() {
+            self.materialize_overflow(&block)?;
+        }
+        Ok((block, index))
+    }
+
+    fn term_page(&self, id: GlobalTermId) -> Result<(Arc<CachedBlock>, usize), SegmentedError> {
         let local = id
             .index()
             .checked_sub(self.header.first_term_index)
@@ -1332,28 +1491,26 @@ impl SegmentedSession {
         while lo < hi {
             let mid = first_probe.take().unwrap_or_else(|| lo + (hi - lo) / 2);
             let block = self.block(self.header.dictionary.first + mid)?;
-            let records = block.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+            let (first, end) = block.dictionary_range.ok_or(SegmentedError::Corrupt(
                 "forward dictionary block kind changed",
             ))?;
-            let first = records.entries[0].0.index();
             if id.index() < first {
                 hi = mid;
             } else {
                 let offset = id.index() - first;
-                if offset
-                    < u64::try_from(records.entries.len())
-                        .map_err(|_| SegmentedError::AddressExhausted)?
-                {
+                if id.index() < end {
                     // Narrow only an in-block offset, including on wasm32.
                     let index =
                         usize::try_from(offset).map_err(|_| SegmentedError::AddressExhausted)?;
-                    let (stored, _) = records.entries[index];
-                    if stored != id {
-                        return self.fail(SegmentedError::Corrupt(
-                            "forward dictionary ordinal changed",
-                        ));
+                    if let Some(records) = block.records() {
+                        let (stored, _) = records.entries[index];
+                        if stored != id {
+                            return self.fail(SegmentedError::Corrupt(
+                                "forward dictionary ordinal changed",
+                            ));
+                        }
+                        format::decode_term(records.key(index))?;
                     }
-                    format::decode_term(records.key(index))?;
                     return Ok((block, index));
                 }
                 lo = mid + 1;
@@ -1372,11 +1529,7 @@ impl SegmentedSession {
             let block = self.block(self.header.reverse.first + mid)?;
             let ids = fixed_records(&block.encoded, format::REVERSE, 8)?;
             let id = reverse_id(ids, 0)?;
-            let (dictionary, index) = self.term_block(id)?;
-            let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
-                "forward dictionary block kind changed",
-            ))?;
-            if records.key(index) <= key {
+            if self.compare_key(id, key)? != core::cmp::Ordering::Greater {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -1389,21 +1542,15 @@ impl SegmentedSession {
         let ids = fixed_records(&block.encoded, format::REVERSE, 8)?;
         let count = u64::try_from(ids.len() / 8).map_err(|_| SegmentedError::AddressExhausted)?;
         let index = format::partition_point(count, |index| {
-            let (dictionary, record) = self.term_block(reverse_id(ids, index)?)?;
-            let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
-                "forward dictionary block kind changed",
-            ))?;
-            Ok::<_, SegmentedError>(records.key(record) < key)
+            Ok::<_, SegmentedError>(
+                self.compare_key(reverse_id(ids, index)?, key)? == core::cmp::Ordering::Less,
+            )
         })?;
         if index == count {
             return Ok(None);
         }
         let id = reverse_id(ids, index)?;
-        let (dictionary, record) = self.term_block(id)?;
-        let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
-            "forward dictionary block kind changed",
-        ))?;
-        Ok((records.key(record) == key).then_some(id))
+        Ok((self.compare_key(id, key)? == core::cmp::Ordering::Equal).then_some(id))
     }
 
     fn lookup_value(
@@ -1644,8 +1791,7 @@ impl TermGuard<GlobalTermId> for SegmentedTermGuard {
     fn term(&self) -> TermRef<'_, GlobalTermId> {
         let records = self
             .block
-            .decoded
-            .as_ref()
+            .records()
             .expect("a term guard is minted only from a decoded dictionary block");
         format::decode_term(records.key(self.index))
             .expect("term bytes were checked before the immutable guard was minted")
@@ -2108,6 +2254,79 @@ mod operation_tests {
         assert!(base.upgrade().is_some());
         drop(owned);
         assert!(base.upgrade().is_none());
+    }
+
+    #[test]
+    fn overflow_payload_stays_charged_until_the_last_escaped_guard() {
+        let label = format!("urn:overflow:{}", "x".repeat(50_000));
+        let (image, id) = image(&label);
+        let session = image
+            .open_session(SegmentedReadLimits::new(
+                2_000_000, 1, 20_000, 10_000_000, 8,
+            ))
+            .unwrap();
+        assert_eq!(session.header.block_bytes, 1024);
+        let guard = session.resolve(id).unwrap();
+        let before = session.evidence().request_count();
+        let duplicate = session.resolve(id).unwrap();
+        assert_eq!(session.evidence().request_count(), before);
+        drop(duplicate);
+        let budget = Arc::clone(&guard.budget);
+        let retained = guard.block.retained_charge();
+        assert!(retained >= label.len() as u64);
+        drop(session);
+        assert!(guard.term() == TermRef::Iri(&label));
+        assert!(lock_read_state(&budget.state).live >= retained);
+        drop(guard);
+        assert_eq!(lock_read_state(&budget.state).live, 0);
+    }
+
+    #[test]
+    fn overflow_provider_failure_keeps_the_original_failed_request() {
+        const FIRST: SegmentedError = SegmentedError::Provider {
+            operation: "overflow fixture page",
+            host_code: Some(73),
+        };
+        #[derive(Debug)]
+        struct Failing {
+            inner: super::super::SegmentedBytes,
+            position: u64,
+        }
+        impl SegmentedProvider for Failing {
+            fn snapshot(&self) -> SegmentedSnapshot {
+                self.inner.snapshot()
+            }
+            fn byte_len(&self) -> u64 {
+                self.inner.byte_len()
+            }
+            fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), SegmentedError> {
+                if position == self.position {
+                    return Err(FIRST);
+                }
+                self.inner.read_at(position, output)
+            }
+        }
+        let (image, id) = image(&format!("urn:failure:{}", "x".repeat(20_000)));
+        let header = Header::decode(image.bytes()).unwrap();
+        let position = (header.overflow.first + 1) * u64::from(header.block_bytes);
+        let session = SegmentedSession::open(
+            Arc::new(Failing {
+                inner: image.provider(),
+                position,
+            }),
+            image.receipt(),
+            SegmentedReadLimits::new(2_000_000, 2, 20_000, 10_000_000, 8),
+        )
+        .unwrap();
+        assert!(matches!(session.resolve(id), Err(ref error) if *error == FIRST));
+        assert_eq!(session.read_error(), Some(FIRST));
+        session.evidence().with_requests(|requests| {
+            let failed = requests.last().unwrap();
+            assert_eq!(failed.position(), position);
+            assert!(!failed.completed());
+        });
+        assert_eq!(lock_read_state(&session.budget.state).pins, 0);
+        assert!(matches!(session.resolve(id), Err(ref error) if *error == FIRST));
     }
 
     fn image(label: &str) -> (SegmentedImage, GlobalTermId) {
