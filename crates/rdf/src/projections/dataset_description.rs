@@ -1237,18 +1237,12 @@ mod tests {
         let reversed = project_construct_view(reordered.as_ref(), &config).expect("reordered");
         assert_eq!(resident.input_records, 3);
         assert_eq!(resident.output_records, 2);
-        assert!(datasets_isomorphic(
-            resident.dataset.as_ref(),
-            reversed.dataset.as_ref()
-        ));
+        assert!(datasets_isomorphic(resident.dataset.as_ref(), reversed.dataset.as_ref()).unwrap());
 
         let bytes = PackBuilder::build_bytes(&source).expect("pack");
         let view = PackView::from_bytes(&bytes).expect("pack view");
         let packed = project_construct_view(&view, &config).expect("packed");
-        assert!(datasets_isomorphic(
-            resident.dataset.as_ref(),
-            packed.dataset.as_ref()
-        ));
+        assert!(datasets_isomorphic(resident.dataset.as_ref(), packed.dataset.as_ref()).unwrap());
         assert_eq!(resident.input_records, packed.input_records);
         assert_eq!(resident.output_records, packed.output_records);
     }

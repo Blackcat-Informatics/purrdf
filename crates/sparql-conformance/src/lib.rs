@@ -271,7 +271,7 @@ fn verdict_of_outcome(case: &SparqlTestCase, outcome: Result<run::RunOutcome, St
     match outcome {
         Ok(outcome) => match compare::compare(case, &outcome) {
             Ok(()) => Verdict::Pass,
-            Err(msg) => Verdict::Fail(msg),
+            Err(msg) => Verdict::Fail(msg.to_string()),
         },
         // A run failure is graded, not assumed: a case whose `mf:result` is a `.err`
         // file EXPECTED to be refused and passes when the diagnostic says what the

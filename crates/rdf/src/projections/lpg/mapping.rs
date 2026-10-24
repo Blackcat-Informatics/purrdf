@@ -838,7 +838,7 @@ mod tests {
         );
 
         let lifted = lift_lpg(&projected.graph, &config(1_000)).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
         assert_ledger_complete(
             &lifted.loss_ledger,
             &[
@@ -1145,7 +1145,7 @@ mod tests {
         padded.push(b'\n');
         assert!(LpgGraph::from_canonical_json(&padded, &config).is_err());
         let lifted = lift_lpg(&graph, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
         assert_eq!(lifted.dataset.named_graphs().count(), 2);
     }
 
@@ -1179,7 +1179,7 @@ mod tests {
             let config = config(1_000);
             let first = project_lpg(dataset.as_ref(), &config).expect("project");
             let lifted = lift_lpg(&first.graph, &config).expect("lift");
-            prop_assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+            prop_assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
             let second = project_lpg(lifted.dataset.as_ref(), &config).expect("reproject");
             prop_assert_eq!(first.graph, second.graph);
         }

@@ -630,7 +630,7 @@ impl RetentionGuard {
     /// other guard on the same owner and ledger.
     ///
     /// `compute` is the CALLER's canonicalization — typically
-    /// [`graph_digest_view`](crate::ir::canon::graph_digest_view) over whatever
+    /// [`try_graph_digest_view`](crate::ir::canon::try_graph_digest_view) over whatever
     /// view the caller holds. The ledger never canonicalizes anything itself and
     /// has no dependency on the canonicalizer; it stores 32 bytes under a name.
     ///

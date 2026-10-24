@@ -169,10 +169,13 @@ fn benches(c: &mut Bench) {
         construction
     );
 
-    assert!(purrdf_core::datasets_isomorphic(
-        &scoped_blanks(16, BlankScope::DEFAULT),
-        &scoped_blanks(16, BlankScope(17)),
-    ));
+    assert!(
+        purrdf_core::datasets_isomorphic(
+            &scoped_blanks(16, BlankScope::DEFAULT),
+            &scoped_blanks(16, BlankScope(17)),
+        )
+        .unwrap()
+    );
     let mut group = c.benchmark_group("shared_views");
     group.bench_function("indexed_native_probe", |b| {
         b.iter(|| {

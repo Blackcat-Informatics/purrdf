@@ -1165,7 +1165,7 @@ mod tests {
 
         let reparsed = lift(&first.bundle, &config);
         assert!(
-            datasets_isomorphic(&source, &reparsed),
+            datasets_isomorphic(&source, &reparsed).unwrap(),
             "the complete OKF profile must round-trip isomorphically"
         );
         let second = write_okf_bundle(&reparsed, &config).expect("second write");
@@ -1208,7 +1208,7 @@ mod tests {
 
         let reparsed = lift(&outcome.bundle, &config);
         assert!(
-            datasets_isomorphic(&base, &reparsed),
+            datasets_isomorphic(&base, &reparsed).unwrap(),
             "only the explicitly ledgered extra annotation may disappear"
         );
     }
@@ -1359,7 +1359,7 @@ mod tests {
             if accepted {
                 let outcome = result.expect("exact YAML representation");
                 let read = lift(&outcome.bundle, &config);
-                assert!(datasets_isomorphic(&frozen, &read), "{lexical}");
+                assert!(datasets_isomorphic(&frozen, &read).unwrap(), "{lexical}");
             } else {
                 assert!(result.is_err(), "{lexical}");
             }

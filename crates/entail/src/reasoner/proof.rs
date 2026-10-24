@@ -3511,7 +3511,7 @@ mod tests {
             .proof()
             .expect(RECORDED)
             .covers(&[ClaimSubject::Module {
-                digest: crate::owl_dl::proof::ontology_identity(extracted.module()),
+                digest: crate::owl_dl::proof::try_ontology_identity(extracted.module()).unwrap(),
             }])
             .expect("the claim is the module's own canonical identity");
     }
@@ -3527,7 +3527,7 @@ mod tests {
             extract_module_with_proofs(&ontology, &seed, ModuleMethod::Top).expect("extracts");
         assert!(matches!(
             bot.proof().expect(RECORDED).covers(&[ClaimSubject::Module {
-                digest: crate::owl_dl::proof::ontology_identity(other.module()),
+                digest: crate::owl_dl::proof::try_ontology_identity(other.module()).unwrap(),
             }]),
             Err(DlProofError::AnswerNotCovered { .. })
         ));
@@ -3883,8 +3883,8 @@ mod tests {
             "nobody asked, so nothing was measured — which is not the same as measuring zero"
         );
         assert_eq!(
-            crate::owl_dl::proof::ontology_identity(plain.module()),
-            crate::owl_dl::proof::ontology_identity(proved.module()),
+            crate::owl_dl::proof::try_ontology_identity(plain.module()).unwrap(),
+            crate::owl_dl::proof::try_ontology_identity(proved.module()).unwrap(),
             "and the module itself is identical either way"
         );
     }

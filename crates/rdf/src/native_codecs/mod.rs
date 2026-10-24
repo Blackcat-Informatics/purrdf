@@ -211,7 +211,7 @@ mod tests {
     fn assert_round_trips(dataset: &RdfDataset, media_type: &str) {
         let reparsed = round_trip(dataset, media_type);
         assert!(
-            datasets_isomorphic(dataset, &reparsed),
+            datasets_isomorphic(dataset, &reparsed).unwrap(),
             "round-trip via {media_type} must be isomorphic"
         );
     }
@@ -597,7 +597,7 @@ mod tests {
                 .expect("generic parse");
             let reparsed = sink.into_dataset().expect("sink finished");
             assert!(
-                datasets_isomorphic(&ds, &reparsed),
+                datasets_isomorphic(&ds, &reparsed).unwrap(),
                 "GtsCodecBackend round-trip via {media_type} must be isomorphic"
             );
         }
@@ -759,7 +759,7 @@ mod tests {
         );
         assert_eq!(reparsed.quad_count(), 5, "all five nodes survive the cycle");
         assert!(
-            datasets_isomorphic(&ds, &reparsed),
+            datasets_isomorphic(&ds, &reparsed).unwrap(),
             "round trip via N-Triples must be isomorphic"
         );
     }

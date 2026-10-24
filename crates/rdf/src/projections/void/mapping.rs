@@ -911,7 +911,7 @@ mod tests {
                 .get(&resident.artifact_path)
                 .expect("artifact");
             let reparsed = parse_dataset(bytes, format.media_type(), None).expect("reparse VoID");
-            assert!(datasets_isomorphic(resident.dataset.as_ref(), &reparsed));
+            assert!(datasets_isomorphic(resident.dataset.as_ref(), &reparsed).unwrap());
         }
     }
 

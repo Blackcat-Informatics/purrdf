@@ -7,9 +7,9 @@
 //! `SOURCE.md`) is the acceptance gate for the native canonicalizer. Each
 //! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec,
 //! canonicalized graph-preservingly by
-//! [`purrdf_rdf::canonicalize_with`], and its canonical N-Quads compared to
+//! [`purrdf_rdf::try_canonicalize_with`], and its canonical N-Quads compared to
 //! the expected `testNNN-rdfc10.nq`. Inputs WITHOUT an expected output are
-//! **negative** (poison / complexity-limit) tests that must abort rather than
+//! **negative** (poison / complexity-limit) tests that must refuse rather than
 //! canonicalize.
 //!
 //! The suite includes the hard automorphism vectors (test053–test058 etc.) whose
@@ -36,7 +36,7 @@
 use purrdf_core::FastSet;
 use std::path::{Path, PathBuf};
 
-use purrdf_rdf::{CanonHash, NativeRdfFormat, canonicalize_with, parse_dataset};
+use purrdf_rdf::{CanonHash, NativeRdfFormat, parse_dataset, try_canonicalize_with};
 
 /// Tests that specify `rdfc:hashAlgorithm "SHA384"` in the W3C manifest (the rest
 /// use the SHA-256 default). As of the vendored suite this is exactly `test075`
@@ -51,7 +51,7 @@ const NUM_SHARDS: usize = 4;
 /// only on the maint lane via [`w3c_rdfc10_heavy_offgate`].
 ///
 /// Current entry: `test074` — the suite's sole negative/poison vector. The native
-/// canonicalizer takes ~5.3 s isolated-local before the call-budget guard aborts (the
+/// canonicalizer takes ~5.3 s isolated-local before the call-budget guard refuses (the
 /// pathological all-blank graph); on a contended 4-core CI runner that can balloon
 /// past budget. Every other vector canonicalizes in ≤ ~0.02 s. Mirrors the
 /// `corpus_parity_heavy_offgate` precedent in `sparql_eval_parity.rs`.
@@ -140,10 +140,6 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
         .filter(|p| include(&stem_of(p)))
         .collect();
 
-    // Suppress panic noise; we report failures by test name through `failures`.
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-
     let mut failures: Vec<String> = Vec::new();
 
     for input in &inputs {
@@ -163,10 +159,10 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
         };
 
         if expected_path.exists() {
-            let outcome =
-                std::panic::catch_unwind(|| canonicalize_with(&quads, hash_for(&stem)).nquads);
+            let outcome = try_canonicalize_with(&quads, hash_for(&stem));
             match outcome {
-                Ok(actual) => {
+                Ok(canonical) => {
+                    let actual = canonical.nquads;
                     let expected = std::fs::read_to_string(&expected_path).expect("read expected");
                     if norm_lines(&actual) != norm_lines(&expected) {
                         failures.push(format!(
@@ -174,40 +170,23 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
                         ));
                     }
                 }
-                Err(_) => failures.push(format!(
-                    "{stem}: canonicalization PANICKED on a positive test"
+                Err(error) => failures.push(format!(
+                    "{stem}: canonicalization refused a positive test: {error}"
                 )),
             }
         } else {
-            // Negative (poison) test: canonicalization must abort (the poison call
-            // budget trips on the pathological blank graph).
-            let outcome =
-                std::panic::catch_unwind(|| canonicalize_with(&quads, hash_for(&stem)).nquads);
-            match outcome {
-                Ok(_) => failures.push(format!(
-                    "{stem}: NEGATIVE poison test did not abort (expected the call-budget guard to trip)"
+            // Negative poison input must return the native work-budget refusal.
+            match try_canonicalize_with(&quads, hash_for(&stem)) {
+                Err(purrdf_rdf::CanonError::BudgetExceeded { .. }) => {}
+                Err(error) => failures.push(format!(
+                    "{stem}: NEGATIVE test returned a different refusal: {error}"
                 )),
-                Err(payload) => {
-                    // The abort MUST be the poison call-budget guard, not an
-                    // incidental parse/bridge panic — otherwise a future
-                    // regression would masquerade as a poison abort and pass.
-                    let msg = payload
-                        .downcast_ref::<String>()
-                        .map(String::as_str)
-                        .or_else(|| payload.downcast_ref::<&str>().copied())
-                        .unwrap_or("<non-string panic payload>");
-                    if !msg.contains("call budget") {
-                        failures.push(format!(
-                            "{stem}: NEGATIVE test panicked, but not via the call-budget guard \
-                             (payload: {msg:?}); a non-budget panic must not count as a poison abort"
-                        ));
-                    }
-                }
+                Ok(_) => failures.push(format!(
+                    "{stem}: NEGATIVE poison test unexpectedly canonicalized"
+                )),
             }
         }
     }
-
-    std::panic::set_hook(prev_hook);
 
     assert!(
         failures.is_empty(),

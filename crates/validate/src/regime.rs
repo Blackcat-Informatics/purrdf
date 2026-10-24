@@ -3108,6 +3108,9 @@ fn render_justification(justification: &Justification) -> Result<String, String>
     let minimal = justification
         .is_minimal()
         .map_err(|error| format!("justify: re-deciding minimality: {error}"))?;
+    let digest = justification
+        .digest_hex()
+        .map_err(|error| format!("justify: content identity: {error}"))?;
     let mut out = String::new();
     out.push_str(JUSTIFICATION_CERTIFICATE_BANNER);
     out.push('\n');
@@ -3115,7 +3118,7 @@ fn render_justification(justification: &Justification) -> Result<String, String>
     write_axiom(justification.axiom(), &mut out);
     let _ = writeln!(out, "axioms {}", justification.axioms());
     let _ = writeln!(out, "decisions {}", justification.decisions());
-    let _ = writeln!(out, "digest {}", justification.digest_hex());
+    let _ = writeln!(out, "digest {digest}");
     let _ = writeln!(out, "sufficient {sufficient}");
     let _ = writeln!(out, "minimal {minimal}");
     Ok(out)

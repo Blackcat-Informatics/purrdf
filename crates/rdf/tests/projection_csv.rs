@@ -48,12 +48,15 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
                 .expect("generic rewrite")
                 .artifacts())
     );
-    assert!(datasets_isomorphic(
-        &dataset,
-        &lift_lpg(&generic_graph, &config)
-            .expect("generic lift")
-            .dataset
-    ));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &lift_lpg(&generic_graph, &config)
+                .expect("generic lift")
+                .dataset
+        )
+        .unwrap()
+    );
 
     let neo4j = project_neo4j_csv(dataset.as_ref(), &config).expect("Neo4j projection");
     assert!(!neo4j.loss_ledger.is_empty());
@@ -66,8 +69,11 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
                 .expect("Neo4j rewrite")
                 .artifacts())
     );
-    assert!(datasets_isomorphic(
-        &dataset,
-        &lift_lpg(&neo4j_graph, &config).expect("Neo4j lift").dataset
-    ));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &lift_lpg(&neo4j_graph, &config).expect("Neo4j lift").dataset
+        )
+        .unwrap()
+    );
 }

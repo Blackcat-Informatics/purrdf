@@ -70,7 +70,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
-use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, canonicalize};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, try_canonicalize};
 use purrdf_shapes::data::{GraphFilter, ShaclData, native_quads};
 use purrdf_shapes::expression::{
     Binding, NodeExpr, RecursionGuard, Scope, eval_node_expr_in_scope,
@@ -441,8 +441,8 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
     }
     let (inferred, base) = outcome?;
     let expected_full = merge(base.as_ref(), expected_triples(&tc.expected)?.as_ref())?;
-    let produced = canonicalize(inferred.as_ref()).nquads;
-    let expected = canonicalize(expected_full.as_ref()).nquads;
+    let produced = try_canonicalize(inferred.as_ref()).unwrap().nquads;
+    let expected = try_canonicalize(expected_full.as_ref()).unwrap().nquads;
     if produced == expected {
         return Ok(());
     }
@@ -535,8 +535,8 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let produced =
                 expected_triples(&InferExpected::Triples(inference.inferred().to_vec()))?;
             let expected = parse_turtle_file(result)?;
-            let produced = canonicalize(produced.as_ref()).nquads;
-            let expected = canonicalize(expected.as_ref()).nquads;
+            let produced = try_canonicalize(produced.as_ref()).unwrap().nquads;
+            let expected = try_canonicalize(expected.as_ref()).unwrap().nquads;
             if produced == expected {
                 return Ok(());
             }

@@ -1409,7 +1409,7 @@ mod tests {
         let rewritten = write_lpg_csv(&decoded, &config).expect("rewrite CSV");
         assert!(same_artifacts(&projected.package, &rewritten));
         let lifted = lift_lpg(&decoded, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
     }
 
     #[test]
@@ -1458,7 +1458,7 @@ mod tests {
         let rewritten = write_neo4j_csv(&decoded, &config).expect("rewrite Neo4j");
         assert!(same_artifacts(&projected.package, &rewritten));
         let lifted = lift_lpg(&decoded, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
     }
 
     #[test]

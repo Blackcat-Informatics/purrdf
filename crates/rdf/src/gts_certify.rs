@@ -38,7 +38,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{CanonError, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
+use crate::{CanonError, CanonHash, RdfDiagnostic, try_canonicalize_with};
 
 /// Blank-node count above which [`refold_digest`] refuses to canonicalize the
 /// content projection (a cheap structural pre-reject; RDFC-1.0's n-degree
@@ -169,8 +169,8 @@ pub fn content_projection(g: &Graph) -> Graph {
 /// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
 /// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
 /// count exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
-/// attempted (refuse-don't-trust: never runs RDFC-1.0's combinatorial
-/// n-degree search against untrusted, potentially adversarial input).
+/// attempted. Returns [`CertifyError::CanonRefused`] when canonicalization
+/// refuses the admitted projection.
 pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
     canonical_digest(&content_projection(g))
 }
@@ -185,29 +185,9 @@ pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
 /// Returns [`CertifyError::Dataset`] when `projected` cannot be bridged into a
 /// frozen dataset, and [`CertifyError::Poison`] when its blank-node count
 /// exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
-/// attempted (refuse-don't-trust: never runs RDFC-1.0's combinatorial
-/// n-degree search against untrusted, potentially adversarial input).
+/// attempted. Returns [`CertifyError::CanonRefused`] when canonicalization
+/// refuses the admitted projection.
 fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
-    let dataset = dataset_from_gts_graph(projected)?;
-    let blanks = crate::ir::canon::blank_count(&dataset);
-    if blanks > POISON_BLANK_LIMIT {
-        return Err(CertifyError::Poison(blanks));
-    }
-    let canonical = canonicalize_with(&dataset, CanonHash::Sha256);
-    let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(purrdf_hash::hex::encode(digest.as_slice()))
-}
-
-/// The fallible twin of [`canonical_digest`], for UNTRUSTED input
-/// ([`verify_compaction`] and everything it calls): identical up through the
-/// cheap [`POISON_BLANK_LIMIT`] blank-COUNT pre-reject, but canonicalizes
-/// through [`try_canonicalize_with`] so a pathologically symmetric graph that
-/// stays under the count limit yet exhausts RDFC-1.0's n-degree search call
-/// budget surfaces as [`CertifyError::CanonRefused`] instead of
-/// panicking. Byte-identical `Ok` digest to [`canonical_digest`] on any input
-/// both accept — determinism is unaffected, only the failure mode on
-/// adversarial input changes from abort to a returned error.
-fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     let dataset = dataset_from_gts_graph(projected)?;
     let blanks = crate::ir::canon::blank_count(&dataset);
     if blanks > POISON_BLANK_LIMIT {
@@ -217,28 +197,6 @@ fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
         try_canonicalize_with(&dataset, CanonHash::Sha256).map_err(CertifyError::CanonRefused)?;
     let digest = Sha256::digest(canonical.nquads.as_bytes());
     Ok(purrdf_hash::hex::encode(digest.as_slice()))
-}
-
-/// The fallible twin of [`refold_digest`], for UNTRUSTED input — see
-/// [`try_canonical_digest`].
-///
-/// # Errors
-/// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
-/// [`CertifyError::CanonRefused`] — never panics, regardless of how
-/// adversarially symmetric `g`'s content projection is.
-fn try_refold_digest(g: &Graph) -> Result<String, CertifyError> {
-    try_canonical_digest(&content_projection(g))
-}
-
-/// The fallible twin of [`effective_digest`], for UNTRUSTED input — see
-/// [`try_canonical_digest`].
-///
-/// # Errors
-/// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
-/// [`CertifyError::CanonRefused`] — never panics, regardless of how
-/// adversarially symmetric `g`'s effective projection is.
-fn try_effective_digest(g: &Graph) -> Result<String, CertifyError> {
-    try_canonical_digest(&effective_projection(g))
 }
 
 /// A term-id resolved to its own `value` string, or `None` when the id is
@@ -389,7 +347,8 @@ pub fn effective_projection(g: &Graph) -> Graph {
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
 /// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
-/// count exceeds [`POISON_BLANK_LIMIT`].
+/// count exceeds [`POISON_BLANK_LIMIT`]. Canonicalization refusals retain their
+/// original cause in [`CertifyError::CanonRefused`].
 pub fn effective_digest(g: &Graph) -> Result<String, CertifyError> {
     canonical_digest(&effective_projection(g))
 }
@@ -637,10 +596,8 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// (RAW), AND `pre`/`post` agree on [`effective_digest`] (EFFECTIVE) — the
 /// suppression↔compaction commuting square (see [`CompactionReport::suppressions_ok`]).
 ///
-/// Called only from [`verify_compaction`] over UNTRUSTED bytes, so the
-/// effective-digest agreement is computed via `try_effective_digest`
-/// (fail-closed on a poison-budget graph) rather than [`effective_digest`]
-/// (which panics for trusted callers).
+/// Called from [`verify_compaction`] over caller-supplied bytes. Both sides use
+/// [`effective_digest`], retaining the original canonicalization refusal.
 ///
 /// # Errors
 /// Returns [`CertifyError`] only when an effective projection genuinely
@@ -649,7 +606,7 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// mismatch, which surfaces as `Ok(false)`.
 fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
     let retained = suppression_retention_ok(pre, post);
-    let effective_equivalent = try_effective_digest(pre)? == try_effective_digest(post)?;
+    let effective_equivalent = effective_digest(pre)? == effective_digest(post)?;
     Ok(retained && effective_equivalent)
 }
 
@@ -663,9 +620,8 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// `pre_bytes`/`post_bytes` are UNTRUSTED (an independent verifier's whole
 /// point is to not trust the claimant), so every digest this function
 /// computes over them goes through the fallible RDFC-1.0 canonicalizer
-/// (`try_refold_digest`/`try_effective_digest`, backing
-/// [`try_canonicalize_with`]) rather than the panicking
-/// [`canonicalize_with`]: a pathologically symmetric blank graph that stays
+/// ([`refold_digest`]/[`effective_digest`], backing
+/// [`try_canonicalize_with`]): a pathologically symmetric blank graph that stays
 /// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
 /// RDFC-1.0's n-degree search call budget surfaces as
 /// [`CertifyError::CanonRefused`], never a process-aborting panic —
@@ -689,7 +645,7 @@ pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
 
-    let refold_equivalent = try_refold_digest(&pre)? == try_refold_digest(&post)?;
+    let refold_equivalent = refold_digest(&pre)? == refold_digest(&post)?;
     let seam_chain_ok = post.diagnostics.is_empty();
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);

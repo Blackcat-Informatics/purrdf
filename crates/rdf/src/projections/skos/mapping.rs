@@ -996,7 +996,7 @@ mod tests {
         );
 
         // Same graph either way: the base changes the SPELLING, never the denotation.
-        assert!(datasets_isomorphic(&unbased.dataset, &based.dataset));
+        assert!(datasets_isomorphic(&unbased.dataset, &based.dataset).unwrap());
     }
 
     /// A document base that is not an absolute IRI is refused at configuration time, with the
@@ -1232,7 +1232,7 @@ mod tests {
         let configuration = config(SkosGraphSelection::DefaultGraph, 1_000);
         let projected = project_skos(dataset.as_ref(), &configuration).expect("project");
         let reparsed = parse_dataset(&projected.turtle, "text/turtle", None).expect("parse Turtle");
-        assert!(datasets_isomorphic(&projected.dataset, &reparsed));
+        assert!(datasets_isomorphic(&projected.dataset, &reparsed).unwrap());
         assert!(
             projected.dataset.quads().all(|quad| quad.g.is_none()),
             "SKOS view must be one default graph"
@@ -1315,7 +1315,7 @@ mod tests {
         let view = PackView::from_bytes(&bytes).expect("pack view");
         let packed = project_skos(&view, &configuration).expect("packed");
         assert_eq!(resident.turtle, packed.turtle);
-        assert!(datasets_isomorphic(&resident.dataset, &packed.dataset));
+        assert!(datasets_isomorphic(&resident.dataset, &packed.dataset).unwrap());
         assert_eq!(
             resident.loss_ledger.render_json(),
             packed.loss_ledger.render_json()

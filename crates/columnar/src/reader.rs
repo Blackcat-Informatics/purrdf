@@ -828,7 +828,7 @@ mod tests {
         let (dataset, blobs) = fixture();
         let encoded = write(&*dataset, &blobs, Compression::Zstd).unwrap();
         let decoded = read(&encoded.files).unwrap();
-        assert!(datasets_isomorphic(&dataset, &decoded.dataset));
+        assert!(datasets_isomorphic(&dataset, &decoded.dataset).unwrap());
         assert_eq!(decoded.blobs, blobs);
         assert!(encoded.losses.is_empty());
         assert!(decoded.losses.is_empty());

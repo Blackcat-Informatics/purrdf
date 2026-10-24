@@ -2173,7 +2173,7 @@ mod tests {
         let xml = serialize(&ds);
         let reparsed = parse(&xml, None);
         assert!(
-            crate::datasets_isomorphic(&ds, &reparsed),
+            crate::datasets_isomorphic(&ds, &reparsed).unwrap(),
             "rdf/xml round-trip must be isomorphic"
         );
     }

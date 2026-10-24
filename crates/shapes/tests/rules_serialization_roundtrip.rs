@@ -11,7 +11,7 @@
 //! equality with the entailed dataset — proving the minted per-focus blank
 //! labels survive both egress syntaxes losslessly.
 
-use purrdf_rdf::{SerializeGraph, canonicalize, parse_dataset, serialize_dataset};
+use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset, try_canonicalize};
 use purrdf_shapes::rules::entail_dataset;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
@@ -53,7 +53,7 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
         "the rule must derive property-shape triples for both foci"
     );
 
-    let canonical_entailed = canonicalize(entailed.as_ref()).nquads;
+    let canonical_entailed = try_canonicalize(entailed.as_ref()).unwrap().nquads;
     for media in ["text/turtle", "application/n-triples"] {
         let bytes = serialize_dataset(entailed.as_ref(), media, SerializeGraph::Dataset)
             .unwrap_or_else(|e| panic!("{media} serialization must succeed: {e}"));
@@ -61,7 +61,7 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
             .unwrap_or_else(|e| panic!("{media} re-parse must succeed: {e}"));
         assert_eq!(
             canonical_entailed,
-            canonicalize(reparsed.as_ref()).nquads,
+            try_canonicalize(reparsed.as_ref()).unwrap().nquads,
             "{media} round-trip must preserve the entailed dataset"
         );
     }

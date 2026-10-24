@@ -731,7 +731,7 @@ mod tests {
                 .expect("replays");
             let replayed = sink.into_dataset().expect("freezes");
             assert_eq!(replayed.named_graphs().count(), graphs);
-            assert!(datasets_isomorphic(&**source, &*replayed));
+            assert!(datasets_isomorphic(&**source, &*replayed).unwrap());
         }
     }
 
@@ -801,7 +801,7 @@ mod tests {
         let rebuilt = sink.into_dataset().expect("frozen after finish");
 
         assert!(
-            datasets_isomorphic(&original, &rebuilt),
+            datasets_isomorphic(&original, &rebuilt).unwrap(),
             "replayed dataset is isomorphic to the original"
         );
         assert_eq!(original.quad_count(), rebuilt.quad_count());
@@ -849,7 +849,7 @@ mod tests {
         let rebuilt = sink.into_dataset().expect("frozen after finish");
 
         assert!(
-            datasets_isomorphic(&original, &rebuilt),
+            datasets_isomorphic(&original, &rebuilt).unwrap(),
             "replayed dataset with a graph-scoped reifier/annotation must be isomorphic"
         );
         // Direct check: the rebuilt reifier/annotation rows still carry a `Some(graph)`
@@ -875,7 +875,7 @@ mod tests {
         let dynamic: &mut dyn RdfEventSink = &mut sink;
         source.drive_erased(dynamic).expect("erased drive ok");
         let rebuilt = sink.into_dataset().expect("frozen after finish");
-        assert!(datasets_isomorphic(&original, &rebuilt));
+        assert!(datasets_isomorphic(&original, &rebuilt).unwrap());
         assert!(
             source.declares_before_reference(),
             "frozen replay declares-before-reference"

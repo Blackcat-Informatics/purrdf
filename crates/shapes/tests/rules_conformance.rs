@@ -57,7 +57,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_rdf::{RdfDataset, canonicalize};
+use purrdf_rdf::{RdfDataset, try_canonicalize};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::shacl_corpora::file_iri;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
@@ -154,8 +154,8 @@ fn run_case(case: &Case) -> Result<(), String> {
     .map_err(|e| format!("cannot parse expected graph: {e}"))?;
     let expected_full = merge(projected.as_ref(), derived_ds.as_ref())?;
 
-    let produced_canon = canonicalize(produced.as_ref()).nquads;
-    let expected_canon = canonicalize(expected_full.as_ref()).nquads;
+    let produced_canon = try_canonicalize(produced.as_ref()).unwrap().nquads;
+    let expected_canon = try_canonicalize(expected_full.as_ref()).unwrap().nquads;
     if produced_canon != expected_canon {
         return Err(format!(
             "inferred-graph mismatch (RDFC-1.0):\n  --- PRODUCED (base ⊎ derived) ---\n{produced_canon}\n  --- EXPECTED (base ⊎ expected-derived) ---\n{expected_canon}"
@@ -293,8 +293,8 @@ fn entail_dataset_composes_project_then_apply_rules() {
     let via_apply = apply_rules(&data, &shapes).expect("apply_rules");
 
     assert_eq!(
-        canonicalize(via_entail.as_ref()).nquads,
-        canonicalize(via_apply.as_ref()).nquads,
+        try_canonicalize(via_entail.as_ref()).unwrap().nquads,
+        try_canonicalize(via_apply.as_ref()).unwrap().nquads,
         "entail_dataset must equal apply_rules over the projected dataset"
     );
 }
@@ -326,11 +326,12 @@ fn sh_order_is_order_independent_over_the_closure() {
                 .prefixes,
         )
         .expect("shapes");
-        canonicalize(
+        try_canonicalize(
             purrdf_shapes::entail_dataset(data.as_ref(), &shapes)
                 .expect("entail")
                 .as_ref(),
         )
+        .unwrap()
         .nquads
     };
 

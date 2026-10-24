@@ -24,7 +24,7 @@
 //!
 //! * [`surface_of`] is INJECTIVE — distinct [`TermValue`]s render to distinct surfaces —
 //!   so two terms can never collide into one store term. It is the repository's own
-//!   canonical N-Quads term spelling (`purrdf_core::canonicalize`'s), with a blank node
+//!   canonical N-Quads term spelling (`purrdf_core::try_canonicalize`'s), with a blank node
 //!   qualified by its scope because a scope is part of a blank node's identity (C0.2)
 //!   and is not recoverable from a canonical label.
 //! * The evaluator MINTS NO TERMS. Every clause is range-restricted (`compile` refuses
@@ -1431,7 +1431,7 @@ impl Terms {
 /// The lexical surface `purrdf-datalog` interns `value` under.
 ///
 /// This is the repository's canonical N-Quads term spelling — the same bytes
-/// `purrdf_core::canonicalize` writes — with one deliberate difference: a blank node is
+/// `purrdf_core::try_canonicalize` writes — with one deliberate difference: a blank node is
 /// qualified by its scope ordinal, because C0.2 makes the scope part of the node's
 /// identity while a canonical label is assigned by the canonicalization algorithm rather
 /// than carried by the term.
@@ -1888,7 +1888,7 @@ mod tests {
         )
         .expect("the fixture's collections are well formed")
         .0;
-        let nquads = purrdf_core::canonicalize(&closed).nquads;
+        let nquads = purrdf_core::try_canonicalize(&closed).unwrap().nquads;
         assert!(
             !nquads.contains(crate::lists::INTERNAL_SIGIL),
             "an internal id reached the serialized closure:\n{nquads}"
@@ -1990,7 +1990,7 @@ mod tests {
         let closed = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
             .expect("owl-rl closes it")
             .0;
-        let nquads = purrdf_core::canonicalize(&closed).nquads;
+        let nquads = purrdf_core::try_canonicalize(&closed).unwrap().nquads;
         let labels: BTreeSet<&str> = nquads
             .split_whitespace()
             .filter(|token| token.starts_with("_:"))
