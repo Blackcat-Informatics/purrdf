@@ -49,7 +49,13 @@ fn shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth() {
         purrdf_alloc_probe::Measurement,
         purrdf_alloc_probe::Measurement,
     )> = None;
-    for depth in [1, 8, 32] {
+    // Borrowed predicate lookup removes fixed spelling copies. Multiplying the
+    // newly smaller depth-one requested-byte total no longer bounds later
+    // geometric buffer capacities. Pin each actual expansion instead: neither
+    // extra allocations nor extra requested bytes can hide in a ratio envelope.
+    for (depth, expansion_allocations, expansion_bytes) in
+        [(1, 10, 3_458), (8, 48, 27_502), (32, 172, 111_982)]
+    {
         let mut source = String::from(
             "@prefix sh: <http://www.w3.org/ns/shacl#> .
              @prefix ex: <http://example.org/> .
@@ -87,6 +93,8 @@ fn shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth() {
             1
         );
         eprintln!("depth {depth}: preparation {preparation:?}, expansion {expansion_cost:?}");
+        assert_eq!(expansion_cost.allocations, expansion_allocations);
+        assert_eq!(expansion_cost.requested_bytes, expansion_bytes);
         // A linear envelope anchored at depth one accommodates geometric table
         // capacity steps. Comparing adjacent ratios instead assumes that every
         // sample uses exactly the same fraction of its backing capacity.
@@ -102,8 +110,6 @@ fn shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth() {
                 preparation.peak_working_bytes
                     <= old_preparation.peak_working_bytes * i64::try_from(multiplier).unwrap()
             );
-            assert!(expansion_cost.allocations <= old_expansion.allocations * multiplier);
-            assert!(expansion_cost.requested_bytes <= old_expansion.requested_bytes * multiplier);
             assert!(
                 expansion_cost.peak_working_bytes
                     <= old_expansion.peak_working_bytes * i64::try_from(multiplier).unwrap()

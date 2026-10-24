@@ -458,6 +458,7 @@ where
         base,
         originals: FastSet::default(),
         shapes,
+        class_supplement: crate::engine::request_subclasses(shapes),
         shapes_graph_iri,
         empty,
         view: RefCell::new(None),
@@ -862,17 +863,25 @@ impl LiveView {
         core: Arc<RdfDataset>,
         sparql: Arc<RdfDataset>,
         engine: &Engine<'_, '_, N>,
-    ) -> Self
+    ) -> Result<Self, crate::error::ShapesError>
     where
         Arity<N>: RuleShape<N>,
     {
         let shared = Arc::ptr_eq(&core, &sparql);
-        let data = Rc::new(ShaclData::new(
+        let data = ShaclData::new(
             Arc::clone(&core),
             Arc::clone(&sparql),
             engine.shapes_graph_iri.clone(),
-        ));
-        Self {
+        );
+        let data = Rc::new(
+            engine
+                .class_supplement
+                .as_deref()
+                .map(|supplement| supplement.apply(&data))
+                .transpose()?
+                .unwrap_or(data),
+        );
+        Ok(Self {
             generation,
             rows,
             delta_bytes: 0,
@@ -880,7 +889,7 @@ impl LiveView {
             core: MutableDataset::new(core),
             sparql: (!shared).then(|| MutableDataset::new(sparql)),
             data,
-        }
+        })
     }
 }
 
@@ -914,6 +923,8 @@ struct Engine<'r, 'a, const N: usize> {
     originals: FastSet<[Term; 3]>,
     /// The shapes.
     shapes: &'a Shapes,
+    /// Immutable shapes configuration reused across every actual rule snapshot.
+    class_supplement: Option<Box<crate::data::ClassSupplement>>,
     /// The shapes graph IRI a SPARQL rule sees as `$shapesGraph`.
     shapes_graph_iri: Option<String>,
     /// The empty dataset a pure expression is evaluated over.
@@ -1051,13 +1062,7 @@ where
         }
         let core = builder.freeze().map_err(crate::error::ShapesError::from)?;
         let sparql = rules::build_round_base(&core, self.shapes, self.shapes_graph_iri.as_deref())?;
-        Ok(LiveView::compacted(
-            generation,
-            model.row_slots(),
-            core,
-            sparql,
-            self,
-        ))
+        LiveView::compacted(generation, model.row_slots(), core, sparql, self)
     }
 
     /// `view` extended by the store rows committed since it was built, or `None` when
@@ -1107,7 +1112,7 @@ where
                 Some(sparql) => sparql.freeze().map_err(crate::error::ShapesError::from)?,
                 None => Arc::clone(&core),
             };
-            *view = LiveView::compacted(view.generation, rows, core, sparql, self);
+            *view = LiveView::compacted(view.generation, rows, core, sparql, self)?;
             return Ok(Some(Rc::clone(&view.data)));
         }
         view.delta_bytes = delta_bytes;
@@ -1130,11 +1135,14 @@ where
             Some(sparql) => snapshot(sparql)?,
             None => Arc::clone(&core),
         };
-        view.data = Rc::new(ShaclData::from_views(
-            core,
-            sparql,
-            self.shapes_graph_iri.clone(),
-        ));
+        let data = ShaclData::from_views(core, sparql, self.shapes_graph_iri.clone());
+        view.data = Rc::new(
+            self.class_supplement
+                .as_deref()
+                .map(|supplement| supplement.apply(&data))
+                .transpose()?
+                .unwrap_or(data),
+        );
         Ok(Some(Rc::clone(&view.data)))
     }
 
@@ -1202,6 +1210,7 @@ where
                     &view,
                     producer.rule,
                     &producer.shapes,
+                    &self.shapes.validation_options,
                     self.shapes_graph_iri.as_deref(),
                     &mut || self.mint(),
                     selection,

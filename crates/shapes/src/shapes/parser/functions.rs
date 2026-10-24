@@ -14,11 +14,12 @@ use purrdf_sparql_eval::{
     UserFunction, UserFunctionRegistry,
 };
 
+#[cfg(test)]
 use crate::data::ShaclData;
 use crate::error::{FailureClass, ShapesError};
 use crate::expression::{
-    CustomFunction, FnCall, NodeExpr, RecursionGuard, ShapeArg, SparqlCallForm,
-    eval_custom_function_call, eval_node_expr, sparql_ns_lowering,
+    CustomFunction, FnCall, NodeExpr, ShapeArg, SparqlCallForm, eval_custom_function_call,
+    eval_node_expr, sparql_ns_lowering,
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::provenance::ParseProvenance;
@@ -666,7 +667,13 @@ impl Parser<'_> {
 /// Whether the law in force makes a blank-node argument to a custom SPARQL function
 /// an error: the editor's draft and the compatibility law do, the working draft and
 /// the 2017 Recommendation state no such rule.
-fn blank_node_argument_is_error() -> bool {
+fn blank_node_argument_is_error(call: &ExprFnCall<'_>) -> bool {
+    if let Some(context) = call.invocation_context::<crate::sparql::FunctionRequest>() {
+        return context
+            .request
+            .shacl_profile
+            .reads_editors_draft_semantics();
+    }
     crate::query_law::current().is_none_or(|law| law.profile().reads_editors_draft_semantics())
 }
 
@@ -699,6 +706,7 @@ pub(crate) fn invoke_expression_function(
     func: &Arc<CustomFunction>,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
+    let _functions = crate::sparql::FunctionRequest::enter(call);
     let mut args: Vec<Option<Term>> = Vec::with_capacity(call.args.len());
     for (index, value) in call.args.iter().enumerate() {
         // SHACL 1.2 SPARQL Extensions §7.3: an argument whose evaluation is an error
@@ -709,7 +717,7 @@ pub(crate) fn invoke_expression_function(
         // evaluates to a blank node leads to an evaluation failure and thus an error".
         // The working draft states no such rule, so a blank node is an ordinary
         // argument under it.
-        let blank_is_error = blank_node_argument_is_error();
+        let blank_is_error = blank_node_argument_is_error(call);
         let bound = value
             .as_ref()
             .map(term_value_to_native)
@@ -722,12 +730,9 @@ pub(crate) fn invoke_expression_function(
     // A fresh view over the calling query's own graph. Both halves are the same
     // frozen dataset, so the node expression reads exactly the graph the query is
     // reading — the CURRENT one, never a capture from shapes-load.
-    let store = ShaclData::new(
-        Arc::clone(call.focus_graph),
-        Arc::clone(call.focus_graph),
-        None,
-    );
-    let mut guard = RecursionGuard::with_depth(call.depth);
+    let store = crate::sparql::FunctionRequest::store(call)
+        .map_err(|error| EvalError::function(format!("function request: {error}")))?;
+    let mut guard = crate::sparql::FunctionRequest::guard(call);
     let _depth = enter_call_depth_scope(call.depth);
     let result = sparql_call_result(
         eval_custom_function_call(&store, owner, func, &args, &mut guard),
@@ -826,6 +831,7 @@ pub(crate) fn invoke_native_list_function(
     owner: &Arc<crate::shapes::ModelOwner>,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
+    let _functions = crate::sparql::FunctionRequest::enter(call);
     let mut args: Vec<NodeExpr> = Vec::with_capacity(call.args.len());
     for value in call.args {
         match value {
@@ -858,12 +864,9 @@ pub(crate) fn invoke_native_list_function(
             },
         }
     };
-    let store = ShaclData::new(
-        Arc::clone(call.focus_graph),
-        Arc::clone(call.focus_graph),
-        None,
-    );
-    let mut guard = RecursionGuard::with_depth(call.depth);
+    let store = crate::sparql::FunctionRequest::store(call)
+        .map_err(|error| EvalError::function(format!("function request: {error}")))?;
+    let mut guard = crate::sparql::FunctionRequest::guard(call);
     let _depth = enter_call_depth_scope(call.depth);
     let focus = Term::NamedNode(NamedNode::from(iri));
     let expr = NodeExpr::Owned {

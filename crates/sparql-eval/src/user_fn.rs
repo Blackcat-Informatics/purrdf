@@ -583,14 +583,15 @@ enum NativeBody {
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
 /// the calling query is running over, and the current user-function call depth.
 ///
-/// This is the whole of the difference between [`ExprFnBody`] and [`NativeFnBody`].
+/// [`ExprFnBody`] receives the query context its dataset-aware computation needs.
 /// A native closure sees only values and therefore cannot read a graph or re-enter
 /// an evaluator; an expression-bodied one is defined by a SHACL node expression,
 /// whose evaluation is a function OF a graph (`evalExpr(expr, focusGraph, focusNode,
-/// scope)`), so the graph has to travel with the call.
-#[derive(Debug)]
+/// scope)`), so the graph has to travel with the call. A bound registry may also
+/// supply shared application request state through [`Self::invocation_context`].
 #[non_exhaustive]
 pub struct ExprFnCall<'a> {
+    invocation_context: Option<&'a (dyn core::any::Any + Send + Sync)>,
     /// Where a body that re-enters the evaluator deposits what the relations it
     /// invoked attested — see [`ExprFnCall::record_relations`].
     ///
@@ -628,6 +629,18 @@ pub struct ExprFnCall<'a> {
     pub depth: u32,
 }
 
+purrdf_hash::debug_non_exhaustive!(ExprFnCall<'_> { iri, args, focus_graph, depth });
+
+impl ExprFnCall<'_> {
+    /// Borrow the caller's application context, when its bound registry supplied
+    /// one of this type. Standalone queries supply no application context.
+    #[must_use]
+    pub fn invocation_context<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.invocation_context
+            .and_then(<dyn core::any::Any + Send + Sync>::downcast_ref)
+    }
+}
+
 /// A dataset-aware (expression-bodied) user function body: a closure over the
 /// evaluated argument values AND the calling query's focus graph (see
 /// [`ExprFnCall`]).
@@ -640,7 +653,7 @@ pub struct ExprFnCall<'a> {
 /// exits â never a value it did not compute.
 ///
 /// The two body types differ ONLY in what they are handed ([`ExprFnCall`] adds the
-/// focus graph and the call depth; [`NativeFnBody`] sees values alone and carries a
+/// focus graph, call depth and application invocation context; [`NativeFnBody`] sees values alone and carries a
 /// [`Volatility`] the fork-join gate reads). Their failure channels are identical, so
 /// neither is the "lossy" one and a host cannot pick the wrong seam and quietly lose
 /// per-solution error semantics.
@@ -1288,7 +1301,13 @@ impl UserFunctionRegistry {
 /// Only the SPARQL-bodied table is bound. Native and expression-bodied functions
 /// are Rust closures with no SPARQL body and nothing to parse, so they pass through
 /// untouched â they are reachable through this type exactly as before.
+#[derive(Clone)]
 pub struct BoundFunctionRegistry {
+    data: Option<Arc<BoundFunctionData>>,
+    invocation_context: Option<InvocationContext>,
+}
+
+struct BoundFunctionData {
     /// The declarations: parameters, arity, return constraints, body text, and the
     /// native and expression tables verbatim.
     inner: UserFunctionRegistry,
@@ -1299,19 +1318,37 @@ pub struct BoundFunctionRegistry {
     env: RegistryId,
 }
 
+#[derive(Clone)]
+enum InvocationContext {
+    Strong(Arc<dyn core::any::Any + Send + Sync>),
+    Weak(std::sync::Weak<dyn core::any::Any + Send + Sync>),
+}
+
+impl InvocationContext {
+    fn retain(&self) -> Result<Arc<dyn core::any::Any + Send + Sync>, EvalError> {
+        match self {
+            Self::Strong(context) => Ok(Arc::clone(context)),
+            Self::Weak(context) => context.upgrade().ok_or_else(|| {
+                EvalError::function("the expression function invocation context was released")
+            }),
+        }
+    }
+}
+
 impl core::fmt::Debug for BoundFunctionRegistry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // The prepared bodies are listed by IRI (sorted, for deterministic output)
         // rather than by algebra: a `PreparedQuery` renders to pages of pattern tree
         // that tell a reader nothing about which functions are bound, which is the
         // question this impl exists to answer.
-        let mut bound: Vec<&str> = self.bodies.keys().map(String::as_str).collect();
+        let mut bound: Vec<&str> = self.data().bodies.keys().map(String::as_str).collect();
         bound.sort_unstable();
         f.debug_struct("BoundFunctionRegistry")
-            .field("declarations", &self.inner)
+            .field("declarations", &self.data().inner)
             .field("bound_bodies", &bound)
-            .field("env", &self.env)
-            .finish()
+            .field("env", &self.data().env)
+            .field("invocation_context", &self.invocation_context.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1326,10 +1363,18 @@ impl BoundFunctionRegistry {
     /// universally compatible, because a registry with no bodies cannot have bound
     /// any of them to the wrong environment.
     pub const EMPTY: Self = Self {
-        inner: UserFunctionRegistry::EMPTY,
-        bodies: DetHashMap::with_hasher(crate::DetHasher::new()),
-        env: RegistryId::EMPTY,
+        invocation_context: None,
+        data: None,
     };
+
+    fn data(&self) -> &BoundFunctionData {
+        static EMPTY: BoundFunctionData = BoundFunctionData {
+            inner: UserFunctionRegistry::EMPTY,
+            bodies: DetHashMap::with_hasher(crate::DetHasher::new()),
+            env: RegistryId::EMPTY,
+        };
+        self.data.as_deref().unwrap_or(&EMPTY)
+    }
 
     /// Assemble a bound registry from declarations and their prepared bodies â the
     /// tail of [`crate::engine::NativeSparqlEngine::bind_functions`], which is the
@@ -1339,7 +1384,44 @@ impl BoundFunctionRegistry {
         bodies: DetHashMap<String, Arc<crate::engine::PreparedQuery>>,
         env: RegistryId,
     ) -> Self {
-        Self { inner, bodies, env }
+        if inner.is_empty() && bodies.is_empty() {
+            return Self::EMPTY;
+        }
+        Self {
+            data: Some(Arc::new(BoundFunctionData { inner, bodies, env })),
+            invocation_context: None,
+        }
+    }
+
+    /// Build shared state for expression-function invocations in this request.
+    /// The builder receives a registry for nested queries sharing these exact
+    /// declarations and prepared bodies, with a weak link to the new context.
+    /// Retaining that registry in the context therefore creates no ownership cycle.
+    /// Cloning or moving the returned registry retains the complete request.
+    /// Context is read at invocation time; each query still supplies its focus graph.
+    #[must_use]
+    pub fn with_invocation_context<T: core::any::Any + Send + Sync>(
+        mut self,
+        build: impl FnOnce(Self) -> T,
+    ) -> Self {
+        let context = Arc::new_cyclic(|context: &std::sync::Weak<T>| {
+            let mut nested = self.clone();
+            nested.invocation_context = Some(InvocationContext::Weak(context.clone()));
+            build(nested)
+        });
+        self.invocation_context = Some(InvocationContext::Strong(context));
+        self
+    }
+
+    /// Borrow the application context owned by this registry. Nested registries
+    /// borrow their context weakly and expose it only during an invocation;
+    /// they cannot be reused as independent request owners through this method.
+    #[must_use]
+    pub fn owned_invocation_context<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        match &self.invocation_context {
+            Some(InvocationContext::Strong(context)) => context.downcast_ref(),
+            Some(InvocationContext::Weak(_)) | None => None,
+        }
     }
 
     /// Resolve a call-position IRI to its declaration and its bound body.
@@ -1352,47 +1434,47 @@ impl BoundFunctionRegistry {
         &self,
         iri: &str,
     ) -> Option<(&UserFunction, &Arc<crate::engine::PreparedQuery>)> {
-        let func = self.inner.resolve(iri)?;
-        let body = self.bodies.get(iri)?;
+        let func = self.data().inner.resolve(iri)?;
+        let body = self.data().bodies.get(iri)?;
         Some((func, body))
     }
 
     /// Resolve a call-position IRI to its declared native function, if any.
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
-        self.inner.resolve_native(iri)
+        self.data().inner.resolve_native(iri)
     }
 
     /// Resolve a call-position IRI to its declared dataset-aware
     /// (expression-bodied) function, if any.
     #[must_use]
     pub fn resolve_expr(&self, iri: &str) -> Option<&ExprFunction> {
-        self.inner.resolve_expr(iri)
+        self.data().inner.resolve_expr(iri)
     }
 
     /// Whether a registered expression-bodied function requires an owned focus graph.
     #[must_use]
     pub fn requires_focus_graph(&self) -> bool {
-        self.inner.requires_focus_graph()
+        self.data().inner.requires_focus_graph()
     }
 
     /// Whether the registry holds no functions of any kind.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.data().inner.is_empty()
     }
 
     /// The number of declared functions across all three kinds.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.data().inner.len()
     }
 
     /// The declarations this was bound from, for a caller that needs the
     /// unbound view (a content fingerprint, a product writer).
     #[must_use]
     pub fn declarations(&self) -> &UserFunctionRegistry {
-        &self.inner
+        &self.data().inner
     }
 
     /// The identity of the environment every body here was bound against.
@@ -1401,7 +1483,7 @@ impl BoundFunctionRegistry {
     /// [`Self::EMPTY`].
     #[must_use]
     pub fn env_id(&self) -> RegistryId {
-        self.env
+        self.data().env
     }
 
     /// Bind `registry` against the canonical empty environment, through the
@@ -1431,7 +1513,7 @@ impl BoundFunctionRegistry {
     /// distinction [`RegistryId`] exists to draw.
     #[must_use]
     pub fn admits(&self, env: &crate::extension_env::ExtensionEnv<'_>) -> bool {
-        self.bodies.is_empty() || self.env == env.id()
+        self.data().bodies.is_empty() || self.data().env == env.id()
     }
 }
 
@@ -2123,7 +2205,14 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
         ));
     }
     let relations = core::cell::RefCell::new(RelationWitness::default());
+    let invocation_context = ctx
+        .user_functions
+        .invocation_context
+        .as_ref()
+        .map(InvocationContext::retain)
+        .transpose()?;
     let call = ExprFnCall {
+        invocation_context: invocation_context.as_deref(),
         relations: &relations,
         iri,
         args,

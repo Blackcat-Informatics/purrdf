@@ -1251,6 +1251,7 @@ pub struct RecursionGuard {
     stack: FastSet<(String, String)>,
     depth: u32,
     structural: u32,
+    request: crate::engine::ValidationRequest,
 }
 
 /// Maximum nested `sh:filterShape` / `sh:exists` re-entry depth. Legitimate
@@ -1278,6 +1279,11 @@ pub const MAX_RECURSION_DEPTH: u32 = 64;
 pub const MAX_NODE_EXPR_DEPTH: u32 = 256;
 
 impl RecursionGuard {
+    pub(crate) fn with_request(mut self, request: &crate::engine::ValidationRequest) -> Self {
+        self.request.clone_from(request);
+        self
+    }
+
     /// A fresh guard seeded at `depth` — used when the constraint engine
     /// re-enters expression evaluation across the `conforms` boundary so the
     /// filter/exists recursion depth is preserved across the fresh guard.
@@ -1287,6 +1293,7 @@ impl RecursionGuard {
             stack: FastSet::default(),
             depth,
             structural: 0,
+            request: crate::engine::ValidationRequest::default(),
         }
     }
 
@@ -1715,6 +1722,9 @@ pub(crate) fn eval_planned_node_expr_in_scope(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
+    guard
+        .request
+        .clone_from(plan.binding().validation_request());
     guard.enter_node_expr()?;
     // Capture, unwind one level, THEN propagate: an early `?` here would leave
     // the structural counter permanently raised for the rest of the evaluation.
@@ -1730,22 +1740,22 @@ pub(crate) fn eval_planned_node_expr_in_scope(
 /// The direct SPARQL value boundary prepares only the declared function body and
 /// borrows its evaluated values through [`Scope::with_values`].
 ///
-/// `disallows` is the conformance-disallow set of the run this evaluation belongs
+/// `request` is the shared law of the run this evaluation belongs
 /// to, so a shape-bearing expression reached through an argument or a dynamic body
 /// judges conformance exactly as the rest of the run does; a public entry point
-/// that is not part of a validation run passes the default set.
+/// that is not part of a validation run passes the default request.
 fn eval_unlowered(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
-    disallows: &crate::report::ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
     model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
     let lowering = crate::plan::lower_standalone_expression(expr, model)?;
     let mut binding = lowering.bind(store.core_view());
-    binding.set_conformance_disallows(disallows);
+    binding.set_validation_request(request);
     eval_planned_node_expr_in_scope(
         store,
         focus,
@@ -1774,15 +1784,8 @@ pub fn eval_node_expr_in_scope(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    eval_unlowered(
-        store,
-        focus,
-        expr,
-        guard,
-        scope,
-        &crate::report::ConformanceDisallows::default(),
-        None,
-    )
+    let request = guard.request.clone();
+    eval_unlowered(store, focus, expr, guard, scope, &request, None)
 }
 
 /// `evalExpr(expr, data graph, focus, {})` as one step of a validation RUN: the
@@ -1798,7 +1801,7 @@ pub(crate) fn eval_node_expr_in_run(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
-    disallows: &crate::report::ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
     model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_unlowered(
@@ -1807,7 +1810,7 @@ pub(crate) fn eval_node_expr_in_run(
         expr,
         &mut RecursionGuard::default(),
         Scope::EMPTY,
-        disallows,
+        request,
         model,
     )
 }
@@ -2494,7 +2497,7 @@ fn eval_node_expr_at_depth(
                     arg_expr,
                     guard,
                     Scope::EMPTY,
-                    plan.binding().conformance_disallows(),
+                    plan.binding().validation_request(),
                     plan.model(),
                 )?;
                 match values.as_slice() {
@@ -2552,7 +2555,7 @@ fn eval_node_expr_at_depth(
                     arg,
                     guard,
                     Scope::EMPTY,
-                    plan.binding().conformance_disallows(),
+                    plan.binding().validation_request(),
                     plan.model(),
                 )?;
                 // §6.2 says of a custom LIST parameter function that "each argument
@@ -2776,7 +2779,8 @@ pub fn eval_custom_function_call(
     // Preserve the direct-call boundary's original typed missing-body failure.
     let body = func.body()?;
     let lowering = crate::plan::lower_standalone_expression(body, Some(owner))?;
-    let binding = lowering.bind(store.core_view());
+    let mut binding = lowering.bind(store.core_view());
+    binding.set_validation_request(&guard.request);
     let focus = Term::NamedNode(func.iri.clone());
     let plan = lowering.plan(&binding);
     guard.enter_node_expr()?;
@@ -3390,9 +3394,14 @@ mod tests {
         );
         // Bound through the production path: a body becomes algebra against the
         // environment in force, never at declaration time.
-        let _scope = crate::sparql::enter_function_scope(
-            crate::sparql::bind_in_current_env(&registry).expect("the body parses and admits"),
-        );
+        let _scope = crate::sparql::enter_function_scope(Arc::new(
+            purrdf_sparql_eval::NativeSparqlEngine::new()
+                .bind_functions(
+                    registry,
+                    &crate::sparql::current_env().expect("environment"),
+                )
+                .expect("the body parses and admits"),
+        ));
 
         let data = load_data("");
         let mut guard = RecursionGuard::default();

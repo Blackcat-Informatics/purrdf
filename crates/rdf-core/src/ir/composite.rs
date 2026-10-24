@@ -393,7 +393,7 @@ impl CompositeSource {
         match &self.carrier {
             Carrier::Native(ds) => ds.term_id_by_iri(iri).map(LocalId::Base),
             Carrier::Delta(ds) => ds.lookup_iri(iri),
-            Carrier::Selected(selection) => selection.lookup(&TermValue::iri(iri)),
+            Carrier::Selected(selection) => selection.lookup_iri(iri),
         }
     }
     fn lookup_blank(&self, label: &str, scope: BlankScope) -> Option<LocalId> {
@@ -909,8 +909,18 @@ impl SelectedGraphs {
     /// Resolve a term value against the retained view, admitting it only when the
     /// selection actually holds the resulting handle.
     fn lookup(&self, value: &TermValue) -> Option<LocalId> {
+        if let TermValue::Iri(iri) = value {
+            return self.lookup_iri(iri);
+        }
         self.view
             .term_id_if_ready(value)
+            .and_then(|id| self.index.get(&id).copied())
+            .map(LocalId::Base)
+    }
+
+    fn lookup_iri(&self, iri: &str) -> Option<LocalId> {
+        self.view
+            .lookup_iri(iri)
             .and_then(|id| self.index.get(&id).copied())
             .map(LocalId::Base)
     }
@@ -1248,6 +1258,16 @@ impl CompositeDatasetView {
     #[must_use]
     pub fn term_value(&self, id: CompositeViewId) -> TermValue {
         owned_value(self, id)
+    }
+    /// Look up a borrowed IRI through the retained dictionaries, returning the
+    /// same first-source canonical handle as the owned-value lookup.
+    #[must_use]
+    pub fn lookup_iri(&self, iri: &str) -> Option<CompositeViewId> {
+        self.sources.iter().enumerate().find_map(|(index, source)| {
+            source
+                .lookup_iri(iri)
+                .map(|local| self.map_id(index, local))
+        })
     }
     /// Retained dimensions and successful work shared by clones.
     #[must_use]
@@ -1824,6 +1844,9 @@ impl DatasetView for CompositeDatasetView {
         })
     }
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        if let TermValue::Iri(iri) = value {
+            return Ok(self.lookup_iri(iri));
+        }
         Ok({
             (0..self.sources.len()).find_map(|index| {
                 self.lookup_value(index, value)

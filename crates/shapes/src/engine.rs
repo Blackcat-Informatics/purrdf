@@ -292,10 +292,10 @@ impl BoundShapes {
         shapes: &[Shape],
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
-        disallows: &ConformanceDisallows,
+        request: &ValidationRequest,
     ) -> Result<Self, ShapesError> {
         let mut binding = lowered.bind(data.core_view(), &classes);
-        binding.set_conformance_disallows(disallows);
+        binding.set_validation_request(request);
         let targets = shapes
             .iter()
             .map(|shape| {
@@ -322,10 +322,10 @@ impl BoundShapes {
         data: &ShaclData,
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
-        disallows: &ConformanceDisallows,
+        request: &ValidationRequest,
     ) -> Self {
         let mut binding = lowered.bind(data.core_view(), &classes);
-        binding.set_conformance_disallows(disallows);
+        binding.set_validation_request(request);
         Self {
             lowered,
             classes,
@@ -470,7 +470,7 @@ impl PreparedTargets {
                     for node in crate::target_eval::where_targets(
                         data,
                         where_shape,
-                        binding.conformance_disallows(),
+                        binding.validation_request(),
                         shape.owner.as_ref(),
                     )? {
                         prepared.explicit_ids.insert(node);
@@ -481,7 +481,7 @@ impl PreparedTargets {
                         data,
                         &shape.id,
                         expr,
-                        binding.conformance_disallows(),
+                        binding.validation_request(),
                         shape.owner.as_ref(),
                     )? {
                         prepared.insert_explicit(data.core_view(), candidate);
@@ -1189,7 +1189,7 @@ pub(crate) fn resolve_focus_nodes(
             Target::Where(where_shape) => Some(crate::target_eval::where_targets(
                 data,
                 where_shape,
-                binding.conformance_disallows(),
+                binding.validation_request(),
                 model,
             )?),
             Target::Node(_) | Target::Sparql { .. } | Target::NodeExpression(_) => None,
@@ -1215,7 +1215,7 @@ pub(crate) fn resolve_focus_nodes(
                 data,
                 shape,
                 expr,
-                binding.conformance_disallows(),
+                binding.validation_request(),
                 model,
             )?,
             Target::Class(_)
@@ -1322,7 +1322,7 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
     //    chain no access mode serves) must fail before any focus node is visited, so
     //    the message names the declaration rather than arriving mid-validation on
     //    whichever row happened to reach it first.
-    let bound_functions = crate::sparql::bind_in_current_env(&shapes.functions)?;
+    let bound_functions = crate::sparql::bind_in_current_env(shapes, data.shapes_graph_iri())?;
 
     // Every `sh:uniqueValuesFor` grouping, built HERE, on this thread and before
     // any worker exists: a grouping reads the declaring shape's whole target set,
@@ -1470,8 +1470,10 @@ where
     // This orchestration-thread scope covers target resolution; each focus chunk
     // installs the same SHACL-AF function and custom-aggregate registries on its
     // worker.
-    let _function_scope =
-        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
+    let _function_scope = crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(
+        shapes,
+        data.shapes_graph_iri(),
+    )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
@@ -1741,6 +1743,41 @@ pub struct ValidationOptions {
     /// graph alone. Blank-node classes of a shapes graph that is not the data graph
     /// name no node of the data graph and are not read.
     pub subclass_of_in_shapes_graph: bool,
+}
+
+/// Shared request law. The canonical default needs no per-request allocation;
+/// non-default payloads are retained once and borrowed by every nested binding.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ValidationRequest(Option<Arc<ValidationOptions>>);
+
+impl ValidationRequest {
+    pub(crate) fn is_default(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub(crate) fn same_options(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl From<ValidationOptions> for ValidationRequest {
+    fn from(options: ValidationOptions) -> Self {
+        Self((options != ValidationOptions::default()).then(|| Arc::new(options)))
+    }
+}
+
+impl std::ops::Deref for ValidationRequest {
+    type Target = ValidationOptions;
+
+    fn deref(&self) -> &Self::Target {
+        static DEFAULT: std::sync::LazyLock<ValidationOptions> =
+            std::sync::LazyLock::new(ValidationOptions::default);
+        self.0.as_deref().unwrap_or(&DEFAULT)
+    }
 }
 
 impl ValidationOptions {
@@ -2072,7 +2109,7 @@ impl PreparedShapes {
     /// options it was bound with.
     #[must_use]
     pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
-        Arc::make_mut(&mut self.shapes).validation_options = options;
+        Arc::make_mut(&mut self.shapes).validation_options = options.into();
         // A copy-on-write shape tree has a new declaration ownership domain.
         // Existing bindings/configurations retain the old tree and its caches.
         self.xpath_caches = OnceLock::new();
@@ -2435,7 +2472,7 @@ impl PreparedValidator {
             None => data,
         };
         let _function_scope = crate::sparql::enter_function_scope(
-            crate::sparql::bind_in_current_env(&shapes.functions)?,
+            crate::sparql::bind_in_current_env(&shapes, data.shapes_graph_iri())?,
         );
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
@@ -2444,7 +2481,7 @@ impl PreparedValidator {
             &shapes.node_shapes,
             prepared.lowered()?,
             prepared.class_catalog()?,
-            &shapes.validation_options.conformance_disallows,
+            &shapes.validation_options,
         )?;
         Ok(Self {
             data,
@@ -3819,22 +3856,23 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
 ///
 /// # Errors
 /// The supplemented views exceed the default view limits.
-fn with_shapes_graph_subclasses(
+pub(crate) fn with_shapes_graph_subclasses(
     data: &ShaclData,
     shapes: &Shapes,
 ) -> Result<Option<ShaclData>, ShapesError> {
+    request_subclasses(shapes)
+        .map(|supplement| supplement.apply(data))
+        .transpose()
+}
+
+pub(crate) fn request_subclasses(shapes: &Shapes) -> Option<Box<crate::data::ClassSupplement>> {
     if !shapes.validation_options.subclass_of_in_shapes_graph {
-        return Ok(None);
+        return None;
     }
     let graph = shapes.shapes_dataset.as_ref();
-    let Some(subclass_of) = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF) else {
-        return Ok(None);
-    };
-    let supplement = shapes_graph_subclass_pairs(graph, subclass_of);
-    if supplement.is_empty() {
-        return Ok(None);
-    }
-    data.with_class_supplement(&supplement).map(Some)
+    let predicate = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF)?;
+    let pairs = shapes_graph_subclass_pairs(graph, predicate);
+    (!pairs.is_empty()).then(|| Box::new(crate::data::ClassSupplement::new(pairs)))
 }
 
 /// The `(subclass, superclass)` IRI pairs SHACL type follows from `graph`'s
@@ -4021,12 +4059,7 @@ where
 {
     let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter())?);
     let classes = Arc::clone(lowered.classes());
-    let bound = BoundShapes::bind_untargeted(
-        data,
-        lowered,
-        classes,
-        &shapes.validation_options.conformance_disallows,
-    );
+    let bound = BoundShapes::bind_untargeted(data, lowered, classes, &shapes.validation_options);
     validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 

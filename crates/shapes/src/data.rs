@@ -128,10 +128,38 @@ pub struct ShaclData {
     /// The same relation over the dataset visible to SHACL-SPARQL.
     sparql_view: ClassMembershipView,
     /// The named-graph IRI under which the shapes dataset is exposed, when known.
-    shapes_graph_iri: Option<String>,
+    shapes_graph_iri: Option<Arc<str>>,
     /// The NODES of the Core data graph, derived on first use and shared by every
     /// `sh:targetWhere` the bound shapes declare (see [`Self::graph_nodes`]).
     graph_nodes: OnceLock<Box<[TermId]>>,
+}
+
+/// Immutable shapes-class configuration shared across query or rule snapshots.
+/// The dictionary contains no data rows, memberships or data-local handles.
+#[derive(Debug)]
+pub(crate) struct ClassSupplement {
+    pairs: Vec<(String, String)>,
+    terms: OnceLock<Result<Arc<RdfDataset>, crate::error::ShapesError>>,
+}
+
+impl ClassSupplement {
+    /// Retain one request's immutable lexical subclass edges.
+    pub(crate) fn new(pairs: Vec<(String, String)>) -> Self {
+        Self {
+            pairs,
+            terms: OnceLock::new(),
+        }
+    }
+
+    /// Bind the shared dictionary and edges to the actual snapshot's namespace.
+    /// Storage and handle-mapping refusals remain failures of this operation.
+    pub(crate) fn apply(&self, data: &ShaclData) -> Result<ShaclData, crate::error::ShapesError> {
+        data.with_class_supplement_from(&self.pairs, || {
+            self.terms
+                .get_or_init(|| ShaclData::class_supplement_terms(&self.pairs))
+                .clone()
+        })
+    }
 }
 
 impl ShaclData {
@@ -187,6 +215,20 @@ impl ShaclData {
         shapes_graph_iri: Option<String>,
         supplement: &[(String, String)],
     ) -> Self {
+        Self::from_shared_views_with_supplement(
+            core,
+            sparql,
+            shapes_graph_iri.map(Arc::from),
+            supplement,
+        )
+    }
+
+    fn from_shared_views_with_supplement(
+        core: Arc<ShaclDatasetView>,
+        sparql: Arc<ShaclDatasetView>,
+        shapes_graph_iri: Option<Arc<str>>,
+        supplement: &[(String, String)],
+    ) -> Self {
         let class_membership =
             ClassMembershipView::from_view_with_supplement(Arc::clone(&core), supplement);
         let sparql_view = if Arc::ptr_eq(&core, &sparql) {
@@ -202,6 +244,11 @@ impl ShaclData {
             shapes_graph_iri,
             graph_nodes: OnceLock::new(),
         }
+    }
+
+    pub(crate) fn with_shapes_graph(mut self, iri: Option<Arc<str>>) -> Self {
+        self.shapes_graph_iri = iri;
+        self
     }
 
     /// The NODES of the Core data graph, as RDF 1.2 Concepts defines them: "The
@@ -288,39 +335,42 @@ impl ShaclData {
         Arc::ptr_eq(&self.core, &self.sparql)
     }
 
-    /// This holder with SHACL type also following `supplement`, the `(subclass,
-    /// superclass)` IRI pairs of the shapes graph's `rdfs:subClassOf` triples (SHACL 1.2
-    /// Core §6.3, `subClassOfInShapesGraph`).
-    ///
-    /// The rows both views read are unchanged. An IRI of the pairs the Core view does
-    /// not intern — a class only the shapes graph names — is added to both views' term
-    /// tables ([`ShaclDatasetView::with_extra_terms`]), so a class target or
-    /// `sh:class` naming it resolves and derives its members through the supplement.
-    ///
-    /// # Errors
-    /// A composite or handle mapping exceeding the default view limits.
-    pub(crate) fn with_class_supplement(
-        &self,
+    /// A dictionary for the immutable supplement, independent of every data
+    /// snapshot. Include all its IRIs so reuse across different graphs cannot
+    /// omit a class that only a later graph needs added to its term namespace.
+    fn class_supplement_terms(
         supplement: &[(String, String)],
-    ) -> Result<Self, crate::error::ShapesError> {
-        let mut missing: Vec<&str> = supplement
+    ) -> Result<Arc<RdfDataset>, crate::error::ShapesError> {
+        let mut iris: Vec<&str> = supplement
             .iter()
             .flat_map(|(child, parent)| [child.as_str(), parent.as_str()])
-            .filter(|iri| self.core.term_id_by_iri(iri).is_none())
             .collect();
-        missing.sort_unstable();
-        missing.dedup();
-        let (core, sparql) = if missing.is_empty() {
-            (Arc::clone(&self.core), Arc::clone(&self.sparql))
-        } else {
-            let mut terms = ::purrdf_rdf::RdfDatasetBuilder::new();
-            for iri in missing {
-                terms.intern_iri(iri)?;
-            }
-            let terms = terms
-                .freeze()
-                .map_err(crate::error::ShapesError::from)
-                .map_err(|error| error.context("the subClassOfInShapesGraph terms: "))?;
+        iris.sort_unstable();
+        iris.dedup();
+        let mut terms = ::purrdf_rdf::RdfDatasetBuilder::new();
+        for iri in iris {
+            terms.intern_iri(iri)?;
+        }
+        terms
+            .freeze()
+            .map_err(crate::error::ShapesError::from)
+            .map_err(|error| error.context("the subClassOfInShapesGraph terms: "))
+    }
+
+    /// Resolve supplement edges against this graph, obtaining its shared static
+    /// dictionary only when this graph needs additional class identities.
+    /// Data rows remain unchanged; only term namespaces and SHACL type are extended.
+    fn with_class_supplement_from(
+        &self,
+        supplement: &[(String, String)],
+        terms: impl FnOnce() -> Result<Arc<RdfDataset>, crate::error::ShapesError>,
+    ) -> Result<Self, crate::error::ShapesError> {
+        let missing = supplement
+            .iter()
+            .flat_map(|(child, parent)| [child.as_str(), parent.as_str()])
+            .any(|iri| self.core.term_id_by_iri(iri).is_none());
+        let (core, sparql) = if missing {
+            let terms = terms()?;
             let limits = ::purrdf_rdf::ir::ViewLimits::default();
             let core = Arc::new(self.core.with_extra_terms(Arc::clone(&terms), limits)?);
             let sparql = if self.sparql_view_shares_core_ids() {
@@ -329,8 +379,10 @@ impl ShaclData {
                 Arc::new(self.sparql.with_extra_terms(terms, limits)?)
             };
             (core, sparql)
+        } else {
+            (Arc::clone(&self.core), Arc::clone(&self.sparql))
         };
-        Ok(Self::from_views_with_supplement(
+        Ok(Self::from_shared_views_with_supplement(
             core,
             sparql,
             self.shapes_graph_iri.clone(),

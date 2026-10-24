@@ -349,7 +349,10 @@ impl DeltaDatasetView {
             )
     }
 
-    pub(crate) fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
+    /// Look up a borrowed IRI in the shared base and committed delta without
+    /// allocating an owned term. Base identities remain canonical on a match.
+    #[must_use]
+    pub fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
         self.base
             .term_id_by_iri(iri)
             .map(DeltaViewId::Base)

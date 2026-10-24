@@ -77,14 +77,20 @@ delta-backed view whose pattern probe is type-erased:
 | `sh:sparql` constraint, governed | 56 |
 | custom `sh:ask` component, governed | 97 |
 | custom `sh:select` component, governed | 64 |
-| `sh:expression` function call, governed | 104 |
+| `sh:expression` function call, governed | 103 |
 
 Native ownership retains an unchanged immutable schema through a union or
 projection instead of copying its columns and publishing another outer control.
 The expression's two scalar calls save six allocations per focus node; the
 governed SELECT paths also avoid their redundant projected array and control.
-Filtered layouts still use the same admitted builder. The original entry constants,
-doubling terms and exact allocation assertions are unchanged.
+Filtered layouts still use the same admitted builder.
+
+Borrowed IRI lookup on delta views removes one focus-spelling copy from each
+expression path-values evaluation: its governed slope moves from 104 to 103.
+Four setup copies also disappear from its change expansion, moving the entry
+constant from 41 to 37. The exact governed expression form is now
+`37 + 103 N + 3 log2(N / 1280)`, asserted at 1,280, 2,560 and 5,120 focus nodes.
+The doubling term and zero-tolerance assertions remain unchanged.
 
 Historically, short BIND loops moved to the sequential evaluator path rather than constructing
 a worker context and converting its output. On the expression fixture this

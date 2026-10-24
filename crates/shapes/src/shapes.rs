@@ -1191,7 +1191,7 @@ pub struct Shapes {
     /// default and takes a request's options through
     /// [`crate::engine::PreparedShapes::with_validation_options`]. `pub(crate)`
     /// rather than private for the reason [`Self::parse_provenance`] gives.
-    pub(crate) validation_options: crate::engine::ValidationOptions,
+    pub(crate) validation_options: crate::engine::ValidationRequest,
     /// SHACL-AF `sh:SPARQLTargetType` declarations declared in the shapes graph,
     /// keyed by target-type IRI string. Empty when the graph declares no custom
     /// target types.
@@ -1317,7 +1317,7 @@ impl Shapes {
     /// Validate these shapes under `options` from now on — a host's
     /// conformance-disallow set, for one.
     pub fn set_validation_options(&mut self, options: crate::engine::ValidationOptions) {
-        self.validation_options = options;
+        self.validation_options = options.into();
     }
 
     /// Borrow the original frozen dataset retained when these shapes were parsed.
@@ -1358,7 +1358,7 @@ impl Default for Shapes {
             box_role_vocab: None,
             functions: Arc::new(UserFunctionRegistry::default()),
             aggregates: Arc::new(AggregateRegistry::default()),
-            validation_options: crate::engine::ValidationOptions::default(),
+            validation_options: crate::engine::ValidationRequest::default(),
             target_types: std::collections::BTreeMap::new(),
             shapes_graph: None,
             shapes_dataset: ::purrdf_rdf::RdfDatasetBuilder::new()
@@ -1561,7 +1561,7 @@ pub(crate) fn from_resolved_dataset_with_options(
         .parse_with_expressions(&[], &[])
         .map(|(shapes, _)| shapes)
         .map_err(|message| parser.load_complete_error(message))?;
-    shapes.validation_options = options.clone();
+    shapes.validation_options = options.clone().into();
     Ok(shapes)
 }
 
@@ -2550,7 +2550,7 @@ impl<'s> Parser<'s> {
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::default()),
-            validation_options: crate::engine::ValidationOptions::default(),
+            validation_options: crate::engine::ValidationRequest::default(),
             target_types: self
                 .target_types
                 .iter()

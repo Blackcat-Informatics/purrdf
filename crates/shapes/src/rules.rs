@@ -986,8 +986,10 @@ pub(crate) fn infer_with(
     // Declared SHACL-AF functions, and any caller-injected custom aggregates, are in
     // scope for node expressions and CONSTRUCT bodies for the whole run; the guards
     // restore the previous tables on drop.
-    let _function_scope =
-        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
+    let _function_scope = crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(
+        shapes,
+        data.shapes_graph_iri(),
+    )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let rule_set = shacl_rule_set(shapes, options)?;
     srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution).map_err(|error| {
@@ -1361,8 +1363,9 @@ fn eligible_focus_nodes(
     data: &ShaclData,
     rule: &Rule,
     shape: &Shape,
+    request: &crate::engine::ValidationRequest,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let plan = RulePlan::of(data, shape, &rule.conditions)?;
+    let plan = RulePlan::of(data, shape, &rule.conditions, request)?;
     // Read once per resolution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between the
     // condition checks of successive focus nodes; the ungoverned path pays one branch.
@@ -1406,6 +1409,7 @@ pub(crate) fn execute_rule(
     data: &ShaclData,
     rule: &Rule,
     shapes: &[&Shape],
+    request: &crate::engine::ValidationRequest,
     shapes_graph_iri: Option<&str>,
     mint: &mut dyn FnMut() -> u64,
     mut selection: FocusSelection<'_>,
@@ -1419,6 +1423,7 @@ pub(crate) fn execute_rule(
                 object,
             } => global_triple_rule(
                 data,
+                request,
                 subject.as_ref(),
                 predicate.as_ref(),
                 object.as_ref(),
@@ -1466,13 +1471,13 @@ pub(crate) fn execute_rule(
     for (index, shape) in shapes.iter().enumerate() {
         let (focus_nodes, run, eligible) = match &mut selection {
             FocusSelection::Every => {
-                let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                 let run = vec![true; focus_nodes.len()];
                 let eligible = focus_nodes.len();
                 (focus_nodes, run, eligible)
             }
             FocusSelection::Changed(record) => {
-                let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                 *record.slot(index) = focus_nodes.iter().cloned().collect();
                 let run = vec![true; focus_nodes.len()];
                 let eligible = focus_nodes.len();
@@ -1498,7 +1503,7 @@ pub(crate) fn execute_rule(
                         (focus_nodes, run, executed.len())
                     }
                     None => {
-                        let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                        let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                         let run: Vec<bool> = focus_nodes
                             .iter()
                             .map(|focus| !executed.contains(focus) || affected.contains(focus))
@@ -1526,7 +1531,13 @@ pub(crate) fn execute_rule(
                     .filter(|(_, run)| **run)
                     .map(|(focus, _)| focus.clone())
                     .collect();
-                triple_rule_execution(data, [subject, predicate, object], &executed, &mut out)?;
+                triple_rule_execution(
+                    data,
+                    request,
+                    [subject, predicate, object],
+                    &executed,
+                    &mut out,
+                )?;
             }
             RuleBody::Sparql {
                 construct,
@@ -1560,6 +1571,7 @@ fn well_formed(subject: &Term, predicate: &Term) -> bool {
 /// A shape rule's `sh:TripleRule` execution over its focus nodes.
 fn triple_rule_execution(
     data: &ShaclData,
+    request: &crate::engine::ValidationRequest,
     expressions: [&Option<NodeExpr>; 3],
     focus_nodes: &[Term],
     out: &mut Vec<[Term; 3]>,
@@ -1570,7 +1582,7 @@ fn triple_rule_execution(
         .iter()
         .map(|expr| {
             expr.as_ref()
-                .map(|expr| ExprPlan::of(data, expr))
+                .map(|expr| ExprPlan::of(data, expr, request))
                 .transpose()
         })
         .collect::<Result<_, crate::error::ShapesError>>()?;
@@ -1607,6 +1619,7 @@ fn triple_rule_execution(
 /// expression yields exactly its value.
 fn global_triple_rule(
     data: &ShaclData,
+    request: &crate::engine::ValidationRequest,
     subject: Option<&NodeExpr>,
     predicate: Option<&NodeExpr>,
     object: Option<&NodeExpr>,
@@ -1620,7 +1633,7 @@ fn global_triple_rule(
     let mut guard = RecursionGuard::default();
     let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
     for expr in [subject, predicate, object] {
-        let mut values = ExprPlan::of(data, expr)?.eval(data, &absent, &mut guard)?;
+        let mut values = ExprPlan::of(data, expr, request)?.eval(data, &absent, &mut guard)?;
         values.retain(|value| *value != absent);
         sets.push(values);
     }
@@ -1931,9 +1944,11 @@ impl<'a> RulePlan<'a> {
         data: &ShaclData,
         shape: &'a Shape,
         conditions: &'a [Shape],
+        request: &crate::engine::ValidationRequest,
     ) -> Result<Self, crate::error::ShapesError> {
         let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions))?;
-        let binding = lowered.bind(data.core_view(), lowered.classes());
+        let mut binding = lowered.bind(data.core_view(), lowered.classes());
+        binding.set_validation_request(request);
         Ok(Self {
             lowered,
             binding,
@@ -1994,9 +2009,14 @@ struct ExprPlan<'a> {
 
 impl<'a> ExprPlan<'a> {
     /// Lower `expr` standalone and resolve every identity it names against `data`.
-    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Result<Self, crate::error::ShapesError> {
+    fn of(
+        data: &ShaclData,
+        expr: &'a NodeExpr,
+        request: &crate::engine::ValidationRequest,
+    ) -> Result<Self, crate::error::ShapesError> {
         let lowering = crate::plan::lower_standalone_expression(expr, None)?;
-        let binding = lowering.bind(data.core_view());
+        let mut binding = lowering.bind(data.core_view());
+        binding.set_validation_request(request);
         Ok(Self {
             expr,
             lowering,

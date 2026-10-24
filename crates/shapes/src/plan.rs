@@ -403,7 +403,7 @@ impl LoweredShapes {
             indexes,
             unique_values,
             closed_types,
-            conformance_disallows: ConformanceDisallows::default(),
+            request: crate::engine::ValidationRequest::default(),
         }
     }
 
@@ -841,7 +841,7 @@ pub(crate) struct DatasetBinding {
     /// identity of every type this data graph interns, with the identities of the
     /// properties it permits.
     closed_types: Box<[FastMap<TermId, FastSet<TermId>>]>,
-    /// The validation request's conformance-disallow set, which every
+    /// The complete shared validation request, whose conformance-disallow set every
     /// conformance check a plan over this binding performs — nested `sh:node`,
     /// `sh:not`, `sh:and`, `sh:or`, `sh:xone`, `sh:qualifiedValueShape`,
     /// `sh:someValue`, `sh:memberShape`, `sh:reifierShape`, `sh:filterShape` —
@@ -849,19 +849,23 @@ pub(crate) struct DatasetBinding {
     /// made for a request that named another; it lives here, beside the
     /// dataset's identities, because a binding is one request's view and every
     /// plan descending from it reaches it with no argument to forget.
-    conformance_disallows: ConformanceDisallows,
+    request: crate::engine::ValidationRequest,
 }
 
 impl DatasetBinding {
-    /// Judge conformance over this binding against `disallows`.
-    pub(crate) fn set_conformance_disallows(&mut self, disallows: &ConformanceDisallows) {
-        self.conformance_disallows.clone_from(disallows);
+    /// Bind every nested operation to this exact request law.
+    pub(crate) fn set_validation_request(&mut self, request: &crate::engine::ValidationRequest) {
+        self.request.clone_from(request);
+    }
+
+    pub(crate) fn validation_request(&self) -> &crate::engine::ValidationRequest {
+        &self.request
     }
 
     /// The conformance-disallow set this binding judges against.
     #[inline]
     pub(crate) fn conformance_disallows(&self) -> &ConformanceDisallows {
-        &self.conformance_disallows
+        &self.request.conformance_disallows
     }
 
     /// The dataset identity of a planned class, by IRI.
