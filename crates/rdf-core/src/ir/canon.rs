@@ -5631,7 +5631,9 @@ mod tests {
             issuer.issue(blanks[0]);
             let (_, issuer) = state.hash_n_degree(blanks[0], issuer).unwrap();
             assert_eq!(issuer.order(), blanks);
-            assert!(state.budget < RDFC_CALL_LIMIT - COUNT as u64);
+            // One entry per blank, plus one permutation at each endpoint
+            // and two at each internal node: COUNT + 2 * (COUNT - 1).
+            assert_eq!(state.budget, RDFC_CALL_LIMIT - (3 * COUNT as u64 - 2));
         })
         .unwrap();
     }
