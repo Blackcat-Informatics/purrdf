@@ -1,0 +1,37 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 8.83s
+     Running tests/ontology_schema_surface.rs (/opt/.cargo/30/0484021a05ddc3/debug/build/purrdf-shapes/564c5f48f0936596/out/ontology_schema_surface-564c5f48f0936596)
+
+running 29 tests
+test a_restricted_property_is_judged_on_its_class_outside_its_domain ... ok
+test a_subclass_projects_an_inherited_disjunction_its_owner_cannot ... ok
+test all_language_emitter_outputs_are_byte_deterministic ... ok
+test an_external_shape_cell_reports_xml_approximation_at_its_actual_validator ... ok
+test a_subclass_shape_is_not_overridden_by_an_inherited_disjunction ... ok
+test direct_shacl_shapes_stay_authoritative_over_restrictions ... ok
+test every_language_emitter_carries_the_projection_or_records_its_loss ... ok
+test every_schema_cell_that_admits_xml_reports_unchecked_representation ... ok
+test facets_on_a_defined_datatype_restrict_its_definition ... ok
+test graphql_names_literal_enumerations_beside_their_array_form ... ok
+test iri_only_ontologies_report_no_class_expressions ... ok
+test iri_only_output_changes_only_in_owl_values_precision_and_openapi_references ... ok
+test compilation_manifest_and_emitters_are_deterministic ... ok
+test iri_only_output_matches_its_golden ... ok
+test manifest_reports_every_form_with_its_outcome_and_provenance ... ok
+test json_schema_projection_judges_projected_instances ... ok
+test ontology_property_surface_reaches_every_language_emitter ... ok
+test ontology_with_every_anonymous_class_expression_compiles ... ok
+test public_member_count_shapes_do_not_claim_an_xml_exclusion ... ok
+test relation_carries_restriction_provenance_and_precision ... ok
+test reported_outcomes_match_every_emitter_on_an_agent_provenance_slice ... ok
+test shaped_only_mode_excludes_every_component ... ok
+test ontology_complete_output_reads_back_through_every_importer ... ok
+test universal_restriction_to_owl_nothing_forbids_the_property ... ok
+test unrepresented_components_are_named_on_the_class_definition ... ok
+test xml_exclusion_controls_keep_their_exact_shape_coverage ... ok
+test thousands_of_restricted_classes_on_shared_properties_scale_linearly ... ok
+test a_four_thousand_deep_subclass_chain_compiles_and_validates ... ok
+test a_gene_ontology_sized_tree_references_inherited_restrictions ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.91s
+

@@ -1,0 +1,72 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/rdf-core)
+   Compiling cmov v0.5.4
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling libc v0.2.186
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling ctutils v0.4.2
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling proc-macro2 v1.0.106
+   Compiling structured-zstd v0.0.49
+   Compiling crossbeam-epoch v0.9.18
+   Compiling visual-hashing v1.0.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/alloc-probe)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling universal-hash v0.6.1
+   Compiling digest v0.11.3
+   Compiling rayon v1.12.0
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling aead v0.6.1
+   Compiling syn v2.0.118
+   Compiling sha2 v0.11.0
+   Compiling aes v0.9.3
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes-gcm v0.11.1
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/ed25519)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/testkit)
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/jsonschema)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/datalog)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/conformance-kit)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 5m 03s
+     Running unittests src/lib.rs (/opt/.cargo/30/0484021a05ddc3/debug/build/purrdf-shapes/66ba366adbf8b1a5/out/purrdf_shapes-66ba366adbf8b1a5)
+
+running 1 test
+test json_schema::tests::test_openapi_embeds_components_schemas ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 994 filtered out; finished in 0.00s
+

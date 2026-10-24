@@ -1,0 +1,63 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/shapes/src/json_schema.rs:1118:
+ }
+ 
+ const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
+-const SCHEMA_POLICY_SALT: &str =
+-    "rdf12;json-schema-2020-12;openapi-3.1-local-refs-v1;input-derived-surface-v2;owl-rdfs-fragment-v2";
++const SCHEMA_POLICY_SALT: &str = "rdf12;json-schema-2020-12;openapi-3.1-local-refs-v1;input-derived-surface-v2;owl-rdfs-fragment-v2";
+ pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+ /// Existing guard for exponential anonymous-expression expansion, independent
+ /// of the input-derived class, property-coverage and emitter width bounds.
+Diff in /home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/shapes/src/json_schema.rs:10386:
+                         let other = right.get(key).expect("same schema member");
+                         if key == "$ref" {
+                             assert_eq!(
+-                                value.as_str().and_then(|text| text.strip_prefix("#/$defs/")),
+-                                other.as_str().and_then(|text| text.strip_prefix("#/components/schemas/"))
++                                value
++                                    .as_str()
++                                    .and_then(|text| text.strip_prefix("#/$defs/")),
++                                other
++                                    .as_str()
++                                    .and_then(|text| text.strip_prefix("#/components/schemas/"))
+                             );
+                         } else {
+                             pending.push((value, other));
+Diff in /home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/shapes/src/json_schema.rs:10421:
+         let defs = Map::from([("a/b~c".to_owned(), body.clone())]);
+         let openapi = openapi_doc(defs);
+         let emitted = &openapi["components"]["schemas"]["a/b~c"];
+-        assert_eq!(emitted["properties"]["next"]["$ref"], "#/components/schemas/a~1b~0c");
+-        assert_eq!(emitted["allOf"][0]["then"]["$ref"], "#/components/schemas/a~1b~0c");
++        assert_eq!(
++            emitted["properties"]["next"]["$ref"],
++            "#/components/schemas/a~1b~0c"
++        );
++        assert_eq!(
++            emitted["allOf"][0]["then"]["$ref"],
++            "#/components/schemas/a~1b~0c"
++        );
+         assert_eq!(emitted["items"]["$ref"], "#/components/schemas/a~1b~0c");
+         for keyword in ["const", "enum", "default", "examples"] {
+-            assert_eq!(emitted[keyword], body[keyword], "{keyword} is instance data");
++            assert_eq!(
++                emitted[keyword], body[keyword],
++                "{keyword} is instance data"
++            );
+         }
+         assert_eq!(emitted["properties"]["$ref"]["const"], literal);
+         // Literal `$ref` fields above are data rather than schema references;
+Diff in /home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/crates/shapes/src/json_schema.rs:10432:
+         // exercise whole-document closure on the actual recursive schemas.
+-        let recursive = openapi_doc(Map::from([("a/b~c".to_owned(), json!({
+-            "anyOf": [false, { "$ref": "#/$defs/a~1b~0c" }]
+-        }))]));
++        let recursive = openapi_doc(Map::from([(
++            "a/b~c".to_owned(),
++            json!({
++                "anyOf": [false, { "$ref": "#/$defs/a~1b~0c" }]
++            }),
++        )]));
+         assert_local_reference_closure(&recursive);
+     }
+ 

@@ -1,0 +1,113 @@
+{
+  "projection": "Removed mechanical review-stack authorization banner, UI buttons/help/poem, and nontechnical HTML comments. Technical content, review coverage metadata, risk labels and source provenance retained.",
+  "pages": [
+    [
+      {
+        "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/comments/6378433224",
+        "html_url": "https://github.com/Blackcat-Informatics/purrdf/pull/693#issuecomment-6378433224",
+        "issue_url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/693",
+        "id": 6378433224,
+        "node_id": "IC_kwDOTKq-Ms8AAAABfC8qyA",
+        "user": {
+          "login": "coderabbitai[bot]",
+          "id": 136622811,
+          "node_id": "BOT_kgDOCCSy2w",
+          "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/coderabbitai%5Bbot%5D",
+          "html_url": "https://github.com/apps/coderabbitai",
+          "followers_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/followers",
+          "following_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/following{/other_user}",
+          "gists_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/subscriptions",
+          "organizations_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/orgs",
+          "repos_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/repos",
+          "events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/coderabbitai%5Bbot%5D/received_events",
+          "type": "Bot",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "created_at": "2026-10-24T01:54:20Z",
+        "updated_at": "2026-10-24T02:01:22Z",
+        "body": "\n\n\n\n\n\nNo actionable comments were generated in the recent review. \ud83c\udf89\n\n<details>\n<summary><strong>\u2139\ufe0f Recent review info</strong></summary>\n<dl>\n<dd>\n\n<details>\n<summary><strong>\u2699\ufe0f Run configuration</strong></summary>\n<dl>\n<dd>\n\n- **Source mode**: Auto\n- **Repository**: Unavailable\n- **Branch**: Unavailable\n- **File**: No configuration file from this repository applied\n- **Commit**: Unavailable\n- **Layers**: Organization UI\n- **Review profile**: CHILL\n- **Plan**: Advanced\n- **Run ID**: `8b54bd71-39d6-46a9-87e9-98708f47f29f`\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>\ud83d\udce5 Commits</strong></summary>\n<dl>\n<dd>\n\nReviewing files that changed from the base of the PR and between e3eb29225d3fda035613345fb90e0a047e85f45e and 0461e3d460e34c619f37928dc0f2725f34bb49fc.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>\ud83d\udcd2 Files selected for processing: 3</strong></summary>\n<dl>\n<dd>\n\n* `crates/shapes/src/json_schema.rs`\n* `crates/shapes/tests/fixtures/iri-only-surface.golden.txt`\n* `crates/shapes/tests/ontology_schema_surface.rs`\n\n</dd>\n</dl>\n</details>\n\n**Included review availability:** This review used your included allowance. 8 included reviews remain after this review. Your included PR review attempts over the past 7 days set your current allowance at 10 reviews per hour.\n\n</dd>\n</dl>\n</details>\n\n\n\n\n\n\n\n\n<details>\n<summary><strong>\ud83d\udcdd Summary</strong></summary>\n<dl>\n<dd>\n\n\n\n## Summary by CodeRabbit\n\n* **Bug Fixes**\n  * OpenAPI 3.1 schemas now express local schema references through `components/schemas`, with the referenced definitions included in the generated document.\n  * References in schema examples and values\u2014such as defaults, constants, and enumerations\u2014remain unchanged.\n  * Recursive references and references with escaped pointer tokens are preserved, keeping schema targets and validation constraints intact.\n\n\nOpenAPI generation now relocates schema-position references from `#/$defs/` to `#/components/schemas/` and moves definitions into `components.schemas`. Tests and golden output check reference resolution and schema equivalence while preserving JSON Schema references.\n\n**Changes: OpenAPI local references**\n\n|Layer / File(s)|Summary|\n|:---|:---|\n|**Reference relocation and OpenAPI construction** <br> `crates/shapes/src/json_schema.rs`|`openapi_doc` takes ownership of definitions, rewrites local references in schema positions, and moves definitions into `components.schemas`. The policy salt identifies the new OpenAPI reference policy.|\n|**Reference validation and schema surface updates** <br> `crates/shapes/src/json_schema.rs`, `crates/shapes/tests/fixtures/iri-only-surface.golden.txt`, `crates/shapes/tests/ontology_schema_surface.rs`|Tests check local-reference closure, schema equivalence, recursive and escaped references, and preservation of `$ref`-shaped instance data. The golden output and surface comparison accept the changed OpenAPI reference locations. JSON Schema references remain unchanged.|\n\n\n**Priority:** \u2796 Normal\n\n**Estimated code review effort:** 3 (Moderate) | ~20 minutes\n\n\n**Change:** Bug fix \u00b7 **Severity of issue fixed:** Medium\n\n\n**Possibly related issues**\n- The dangling OpenAPI references issue describes the unresolved `#/$defs/` targets addressed by this change.\n\n**Possibly related PRs**\n- [Blackcat-Informatics/purrdf#691](https://github.com/Blackcat-Informatics/purrdf/pull/691): Establishes the shared definition catalog that this change relocates into OpenAPI components.\n\n</dd>\n</dl>\n</details>\n\n\n<details>\n<summary><strong>Merge Risk:</strong> <strong>\u26aa Minimal</strong> \u00b7 up to <code>0461e</code></summary>\n<dl>\n<dd>\n\n\n<!-- final_review_risk_label\n**Merge Risk:** **\u26aa Minimal** \u00b7 up to `0461e`\n-->\n<!-- final_review_risk_coverage:{\"sourceCommitId\":\"0461e3d460e34c619f37928dc0f2725f34bb49fc\",\"coveredCommitId\":\"0461e3d460e34c619f37928dc0f2725f34bb49fc\",\"kind\":\"reviewed\"} -->\n\nThe reference relocation has no identified issue requiring a fix before merge. Normal checks remain appropriate.\n\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Security architecture risk:</strong> <strong>\u26aa Minimal</strong> \u00b7 up to <code>0461e</code></summary>\n<dl>\n<dd>\n\n\n\n\nThis corrects document-local references without adding external access or authority. The inspected changes preserve literal data and existing validation constraints. No material security risk was found in the change.\n\n**Retained concerns**\nNo architecture-level concerns identified.\n\n<details>\n<summary><strong>Security review details</strong></summary>\n<dl>\n<dd>\n\n**Security Blast Radius**\n- _observed_ \u2014 The changed builder operates on generated document values. It replaces a local fragment prefix without fetching targets, evaluating schemas, accessing credentials, or introducing network operations. The existing path-parameter and response schemas remain static and contain no references.\n\n**Trust Boundaries and Controls**\n- _observed_ \u2014 The traversal distinguishes schema structure from literal instance data using recognized schema keywords. A reference-shaped value inside literal data is not treated as an instruction, and pointer suffixes are not decoded or reinterpreted during relocation.\n\n**Resilience and Maintainability Implications**\n- _inferred_ \u2014 The relocation transition is isolated to an owned map, with JSON Schema copied beforehand and the completed OpenAPI value returned afterward. No shared catalog is incrementally mutated. Repetition does not reapply the prefix change, and recursive reference edges cannot cause traversal expansion because only the physical JSON tree is walked. These properties contain interruption and concurrency effects within this transformation; external persistence recovery was not assessed.\n\n</dd>\n</dl>\n</details>\n\n\n</dd>\n</dl>\n</details>\n\n\n<details>\n<summary><strong>Pre-merge checks: <sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Passed\" title=\"Passed\"></picture></sup> 4 \u00b7 <sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-failed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Failed\" title=\"Failed\"></picture></sup> 1</strong></summary>\n<dl>\n<dd>\n\n<strong><sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-failed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Failed\" title=\"Failed\"></picture></sup> Failed checks: 1 warning</strong>\n\n|     Check name     |                                              Status                                              | Explanation                                                                                                                                                                                               | Resolution                                                                         |\n| :---------------- | :----------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |\n| Docstring Coverage | ![Warning](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-warning.svg) | Docstring coverage is 53.33% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 15 functions across 2 files. (1 skipped: \u2026 | Write docstrings for the functions missing them to satisfy the coverage threshold. |\n\n<details>\n<summary><strong><sup><picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-counter-passed-14-v2.svg\" width=\"14\" height=\"14\" align=\"middle\" alt=\"Passed\" title=\"Passed\"></picture></sup> Passed checks: 4 passed</strong></summary>\n<dl>\n<dd>\n\n|         Check name         |                                             Status                                             | Explanation                                                                                                                                                                                                  |\n| :------------------------ | :--------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |\n|         Title check        | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The title clearly identifies the main change: resolving OpenAPI references to shared schema definitions.                                                                                                     |\n|      Description check     | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The description directly explains the OpenAPI reference relocation, preserved behavior, policy update, tests, and validation results.                                                                        |\n|     Linked Issues check    | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | Issue `#692` (direct, open) requires resolvable local references in the OpenAPI output, a native closure regression, unchanged JSON Schema `#/$defs/...` references, equivalent constraints, proportional \u2026    |\n| Out of Scope Changes check | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | All changed hunks connect to `#692` or its acceptance criteria:<br>- crates/shapes/src/json_schema.rs: the `openapi_doc` relocation walk and ownership change implement the reference fix. The call-site chan\u2026 |\n\n<details>\n<summary><strong>Full details: Linked Issues check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nIssue `#692` (direct, open) requires resolvable local references in the OpenAPI output, a native closure regression, unchanged JSON Schema `#/$defs/...` references, equivalent constraints, proportional work, and regenerated goldens.\n\nEvidence at head 0461e3d4 versus merge base e3eb2922:\n- Reference relocation: `openapi_doc(defs)` in crates/shapes/src/json_schema.rs now takes ownership of the definitions map. It walks only the schema positions named by `schema_map_keywords`, `schema_array_keywords` and `schema_single_keywords` (the same lists the catalog validator in schema_catalog.rs uses). It rewrites `#/$defs/` to `#/components/schemas/` in `$ref` strings. Instance data under `const`, `enum`, `default` and `examples` is not visited. Escaped suffix tokens are kept as written. Annotation, Literal, class branches and vocabulary enums are all in the catalog, so they are covered.\n- Work and allocation: the walk mutates in place with `WorkList`, and the catalog is moved into `components/schemas` rather than cloned. Both call sites (`compile_with_value_vocab`, `compile_with_surface`) now pass `defs` by value.\n- JSON Schema surface: the `root_schema` output path is unchanged, so `#/$defs/...` references stay in the JSON Schema artifact.\n- Tests: `assert_local_reference_closure` walks the whole OpenAPI document and checks that each local target resolves. `assert_surface_equivalence` checks that the two surfaces match except for the reference base. `openapi_relocates_recursive_escaped_refs_without_rewriting_instance_data` covers escaped keys (`a~1b~0c`), recursive edges and literal instance data. The closure and equivalence checks run in the compile helpers (`compile_vocab`, `compile_with_value_vocab`) and in the Person and carrier tests.\n- Goldens: the diff stat for crates/shapes/tests/fixtures/iri-only-surface.golden.txt is +36/-36, matching the 36 OpenAPI reference prefixes stated in the PR. The ontology test accepts only openapi `/$ref` changes whose target prefix changes from `#/$defs/` to `#/components/schemas/` with the same suffix.\n- Policy identity: `SCHEMA_POLICY_SALT` now contains `openapi-3.1-local-refs-v1`, so cached output is regenerated.\n\nLimits of this assessment: I did not run the test suite, Clippy or commit hooks. The reported results are author claims and are not independently verified here. The golden-file byte count is taken from the diff stat.\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Full details: Out of Scope Changes check</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nAll changed hunks connect to `#692` or its acceptance criteria:\n- crates/shapes/src/json_schema.rs: the `openapi_doc` relocation walk and ownership change implement the reference fix. The call-site changes pass `defs` by value to support it. The salt string change makes cached output regenerate, as the issue requires for regenerated goldens. The new unit tests and helper functions are the closure, escaped-key, recursion and equivalence regressions the issue asks for.\n- crates/shapes/tests/fixtures/iri-only-surface.golden.txt: the OpenAPI reference-prefix change is the regenerated golden artifact the issue requires.\n- crates/shapes/tests/ontology_schema_surface.rs: the renamed golden-difference test and its narrowed allowance for OpenAPI reference-target moves verify that the golden change is limited to those prefixes.\n\nNo changed hunk is unrelated to the issue. The diff does not alter the public declarations listed in the summary, and the shared catalog and JSON Schema behavior are preserved by the tests.\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n<details>\n<summary><strong>Full details: Docstring Coverage</strong></summary>\n<dl>\n<dd>\n\n**Explanation**\n\nDocstring coverage is 53.33% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 15 functions across 2 files. (1 skipped: 1 unsupported.)\n\n**Resolution**\n\nWrite docstrings for the functions missing them to satisfy the coverage threshold.\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n\n\n\n\n",
+        "author_association": "NONE",
+        "reactions": {
+          "url": "https://api.github.com/repos/Blackcat-Informatics/purrdf/issues/comments/6378433224/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "performed_via_github_app": {
+          "id": 347564,
+          "client_id": "Iv1.6aaafe4fe882736b",
+          "slug": "coderabbitai",
+          "node_id": "A_kwHOB96YWc4ABU2s",
+          "owner": {
+            "login": "coderabbitai",
+            "id": 132028505,
+            "node_id": "O_kgDOB96YWQ",
+            "avatar_url": "https://avatars.githubusercontent.com/u/132028505?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/coderabbitai",
+            "html_url": "https://github.com/coderabbitai",
+            "followers_url": "https://api.github.com/users/coderabbitai/followers",
+            "following_url": "https://api.github.com/users/coderabbitai/following{/other_user}",
+            "gists_url": "https://api.github.com/users/coderabbitai/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/coderabbitai/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/coderabbitai/subscriptions",
+            "organizations_url": "https://api.github.com/users/coderabbitai/orgs",
+            "repos_url": "https://api.github.com/users/coderabbitai/repos",
+            "events_url": "https://api.github.com/users/coderabbitai/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/coderabbitai/received_events",
+            "type": "Organization",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "name": "coderabbitai",
+          "description": "# Transforming Code Reviews with AI\r\n\r\n## Features\r\n\r\n**Automated Reviews**: Continuous reviews of the pull requests including incremental commits. \r\n\r\n**Summarization**: Generates high-level summary and a technical walkthrough of the PR changes.\u00a0\r\n\r\n**Line-by-line review**: Provides line-by-line suggestions committable with one click.\r\n\r\n**Codebase verification**:  Verifies the impact on the overall codebase and identifies missing changes.\r\n\r\n**Insights into your code**:  Ask any questions on your codebase within the pull request \r\n\r\n**Chat about your code** : Chat with the bot around your code.\u00a0The more you chat, the smarter it gets.\r\n\r\n**Issue Validation**:  Validates the PR against the linked issues and identifies other related issues\u00a0\r\n\r\n\r\n\r\n",
+          "external_url": "https://coderabbit.ai?utm_source=cr_app&utm_medium=github",
+          "html_url": "https://github.com/apps/coderabbitai",
+          "created_at": "2023-06-14T15:47:27Z",
+          "updated_at": "2026-10-22T09:20:52Z",
+          "permissions": {
+            "actions": "read",
+            "checks": "write",
+            "contents": "write",
+            "discussions": "read",
+            "issues": "write",
+            "members": "read",
+            "merge_queues": "read",
+            "metadata": "read",
+            "pull_requests": "write",
+            "statuses": "write",
+            "workflows": "write"
+          },
+          "events": [
+            "issues",
+            "issue_comment",
+            "label",
+            "membership",
+            "merge_group",
+            "organization",
+            "pull_request",
+            "pull_request_review",
+            "pull_request_review_comment",
+            "pull_request_review_thread",
+            "release",
+            "repository",
+            "team"
+          ]
+        },
+        "minimized": null
+      }
+    ]
+  ]
+}

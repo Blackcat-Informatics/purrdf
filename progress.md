@@ -1,0 +1,3 @@
+The backlog campaign has resumed. This bounded packaging repair is active in an isolated worktree: both emitters now transfer their shared catalog into OpenAPI and relocate references only at schema positions, preserving literal data and escaped pointer tokens. The schema policy identity changes so cached broken artifacts are invalidated.
+
+The actual public OpenAPI regression passes natively. Complete JSON-schema module checks, recursive/escaped-reference controls, supported golden regeneration and caller qualification are in progress. No PR, merge or completion is claimed yet; the other open contracts and donor worktrees remain preserved.

@@ -1,0 +1,6 @@
+checks     /home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/.stage/openapi-emissions-retain-dangling-defs/pr-checks.txt   state=pass
+comments   /home/paudley/Active/purrdf/.worktrees/692-openapi-emissions-retain-dangling-defs/.stage/openapi-emissions-retain-dangling-defs/pr-comments.md  (1)
+# PR #693 failed CI logs
+
+No failed checks in this snapshot.
+
