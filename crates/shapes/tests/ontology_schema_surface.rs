@@ -1343,9 +1343,10 @@ fn iri_only_output_matches_its_golden() {
 }
 
 #[test]
-fn iri_only_output_changes_only_in_owl_property_values_and_precision() {
+fn iri_only_output_changes_only_in_owl_values_precision_and_openapi_references() {
     // Against the output frozen before anonymous expressions were read, the
-    // shaped-only sections are byte-identical. The ontology-complete ones
+    // shaped-only schema and coverage are byte-identical. OpenAPI references
+    // move to components/schemas without changing their targets. The ontology-complete ones
     // differ only in the value schemas of the OWL-derived properties and in
     // coverage precision, plus the shared `Literal` definition they
     // reference. Under the OWL 2 RDF-Based Semantics every property takes a
@@ -1380,6 +1381,19 @@ fn iri_only_output_changes_only_in_owl_property_values_and_precision() {
         let mut paths = Vec::new();
         differing_paths(before, now, "", &mut paths);
         for path in &paths {
+            if heading.ends_with(" openapi") && path.ends_with("/$ref") {
+                let previous = before
+                    .pointer(path)
+                    .and_then(Value::as_str)
+                    .and_then(|reference| reference.strip_prefix("#/$defs/"));
+                let current = now
+                    .pointer(path)
+                    .and_then(Value::as_str)
+                    .and_then(|reference| reference.strip_prefix("#/components/schemas/"));
+                if previous.is_some() && previous == current {
+                    continue;
+                }
+            }
             assert!(allowed(heading, path), "{heading}: {path} changed");
         }
         if heading.starts_with("ontology-complete") {

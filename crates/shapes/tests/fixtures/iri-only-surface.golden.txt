@@ -3039,7 +3039,7 @@
       "Agent": {
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -3085,7 +3085,7 @@
                     "type": "object"
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -3116,7 +3116,7 @@
                       "type": "object"
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -3397,7 +3397,7 @@
       "Group": {
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -3443,7 +3443,7 @@
                     "type": "object"
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -3474,7 +3474,7 @@
                       "type": "object"
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -4161,7 +4161,7 @@
               ]
             },
             "then": {
-              "$ref": "#/$defs/Agent"
+              "$ref": "#/components/schemas/Agent"
             }
           },
           {
@@ -4186,7 +4186,7 @@
               ]
             },
             "then": {
-              "$ref": "#/$defs/Group"
+              "$ref": "#/components/schemas/Group"
             }
           },
           {
@@ -4211,7 +4211,7 @@
               ]
             },
             "then": {
-              "$ref": "#/$defs/Org"
+              "$ref": "#/components/schemas/Org"
             }
           },
           {
@@ -4236,7 +4236,7 @@
               ]
             },
             "then": {
-              "$ref": "#/$defs/Person"
+              "$ref": "#/components/schemas/Person"
             }
           },
           {
@@ -4261,14 +4261,14 @@
               ]
             },
             "then": {
-              "$ref": "#/$defs/Team"
+              "$ref": "#/components/schemas/Team"
             }
           }
         ],
         "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -4293,7 +4293,7 @@
       "Org": {
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -4408,7 +4408,7 @@
                     "type": "object"
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -4439,7 +4439,7 @@
                       "type": "object"
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -4477,7 +4477,7 @@
                         "type": "object"
                       },
                       {
-                        "$ref": "#/$defs/Person",
+                        "$ref": "#/components/schemas/Person",
                         "properties": {
                           "@value": false
                         }
@@ -4485,7 +4485,7 @@
                     ]
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -4518,7 +4518,7 @@
                           "type": "object"
                         },
                         {
-                          "$ref": "#/$defs/Person",
+                          "$ref": "#/components/schemas/Person",
                           "properties": {
                             "@value": false
                           }
@@ -4526,7 +4526,7 @@
                       ]
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -4835,7 +4835,7 @@
       "Person": {
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -5596,7 +5596,7 @@
                         "type": "object"
                       },
                       {
-                        "$ref": "#/$defs/Person",
+                        "$ref": "#/components/schemas/Person",
                         "properties": {
                           "@value": false
                         }
@@ -5604,7 +5604,7 @@
                     ]
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -5637,7 +5637,7 @@
                           "type": "object"
                         },
                         {
-                          "$ref": "#/$defs/Person",
+                          "$ref": "#/components/schemas/Person",
                           "properties": {
                             "@value": false
                           }
@@ -5645,7 +5645,7 @@
                       ]
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -5681,7 +5681,7 @@
                     "type": "object"
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -5712,7 +5712,7 @@
                       "type": "object"
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -5750,7 +5750,7 @@
                         "type": "object"
                       },
                       {
-                        "$ref": "#/$defs/Org",
+                        "$ref": "#/components/schemas/Org",
                         "properties": {
                           "@value": false
                         }
@@ -5758,7 +5758,7 @@
                     ]
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -5791,7 +5791,7 @@
                           "type": "object"
                         },
                         {
-                          "$ref": "#/$defs/Org",
+                          "$ref": "#/components/schemas/Org",
                           "properties": {
                             "@value": false
                           }
@@ -5799,7 +5799,7 @@
                       ]
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -5943,7 +5943,7 @@
       "Team": {
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -5989,7 +5989,7 @@
                     "type": "object"
                   },
                   {
-                    "$ref": "#/$defs/Literal"
+                    "$ref": "#/components/schemas/Literal"
                   }
                 ]
               },
@@ -6020,7 +6020,7 @@
                       "type": "object"
                     },
                     {
-                      "$ref": "#/$defs/Literal"
+                      "$ref": "#/components/schemas/Literal"
                     }
                   ]
                 },
@@ -7579,14 +7579,14 @@
               ]
             },
             "then": {
-              "$ref": "#/$defs/Person"
+              "$ref": "#/components/schemas/Person"
             }
           }
         ],
         "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
@@ -7611,7 +7611,7 @@
       "Person": {
         "properties": {
           "@annotation": {
-            "$ref": "#/$defs/Annotation"
+            "$ref": "#/components/schemas/Annotation"
           },
           "@id": {
             "type": "string"
