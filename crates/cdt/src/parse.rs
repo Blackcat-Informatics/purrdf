@@ -812,6 +812,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
                 let decoded = terminals::echar_value(letter).ok_or(CdtError::BadEscape {
                     offset: start,
                     reason: "only \\t \\b \\n \\r \\f \\\" \\' \\\\ \\uXXXX and \\UXXXXXXXX are escapes",
+                    cause: None,
                 })?;
                 self.position += 2;
                 Ok(decoded)
@@ -819,6 +820,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             None => Err(CdtError::BadEscape {
                 offset: start,
                 reason: "the lexical form ends inside an escape sequence",
+                cause: None,
             }
             .into()),
         }
@@ -831,6 +833,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             terminals::decode_uchar(&self.bytes[start..]).map_err(|defect| {
                 CdtError::BadEscape {
                     offset: start,
+                    cause: Some(defect),
                     reason: match defect {
                         terminals::UcharError::NotAnEscape => "expected \\uXXXX or \\UXXXXXXXX",
                         terminals::UcharError::BadHex => {
@@ -875,9 +878,8 @@ impl<'a, 'm> Scanner<'a, 'm> {
     /// literal no serialization of it could round-trip.
     ///
     /// Each refusal keeps its [`CdtError::BadLanguageTag`] shape and its `offset`;
-    /// `reason` now carries [`langtag::LanguageTagError::message`], which is a
-    /// `&'static str` and so fits the field exactly, naming the production that
-    /// refused instead of restating the terminal.
+    /// `cause` retains the native language parser refusal and `reason` carries
+    /// its static presentation, naming the production that refused.
     fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), ReadError> {
         let start = self.position;
         self.expect(b'@', "`@` opening a language tag")?;
@@ -898,6 +900,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             return Err(CdtError::BadLanguageTag {
                 offset: start,
                 reason: error.message(),
+                cause: Some(error),
             }
             .into());
         }
@@ -929,6 +932,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             .ok_or(CdtError::BadLanguageTag {
                 offset: start,
                 reason: "a base direction must be `ltr` or `rtl`",
+                cause: None,
             })
             .map_err(Into::into)
     }

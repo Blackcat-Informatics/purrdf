@@ -1383,6 +1383,18 @@ pub enum UcharError {
     NotAScalar,
 }
 
+impl core::fmt::Display for UcharError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::NotAnEscape => "expected \\uXXXX or \\UXXXXXXXX",
+            Self::BadHex => "expected a complete run of hexadecimal escape digits",
+            Self::NotAScalar => "escape does not name a Unicode scalar value",
+        })
+    }
+}
+
+impl core::error::Error for UcharError {}
+
 impl purrdf_hash::error::StructuredError for UcharError {
     purrdf_hash::error_visit! {
         NotAnEscape => "uchar-not-an-escape" {},
