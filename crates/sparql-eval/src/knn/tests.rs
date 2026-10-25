@@ -3097,6 +3097,57 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
     assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
 }
 
+#[test]
+fn computed_distance_refusals_retain_rows_metric_and_original_bits() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let workspace = crate::WorkspaceCapability::resident();
+    let space = EmbeddingSpace::from_vectors(
+        &DistanceMetric::SquaredEuclidean,
+        1,
+        vec![(iri("a"), vec![1e300]), (iri("b"), vec![-1e300])],
+        roomy(),
+    )
+    .unwrap();
+    let errors = [
+        space
+            .row_distance::<Exact>(None, 0, 1, &workspace)
+            .unwrap_err(),
+        space
+            .search_admitted::<Exact>(None, 0, 2, &workspace)
+            .unwrap_err(),
+    ];
+    drop(space);
+    drop(workspace);
+    for error in errors {
+        let copy = error.clone();
+        drop(error);
+        let EvalError::RetainedNativeFailure(failure) = &copy else {
+            panic!("the data refusal must retain its native context");
+        };
+        assert_eq!(failure.kind(), crate::NativeDiagnosticKind::Data);
+        let fields = Capture::read(failure.cause());
+        assert_eq!(fields.code, "knn-non-finite-distance");
+        assert!(matches!(fields.field("query_row"), ErrorValue::Unsigned(0)));
+        assert!(matches!(fields.field("row"), ErrorValue::Unsigned(1)));
+        let native = std::error::Error::source(failure)
+            .unwrap()
+            .downcast_ref::<DistanceRefusal>()
+            .unwrap();
+        assert_eq!(native.metric, DistanceMetric::SquaredEuclidean);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "distance-non-finite");
+        assert!(matches!(cause.field("value"), ErrorValue::Float64Bits(bits)
+            if bits == f64::INFINITY.to_bits()));
+        assert!(std::error::Error::source(native).unwrap().is::<NonFinite>());
+        assert_eq!(
+            copy.to_string(),
+            "malformed RDF input: the distance from row 0 to row 1 left the finite range under SquaredEuclidean; the artifact's magnitudes cannot be ranked under this metric"
+        );
+    }
+}
+
 /// Both generation constructions are frozen over fixed inputs: a moved generation is a
 /// changed identity every piece of retrieval evidence already recorded carries.
 #[test]

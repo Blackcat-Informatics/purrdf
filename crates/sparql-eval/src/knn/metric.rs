@@ -78,7 +78,7 @@ use purrdf_core::distance::Measure;
 /// relation stores, re-exported from the module that defines them so a caller names one
 /// type for each.
 pub use purrdf_core::distance::{
-    Arithmetic, Bound, Bounded, Exact, Reassociated, Resolved, Scalar, Selected,
+    Arithmetic, Bound, Bounded, Exact, NonFinite, Reassociated, Resolved, Scalar, Selected,
 };
 
 /// The three built-in metrics, decoded from a family contract's declaration.
@@ -171,8 +171,7 @@ impl Kernel {
         )
     }
 
-    /// The distance from `query` to `candidate` under this kernel, or `None` when the
-    /// computation left the finite range.
+    /// The distance from `query` to `candidate` under this kernel, retaining the original checked result when the computation left the finite range.
     ///
     /// The operands may be stored at either width PURREMB defines, independently of each
     /// other -- an `f64` query against an `f32` corpus is the ordinary case for a search
@@ -187,7 +186,7 @@ impl Kernel {
     /// computed once is a norm that cannot be computed two ways. They are ignored by the
     /// kernels that do not divide by them.
     ///
-    /// # Why `None` rather than an infinity
+    /// # Why a refusal rather than an infinity
     ///
     /// The stored scalars are finite (PURREMB rejects a non-finite one at read time), but
     /// finite inputs can still produce an infinite sum of squares near the top of the binary64
@@ -203,7 +202,6 @@ impl Kernel {
     /// to nearest is refused there, by name, so it never reaches this function: there is
     /// no entry point that computes an exact distance without that check. Every exact path
     /// returns the same bits, so which one the handle names does not change the answer.
-    #[must_use]
     pub fn distance<A: Scalar, B: Scalar>(
         self,
         arithmetic: Resolved<Exact>,
@@ -211,14 +209,14 @@ impl Kernel {
         query_norm: f64,
         candidate: &[B],
         candidate_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         // Cosine is written exactly as PURREMB v1 states it -- one product, one quotient,
         // one subtraction, each rounded on its own -- inside the exact arithmetic.
         arithmetic.distance(self.measure(), query, query_norm, candidate, candidate_norm)
     }
 
     /// The distance from `query` to `candidate` under the [`Reassociated`] arithmetic,
-    /// or `None` when it left the finite range.
+    /// retaining the original checked result on refusal.
     ///
     /// The same metric as [`Kernel::distance`], computed under a different contract: the
     /// sum is reassociated and may be contracted to fused multiply-add along the
@@ -234,7 +232,6 @@ impl Kernel {
     /// PURREMB's norm fold has one written order, so they come from
     /// [`Resolved::<Exact>::norm`] on `arithmetic.exact()` ([`Resolved::exact`]), exactly
     /// as [`Kernel::distance`]'s do.
-    #[must_use]
     pub fn distance_reassociated<A: Scalar, B: Scalar>(
         self,
         arithmetic: Resolved<Reassociated>,
@@ -242,7 +239,7 @@ impl Kernel {
         query_norm: f64,
         candidate: &[B],
         candidate_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         arithmetic.distance(self.measure(), query, query_norm, candidate, candidate_norm)
     }
 
@@ -503,12 +500,12 @@ mod tests {
         // sum((3-0)^2 + (4-5)^2) = 9 + 1 = 10.
         assert_eq!(
             Kernel::SquaredEuclidean.distance(exact(), &a, norm_a, &b, norm_b),
-            Some(10.0)
+            Ok(10.0)
         );
         // -dot = -20.
         assert_eq!(
             Kernel::NegativeDot.distance(exact(), &a, norm_a, &b, norm_b),
-            Some(-20.0)
+            Ok(-20.0)
         );
         // 1 - 20/(5*5) = 1 - 0.8 = 0.19999999999999996 in binary64: pinned by BITS, not
         // by a decimal that would hide which of two adjacent doubles this is.
@@ -530,7 +527,7 @@ mod tests {
         let n = norm(&v);
         assert_eq!(
             Kernel::SquaredEuclidean.distance(exact(), &v, n, &v, n),
-            Some(0.0),
+            Ok(0.0),
             "sum of squared zero differences"
         );
 
@@ -654,11 +651,14 @@ mod tests {
     fn an_overflowing_distance_is_reported_rather_than_ranked_as_an_infinity() {
         let a = [f64::MAX, f64::MAX];
         let b = [-f64::MAX, -f64::MAX];
-        assert_eq!(
-            Kernel::SquaredEuclidean.distance(exact(), &a, 0.0, &b, 0.0),
-            None,
-            "an infinite sum of squares still sorts, and would sort LAST — a confidently \
-             ranked answer computed from a number that overflowed"
+        let cause = Kernel::SquaredEuclidean
+            .distance(exact(), &a, 0.0, &b, 0.0)
+            .unwrap_err();
+        let fields = purrdf_testkit::error_capture::Capture::read(&cause);
+        assert_eq!(fields.code, "distance-non-finite");
+        assert!(
+            matches!(fields.field("value"), purrdf_hash::error::ErrorValue::Float64Bits(bits)
+            if bits == f64::INFINITY.to_bits())
         );
 
         // The neighbouring VALID case: large but not overflowing must still rank. A
@@ -674,7 +674,7 @@ mod tests {
         assert!(expected.is_finite());
         assert_eq!(
             Kernel::SquaredEuclidean.distance(exact(), &c, 0.0, &d, 0.0),
-            Some(expected),
+            Ok(expected),
             "two squares of 1e150 are finite and must be ranked, not refused"
         );
     }
@@ -847,7 +847,7 @@ mod tests {
                         bound.is_met_by(truth),
                         "abandoned at {bound:?} but the true distance {truth} does not meet it"
                     ),
-                    Bounded::NonFinite => panic!("the fixture is finite"),
+                    Bounded::NonFinite(_) => panic!("the fixture is finite"),
                 }
             }
         }
@@ -860,6 +860,9 @@ mod tests {
         // distance would rank a candidate on a number that never existed.
         let huge = vec![f64::MAX / 2.0; 8];
         let zero = vec![0.0_f64; 8];
+        let cause = Kernel::SquaredEuclidean
+            .distance(exact(), &huge, 0.0, &zero, 0.0)
+            .unwrap_err();
         assert_eq!(
             Kernel::SquaredEuclidean.distance_bounded(
                 exact(),
@@ -869,12 +872,12 @@ mod tests {
                 0.0,
                 Bound::AtOrAbove(1.0)
             ),
-            Bounded::NonFinite,
+            Bounded::NonFinite(cause),
             "an overflow is an error even when a bound would otherwise have abandoned"
         );
         assert_eq!(
             Kernel::SquaredEuclidean.distance(exact(), &huge, 0.0, &zero, 0.0),
-            None,
+            Err(cause),
             "and the unbounded fold still refuses it too"
         );
     }
@@ -959,10 +962,9 @@ mod tests {
         let fast = reassociated();
         let a = [f64::MAX, f64::MAX];
         let b = [-f64::MAX, -f64::MAX];
-        assert_eq!(
-            Kernel::SquaredEuclidean.distance_reassociated(fast, &a, 0.0, &b, 0.0),
-            None
-        );
+        let cause = Kernel::SquaredEuclidean
+            .distance_reassociated(fast, &a, 0.0, &b, 0.0)
+            .unwrap_err();
         assert_eq!(
             Kernel::SquaredEuclidean.distance_bounded_reassociated(
                 fast,
@@ -972,7 +974,7 @@ mod tests {
                 0.0,
                 Bound::AtOrAbove(1.0)
             ),
-            Bounded::NonFinite
+            Bounded::NonFinite(cause)
         );
         // The valid neighbour ranks.
         let c = [1e150_f64, 1e150];
@@ -980,7 +982,7 @@ mod tests {
         assert!(
             Kernel::SquaredEuclidean
                 .distance_reassociated(fast, &c, 0.0, &d, 0.0)
-                .is_some_and(f64::is_finite)
+                .is_ok_and(f64::is_finite)
         );
     }
 

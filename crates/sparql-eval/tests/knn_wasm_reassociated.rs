@@ -169,11 +169,12 @@ fn the_reassociated_distance_refuses_an_overflow() {
     let fast = Reassociated::resolve().expect("the default float environment is the IEEE one");
     let huge = vec![1e300_f64; 70];
     let negative = vec![-1e300_f64; 70];
-    assert_eq!(
-        Kernel::NegativeDot.distance_reassociated(fast, &huge, 0.0, &huge, 0.0),
-        None
+    assert!(
+        Kernel::NegativeDot
+            .distance_reassociated(fast, &huge, 0.0, &huge, 0.0)
+            .is_err()
     );
-    assert_eq!(
+    assert!(matches!(
         Kernel::SquaredEuclidean.distance_bounded_reassociated(
             fast,
             &huge,
@@ -182,13 +183,13 @@ fn the_reassociated_distance_refuses_an_overflow() {
             0.0,
             Bound::AtOrAbove(1.0)
         ),
-        Bounded::NonFinite
-    );
+        Bounded::NonFinite(_)
+    ));
     let large = vec![1e150_f64; 2];
     assert!(
         Kernel::SquaredEuclidean
             .distance_reassociated(fast, &large, 0.0, &[0.0_f64, 0.0], 0.0)
-            .is_some_and(f64::is_finite),
+            .is_ok_and(f64::is_finite),
         "the valid neighbour ranks"
     );
 }

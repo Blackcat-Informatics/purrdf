@@ -103,8 +103,11 @@ pub(crate) fn select_neighbors<A: Arithmetic>(
                     break;
                 }
                 Bounded::Beyond => {}
-                Bounded::NonFinite => {
-                    return Err(HnswError::NonFiniteDistance { row: picked.row });
+                Bounded::NonFinite(cause) => {
+                    return Err(HnswError::NonFiniteDistance {
+                        row: picked.row,
+                        cause,
+                    });
                 }
             }
         }

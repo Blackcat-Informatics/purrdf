@@ -12,8 +12,8 @@
 //! runs this code, shown on an input where the two genuinely differ.
 
 use super::tests::{
-    Executed, REQUIRE_PATHS_VAR, Store, Stream, at_offset, exact_compiled, paths_of, reference_dot,
-    widened,
+    Executed, REQUIRE_PATHS_VAR, Store, Stream, at_offset, exact_compiled, nonfinite_bits,
+    paths_of, reference_dot, widened,
 };
 use super::*;
 
@@ -217,9 +217,9 @@ fn check_bound<Q: Store, T: Store>(
             path.path()
         );
         // The batch form runs the same compilation, so it is the same number.
-        let mut out = [None];
+        let mut out = [Ok(0.0)];
         path.distances(Measure::SquaredEuclidean, a_typed, 0.0, view, &mut out);
-        assert_eq!(out[0].map(f64::to_bits), Some(fast_squares.to_bits()));
+        assert_eq!(out[0].map(f64::to_bits), Ok(fast_squares.to_bits()));
         compared += 3;
     }
     compared
@@ -253,7 +253,7 @@ fn every_api<Q: Store, T: Store>(
     a: &[f64],
     b: &[f64],
     offset: usize,
-) -> [Option<u64>; 4] {
+) -> [Result<u64, NonFinite>; 4] {
     let a_buffer: Vec<Q> = at_offset(a, offset);
     let b_buffer: Vec<T> = at_offset(b, offset);
     let a_typed = &a_buffer[offset..];
@@ -262,9 +262,9 @@ fn every_api<Q: Store, T: Store>(
     let (a_norm, b_norm) = (exact.norm(a_typed), exact.norm(b_typed));
     let norms = [b_norm];
     let view = RowsRef::new(b_typed, 1, a.len(), &norms).expect("one row");
-    let mut batch = [None];
+    let mut batch = [Ok(0.0)];
     path.distances(measure, a_typed, a_norm, view, &mut batch);
-    let mut indexed = [None];
+    let mut indexed = [Ok(0.0)];
     path.distances_indexed(measure, a_typed, a_norm, view, &[0], &mut indexed);
     let pair = path.distance(measure, a_typed, a_norm, b_typed, b_norm);
     let bounded = match path.distance_bounded(
@@ -275,8 +275,8 @@ fn every_api<Q: Store, T: Store>(
         b_norm,
         Bound::Above(f64::INFINITY),
     ) {
-        Bounded::Below(value) => Some(value),
-        Bounded::NonFinite => None,
+        Bounded::Below(value) => Ok(value),
+        Bounded::NonFinite(cause) => Err(cause),
         Bounded::Beyond => panic!("an infinite bound is never met"),
     };
     [batch[0], indexed[0], pair, bounded].map(|value| value.map(f64::to_bits))
@@ -356,7 +356,7 @@ fn reassociated_bounded_agrees_with_full() {
                         Bounded::Beyond => {
                             assert!(bound.is_met_by(full), "len {len}: abandoned at {bound:?}");
                         }
-                        Bounded::NonFinite => panic!("the fixture is finite"),
+                        Bounded::NonFinite(_) => panic!("the fixture is finite"),
                     }
                 }
             }
@@ -385,7 +385,15 @@ fn reassociated_bounded_agrees_with_full() {
             path.distance_bounded(Measure::SquaredEuclidean, &early, 0.0, &zero, 0.0, bound)
         };
         assert_eq!(bounded(Bound::AtOrAbove(10.0)), Bounded::Beyond);
-        assert_eq!(bounded(Bound::AtOrAbove(1e9)), Bounded::NonFinite);
+        let Bounded::NonFinite(cause) = bounded(Bound::AtOrAbove(1e9)) else {
+            panic!("the unreached bound must expose the non-finite term");
+        };
+        assert!(f64::from_bits(nonfinite_bits(cause)).is_nan());
+        assert_eq!(
+            path.distance(Measure::SquaredEuclidean, &early, 0.0, &zero, 0.0),
+            Err(cause),
+            "the full fold retains the observed NaN on this path"
+        );
     }
     assert_ran(&executed, "reassociated_bounded_agrees_with_full");
 }
@@ -399,18 +407,18 @@ fn reassociated_overflow_is_nonfinite() {
         let negative = vec![-1e300_f64; len];
         for &path in &paths {
             executed.ran(path.path());
-            assert_eq!(
-                path.distance(Measure::NegativeDot, &huge, 0.0, &huge, 0.0),
-                None,
-                "{} len {len}: a dot of 1e300 components overflows",
-                path.path()
-            );
-            assert_eq!(
-                path.distance(Measure::SquaredEuclidean, &huge, 0.0, &negative, 0.0),
-                None,
-                "{} len {len}: so does the distance between ±1e300",
-                path.path()
-            );
+            let dot = path
+                .distance(Measure::NegativeDot, &huge, 0.0, &huge, 0.0)
+                .unwrap_err();
+            assert_eq!(nonfinite_bits(dot), f64::NEG_INFINITY.to_bits());
+            let cause = path
+                .distance(Measure::SquaredEuclidean, &huge, 0.0, &negative, 0.0)
+                .unwrap_err();
+            assert_eq!(nonfinite_bits(cause), f64::INFINITY.to_bits());
+            let cosine = path
+                .distance(Measure::Cosine, &huge, 1e300, &huge, 1e300)
+                .unwrap_err();
+            assert!(f64::from_bits(nonfinite_bits(cosine)).is_nan());
             for bound in [
                 Bound::Above(f64::INFINITY),
                 Bound::AtOrAbove(f64::INFINITY),
@@ -425,15 +433,30 @@ fn reassociated_overflow_is_nonfinite() {
                         0.0,
                         bound
                     ),
-                    Bounded::NonFinite,
+                    Bounded::NonFinite(cause),
                     "{} len {len} under {bound:?}: the overflow is checked before the bound",
                     path.path()
                 );
             }
             let view = RowsRef::new(&negative, 1, len, &[]).expect("one row");
-            let mut out = [Some(0.0)];
+            let mut out = [Ok(0.0)];
             path.distances(Measure::SquaredEuclidean, &huge, 0.0, view, &mut out);
-            assert_eq!(out, [None], "{} len {len}: the batch form", path.path());
+            let mut indexed = [Ok(0.0)];
+            path.distances_indexed(
+                Measure::SquaredEuclidean,
+                &huge,
+                0.0,
+                view,
+                &[0],
+                &mut indexed,
+            );
+            assert_eq!(
+                out,
+                [Err(cause)],
+                "{} len {len}: the batch form",
+                path.path()
+            );
+            assert_eq!(indexed, out, "{} len {len}: the indexed form", path.path());
 
             // The valid neighbour: large but finite ranks.
             let large = vec![1e150_f64; len];
@@ -648,7 +671,7 @@ fn the_portable_path_is_not_dispatched_where_a_named_path_exists() {
     assert_ne!(resolved.path(), Path::Portable);
     assert_eq!(
         resolved.distance(Measure::NegativeDot, &a, 0.0, &a, 0.0),
-        Some(-14.0),
+        Ok(-14.0),
         "the resolved path computes"
     );
     let _ = Resolved::<Reassociated>::on(Path::Portable).distance(
@@ -1041,7 +1064,7 @@ fn every_required_dispatch_path_executes() {
                     handle
                         .distance(Measure::NegativeDot, a, 0.0, b, 0.0)
                         .map(f64::to_bits),
-                    Some((-reference_dot(a, b)).to_bits()),
+                    Ok((-reference_dot(a, b)).to_bits()),
                     "exact dot on {path} at len {}",
                     a.len()
                 );
