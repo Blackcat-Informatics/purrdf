@@ -1973,7 +1973,7 @@ mod tests {
         assert_eq!(report.join_steps(), u64::MAX);
         assert_eq!(report.join_step_limit(), u64::MAX);
         assert_eq!(state.store.row_count(), 2);
-        assert!(state.derivations.is_empty());
+        assert_eq!(state.derivations, []);
     }
 
     // ── The restriction fires, terminates and mints blank nodes ─────────────────
