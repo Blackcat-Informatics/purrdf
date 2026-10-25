@@ -181,7 +181,7 @@ fn html_diagnostics_preserve_encounter_order_and_original_ranges() {
 
 #[test]
 fn delta_coverage_keeps_original_term_and_full_width_populations() {
-    let predicate = String::from("urn:original:predicate");
+    let predicate = String::from("https://example.org/original/predicate");
     let error = TextDeltaError::CoverageMismatch {
         predicate: Box::new(purrdf_core::TermValue::iri(&predicate)),
         before: u128::MAX,
@@ -207,6 +207,9 @@ fn delta_coverage_keeps_original_term_and_full_width_populations() {
     let ErrorValue::Term(value) = fields.field("predicate") else {
         panic!("the predicate remains a borrowed RDF term");
     };
-    assert_eq!(Capture::read(value).code, "rdf-term-iri");
+    let predicate = Capture::read(value);
+    assert_eq!(predicate.code, "rdf-term-iri");
+    assert!(matches!(predicate.field("iri"), ErrorValue::Iri(value)
+        if value == "https://example.org/original/predicate"));
     assert!(error.source().is_none());
 }

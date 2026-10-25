@@ -377,7 +377,7 @@ mod tests {
                 .downcast_ref::<crate::CapacityFailure>()
                 .is_some()
         );
-        assert!(values.is_empty());
+        assert_eq!(values, []);
         assert!(allocation.is_none());
         crate::query_workspace::admitted(workspace.reserve_vec(&mut values, &mut allocation, 1))
             .unwrap();
