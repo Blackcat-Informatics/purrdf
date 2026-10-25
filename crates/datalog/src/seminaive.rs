@@ -918,8 +918,8 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// The unbindable variable, as authored.
         variable: String,
     },
-    /// The stored-fact or join-step limit in force ([`EvalOptions`]), or the fixed
-    /// term-arena ceiling, was passed. The report is accurate at the point evaluation
+    /// The stored-fact, join-step or term-arena limit in force ([`EvalOptions`])
+    /// was passed. The report is accurate at the point evaluation
     /// stopped, and carries the limit that was passed.
     BudgetExhausted {
         /// Which ceiling.
