@@ -46,6 +46,7 @@ members = [
     "crates/testkit",
     "crates/stack",
     "crates/text",
+    "crates/toml",
     "crates/validate",
     "crates/wasm-link",
     "crates/xsd",
@@ -68,6 +69,7 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 # Where a use site needs default features OFF, they are disabled HERE and
 # re-enabled per crate with `default-features = true` where required.
 [workspace.dependencies]
+purrdf-toml = { path = "crates/toml", version = "3.0.1" }
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
 purrdf = { path = "crates/purrdf", version = "3.0.1" }
 # The C ABI's own library is also named `purrdf`; this distinct import key

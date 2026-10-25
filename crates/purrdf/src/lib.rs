@@ -354,6 +354,11 @@ pub mod json {
     pub use purrdf_json::*;
 }
 
+/// Lossless TOML 1.1 authoring model and verified RDF 1.2 byte-cover codec.
+pub mod toml {
+    pub use purrdf_toml::*;
+}
+
 /// The common umbrella surface, for `use purrdf::prelude::*;`.
 pub mod prelude {
     pub use purrdf_rdf::prelude::*;

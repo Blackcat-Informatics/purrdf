@@ -79,6 +79,7 @@ purrdf-mime.workspace = true
 
 # Ordered JSON is an always-available data carrier over the shared IR.
 purrdf-json.workspace = true
+purrdf-toml.workspace = true
 
 # The error conversions are declared through the one `From`-into-a-variant spelling.
 purrdf-lex = { workspace = true }

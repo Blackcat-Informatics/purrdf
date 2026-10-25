@@ -1121,6 +1121,23 @@ fingerprints = []
 names = ['^(parse_json_value|json_parse_value|parse_json_number|metadata_value_from_json)$']
 
 [[job]]
+id = "toml-document"
+summary = "Reading TOML 1.1 into a flat typed source model and projecting a verified original-byte RDF cover"
+home = "purrdf_toml::analyze"
+entry_points = ["purrdf_toml::Document", "purrdf_toml::project", "purrdf_toml::encode", "purrdf_toml::decode_document"]
+spec = "TOML 1.1.0 and crates/toml/SPEC.md; declaration identity, typed values, scalar/structure cover and exact reparse verification"
+vectors = ["crates/toml/tests/suite/files-toml-1.1.0"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(parse_toml|parse_toml_value|parse_toml_string|parse_toml_number)$']
+
+[[job]]
 id = "yaml-document"
 summary = "Reading and writing a YAML 1.2 document over the JSON data model"
 home = "purrdf_lex::yaml::read"
@@ -1853,11 +1870,19 @@ members = [
     "purrdf_json::profile::Vocabulary::standard",
     "purrdf_markdown::profile::Vocabulary::standard",
     "purrdf_mime::profile::Vocabulary::standard",
+    "purrdf_toml::profile::Vocabulary::standard",
 ]
 kind = "shim"
 criterion = "b"
 anchor = "purrdf_markdown::profile::Vocabulary::standard"
-reason = "Each codec crate names its own vocabulary under its own designated namespace: three different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+reason = "Each codec crate names its own vocabulary under its own designated namespace: four different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+
+[[distinct]]
+members = ["purrdf_json::project::encode", "purrdf_toml::codec::encode"]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_json::project::encode"
+reason = "The public convenience entry points admit different languages and typed models: RFC 8259 ordered JSON versus TOML 1.1 declarations and values. Each composes its own single analysis and projection homes; neither duplicates a parser, identity function or byte-cover law."
 
 [[distinct]]
 members = [
