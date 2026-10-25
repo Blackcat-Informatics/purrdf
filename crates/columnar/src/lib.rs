@@ -6,7 +6,7 @@
 //! The codec projects an RDF 1.2 [`purrdf_core::DatasetView`] plus a
 //! [`purrdf_core::ContentStore`] into the fixed five-table schema exposed by
 //! [`schema`]. Its deliberately narrow Parquet subset keeps the implementation
-//! wasm-clean and auditable: INT64/BYTE_ARRAY columns, flat OPTIONAL fields,
+//! wasm-clean and auditable: `INT64`/`BYTE_ARRAY` columns, flat `OPTIONAL` fields,
 //! PLAIN values, RLE definition levels, Data Page V2, and UNCOMPRESSED or ZSTD
 //! page bodies.
 //!
@@ -32,7 +32,7 @@ mod reader;
 pub mod schema;
 mod writer;
 
-pub use error::{ColumnarError, ColumnarWriteError};
+pub use error::{ColumnarError, ColumnarWriteError, ReaderReason};
 pub use files::ParquetFiles;
 pub use parquet::Compression;
 pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};

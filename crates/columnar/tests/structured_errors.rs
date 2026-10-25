@@ -588,6 +588,55 @@ fn public_blob_read_preserves_original_integrity_cause() {
     assert_eq!(cause.code, "content-digest-mismatch");
     assert_content_digest(&cause.child("stored"), stored);
     assert_content_digest(&cause.child("actual"), ContentDigest::of(&changed));
+
+    // The public reader returns rejected decoded digest cells, independently of
+    // the original files and without rendering or copying a diagnostic string.
+    let mut blobs = ContentStore::new();
+    let digest = blobs.insert(first.to_vec()).to_hex();
+    for (replacement, code, message) in [
+        (vec![0xff; 64], "columnar-digest-utf8", "row 0 is not UTF-8"),
+        (
+            vec![b'g'; 64],
+            "columnar-digest-shape",
+            "row 0 is not a 64-digit SHA-256 hex value",
+        ),
+        (
+            digest.to_ascii_uppercase().into_bytes(),
+            "columnar-digest-case",
+            "row 0 is not canonical lowercase hexadecimal",
+        ),
+    ] {
+        let mut array = write(
+            &RdfDatasetBuilder::new().freeze().unwrap(),
+            &blobs,
+            Compression::Uncompressed,
+        )
+        .unwrap()
+        .files
+        .into_array();
+        replace_unique(&mut array[4], digest.as_bytes(), &replacement);
+        let files = ParquetFiles::from_array(array);
+        let error = read(&files).unwrap_err();
+        drop(files);
+        assert_eq!(inspect_without_allocation(&error).bytes, 64);
+        let reason = Capture::read(&error).child("reason");
+        assert_eq!(reason.code, code);
+        assert!(matches!(reason.field("row"), ErrorValue::Unsigned(0)));
+        assert!(matches!(reason.field("bytes"), ErrorValue::Bytes(bytes) if bytes == replacement));
+        assert_eq!(
+            error.to_string(),
+            format!("columnar blobs.digest is malformed: {message}")
+        );
+        if code == "columnar-digest-utf8" {
+            let cause = reason.child("cause");
+            assert_eq!(cause.code, "std-utf8");
+            assert!(matches!(
+                cause.field("valid_up_to"),
+                ErrorValue::ByteCount(0)
+            ));
+            assert!(matches!(cause.field("error_len"), ErrorValue::ByteCount(1)));
+        }
+    }
 }
 
 /// Actual kernel validation survives the public reader with its complete diagnostic.

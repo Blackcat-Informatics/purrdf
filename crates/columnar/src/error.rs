@@ -5,6 +5,9 @@
 
 use std::fmt;
 
+mod reader;
+pub use reader::ReaderReason;
+
 /// A fail-closed Parquet encoding, decoding, or RDF reconstruction error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -38,6 +41,13 @@ pub enum ColumnarError {
         /// Stable diagnostic detail.
         detail: String,
     },
+    /// Decoded rows violate the original RDF reconstruction contract.
+    Reader {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Original native operands and causes.
+        reason: ReaderReason,
+    },
     /// A valid Parquet construct falls outside PurRDF's deliberately narrow profile.
     Unsupported {
         /// Unsupported field or construct.
@@ -68,6 +78,7 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
         Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Reader { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
             "context" => Code(context), "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(u128::from(*maximum)),
@@ -76,6 +87,10 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
+    pub(crate) fn reader_malformed(context: &'static str, reason: ReaderReason) -> Self {
+        Self::Reader { context, reason }
+    }
+
     pub(crate) fn malformed(context: &'static str, detail: impl Into<String>) -> Self {
         Self::Malformed {
             context,
@@ -129,6 +144,9 @@ impl fmt::Display for ColumnarError {
             Self::Malformed { context, detail } => {
                 write!(f, "columnar {context} is malformed: {detail}")
             }
+            Self::Reader { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::Unsupported { context, value } => {
                 write!(f, "columnar {context} value {value} is unsupported")
             }
@@ -149,6 +167,7 @@ purrdf_lex::error_source!(ColumnarError => {
     Self::ContentStore(cause) => cause,
     Self::BlobContent { cause, .. } => cause,
     Self::Reconstruction(cause) => cause,
+    Self::Reader { reason, .. } => reason,
 });
 
 purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });

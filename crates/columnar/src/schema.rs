@@ -12,6 +12,13 @@ pub enum PhysicalType {
     ByteArray,
 }
 
+impl purrdf_hash::error::StructuredError for PhysicalType {
+    purrdf_hash::error_visit! {
+        Int64 => "columnar-physical-int64" {},
+        ByteArray => "columnar-physical-byte-array" {},
+    }
+}
+
 /// Whether a flat column is required or nullable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repetition {
