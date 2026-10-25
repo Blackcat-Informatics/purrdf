@@ -16,8 +16,10 @@ The human message and `invalid-utf8` refusal identity are unchanged.
 
 `FusionError::MalformedProfile` now carries `Box<ProfileRefusal>` instead of a
 rendered string. Its closed native reasons retain canonical/IRI decoder causes,
-profile fields and original candidate owners. Use `StructuredError` inspection to
-recover fields and `Display` for presentation. The outer
+profile fields and original candidate owners. The inspected `reason` field is now
+a borrowed cause with its own code and fields, replacing its former text value.
+Use `StructuredError` inspection to recover fields and `Display` for presentation.
+The outer
 `fusion-malformed-profile` inspection identity and human messages are unchanged.
 
 ## Columnar projection errors
