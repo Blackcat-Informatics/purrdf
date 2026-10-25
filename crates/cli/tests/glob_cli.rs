@@ -121,7 +121,7 @@ fn ordered_pattern_sets_publish_all_indices_only_after_complete_success() {
     *args.last_mut().unwrap() = "2";
     let refused = run(&args);
     assert_eq!(refused.status.code(), Some(1));
-    assert!(refused.stdout.is_empty());
+    assert_eq!(refused.stdout, [] as [u8; 0]);
     assert!(stderr(&refused).contains("glob pattern 2: glob work refused"));
     let empty = run(&[
         "glob-set",
@@ -170,7 +170,7 @@ fn ordered_pattern_sets_publish_all_indices_only_after_complete_success() {
             "100",
         ]);
         assert_eq!(refusal.status.code(), Some(1));
-        assert!(refusal.stdout.is_empty());
+        assert_eq!(refusal.stdout, [] as [u8; 0]);
         assert!(stderr(&refusal).contains(message), "{}", stderr(&refusal));
     }
 }
