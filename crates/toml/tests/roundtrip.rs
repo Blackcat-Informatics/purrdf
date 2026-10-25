@@ -40,6 +40,9 @@ time = 07:32
 local = 1979-05-27 07:32
 offset = 1979-05-27t07:32-07:00
 precision = 07:32:00.123456789012345
+leap_offset = 2000-01-01t23:59:60z
+leap_local = 2000-01-01 23:59:60
+leap_time = 23:59:60
 mixed = [[1, 2], { quoted."a/b" = true, }, 'end']
 inline = {
   x = 1, # TOML 1.1
@@ -107,6 +110,42 @@ fn declarations_and_typed_semantics_keep_original_ownership() {
             .windows(2)
             .all(|keys| keys[0].span.end <= keys[1].span.start)
     );
+    // TOML leap seconds cannot be represented by the XSD temporal lexical spaces.
+    for (text, lexical, local) in [
+        (
+            "x=2000-01-01t23:59:60z",
+            "2000-01-01T23:59:60Z",
+            "OffsetDateTime",
+        ),
+        (
+            "x=2000-01-01 23:59:60",
+            "2000-01-01T23:59:60",
+            "LocalDateTime",
+        ),
+        ("x=23:59:60", "23:59:60", "LocalTime"),
+        ("x=2000-01-01", "2000-01-01", "LocalDate"),
+    ] {
+        let model = analyze(
+            SourceDocument {
+                id: SOURCE,
+                bytes: text.as_bytes(),
+            },
+            &profile,
+        )
+        .unwrap();
+        let dataset = project(&model, &profile).unwrap();
+        assert!(dataset.quads().enumerate().any(|(index, row)| {
+            let statement = dataset.to_owned_quad(index, row);
+            statement.predicate == profile.vocabulary().term("value").unwrap()
+                && matches!(statement.object, purrdf_core::RdfTerm::Literal(literal)
+                    if literal.lexical_form == lexical
+                        && literal.datatype.as_deref() == Some(profile.vocabulary().term(local).unwrap().as_str()))
+        }));
+        assert_eq!(
+            decode_document(&dataset, model.id(), &profile).unwrap(),
+            text
+        );
+    }
 }
 
 fn invalid_forms_and_valid_neighbours_obey_toml_boundaries() {

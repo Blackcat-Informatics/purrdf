@@ -9,9 +9,7 @@ use purrdf_core::{
     cover::{VerbatimSpan, reconstruct},
     ir::{QuadIds, RdfDataset, RdfDatasetBuilder, TermId},
 };
-use purrdf_xsd::datatype::{
-    XSD_BOOLEAN, XSD_DATE, XSD_DATE_TIME, XSD_DOUBLE, XSD_INTEGER, XSD_STRING, XSD_TIME,
-};
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DOUBLE, XSD_INTEGER, XSD_STRING};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -155,6 +153,15 @@ pub fn project(document: &Document<'_>, profile: &Profile) -> Result<Arc<RdfData
             Kind::ArrayOfTables => "array-of-tables",
             Kind::Scalar(value) => {
                 emit.verbatim(&id, &document.text[node.span.clone()])?;
+                let temporal_datatype = match value {
+                    Scalar::OffsetDateTime(_) => Some("OffsetDateTime"),
+                    Scalar::LocalDateTime(_) => Some("LocalDateTime"),
+                    Scalar::LocalDate(_) => Some("LocalDate"),
+                    Scalar::LocalTime(_) => Some("LocalTime"),
+                    _ => None,
+                }
+                .map(|local| profile.vocabulary().term(local))
+                .transpose()?;
                 let (kind, value, datatype) = match value {
                     Scalar::String(text) => ("string", text.clone(), XSD_STRING),
                     Scalar::Integer(integer) => ("integer", integer.to_string(), XSD_INTEGER),
@@ -172,14 +179,26 @@ pub fn project(document: &Document<'_>, profile: &Profile) -> Result<Arc<RdfData
                             XSD_DOUBLE,
                         ),
                     },
-                    Scalar::OffsetDateTime(text) => {
-                        ("offset-date-time", temporal_lexical(text), XSD_DATE_TIME)
-                    }
-                    Scalar::LocalDateTime(text) => {
-                        ("local-date-time", temporal_lexical(text), XSD_DATE_TIME)
-                    }
-                    Scalar::LocalDate(text) => ("local-date", text.clone(), XSD_DATE),
-                    Scalar::LocalTime(text) => ("local-time", text.clone(), XSD_TIME),
+                    Scalar::OffsetDateTime(text) => (
+                        "offset-date-time",
+                        temporal_lexical(text),
+                        temporal_datatype.as_deref().expect("temporal kind"),
+                    ),
+                    Scalar::LocalDateTime(text) => (
+                        "local-date-time",
+                        temporal_lexical(text),
+                        temporal_datatype.as_deref().expect("temporal kind"),
+                    ),
+                    Scalar::LocalDate(text) => (
+                        "local-date",
+                        text.clone(),
+                        temporal_datatype.as_deref().expect("temporal kind"),
+                    ),
+                    Scalar::LocalTime(text) => (
+                        "local-time",
+                        text.clone(),
+                        temporal_datatype.as_deref().expect("temporal kind"),
+                    ),
                 };
                 emit.fact(&id, "value", Object::Typed(&value, datatype))?;
                 kind

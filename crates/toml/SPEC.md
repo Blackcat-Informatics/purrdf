@@ -58,6 +58,7 @@ each framed vocabulary local name, in this order:
 Document Value Statement Key Structure source sourceDigest byteLength profile
 document byteStart byteEnd verbatim verbatimText path kind occurrence parent
 ordinal key value node header digest size
+OffsetDateTime LocalDateTime LocalDate LocalTime
 ```
 
 The document preimage frames `purrdf-toml-document-v1` and the original source
@@ -78,9 +79,11 @@ byteEnd. Values additionally state path, ordinal, parent (root document or value
 IRI), kind, optional decoded key, and size for containers. Scalar values state
 their typed semantic value and original verbatim literal; verbatim is typed with
 vocabulary verbatimText. Strings use XSD string, integers XSD integer, floats
-XSD double, booleans XSD boolean, and temporal values the corresponding XSD
-date/time datatype. Kind preserves local/offset distinctions and signed NaN;
-canonical temporal RDF lexical values use uppercase T/Z and include seconds.
+XSD double and booleans XSD boolean. Temporal values use vocabulary datatypes
+OffsetDateTime, LocalDateTime, LocalDate and LocalTime, with the corresponding
+TOML temporal lexical spaces. Their emitted spelling uses uppercase T/Z and
+includes seconds, preserving fractional precision and valid leap seconds.
+These datatypes preserve local/offset distinctions; kind also preserves signed NaN.
 Structure nodes state verbatim runs with the same datatype. Key nodes state
 decoded key text. Statements link to the declared/assigned node and state a
 typed boolean header flag. Every node's complete shape is verified on decode.

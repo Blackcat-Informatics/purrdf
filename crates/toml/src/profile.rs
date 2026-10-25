@@ -38,6 +38,10 @@ pub(crate) const TERMS: &[&str] = &[
     "header",
     "digest",
     "size",
+    "OffsetDateTime",
+    "LocalDateTime",
+    "LocalDate",
+    "LocalTime",
 ];
 
 /// Absolute namespace under which every vocabulary term is derived.

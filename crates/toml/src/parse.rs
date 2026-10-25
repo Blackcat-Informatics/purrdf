@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! TOML 1.1 grammar (https://toml.io/en/v1.1.0), with explicit container frames.
+//! [TOML 1.1 grammar](https://toml.io/en/v1.1.0), with explicit container frames.
 //! Table declaration identity is resolved against arena parents, never a flattened
 //! dotted string: quoted dots and distinct array elements cannot alias.
 
@@ -114,11 +114,14 @@ impl Reader<'_> {
         })
     }
     fn charge(&mut self, bytes: u64) -> Result<(), TomlError> {
-        self.retained = self.retained.checked_add(bytes).ok_or(TomlError::Limit {
-            location: self.location(),
-            resource: "model bytes",
-            limit: self.bounds.max_model_bytes,
-        })?;
+        self.retained = self
+            .retained
+            .checked_add(bytes)
+            .ok_or_else(|| TomlError::Limit {
+                location: self.location(),
+                resource: "model bytes",
+                limit: self.bounds.max_model_bytes,
+            })?;
         if self.retained > self.bounds.max_model_bytes {
             return self.limit("model bytes", self.bounds.max_model_bytes);
         }
@@ -290,12 +293,14 @@ impl Reader<'_> {
                         scalar
                     }
                     Some(b'x') => {
-                        let digits = self.text.as_bytes().get(self.at + 1..self.at + 3).ok_or(
-                            TomlError::Syntax {
+                        let digits = self
+                            .text
+                            .as_bytes()
+                            .get(self.at + 1..self.at + 3)
+                            .ok_or_else(|| TomlError::Syntax {
                                 location: self.location(),
                                 expected: "two hexadecimal digits",
-                            },
-                        )?;
+                            })?;
                         let encoded = [b'\\', b'u', b'0', b'0', digits[0], digits[1]];
                         let (scalar, _) =
                             purrdf_lex::terminals::decode_uchar(&encoded).map_err(|_| {
@@ -313,12 +318,13 @@ impl Reader<'_> {
                     }
                     Some(b'\'') | None => return self.fail("a TOML basic-string escape"),
                     Some(letter) => {
-                        let scalar = purrdf_lex::terminals::echar_value(letter).ok_or(
-                            TomlError::Syntax {
-                                location: self.location(),
-                                expected: "a TOML basic-string escape",
-                            },
-                        )?;
+                        let scalar =
+                            purrdf_lex::terminals::echar_value(letter).ok_or_else(|| {
+                                TomlError::Syntax {
+                                    location: self.location(),
+                                    expected: "a TOML basic-string escape",
+                                }
+                            })?;
                         self.at += 1;
                         scalar
                     }
@@ -543,7 +549,7 @@ impl Reader<'_> {
                         .expect("peek found a scalar");
                     self.at += scalar.len_utf8();
                 }
-                let scalar = atom(&self.text[start..self.at]).ok_or(TomlError::Syntax {
+                let scalar = atom(&self.text[start..self.at]).ok_or_else(|| TomlError::Syntax {
                     location: self.location(),
                     expected: "a TOML scalar value",
                 })?;
