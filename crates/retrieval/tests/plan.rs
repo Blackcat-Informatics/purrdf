@@ -2199,7 +2199,10 @@ fn every_plan_refusal_has_its_own_pinned_name() {
             what: "metric",
             tag: 9,
         },
-        PlanError::InvalidUtf8 { what: "producer" },
+        PlanError::InvalidUtf8 {
+            what: "producer",
+            source: String::from_utf8(vec![255]).unwrap_err().utf8_error(),
+        },
         Iri::parse("not an iri").expect_err("a malformed IRI is refused"),
         PlanError::TrailingBytes { extra: 1 },
         PlanError::UndeclaredRowBound {

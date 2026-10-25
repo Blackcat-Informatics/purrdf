@@ -12,12 +12,12 @@
 //! domain-separated BLAKE3 digest over a canonical, versioned, length-framed
 //! encoding, never over a JSON document or a `Hash`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 use purrdf_text::{Fixed, SCALE_DIGITS};
 
 use crate::canonical::{Reader, Writer};
-use crate::error::FusionError;
+use crate::error::{FusionError, ProfileRefusal};
 use crate::id::{FUSION_PROFILE_VERSION, FusionProfileId};
 use crate::iri::Iri;
 use crate::reciprocal_rank::{
@@ -864,94 +864,88 @@ impl FusionProfile {
     /// or begins with a version this build does not write.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, FusionError> {
         let mut reader = Reader::new(bytes);
-        let version = reader
-            .u16()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let version = reader.u16()?;
         if version != FUSION_PROFILE_VERSION {
-            return Err(FusionError::MalformedProfile(format!(
-                "unsupported fusion profile version {version}; this build writes {FUSION_PROFILE_VERSION}"
-            )));
+            return Err(ProfileRefusal::Version {
+                found: version,
+                expected: FUSION_PROFILE_VERSION,
+            }
+            .into());
         }
-        let decay_tag = reader
-            .u8()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
-        let k = reader
-            .u32()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let decay_tag = reader.u8()?;
+        let k = reader.u32()?;
         let Some(decay) = DecayRule::from_tag(decay_tag, k) else {
-            return Err(FusionError::MalformedProfile(format!(
-                "unknown decay rule tag {decay_tag}"
-            )));
+            return Err(ProfileRefusal::DecayTag { found: decay_tag }.into());
         };
-        let count = reader
-            .count()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let count = reader.count()?;
         let mut weights = BTreeMap::new();
         for _ in 0..count {
-            let text = reader
-                .string("fusion profile stratum")
-                .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
-            let stratum = Iri::parse(&text)
-                .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
-            let raw = reader
-                .i128()
-                .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
-            if weights.insert(stratum, Fixed::from_raw(raw)).is_some() {
-                return Err(FusionError::MalformedProfile(
-                    "fusion profile repeats a stratum".to_owned(),
-                ));
+            let text = reader.string("fusion profile stratum")?;
+            let stratum = Iri::parse(&text)?;
+            let raw = reader.i128()?;
+            match weights.entry(stratum) {
+                Entry::Vacant(entry) => {
+                    entry.insert(Fixed::from_raw(raw));
+                }
+                Entry::Occupied(entry) => {
+                    return Err(ProfileRefusal::DuplicateStratum {
+                        stratum: entry.remove_entry().0,
+                    }
+                    .into());
+                }
             }
         }
-        let tie_break_tag = reader
-            .u8()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let tie_break_tag = reader.u8()?;
         if tie_break_tag != TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM {
-            return Err(FusionError::MalformedProfile(format!(
-                "unknown tie-break tag {tie_break_tag}"
-            )));
+            return Err(ProfileRefusal::TieBreakTag {
+                found: tie_break_tag,
+                expected: TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM,
+            }
+            .into());
         }
-        let max_contributions = reader
-            .u32()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let max_contributions = reader.u32()?;
         // The field is derived from the weight count at construction, so bytes
         // that disagree with their own stratum count describe a profile this
         // build cannot build. Decoding them anyway would hand back a value
         // whose canonical bytes are not the bytes it was decoded from.
-        let declared_strata = u32::try_from(weights.len())
-            .map_err(|_| FusionError::MalformedProfile("too many strata".to_owned()))?;
+        let declared_strata =
+            u32::try_from(weights.len()).map_err(|source| ProfileRefusal::StrataCount {
+                count: weights.len(),
+                limit: u32::MAX,
+                source,
+            })?;
         if max_contributions != declared_strata {
-            return Err(FusionError::MalformedProfile(format!(
-                "profile states a contribution maximum of {max_contributions} over \
-                 {declared_strata} strata; a candidate may surface at most once per stratum"
-            )));
+            return Err(ProfileRefusal::Contributions {
+                found: max_contributions,
+                strata: declared_strata,
+            }
+            .into());
         }
-        let scale = reader
-            .u32()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let scale = reader.u32()?;
         if scale != SCALE_DIGITS {
-            return Err(FusionError::MalformedProfile(format!(
-                "profile scale {scale} is not this build's {SCALE_DIGITS}"
-            )));
+            return Err(ProfileRefusal::Scale {
+                found: scale,
+                expected: SCALE_DIGITS,
+            }
+            .into());
         }
-        let rounding = reader
-            .u8()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let rounding = reader.u8()?;
         if rounding != ROUNDING_TRUNCATE_TOWARD_ZERO {
-            return Err(FusionError::MalformedProfile(format!(
-                "unknown rounding tag {rounding}"
-            )));
+            return Err(ProfileRefusal::RoundingTag {
+                found: rounding,
+                expected: ROUNDING_TRUNCATE_TOWARD_ZERO,
+            }
+            .into());
         }
-        let item_encoding = reader
-            .u8()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let item_encoding = reader.u8()?;
         if item_encoding != ITEM_ENCODING_CANONICAL_LEXICAL {
-            return Err(FusionError::MalformedProfile(format!(
-                "unknown item-encoding tag {item_encoding}"
-            )));
+            return Err(ProfileRefusal::ItemEncodingTag {
+                found: item_encoding,
+                expected: ITEM_ENCODING_CANONICAL_LEXICAL,
+            }
+            .into());
         }
-        reader
-            .finish()
-            .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        reader.finish()?;
 
         Self::with_decay(weights, decay)
     }

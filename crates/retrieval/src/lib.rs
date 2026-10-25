@@ -463,7 +463,7 @@ pub use compile::{
     compile,
 };
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
-pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
+pub use error::{CanonicalSection, FusionError, PlanError, ProfileRefusal, StatisticsDimension};
 pub use execute::{
     CandidateExecutionResult, ExecutionError, ExecutionResult, RankedStreamImpl, ReadStratum,
     StratumStream, StreamEnding, execute, execute_scoped_in_read, execute_scoped_within,

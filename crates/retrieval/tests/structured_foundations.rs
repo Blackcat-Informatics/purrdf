@@ -301,7 +301,178 @@ fn retrieval_native_failures_preserve_panicking_caller_cause() {
     );
 }
 
+fn canonical_utf8_refusals_keep_native_causes_after_input_disposal() {
+    use purrdf_core::FastMap;
+    use purrdf_retrieval::{
+        Plan, PlanOrigin, ReadBound, RegistryId, RequestTerm, StatisticsSnapshot,
+    };
+    use std::collections::BTreeMap;
+
+    let text = "prefix λ";
+    let plan = Plan {
+        version: Plan::VERSION,
+        request_terms: vec![RequestTerm::Lexical {
+            text: text.into(),
+            language: None,
+            predicate: None,
+        }],
+        constraints: Vec::new(),
+        read_bound: ReadBound::Complete,
+        producer_bindings: Vec::new(),
+        producer_decisions: Vec::new(),
+        unserved_terms: Vec::new(),
+        stratum_depths: FastMap::default(),
+        stratum_derivations: BTreeMap::default(),
+        statistics_snapshot: StatisticsSnapshot::default(),
+        registry_instance_id: RegistryId::from_raw(7),
+        registry_content_fingerprint: String::new(),
+        origin: PlanOrigin::Deserialized,
+    };
+    let original = plan.canonical_bytes();
+    let decoded = Plan::from_canonical_bytes(&original).unwrap();
+    assert_eq!(decoded, plan);
+    assert_eq!(decoded.id(), plan.id());
+    let start = original
+        .windows(text.len())
+        .position(|part| part == text.as_bytes())
+        .unwrap();
+    for (tail, valid_up_to, error_len) in [([0xce, 0xff], 7, Some(1)), ([b'a', 0xce], 8, None)] {
+        let mut bytes = original.clone();
+        bytes[start + 7..start + text.len()].copy_from_slice(&tail);
+        let error = Plan::from_canonical_bytes(&bytes).unwrap_err();
+        drop(bytes);
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<core::str::Utf8Error>()
+            .unwrap();
+        assert_eq!(native.valid_up_to(), valid_up_to);
+        assert_eq!(native.error_len(), error_len);
+        assert_eq!(error.refusal(), "invalid-utf8");
+        assert_eq!(
+            error.to_string(),
+            "plan canonical encoding carries invalid UTF-8 in lexical text"
+        );
+        let events = Vec::with_capacity(16);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let capture = Capture::read_with_buffer(&error, events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(capture.code, "retrieval-plan-invalid-utf8");
+        assert!(matches!(
+            capture.field("what"),
+            ErrorValue::Code("lexical text")
+        ));
+        let source = capture.child("source");
+        assert_eq!(source.code, "std-utf8");
+        assert!(
+            matches!(source.field("valid_up_to"), ErrorValue::ByteCount(value) if value == valid_up_to as u128)
+        );
+        match (source.field("error_len"), error_len) {
+            (ErrorValue::ByteCount(actual), Some(expected)) => assert_eq!(actual, expected as u128),
+            (ErrorValue::Absent, None) => {}
+            other => panic!("the original UTF-8 sequence length was lost: {other:?}"),
+        }
+    }
+}
+
+fn profile_decoder_refusals_keep_original_causes_and_owners() {
+    use purrdf_retrieval::{DecayRule, Fixed, FusionProfile, Iri};
+    use std::collections::BTreeMap;
+
+    let spelling = "https://example.org/λ";
+    let profile = FusionProfile::with_decay(
+        BTreeMap::from([(Iri::parse(spelling).unwrap(), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: 60 },
+    )
+    .unwrap();
+    let original = profile.canonical_bytes();
+    let decoded = FusionProfile::from_canonical_bytes(&original).unwrap();
+    assert_eq!(decoded, profile);
+    assert_eq!(decoded.id(), profile.id());
+    let start = original
+        .windows(spelling.len())
+        .position(|part| part == spelling.as_bytes())
+        .unwrap();
+    for (tail, valid_up_to, error_len) in [
+        ([0xce, 0xff], spelling.len() - 2, Some(1)),
+        ([b'a', 0xce], spelling.len() - 1, None),
+    ] {
+        let mut bytes = original.clone();
+        bytes[start + spelling.len() - 2..start + spelling.len()].copy_from_slice(&tail);
+        let error = FusionProfile::from_canonical_bytes(&bytes).unwrap_err();
+        drop(bytes);
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<core::str::Utf8Error>()
+            .unwrap();
+        assert_eq!(native.valid_up_to(), valid_up_to);
+        assert_eq!(native.error_len(), error_len);
+        assert_eq!(
+            error.to_string(),
+            "malformed fusion profile: plan canonical encoding carries invalid UTF-8 in fusion profile stratum"
+        );
+        let events = Vec::with_capacity(24);
+        let reason_events = Vec::with_capacity(8);
+        let plan_events = Vec::with_capacity(8);
+        let utf8_events = Vec::with_capacity(8);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let capture = Capture::read_with_buffer(&error, events);
+        let ErrorValue::Cause(reason) = capture.field("reason") else {
+            panic!("the profile reason must remain a borrowed cause");
+        };
+        let reason = Capture::read_with_buffer(reason, reason_events);
+        let ErrorValue::Cause(plan) = reason.field("source") else {
+            panic!("the profile must retain its original plan refusal");
+        };
+        let plan = Capture::read_with_buffer(plan, plan_events);
+        let ErrorValue::Cause(utf8) = plan.field("source") else {
+            panic!("the plan must retain its original UTF-8 refusal");
+        };
+        let utf8 = Capture::read_with_buffer(utf8, utf8_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(capture.code, "fusion-malformed-profile");
+        assert_eq!(reason.code, "fusion-profile-decode");
+        assert!(matches!(
+            plan.field("what"),
+            ErrorValue::Code("fusion profile stratum")
+        ));
+        assert_eq!(utf8.code, "std-utf8");
+        assert!(
+            matches!(utf8.field("valid_up_to"), ErrorValue::ByteCount(value) if value == valid_up_to as u128)
+        );
+        match (utf8.field("error_len"), error_len) {
+            (ErrorValue::ByteCount(actual), Some(expected)) => assert_eq!(actual, expected as u128),
+            (ErrorValue::Absent, None) => {}
+            other => panic!("the profile lost its original UTF-8 sequence length: {other:?}"),
+        }
+    }
+    let mut bytes = original;
+    bytes[start] = b' ';
+    let error = FusionProfile::from_canonical_bytes(&bytes).unwrap_err();
+    drop(bytes);
+    let native = std::error::Error::source(&error)
+        .unwrap()
+        .source()
+        .unwrap()
+        .source()
+        .unwrap()
+        .downcast_ref::<purrdf_core::IriError>()
+        .unwrap();
+    let capture = Capture::read(&error);
+    let plan = capture.child("reason").child("source");
+    assert_eq!(plan.code, "retrieval-plan-invalid-iri");
+    assert!(matches!(plan.field("text"), ErrorValue::Iri(text) if text == " ttps://example.org/λ"));
+    assert_eq!(plan.child("source").code, Capture::read(native).code);
+}
+
 purrdf_testkit::harness_main!(
+    profile_decoder_refusals_keep_original_causes_and_owners,
+    canonical_utf8_refusals_keep_native_causes_after_input_disposal,
     retrieval_actual_iri_failures_keep_original_nested_cause,
     retrieval_protocol_lists_preserve_order_and_full_width_counts,
     retrieval_request_views_keep_ieee_bits_and_optional_native_values,

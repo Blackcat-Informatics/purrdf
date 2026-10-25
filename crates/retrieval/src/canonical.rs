@@ -307,7 +307,7 @@ impl<'a> Reader<'a> {
         let bytes = self.bytes()?;
         core::str::from_utf8(bytes)
             .map(str::to_owned)
-            .map_err(|_| PlanError::InvalidUtf8 { what })
+            .map_err(|source| PlanError::InvalidUtf8 { what, source })
     }
 
     /// Read a present/absent discriminant and, when present, a framed string.

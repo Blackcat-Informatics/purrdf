@@ -2829,11 +2829,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             let selected = self.select_emittable(&mut visits);
             self.selection_visits += visits;
             if let Some(id) = selected? {
-                let state = self.frontier.remove(&id).ok_or_else(|| {
-                    FusionError::MalformedProfile(
-                        "selected candidate vanished from the frontier".to_owned(),
-                    )
-                })?;
+                let state = self
+                    .frontier
+                    .remove(&id)
+                    .ok_or_else(|| crate::ProfileRefusal::CandidateVanished { item: id.clone() })?;
                 self.unfile(&id, &state)?;
                 // Whether this row won its place on score or on the tie-break.
                 // Asked here rather than inside `select_emittable`, because that
@@ -4538,10 +4537,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// Answered as the engine-invariant error the frontier's own vanished
     /// candidate is, rather than by a panic.
     fn unfiled(id: &CandidateId) -> FusionError {
-        FusionError::MalformedProfile(format!(
-            "frontier candidate {} is missing from the selection index",
-            id.as_str()
-        ))
+        crate::ProfileRefusal::CandidateUnindexed { item: id.clone() }.into()
     }
 
     /// Take the candidate `state` describes out of [`SelectionIndex`], as it
@@ -4926,11 +4922,11 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 }
                 .into());
             }
-            return Err(FusionError::MalformedProfile(format!(
-                "stream {index} named candidate {} after it certified without having \
-                 contributed to it, which certification forbids",
-                head.item.as_str()
-            )));
+            return Err(crate::ProfileRefusal::LateContribution {
+                stream: index,
+                item: head.item,
+            }
+            .into());
         }
 
         // The candidate's next state is derived before the frontier is touched,
