@@ -190,7 +190,7 @@ fn full_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
 where
@@ -212,7 +212,7 @@ fn factor_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     scan: JoinScan,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
@@ -246,7 +246,7 @@ fn reference_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     scan: JoinScan,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
@@ -286,24 +286,25 @@ where
         )
         .map_err(EvalError::Source)?;
     }
-    let binary = |position, partial: Vec<SlotSolution<D::Id, N>>, governor: &mut StepGovernor| {
-        let extend = if seed.is_some() {
-            extend_rebound_solutions
-        } else {
-            extend_slot_solutions
+    let binary =
+        |position, partial: Vec<SlotSolution<D::Id, N>>, governor: &mut StepGovernor<'_>| {
+            let extend = if seed.is_some() {
+                extend_rebound_solutions
+            } else {
+                extend_slot_solutions
+            };
+            extend(
+                entry.plan.operator_at(position),
+                snapshot.rel,
+                entry.delta,
+                snapshot
+                    .delta_indexes
+                    .expect("the factor's delta indexes were prepared"),
+                scan.at(position),
+                partial,
+                governor,
+            )
         };
-        extend(
-            entry.plan.operator_at(position),
-            snapshot.rel,
-            entry.delta,
-            snapshot
-                .delta_indexes
-                .expect("the factor's delta indexes were prepared"),
-            scan.at(position),
-            partial,
-            governor,
-        )
-    };
     if !entry.plan.has_cyclic_subplan() {
         for &position in &factor.positions {
             if seed == Some(position) {
@@ -420,7 +421,7 @@ fn new_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
 where
@@ -462,7 +463,7 @@ type FactorRelations<I, const N: usize> = Vec<Vec<SlotSolution<I, N>>>;
 fn partial_relations<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<FactorRelations<D::Id, N>, EvalError<D::Error>>
 where
@@ -760,7 +761,7 @@ where
     fn visit(
         &self,
         buffer: &mut RoundBuffer<'r, D::Id, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         let mut frame = product::Frame::new(&self.tables);
@@ -774,7 +775,7 @@ where
     fn reference_visit(
         &self,
         buffer: &mut RoundBuffer<'r, D::Id, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         let mut cursors: Vec<_> = self.tables.iter().map(|table| table.iter()).collect();
@@ -808,7 +809,7 @@ where
         &self,
         chosen: &[Witnesses<'_, D::Id, N>],
         buffer: &mut RoundBuffer<'r, D::Id, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         if !governor.charge() {
@@ -871,7 +872,7 @@ where
 pub(super) fn evaluate<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
@@ -883,7 +884,7 @@ where
 pub(super) fn evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
@@ -911,7 +912,7 @@ where
 fn reference_evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
@@ -1043,7 +1044,7 @@ where
 fn ground_blocked<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
 ) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>>
 where
@@ -1324,7 +1325,10 @@ mod tests {
                 execution,
                 JoinStrategy::Planned,
                 u64::MAX,
-                &NoGuards,
+                super::super::RoundControl {
+                    guards: &NoGuards,
+                    stop: None,
+                },
             )
             .unwrap();
             assert_eq!(round.entries.len(), 4);
@@ -1362,7 +1366,10 @@ mod tests {
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
                 0,
-                &NoGuards,
+                super::super::RoundControl {
+                    guards: &NoGuards,
+                    stop: None
+                },
             ),
             Err(crate::seminaive::EvalError::Source(SourceLost(99)))
         ));

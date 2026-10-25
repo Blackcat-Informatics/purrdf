@@ -45,6 +45,18 @@ handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
 
 ## Explicit capacity limits
 
+`purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed
+`Option<&dyn StopSignal>`. `Inference::usage()` retains the complete original
+`BudgetReport`; `RuleLimitExceeded::usage()` exposes it after exhaustion.
+`SrlError::LimitExceeded` and `RulesError::LimitExceeded` now carry
+`Box<RuleLimitExceeded>`. Update explicit constructions and exhaustive matches;
+method access through a borrowed payload remains unchanged. Their standard
+error sources still borrow the original `RuleLimitExceeded` directly.
+Handle the new `Stopped { cause }` variants separately from resource limits.
+Their native cause owns the stopped evaluator's usage report. Cancellation is
+cooperative between work boundaries, including within scheduled rule groups;
+it never returns an unfinished inference result or changes contract identity.
+
 Unstated Datalog stored-fact, join-step and term-arena settings now impose no
 logical ceiling on every target. Physical storage admission and counter
 representation still apply. Select finite limits explicitly; effective settings

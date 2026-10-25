@@ -89,7 +89,7 @@ impl<I: TermIdentity> Invocation<I> {
         &mut self,
         guards: &dyn GuardEvaluator<D, N>,
         call: &GuardCall<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), EvalError<D::Error>>
     where
         Arity<N>: StoreShape<N>,
@@ -107,7 +107,7 @@ impl<I: TermIdentity> Invocation<I> {
     pub(super) fn advance_with<D: TermDictionary<Id = I>, const N: usize>(
         &mut self,
         context: &Context<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         invoke: impl FnOnce() -> Result<GuardRows<I>, EvalError<D::Error>>,
     ) -> Result<(), EvalError<D::Error>>
     where
@@ -119,6 +119,9 @@ impl<I: TermIdentity> Invocation<I> {
             .check_read()
             .map_err(EvalError::Source)?;
         if matches!(self, Self::Uncalled) {
+            if governor.stopped() {
+                return Ok(());
+            }
             *self = Self::Returned {
                 rows: invoke()?,
                 next: 0,
@@ -202,7 +205,7 @@ where
         entry: RuleEntry<'_, N>,
         rel: &RelationStore<D, N>,
         guards: &dyn GuardEvaluator<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), EvalError<D::Error>> {
         rel.interner().check_read().map_err(EvalError::Source)?;
         while self.position < self.end {

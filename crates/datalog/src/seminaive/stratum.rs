@@ -4,8 +4,8 @@
 //! One stratum's original delta, round and publication owners across refusal.
 
 use super::{
-    BudgetResource, Delta, EvalError, Executable, FixpointState, RoundSnapshot, RuleEntry,
-    RuleRuntime, StratumRun, TermDictionary, TermId, TermIdentity, check_budget, commit,
+    BudgetResource, Delta, EvalError, Executable, FixpointState, RoundControl, RoundSnapshot,
+    RuleEntry, RuleRuntime, StratumRun, TermDictionary, TermId, TermIdentity, check_budget, commit,
     evidence::RuleEvidence, is_stopped, round,
 };
 use crate::store::{Arity, StoreShape};
@@ -140,7 +140,10 @@ where
                         run.execution,
                         run.strategy,
                         state.allowance(),
-                        run.guards,
+                        RoundControl {
+                            guards: run.guards,
+                            stop: None,
+                        },
                         evidence,
                     )?;
                     state.join_steps = state

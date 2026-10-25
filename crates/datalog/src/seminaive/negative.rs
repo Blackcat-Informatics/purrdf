@@ -80,7 +80,7 @@ where
     pub(super) fn next<const ALL: bool, D: TermDictionary<Id = I>>(
         &mut self,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> ScanStep<I, N> {
         loop {
             if self.rows.is_none() {
@@ -193,7 +193,7 @@ where
         atom: &NegatedAtom<N>,
         solution: &SlotSolution<I, N>,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         mut visit: impl FnMut(RowId) -> Result<bool, E>,
         source_error: impl Fn(D::Error) -> E,
     ) -> Result<bool, E> {
@@ -293,7 +293,7 @@ where
         atom: &NegatedAtom<N>,
         solution: &mut SlotSolution<I, N>,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
     ) -> Result<(), super::EvalError<D::Error>> {
         use super::EvalError;

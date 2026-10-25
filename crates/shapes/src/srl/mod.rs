@@ -37,6 +37,7 @@ mod syntax;
 
 pub use document::{
     CheckLevel, CheckedRuleSet, ImportResolver, InferOptions, RuleSetDocument, SrlError, SrlRule,
-    Stratum, UNRESOLVED_IMPORT_MESSAGE, check, infer, infer_triples, parse, parse_and_check,
+    Stratum, UNRESOLVED_IMPORT_MESSAGE, check, infer, infer_triples, infer_triples_until,
+    infer_until, parse, parse_and_check,
 };
 pub use eval::{Explanation, Inference, evaluate};

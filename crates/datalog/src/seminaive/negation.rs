@@ -139,7 +139,7 @@ where
         &mut self,
         runtime: &NegationRuntime<N>,
         probe: GroupProbe<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         probe
@@ -537,7 +537,7 @@ mod tests {
     fn oracle<const N: usize>(
         runtime: &NegationRuntime<N>,
         probe: GroupProbe<'_, HostDictionary, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn RuleEvidence<HostDictionary, N>>,
     ) -> (bool, Option<EvidenceId>)
     where

@@ -172,7 +172,7 @@ where
         &mut self,
         plan: &RulePlan<N>,
         snapshot: JoinSnapshot<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), D::Error> {
         snapshot.rel.interner().check_read()?;
         while !self.is_complete() {
@@ -345,7 +345,7 @@ where
         &mut self,
         plan: &RulePlan<N>,
         snapshot: JoinSnapshot<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), D::Error> {
         snapshot.rel.interner().check_read()?;
         if self.unit_pending {

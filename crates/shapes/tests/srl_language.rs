@@ -68,6 +68,190 @@ fn syntax_error(text: &str) -> String {
     }
 }
 
+/// A deterministic host signal for cuts inside a single scheduled group.
+#[derive(Debug)]
+struct PollStop(std::sync::atomic::AtomicU64);
+
+impl purrdf_core::StopSignal for PollStop {
+    fn stopped(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.0
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(1)
+            })
+            .is_err()
+    }
+}
+
+/// Exercise the public governed API and retain usage after the physical input drops.
+fn governed_run(
+    document: &srl::RuleSetDocument,
+    source: &str,
+    options: &InferOptions,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+    graph_free: bool,
+) -> Result<purrdf_datalog::seminaive::BudgetReport, SrlError> {
+    let source = data(source);
+    if graph_free {
+        let compact =
+            purrdf_core::TripleDataset::try_from(Arc::try_unwrap(source).unwrap()).unwrap();
+        let read = compact.read().unwrap();
+        srl::infer_triples_until(document, &read, options, stop).map(|result| *result.usage())
+    } else {
+        srl::infer_until(document, &source, options, stop).map(|result| *result.usage())
+    }
+}
+
+/// Cancellation preserves the original native error and its complete usage record.
+fn stopped_usage(error: &SrlError) -> purrdf_datalog::seminaive::BudgetReport {
+    use purrdf_datalog::seminaive::EvalError;
+    assert!(std::error::Error::source(error).unwrap().is::<EvalError>());
+    let SrlError::Stopped { cause } = error else {
+        panic!("expected a stopped inference, got {error:?}");
+    };
+    let EvalError::Stopped { report } = cause.as_ref() else {
+        panic!("expected the native stopped cause, got {cause:?}");
+    };
+    *report
+}
+
+/// Empty and nonempty programs stop before success; untripped runs keep exact usage.
+fn governed_inference_preserves_usage_and_distinguishes_stop() {
+    let source = ":a :p :b .".to_owned();
+    for text in ["", "RULE { ?s :q ?o } WHERE { ?s :p ?o }"] {
+        let document = srl::parse_and_check(&rules(text), None).unwrap();
+        for graph_free in [false, true] {
+            let options = InferOptions::default();
+            let baseline = governed_run(&document, &source, &options, None, graph_free).unwrap();
+            let running = PollStop(std::sync::atomic::AtomicU64::new(u64::MAX));
+            assert_eq!(
+                governed_run(&document, &source, &options, Some(&running), graph_free).unwrap(),
+                baseline
+            );
+            assert_eq!(
+                governed_run(&document, &source, &options, None, graph_free).unwrap(),
+                baseline
+            );
+            let stopped = PollStop(std::sync::atomic::AtomicU64::new(0));
+            let error =
+                governed_run(&document, &source, &options, Some(&stopped), graph_free).unwrap_err();
+            let report = stopped_usage(&error);
+            assert_eq!(report.join_steps(), 0);
+            assert_eq!(report.stored_facts(), 1);
+
+            let error = governed_run(
+                &document,
+                &source,
+                &InferOptions::default().with_max_stored_facts(0),
+                Some(&stopped),
+                graph_free,
+            )
+            .unwrap_err();
+            let SrlError::LimitExceeded(limit) = error else {
+                panic!("initial admission must precede cancellation");
+            };
+            assert_eq!(limit.usage().observed_stored_facts(), 1);
+            assert_eq!(limit.usage().stored_fact_limit(), 0);
+        }
+    }
+}
+
+/// A stop inside one group keeps its work but commits none of its partial winners.
+fn governed_inference_stops_inside_candidate_and_reject_only_scans() {
+    let mut text = String::new();
+    for index in 0..128 {
+        writeln!(
+            text,
+            ":a{} :p :b{index} . :b{index} :q :c{index} . :c{index} :r :a{} .",
+            index * 2,
+            index * 2 + 1
+        )
+        .unwrap();
+    }
+    let source = text;
+    let options = InferOptions::default();
+    for (text, charged) in [
+        ("RULE { ?s :copy ?o } WHERE { ?s :p ?o }", true),
+        ("RULE { ?s :copy ?s } WHERE { ?s :p ?s }", false),
+        (
+            "RULE { ?x :copy ?z } WHERE { ?x :p ?y . ?y :q ?z . ?z :r ?x }",
+            false,
+        ),
+    ] {
+        let document = srl::parse_and_check(&rules(text), None).unwrap();
+        for graph_free in [false, true] {
+            let baseline = governed_run(&document, &source, &options, None, graph_free).unwrap();
+            let signal = PollStop(std::sync::atomic::AtomicU64::new(64));
+            let error = governed_run(&document, &source, &options, Some(&signal), graph_free)
+                .expect_err("one scheduled group must observe a host stop during its work");
+            let report = stopped_usage(&error);
+            assert_eq!(report.stored_facts(), 384);
+            assert_eq!(report.join_steps() > 0, charged);
+            assert!(report.join_steps() < baseline.join_steps() || !charged);
+            assert_eq!(
+                governed_run(&document, &source, &options, None, graph_free).unwrap(),
+                baseline
+            );
+        }
+    }
+}
+
+/// Every existing SRL limit carries all measured resources, not selected counters only.
+fn governed_limits_keep_the_complete_usage_report() {
+    use purrdf_shapes::rules::RuleLimit;
+    let source = ":a :p :b .".to_owned();
+    let document = srl::parse_and_check(
+        &rules("RULE { ?s :q ?fresh } WHERE { ?s :p ?o SET(?fresh := BNODE()) }"),
+        None,
+    )
+    .unwrap();
+    for graph_free in [false, true] {
+        let baseline = governed_run(
+            &document,
+            &source,
+            &InferOptions::default(),
+            None,
+            graph_free,
+        )
+        .unwrap();
+        assert!(baseline.generated_terms() > 0);
+        for (options, expected) in [
+            (
+                InferOptions::default().with_max_stored_facts(1),
+                RuleLimit::StoredFacts,
+            ),
+            (
+                InferOptions::default().with_max_join_steps(0),
+                RuleLimit::JoinSteps,
+            ),
+            (
+                InferOptions::default().with_max_generated_terms(0),
+                RuleLimit::GeneratedTerms,
+            ),
+            (
+                InferOptions::default().with_max_term_generating_rounds(0),
+                RuleLimit::TermGeneratingRounds,
+            ),
+        ] {
+            let error = governed_run(&document, &source, &options, None, graph_free).unwrap_err();
+            let SrlError::LimitExceeded(limit) = &error else {
+                panic!("expected original limit refusal, got {error:?}");
+            };
+            let cause = std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<purrdf_shapes::rules::RuleLimitExceeded>()
+                .expect("the original limit payload remains the direct native source");
+            assert!(std::ptr::eq(cause, limit.as_ref()));
+            assert_eq!(limit.limit(), expected);
+            let usage = limit.usage();
+            assert_eq!(usage.input_terms(), baseline.input_terms());
+            assert!(usage.term_arena_bytes() > 0);
+            assert!(usage.join_steps() > 0);
+            assert!(usage.stored_facts() >= 1);
+        }
+    }
+}
+
 /// The same parsed program runs with three physical positions, including immutable
 /// Base reads, variable predicates, recursion, DATA and a legal empty head.
 fn triple_carrier_runs_the_public_rl_program_without_quad_storage() {
@@ -99,6 +283,15 @@ fn triple_carrier_runs_the_public_rl_program_without_quad_storage() {
     assert_eq!(inference.inferred(), original.inferred());
     assert_eq!(inference.proof_text(), original.proof_text());
     assert_ne!(inference.contract_hash(), original.contract_hash());
+    let running = PollStop(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let governed = srl::infer_until(&document, &quad, &options, Some(&running)).unwrap();
+    assert_eq!(governed.inferred(), original.inferred());
+    assert_eq!(governed.proof_text(), original.proof_text());
+    assert_eq!(governed.contract_hash(), original.contract_hash());
+    let governed = srl::infer_triples_until(&document, &read, &options, Some(&running)).unwrap();
+    assert_eq!(governed.inferred(), inference.inferred());
+    assert_eq!(governed.proof_text(), inference.proof_text());
+    assert_eq!(governed.contract_hash(), inference.contract_hash());
     let mut expected = vec![
         [iri("c"), iri("p"), iri("d")],
         [iri("a"), iri("q"), iri("b")],
@@ -129,6 +322,11 @@ fn triple_carrier_runs_the_public_rl_program_without_quad_storage() {
     assert_eq!(cause, TripleReadError::NamedGraphsUnsupported);
     assert!(matches!(
         srl::infer_triples(&document, &read, &options),
+        Err(SrlError::TripleSource(error)) if error == cause
+    ));
+    let stopped = PollStop(std::sync::atomic::AtomicU64::new(0));
+    assert!(matches!(
+        srl::infer_triples_until(&document, &read, &options, Some(&stopped)),
         Err(SrlError::TripleSource(error)) if error == cause
     ));
     let fresh = compact.read().unwrap();
@@ -813,6 +1011,9 @@ fn a_closure_deeper_than_the_floor_completes() {
 }
 
 purrdf_testkit::harness_main!(
+    governed_inference_preserves_usage_and_distinguishes_stop,
+    governed_inference_stops_inside_candidate_and_reject_only_scans,
+    governed_limits_keep_the_complete_usage_report,
     triple_carrier_runs_the_public_rl_program_without_quad_storage,
     triple_rl_keeps_statement_roles_and_scoped_blank_identity,
     multi_character_terminals_must_be_contiguous,

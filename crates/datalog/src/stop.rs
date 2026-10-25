@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The caller-owned **stop signal** a long fixpoint polls at its round boundary.
+//! The caller-owned **stop signal** a long fixpoint polls at owned work boundaries.
 //!
 //! # A stop signal is not a limit, and that distinction is the whole module
 //!
@@ -13,8 +13,9 @@
 //!
 //! A [`StopSignal`] is the other thing. It carries no number and is part of no identity,
 //! because it changes no answer. A run that is not stopped returns precisely the answer
-//! it would have returned with no signal attached — the poll is a load and a branch at a
-//! round boundary, and the rounds are the ones the fixpoint was going to run anyway — and a
+//! it would have returned with no signal attached. Scheduled evaluation also polls
+//! candidate, scan and callback boundaries within a round. Unscheduled and session
+//! entry points retain their documented boundary checks. A
 //! complete-only call that IS stopped returns a typed refusal
 //! ([`EvalError::Stopped`](crate::seminaive::EvalError::Stopped),
 //! [`ChaseError::Stopped`](crate::chase::ChaseError::Stopped)) carrying the consumption
@@ -33,7 +34,8 @@
 //! An implementation MUST latch — once [`StopSignal::stopped`] answers `true` it answers
 //! `true` forever. A signal that could un-fire would make "did this run finish?" depend on
 //! *when* the fixpoint happened to look, which is the nondeterminism this crate exists
-//! without. It MUST also be cheap (it is polled once per round) and it MUST NOT depend on
+//! without. It MUST also be cheap (scheduled execution polls inside hot work loops)
+//! and it MUST NOT depend on
 //! the data: a signal that fires as a function of what has been derived would be a budget
 //! wearing a different hat, and would reintroduce exactly the answer-affecting optionality
 //! the module opens by refusing.

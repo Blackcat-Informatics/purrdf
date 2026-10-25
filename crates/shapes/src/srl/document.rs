@@ -113,7 +113,12 @@ pub enum SrlError {
     /// term-generating round limit, the generated-term budget, the stored-fact limit or
     /// the join-step limit. Names the limit, the numbers, the knob that raises it and, for
     /// the two term limits, the rules that inferred a new term in the last round.
-    LimitExceeded(crate::rules::RuleLimitExceeded),
+    LimitExceeded(Box<crate::rules::RuleLimitExceeded>),
+    /// Caller cancellation refused a complete inference result.
+    Stopped {
+        /// Original native stopped error, including consumed resources.
+        cause: Box<EvalError>,
+    },
     /// Evaluation failed: a guard error, the fixed term-arena ceiling passed, or an
     /// inferred triple that is not an RDF triple.
     Evaluation {
@@ -174,6 +179,7 @@ impl fmt::Display for SrlError {
             Self::LimitExceeded(limit) => {
                 write!(f, "SPARQL 1.2 RL evaluation failed: {limit}")
             }
+            Self::Stopped { cause } => cause.fmt(f),
             Self::Evaluation { message } => write!(f, "SPARQL 1.2 RL evaluation failed: {message}"),
         }
     }
@@ -184,7 +190,8 @@ impl std::error::Error for SrlError {
         match self {
             Self::Shapes(error) => Some(error),
             Self::TripleSource(error) => Some(error),
-            Self::LimitExceeded(error) => Some(error),
+            Self::LimitExceeded(error) => Some(error.as_ref()),
+            Self::Stopped { cause } => Some(cause.as_ref()),
             _ => None,
         }
     }
@@ -607,15 +614,34 @@ pub fn infer(
     base: &RdfDataset,
     options: &InferOptions,
 ) -> Result<Inference, SrlError> {
+    infer_until(document, base, options, None)
+}
+
+/// Infer with a borrowed cooperative stop signal, outside the program identity.
+///
+/// Document, source and admission errors retain their precedence. A stopped run
+/// returns its native cause and usage, never a partially inferred graph.
+///
+/// # Errors
+///
+/// The errors of [`infer`], plus [`SrlError::Stopped`].
+pub fn infer_until(
+    document: &RuleSetDocument,
+    base: &RdfDataset,
+    options: &InferOptions,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<Inference, SrlError> {
     document.check_well_formed()?;
     document.stratify()?;
     let projected = crate::engine::project_dataset(base).map_err(SrlError::Shapes)?;
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
-    eval::evaluate(
+    eval::evaluate_with(
         &document.rule_set(),
         &data,
         &Shapes::default(),
         &options.rules,
+        eval::Reexecution::Incremental,
+        stop,
     )
     .map_err(|error| document.evaluation_error(error))
 }
@@ -635,11 +661,25 @@ pub fn infer_triples(
     base: &purrdf_core::TripleRead<'_>,
     options: &InferOptions,
 ) -> Result<Inference<purrdf_core::TripleDataset>, SrlError> {
+    infer_triples_until(document, base, options, None)
+}
+
+/// Graph-free inference with the same cooperative stop and usage contract.
+///
+/// # Errors
+///
+/// Original input failures and the errors of [`infer_until`].
+pub fn infer_triples_until(
+    document: &RuleSetDocument,
+    base: &purrdf_core::TripleRead<'_>,
+    options: &InferOptions,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<Inference<purrdf_core::TripleDataset>, SrlError> {
     use purrdf_core::DatasetView as _;
     base.checked_read(|base| {
         document.check_well_formed()?;
         document.stratify()?;
-        eval::evaluate_triples(&document.rule_set(), base, &options.rules)
+        eval::evaluate_triples(&document.rule_set(), base, &options.rules, stop)
             .map_err(|error| document.evaluation_error(error))
     })
     .map_err(SrlError::TripleSource)?
@@ -655,6 +695,7 @@ impl RuleSetDocument {
                 SrlError::LimitExceeded(limit)
             }
             crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+            crate::rules::RulesError::Stopped { cause } => SrlError::Stopped { cause },
         }
     }
 

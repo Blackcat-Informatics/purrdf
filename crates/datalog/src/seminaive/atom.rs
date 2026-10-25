@@ -100,7 +100,7 @@ where
         delta: Delta,
         indexes: &DeltaIndexes<I>,
         access: Access,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), D::Error> {
         let (scan, rebound) = match access {
             Access::Planned(scan) => (scan, false),
@@ -125,7 +125,7 @@ where
         delta: Delta,
         indexes: &DeltaIndexes<I>,
         rebound: bool,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), D::Error> {
         if rebound {
             return self.advance::<SCAN, INDEX_REBOUND, D>(operator, rel, delta, indexes, governor);
@@ -155,7 +155,7 @@ where
         rel: &RelationStore<D, N>,
         delta: Delta,
         indexes: &DeltaIndexes<I>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), D::Error> {
         let rel = rel.read_source(operator.shape().read_source());
         rel.interner().check_read()?;
@@ -258,11 +258,14 @@ where
         source: &Source<'_, D, N>,
         input: &SlotSolution<I, N>,
         output: &mut Vec<SlotSolution<I, N>>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> bool {
         let shape = operator.shape();
         let Source { rel, run, delta } = *source;
         loop {
+            if governor.stopped() {
+                return false;
+            }
             if self.active.is_none() {
                 let Some(partition) = self.partitions.next(rel, run) else {
                     return true;
@@ -279,6 +282,9 @@ where
                     .expect("the suspended partition belongs to its original delta")
             });
             loop {
+                if governor.stopped() {
+                    return false;
+                }
                 if self.pending.is_none() {
                     let Some((subject, object, row)) = rows.next(partition.arrangement()) else {
                         break;
