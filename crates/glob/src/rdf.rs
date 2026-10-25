@@ -345,14 +345,19 @@ fn walk(
         move |cell| sole(data, cell, schema.rest),
     )
 }
-fn check_fields(data: &RdfDataset, node: TermId, allowed: &[Option<TermId>]) -> Result<(), Reason> {
+fn check_fields(
+    data: &RdfDataset,
+    node: TermId,
+    role: usize,
+    allowed: &[Option<TermId>],
+) -> Result<(), Reason> {
     for quad in
         DatasetView::quads_for_pattern(data, Some(node), None, None, purrdf_core::GraphMatch::Any)
     {
         if quad.g.is_some() || !allowed.contains(&Some(quad.p)) {
             return Err(Reason::Schema {
-                node: quad.p,
-                role: 0,
+                node,
+                role,
                 code: "unknown-or-named-field",
             });
         }
@@ -366,7 +371,7 @@ fn schema(
 ) -> Result<(Schema, Mode, usize), Reason> {
     let ids = vocab.terms.map(|iri| data.term_id_by_iri(iri));
     let ty = data.term_id_by_iri(TYPE);
-    check_fields(data, root, &[ty, ids[2], ids[3], ids[4], ids[5], ids[6]])?;
+    check_fields(data, root, 0, &[ty, ids[2], ids[3], ids[4], ids[5], ids[6]])?;
     if required(data, root, ty, 0)?
         != ids[0].ok_or(Reason::Schema {
             node: root,
@@ -433,7 +438,7 @@ fn schema(
                 });
             }
         }
-        check_fields(data, member, &[ty, ids[7]])?;
+        check_fields(data, member, 1, &[ty, ids[7]])?;
         if required(data, member, ty, 1)?
             != ids[1].ok_or(Reason::Schema {
                 node: member,

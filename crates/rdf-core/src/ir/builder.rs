@@ -2443,18 +2443,18 @@ impl RdfDatasetBuilder {
                     language,
                     direction,
                 } => {
-                    let datatype = imported.pop().expect("a literal's datatype is imported");
+                    let _ = imported.pop().expect("a literal's datatype is imported");
+                    let TermRef::Literal {
+                        datatype: source_datatype,
+                        ..
+                    } = resolve(id)
+                    else {
+                        unreachable!("literal import step retains its source literal")
+                    };
+                    let TermRef::Iri(datatype_iri) = resolve(source_datatype) else {
+                        unreachable!("validated literal datatype is an IRI")
+                    };
                     let mapped = if matches!(binding, ImportBinding::Fresh(_)) {
-                        let TermRef::Literal {
-                            datatype: source_datatype,
-                            ..
-                        } = resolve(id)
-                        else {
-                            unreachable!("literal import step retains its source literal")
-                        };
-                        let TermRef::Iri(datatype_iri) = resolve(source_datatype) else {
-                            unreachable!("validated literal datatype is an IRI")
-                        };
                         let lexical = crate::cdt_blank::bind_cdt_blank_labels_lazy_with_memory(
                             lexical,
                             datatype_iri,
@@ -2479,13 +2479,11 @@ impl RdfDatasetBuilder {
                         }
                         mapped
                     } else {
-                        self.interner.intern_with_memory(
-                            TermLookup::Literal {
-                                lexical,
-                                datatype,
-                                language,
-                                direction,
-                            },
+                        self.intern_literal_parts_with_memory(
+                            lexical,
+                            Some(datatype_iri),
+                            language,
+                            direction,
                             memory,
                         )?
                     };

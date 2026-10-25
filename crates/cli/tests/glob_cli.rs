@@ -479,6 +479,53 @@ ex:datum ex:value {input} .
                 );
             }
         }
+        for (datatype, lexical) in [("List", "[_:onlyInput]"), ("Map", "{ 'key': _:onlyInput }")] {
+            let plan = data(&document("literal", "*", "not matched", "\"unused\""));
+            let source = data(&format!(
+                "<{EX}datum> <{EX}value> \"{lexical}\"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/{datatype}> .
+                 _:onlyInput <{EX}marker> <{EX}object> ."
+            ));
+            let (label, scope) = source
+                .quads()
+                .find_map(|quad| match source.as_ref().resolve(quad.s) {
+                    TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(plan.term_id_by_blank(&label, scope).is_none());
+            let value = input(&source);
+            let original = source.term_value(value);
+            let result = prepared(plan)
+                .execute(source.into(), value, u64::MAX, Resident)
+                .unwrap();
+            assert_eq!(result.indices(), [0, 2]);
+            let output = result.export(&format!("{EX}run"), Resident).unwrap();
+            assert!(output.term_id_by_blank(&label, scope).is_some());
+            let selected = object(
+                &output,
+                id(&output, "run"),
+                output.term_id_by_iri(TERMS[10]).unwrap(),
+            );
+            assert_eq!(output.term_value(selected), original);
+            for format in [NativeRdfFormat::Turtle, NativeRdfFormat::NTriples] {
+                let encoded = serialize_dataset_to_format(&*output, format, None).unwrap();
+                let restored = parse_dataset(&encoded.bytes, format.media_type(), None).unwrap();
+                let selected = object(
+                    &restored,
+                    id(&restored, "run"),
+                    restored.term_id_by_iri(TERMS[10]).unwrap(),
+                );
+                assert_eq!(restored.term_value(selected), original);
+                assert!(restored.term_id_by_blank(&label, scope).is_some());
+                assert_eq!(
+                    prepared(restored.clone())
+                        .execute(restored.into(), selected, u64::MAX, Resident)
+                        .unwrap()
+                        .indices(),
+                    [0, 2]
+                );
+            }
+        }
     }
 
     #[test]
@@ -506,6 +553,18 @@ ex:datum ex:value {input} .
                 matches!(Capture::read(&error).field("reason"), ErrorValue::Code(code) if code == reason)
             );
         }
+        let unknown = data(&format!("{text} <{EX}yes> <{EX}unexpected> \"bad\" ."));
+        let root = id(&unknown, "plan");
+        let error =
+            PreparedPlan::compile(unknown.into(), root, &vocabulary(), Resident).unwrap_err();
+        let fields = Capture::read(&error);
+        assert!(matches!(
+            fields.field("role"),
+            ErrorValue::Code("pattern_type")
+        ));
+        assert!(
+            matches!(fields.child("node").field("iri"), ErrorValue::Iri(iri) if iri == format!("{EX}yes"))
+        );
         let cyclic = data(&text.replace("rdf:rest rdf:nil", "rdf:rest ex:c0"));
         let root = id(&cyclic, "plan");
         let error =
