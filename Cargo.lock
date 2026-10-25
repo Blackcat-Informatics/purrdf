@@ -413,6 +413,7 @@ dependencies = [
  "purrdf-entail",
  "purrdf-events",
  "purrdf-geo",
+ "purrdf-glob",
  "purrdf-gts",
  "purrdf-hnsw",
  "purrdf-iri",
@@ -651,6 +652,17 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "sha2",
+]
+
+[[package]]
+name = "purrdf-glob"
+version = "3.0.1"
+dependencies = [
+ "purrdf-alloc-probe",
+ "purrdf-hash",
+ "purrdf-iri",
+ "purrdf-lex",
+ "purrdf-testkit",
 ]
 
 [[package]]

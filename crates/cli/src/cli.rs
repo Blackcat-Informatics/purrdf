@@ -3,7 +3,7 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, seventeen subcommands ([`Command`]), and three global flags
+//! One pipeline of subcommands ([`Command`]), and three global flags
 //! (`--loss-ledger`, `--jsonld-options`, `--geo-profile`). The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
@@ -322,9 +322,44 @@ impl Cli {
     }
 }
 
-/// The seventeen pipeline subcommands.
+/// Slash interpretation for the compiled glob command.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum GlobMode {
+    Text,
+    Path,
+}
+
+/// Explicit lexical input selection for the compiled glob command.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum GlobSurface {
+    Literal,
+    Iri,
+    IriScheme,
+    IriAuthority,
+    IriPath,
+    IriQuery,
+    IriFragment,
+}
+
+/// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Match one complete literal or explicitly selected IRI surface.
+    Glob {
+        /// Unicode pattern in the purrdf-glob-v1 language.
+        pattern: String,
+        /// Verbatim literal value or IRI reference.
+        value: String,
+        /// Treat slashes as ordinary text or path-component boundaries.
+        #[arg(long, value_enum)]
+        mode: GlobMode,
+        /// Select the literal or an exact lexical component of a parsed IRI.
+        #[arg(long, value_enum)]
+        surface: GlobSurface,
+        /// Maximum deterministic work units; exhaustion publishes no decision.
+        #[arg(long)]
+        max_work: u64,
+    },
     /// Execute a strict geographic scalar, batch, conversion, cover or index request.
     Geo {
         /// Request JSON source; `-` reads standard input.
