@@ -76,10 +76,12 @@ const MAX_JSON_LD_DOCUMENT_BYTES: ByteLimit = ByteLimit::new(4_u64 * 1024 * 1024
 // within the decode envelope; the estimated working footprint keeps this a memory-safe
 // ceiling, not an unbounded one.
 const MAX_JSON_LD_CARRIER_ROWS: u64 = 33_554_432;
-// Source-carrier retained-text budget: the interned text actually held once. Every retained
-// value is written at least once into the emitted document, so the document ceiling is the
-// tightest text budget that refuses nothing the bounded writer could emit; a smaller cap
-// rejected a whole-ontology bundle carrying several hundred MB of literal text.
+// Source-carrier retained-text budget: the interned text actually held once. Sized to the
+// document ceiling because retained text and emitted text are the same order of magnitude;
+// they are not equal, since compaction, `@type`, list folding and implied datatypes all
+// drop text the carrier retains. A 256 MiB cap rejected a whole-ontology bundle carrying
+// several hundred MB of literal text. Construction memory is bounded separately by
+// `MAX_JSON_LD_CARRIER_WORKING_BYTES`, checked before the carrier indexes are sorted.
 const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = MAX_JSON_LD_DOCUMENT_BYTES;
 // Materialized-carrier WORKING-memory budget. The construction estimate
 // (`rows * ESTIMATED_CARRIER_ROW_BYTES + text`) * `COMPACTED_CARRIER_WORKING_COPIES` is a large
@@ -743,6 +745,18 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
         }
         reifier_of.entry((s, p, o, g)).or_default().push(rid);
     }
+
+    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
+    let mut annotations_of: AnnotationIndex = BTreeMap::new();
+    for &(r, p, v, g) in &graph.annotations {
+        annotations_of.entry((r, g)).or_default().push((p, v));
+    }
+
+    // The working-memory estimate sums per-occurrence footprints, so it does not depend on
+    // the order within each index. Checking it before sorting keeps the sort keys, which
+    // copy term text, behind the same ceiling as the carrier they order.
+    validate_materialized_carrier_budget(graph, &annotations_of)?;
+
     // One O(1) reifier-binding snapshot for the whole carrier build.
     let bindings = graph.reifier_index();
     for list in reifier_of.values_mut() {
@@ -752,12 +766,6 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
         list.sort_by_cached_key(|a| {
             term_id(&graph.terms[*a]).expect("reifier must be IRI or blank node")
         });
-    }
-
-    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
-    let mut annotations_of: AnnotationIndex = BTreeMap::new();
-    for &(r, p, v, g) in &graph.annotations {
-        annotations_of.entry((r, g)).or_default().push((p, v));
     }
     for list in annotations_of.values_mut() {
         // Sort by stable predicate @id then stable value key, not raw term ids. The
@@ -770,8 +778,6 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
             )
         });
     }
-
-    validate_materialized_carrier_budget(graph, &annotations_of)?;
 
     let indexes = Indexes {
         reifier_of: &reifier_of,
