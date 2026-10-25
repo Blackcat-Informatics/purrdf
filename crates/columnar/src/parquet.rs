@@ -37,7 +37,7 @@ const PAGE_TYPE_DATA_V2: i32 = 3;
 // turn a small compressed input into an allocator-sized request.
 const MAX_DECODED_TABLE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_INITIAL_ROW_CAPACITY: usize = 65_536;
-// What the decoded-table budget charges each INT64 row: a value word and a
+// What the decoded-table budget charges each `INT64` row: a value word and a
 // presence word. The charge is part of the profile's accept/refuse boundary, so
 // it is stated here rather than read off the in-memory layout, which packs
 // presence into a bitmap and would otherwise move the boundary with it.
@@ -112,7 +112,7 @@ impl ColumnValues {
         }
     }
 
-    /// The column's definition levels: the INT64 column's own bitmap, or one
+    /// The column's definition levels: the `INT64` column's own bitmap, or one
     /// built from the BYTE_ARRAY rows.
     fn presence(&self) -> Cow<'_, Presence> {
         match self {
@@ -293,7 +293,7 @@ pub(crate) const fn bounded_row_capacity(row_count: usize) -> usize {
 #[derive(Debug)]
 struct EncodedColumn {
     physical_type: i32,
-    encodings: Vec<i32>,
+    encodings: &'static [i32],
     path: &'static str,
     codec: i32,
     num_values: i64,
@@ -315,14 +315,13 @@ pub(crate) fn write_table(
             let data_page_offset = i64::try_from(out.len()).map_err(|_| {
                 ColumnarError::limit("Parquet file offset", out.len(), i64::MAX as usize)
             })?;
-            let encoded = encode_column(values, schema, data.row_count, compression)?;
-            out.extend_from_slice(&encoded.bytes);
+            let encoded = encode_column(values, schema, data.row_count, compression, &mut out)?;
             columns.push(EncodedColumn {
                 physical_type: parquet_physical_type(schema.physical_type),
                 encodings: if schema.repetition == Repetition::Optional {
-                    vec![ENCODING_PLAIN, ENCODING_RLE]
+                    &[ENCODING_PLAIN, ENCODING_RLE]
                 } else {
-                    vec![ENCODING_PLAIN]
+                    &[ENCODING_PLAIN]
                 },
                 path: schema.name,
                 codec: compression.parquet_id(),
@@ -356,6 +355,9 @@ pub(crate) fn write_table(
         value: footer.len() as u64,
         maximum: u64::from(u32::MAX),
     })?;
+    // The footer and trailer finish the file; geometric growth here would
+    // retain up to another page's capacity without any later write to use it.
+    out.reserve_exact(footer.len() + size_of::<u32>() + PARQUET_MAGIC.len());
     out.extend_from_slice(&footer);
     out.extend_from_slice(&footer_len.to_le_bytes());
     out.extend_from_slice(PARQUET_MAGIC);
@@ -379,7 +381,6 @@ fn validate_table_data(data: &TableData) -> Result<(), ColumnarError> {
 
 #[derive(Debug)]
 struct EncodedPage {
-    bytes: Vec<u8>,
     total_uncompressed_size: i64,
     total_compressed_size: i64,
 }
@@ -389,6 +390,7 @@ fn encode_column(
     schema: &ColumnSchema,
     row_count: usize,
     compression: Compression,
+    out: &mut Vec<u8>,
 ) -> Result<EncodedPage, ColumnarError> {
     let definitions = if schema.repetition == Repetition::Optional {
         encode_definition_levels(&values.presence())
@@ -433,17 +435,17 @@ fn encode_column(
             writer.bool_field(7, compression == Compression::Zstd);
         });
     });
-    let mut bytes = Vec::with_capacity(header.len() + definitions.len() + compressed_values.len());
-    bytes.extend_from_slice(&header);
-    bytes.extend_from_slice(&definitions);
-    bytes.extend_from_slice(&compressed_values);
+    let page_len = header.len() + definitions.len() + compressed_values.len();
     let total_uncompressed_size = i64::try_from(header.len()).expect("header length fits i64")
         + i64::from(uncompressed_page_size);
-    let total_compressed_size = i64::try_from(bytes.len()).map_err(|_| {
-        ColumnarError::limit("column chunk byte length", bytes.len(), i64::MAX as usize)
+    let total_compressed_size = i64::try_from(page_len).map_err(|_| {
+        ColumnarError::limit("column chunk byte length", page_len, i64::MAX as usize)
     })?;
+    out.reserve(page_len);
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&definitions);
+    out.extend_from_slice(&compressed_values);
     Ok(EncodedPage {
-        bytes,
         total_uncompressed_size,
         total_compressed_size,
     })
@@ -532,7 +534,7 @@ fn write_column_chunk(writer: &mut CompactWriter, column: &EncodedColumn) {
     writer.i64_field(2, 0);
     writer.struct_field(3, |writer| {
         writer.i32_field(1, column.physical_type);
-        writer.list_i32_field(2, &column.encodings);
+        writer.list_i32_field(2, column.encodings);
         writer.list_string_field(3, &[column.path]);
         writer.i32_field(4, column.codec);
         writer.i64_field(5, column.num_values);
@@ -1542,7 +1544,7 @@ fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Presence, 
 ///
 /// One counted copy with no branch: each value's `to_le_bytes` is the identity
 /// on a little-endian target, so the loop is a plain word copy, which LLVM
-/// lowers to one `memcpy` call (`memory.copy` on wasm32); on a big-endian
+/// lowers to one `memcpy` call (`memory.copy` on `wasm32`); on a big-endian
 /// target it is a byte swap per word.
 /// The collect writes into exactly sized storage, so no byte is zeroed first,
 /// and `into_flattened` reinterprets the words as bytes without copying.
@@ -1569,7 +1571,7 @@ pub(crate) fn encode_int64_plain(values: &[i64]) -> Vec<u8> {
 /// the two answers the per-value loop gives at the value it fails on. Then the
 /// body, which is the dense value vector in little-endian bytes, is read as one
 /// counted copy (`from_le_bytes` is the identity on a little-endian target, so
-/// LLVM lowers it to one `memcpy` call, `memory.copy` on wasm32; a big-endian
+/// LLVM lowers it to one `memcpy` call, `memory.copy` on `wasm32`; a big-endian
 /// target swaps each word). The present rows were counted by the caller, a
 /// popcount over the bitmap, before the page's null count was checked.
 ///
@@ -1681,6 +1683,45 @@ mod tests {
 
     #[global_allocator]
     static GLOBAL: CountingAllocator = CountingAllocator;
+
+    #[test]
+    fn blob_page_write_allocation_growth() {
+        for (payload_len, bounds) in [
+            (1024, [(25, 4382, 1314, 2318), (37, 31_779, 287, 21_229)]),
+            (
+                1024 * 1024,
+                [
+                    (25, 3_147_054, 1_048_878, 2_097_426),
+                    (39, 2_696_968, 329, 2_294_063),
+                ],
+            ),
+        ] {
+            let data = TableData::new(
+                Table::Blobs,
+                vec![
+                    ColumnValues::bytes(vec![Some(vec![0; 32])]),
+                    ColumnValues::bytes(vec![Some(vec![b'x'; payload_len])]),
+                ],
+            )
+            .unwrap();
+            for (compression, (allocations, requested, retained, peak)) in
+                [Compression::Uncompressed, Compression::Zstd]
+                    .into_iter()
+                    .zip(bounds)
+            {
+                drop(write_table(&data, compression).unwrap());
+                let window = CurrentThreadWindow::open();
+                let bytes = write_table(&data, compression).unwrap();
+                let measured = window.close();
+                eprintln!("{payload_len}/{compression:?}: {measured:?}");
+                assert!(measured.allocations <= allocations);
+                assert!(measured.requested_bytes <= requested);
+                assert!(measured.retained_bytes <= retained);
+                assert!(measured.peak_working_bytes <= peak);
+                assert_eq!(read_table(&bytes, Table::Blobs).unwrap(), data);
+            }
+        }
+    }
 
     #[test]
     fn parsed_profile_validation_borrows_all_expected_fields() {
