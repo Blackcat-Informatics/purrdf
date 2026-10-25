@@ -6,7 +6,11 @@
 use std::fmt;
 
 mod compact;
+mod projection;
+mod reader;
 pub use compact::CompactReason;
+pub use projection::ProjectionReason;
+pub use reader::ReaderReason;
 mod value_body;
 pub use value_body::ValueBodyReason;
 
@@ -43,12 +47,26 @@ pub enum ColumnarError {
         /// Stable diagnostic detail.
         detail: String,
     },
+    /// Decoded rows violate the original RDF reconstruction contract.
+    Reader {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Original native operands and causes.
+        reason: ReaderReason,
+    },
     /// Original typed Compact metadata grammar refusal.
     Compact {
         /// Structure being decoded.
         context: &'static str,
         /// Native reason, including original operands and causes.
         reason: CompactReason,
+    },
+    /// Original native RDF projection refusal.
+    Projection {
+        /// Structure being projected.
+        context: &'static str,
+        /// Native reason and any already-owned rejected value.
+        reason: ProjectionReason,
     },
     /// Original native definition-level or PLAIN value-body refusal.
     ValueBody {
@@ -87,7 +105,9 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
         Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Reader { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         ValueBody { context, reason } => "columnar-value-body" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
@@ -97,6 +117,14 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
+    pub(crate) fn reader_malformed(context: &'static str, reason: ReaderReason) -> Self {
+        Self::Reader { context, reason }
+    }
+
+    pub(crate) fn projection(context: &'static str, reason: ProjectionReason) -> Self {
+        Self::Projection { context, reason }
+    }
+
     pub(crate) fn value_body(context: &'static str, reason: ValueBodyReason) -> Self {
         Self::ValueBody { context, reason }
     }
@@ -158,7 +186,13 @@ impl fmt::Display for ColumnarError {
             Self::Malformed { context, detail } => {
                 write!(f, "columnar {context} is malformed: {detail}")
             }
+            Self::Reader { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::Compact { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::Projection { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
             }
             Self::ValueBody { context, reason } => {
@@ -186,10 +220,12 @@ impl fmt::Display for ColumnarError {
 purrdf_lex::error_source!(ColumnarError => {
     Self::ValueBody { reason, .. } => reason,
     Self::Compact { reason, .. } => reason,
+    Self::Projection { reason, .. } => reason,
     Self::Storage(cause) => cause,
     Self::ContentStore(cause) => cause,
     Self::BlobContent { cause, .. } => cause,
     Self::Reconstruction(cause) => cause,
+    Self::Reader { reason, .. } => reason,
 });
 
 purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });

@@ -15,7 +15,7 @@ use purrdf_core::{
 };
 
 use crate::column::Int64Column;
-use crate::error::ColumnarError;
+use crate::error::{ColumnarError, ReaderReason};
 use crate::files::ParquetFiles;
 use crate::parquet::{ColumnValues, TableData, bounded_row_capacity, read_table};
 use crate::schema::Table;
@@ -116,16 +116,16 @@ impl Dictionary {
                 0 => false,
                 1 => true,
                 _ => {
-                    return Err(ColumnarError::malformed(
+                    return Err(ColumnarError::reader_malformed(
                         "terms.named_graph",
-                        format!("row {row} has flag {flag}, expected 0 or 1"),
+                        ReaderReason::NamedGraphFlag { row, flag },
                     ));
                 }
             };
             if named && !matches!(value, TermValue::Iri(_) | TermValue::Blank { .. }) {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::reader_malformed(
                     "terms.named_graph",
-                    format!("row {row} marks a literal or triple term as a graph name"),
+                    ReaderReason::GraphName { row },
                 ));
             }
             named_graphs.push(named);
@@ -144,7 +144,7 @@ impl Dictionary {
     }
 }
 
-/// One term row's nullable INT64 cells, read from each column's rows in step.
+/// One term row's nullable `INT64` cells, read from each column's rows in step.
 #[derive(Debug, Clone, Copy)]
 struct TermInts {
     datatype: Option<i64>,
@@ -181,9 +181,9 @@ fn parse_term_records(data: &TableData) -> Result<Vec<TermRecord>, ColumnarError
         };
         let id = required_i64(id, row, "terms.id")?;
         if id != row as i64 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::reader_malformed(
                 "terms.id",
-                format!("row {row} has id {id}; ids must be dense and zero-based"),
+                ReaderReason::DenseId { row, id },
             ));
         }
         let kind = required_i64(kind, row, "terms.kind")?;
@@ -262,11 +262,8 @@ fn parse_blank_record(
     ensure_null_i64(row, ints.triple_p, "terms.triple_p")?;
     ensure_null_i64(row, ints.triple_o, "terms.triple_o")?;
     let scope = required_i64(ints.scope, row, "terms.scope")?;
-    let scope = u32::try_from(scope).map_err(|_| {
-        ColumnarError::malformed(
-            "terms.scope",
-            format!("row {row} has out-of-range scope {scope}"),
-        )
+    let scope = u32::try_from(scope).map_err(|cause| {
+        ColumnarError::reader_malformed("terms.scope", ReaderReason::Scope { row, scope, cause })
     })?;
     Ok(TermRecord::Blank {
         label: required_utf8(lex, row, "terms.lex")?,
@@ -302,7 +299,9 @@ fn resolve_term_records(records: &[TermRecord]) -> Result<Vec<TermValue>, Column
     values
         .into_iter()
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| ColumnarError::malformed("term dictionary", "unresolved term record"))
+        .ok_or_else(|| {
+            ColumnarError::reader_malformed("term dictionary", ReaderReason::UnresolvedTerm)
+        })
 }
 
 /// Resolve term record `index`, memoised in `values` with `states` marking the records
@@ -345,9 +344,9 @@ fn resolve_term_record(
             return Ok(Ok(value.clone()));
         }
         if states[index] == 1 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::reader_malformed(
                 "term dictionary",
-                "cyclic triple-term reference",
+                ReaderReason::CyclicTriple,
             ));
         }
         states[index] = 1;
@@ -387,29 +386,38 @@ fn resolve_term_record(
             } => {
                 let datatype = resolved.next().expect("a literal's datatype is resolved");
                 let TermValue::Iri(datatype) = datatype else {
-                    return Err(ColumnarError::malformed(
+                    return Err(ColumnarError::reader_malformed(
                         "terms.datatype",
-                        format!("literal row {index} references a non-IRI datatype"),
+                        ReaderReason::LiteralDatatype { row: index },
                     ));
                 };
-                if let Some(language) = &language {
-                    if language.is_empty() || !is_identity_folded(language) {
-                        return Err(ColumnarError::malformed(
+                if let Some(tag) = &language {
+                    // Matching Some establishes that language is present;
+                    // rejection moves its original string through the expect.
+                    if tag.is_empty() || !is_identity_folded(tag) {
+                        return Err(ColumnarError::reader_malformed(
                             "terms.lang",
-                            format!("literal row {index} has a non-canonical language tag"),
+                            ReaderReason::LanguageTag {
+                                row: index,
+                                language: language.expect("language was present"),
+                            },
                         ));
                     }
                     let expected = RdfLiteral::language_datatype_iri(direction);
                     if datatype != expected {
-                        return Err(ColumnarError::malformed(
+                        return Err(ColumnarError::reader_malformed(
                             "terms.datatype",
-                            format!("language literal row {index} must use {expected}"),
+                            ReaderReason::LanguageDatatype {
+                                row: index,
+                                actual: datatype,
+                                expected,
+                            },
                         ));
                     }
                 } else if direction.is_some() {
-                    return Err(ColumnarError::malformed(
+                    return Err(ColumnarError::reader_malformed(
                         "terms.direction",
-                        format!("literal row {index} has a direction without a language tag"),
+                        ReaderReason::DirectionWithoutLanguage { row: index },
                     ));
                 }
                 TermValue::Literal {
@@ -499,7 +507,7 @@ fn decode_blobs(mut data: TableData) -> Result<ContentStore, ColumnarError> {
     bytes_column(&data, 0)?;
     bytes_column(&data, 1)?;
     let (digest_columns, payload_columns) = data.columns.split_at_mut(1);
-    let ColumnValues::ByteArray(digests) = &digest_columns[0] else {
+    let ColumnValues::ByteArray(digests) = &mut digest_columns[0] else {
         unreachable!("digest column was checked above")
     };
     let ColumnValues::ByteArray(payloads) = &mut payload_columns[0] else {
@@ -509,27 +517,37 @@ fn decode_blobs(mut data: TableData) -> Result<ContentStore, ColumnarError> {
     let mut store = ContentStore::new();
     for row in 0..data.row_count {
         let digest_bytes = required_bytes(digests, row, "blobs.digest")?;
-        let digest_text = str::from_utf8(digest_bytes).map_err(|_| {
-            ColumnarError::malformed("blobs.digest", format!("row {row} is not UTF-8"))
-        })?;
-        let digest = ContentDigest::from_hex(digest_text).ok_or_else(|| {
-            ColumnarError::malformed(
+        // This check proves digests[row] is Some. Only a returning refusal
+        // branch takes that same cell, so each expect below has its original.
+        let digest_text = match str::from_utf8(digest_bytes) {
+            Ok(text) => text,
+            Err(cause) => {
+                let bytes = digests[row].take().expect("required digest is present");
+                return Err(ColumnarError::reader_malformed(
+                    "blobs.digest",
+                    ReaderReason::DigestUtf8 { row, cause, bytes },
+                ));
+            }
+        };
+        let Some(digest) = ContentDigest::from_hex(digest_text) else {
+            let bytes = digests[row].take().expect("required digest is present");
+            return Err(ColumnarError::reader_malformed(
                 "blobs.digest",
-                format!("row {row} is not a 64-digit SHA-256 hex value"),
-            )
-        })?;
-        // Parsing has established exactly 64 ASCII hexadecimal digits. Only
-        // uppercase letters can now differ from the canonical spelling.
+                ReaderReason::DigestShape { row, bytes },
+            ));
+        };
+        // Parsing established exactly 64 ASCII hexadecimal digits.
         if digest_text.bytes().any(|byte| byte.is_ascii_uppercase()) {
-            return Err(ColumnarError::malformed(
+            let bytes = digests[row].take().expect("required digest is present");
+            return Err(ColumnarError::reader_malformed(
                 "blobs.digest",
-                format!("row {row} is not canonical lowercase hexadecimal"),
+                ReaderReason::DigestCase { row, bytes },
             ));
         }
         if previous.is_some_and(|value| value >= digest) {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::reader_malformed(
                 "blob row order",
-                "digests are not strictly increasing",
+                ReaderReason::DigestOrder,
             ));
         }
         required_bytes(payloads, row, "blobs.bytes")?;
@@ -570,10 +588,7 @@ fn reconstruct_dataset(
             o: TermBox::new(dictionary.values[o].clone()),
         };
         let triple = dictionary.value_ids.get(&triple_value).ok_or_else(|| {
-            ColumnarError::malformed(
-                "reifier binding",
-                "component tuple has no corresponding triple term",
-            )
+            ColumnarError::reader_malformed("reifier binding", ReaderReason::MissingTriple)
         })?;
         builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]))?;
     }
@@ -591,9 +606,13 @@ fn reconstruct_dataset(
 fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarError> {
     match data.columns.get(index) {
         Some(ColumnValues::Int64(values)) => Ok(values),
-        _ => Err(ColumnarError::malformed(
+        _ => Err(ColumnarError::reader_malformed(
             "table column",
-            format!("{}.{} is not INT64", data.table.name(), index),
+            ReaderReason::ColumnType {
+                table: data.table,
+                column: index,
+                expected: crate::PhysicalType::Int64,
+            },
         )),
     }
 }
@@ -601,9 +620,13 @@ fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarEr
 fn bytes_column(data: &TableData, index: usize) -> Result<&[Option<Vec<u8>>], ColumnarError> {
     match data.columns.get(index) {
         Some(ColumnValues::ByteArray(values)) => Ok(values),
-        _ => Err(ColumnarError::malformed(
+        _ => Err(ColumnarError::reader_malformed(
             "table column",
-            format!("{}.{} is not BYTE_ARRAY", data.table.name(), index),
+            ReaderReason::ColumnType {
+                table: data.table,
+                column: index,
+                expected: crate::PhysicalType::ByteArray,
+            },
         )),
     }
 }
@@ -613,9 +636,7 @@ fn required_i64(
     row: usize,
     context: &'static str,
 ) -> Result<i64, ColumnarError> {
-    value.ok_or_else(|| {
-        ColumnarError::malformed(context, format!("required value is null at row {row}"))
-    })
+    value.ok_or_else(|| ColumnarError::reader_malformed(context, ReaderReason::Null { row }))
 }
 
 fn required_bytes<'a>(
@@ -623,9 +644,9 @@ fn required_bytes<'a>(
     row: usize,
     context: &'static str,
 ) -> Result<&'a [u8], ColumnarError> {
-    column[row].as_deref().ok_or_else(|| {
-        ColumnarError::malformed(context, format!("required value is null at row {row}"))
-    })
+    column[row]
+        .as_deref()
+        .ok_or_else(|| ColumnarError::reader_malformed(context, ReaderReason::Null { row }))
 }
 
 fn required_utf8(
@@ -634,9 +655,9 @@ fn required_utf8(
     context: &'static str,
 ) -> Result<String, ColumnarError> {
     let value = required_bytes(column, row, context)?;
-    str::from_utf8(value)
-        .map(str::to_owned)
-        .map_err(|_| ColumnarError::malformed(context, format!("row {row} is not valid UTF-8")))
+    str::from_utf8(value).map(str::to_owned).map_err(|cause| {
+        ColumnarError::reader_malformed(context, ReaderReason::RowUtf8 { row, cause })
+    })
 }
 
 fn optional_utf8(
@@ -647,8 +668,8 @@ fn optional_utf8(
     column[row]
         .as_deref()
         .map(|value| {
-            str::from_utf8(value).map(str::to_owned).map_err(|_| {
-                ColumnarError::malformed(context, format!("row {row} is not valid UTF-8"))
+            str::from_utf8(value).map(str::to_owned).map_err(|cause| {
+                ColumnarError::reader_malformed(context, ReaderReason::RowUtf8 { row, cause })
             })
         })
         .transpose()
@@ -661,13 +682,17 @@ fn required_term_ref(
     context: &'static str,
 ) -> Result<usize, ColumnarError> {
     let value = required_i64(value, row, context)?;
-    let id = usize::try_from(value).map_err(|_| {
-        ColumnarError::malformed(context, format!("row {row} has negative term id {value}"))
+    let id = usize::try_from(value).map_err(|cause| {
+        ColumnarError::reader_malformed(context, ReaderReason::TermId { row, value, cause })
     })?;
     if id >= term_count {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::reader_malformed(
             context,
-            format!("row {row} references term {id}, but dictionary has {term_count} rows"),
+            ReaderReason::TermReference {
+                row,
+                id,
+                term_count,
+            },
         ));
     }
     Ok(id)
@@ -681,22 +706,26 @@ fn optional_graph_ref(
     let Some(value) = value else {
         return Ok(None);
     };
-    let graph = usize::try_from(value).map_err(|_| {
-        ColumnarError::malformed(
+    let graph = usize::try_from(value).map_err(|cause| {
+        ColumnarError::reader_malformed(
             "graph reference",
-            format!("row {row} has negative id {value}"),
+            ReaderReason::GraphId { row, value, cause },
         )
     })?;
     if graph >= named_graphs.len() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::reader_malformed(
             "graph reference",
-            format!("row {row} references missing term {graph}"),
+            ReaderReason::MissingGraph {
+                row,
+                id: graph,
+                term_count: named_graphs.len(),
+            },
         ));
     }
     if !named_graphs[graph] {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::reader_malformed(
             "graph reference",
-            format!("row {row} references term {graph} not marked as a named graph"),
+            ReaderReason::UndeclaredGraph { row, id: graph },
         ));
     }
     Ok(Some(graph))
@@ -708,9 +737,9 @@ fn ensure_null_i64(
     context: &'static str,
 ) -> Result<(), ColumnarError> {
     if value.is_some() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::reader_malformed(
             context,
-            format!("value must be null for term kind at row {row}"),
+            ReaderReason::ExpectedNull { row },
         ));
     }
     Ok(())
@@ -722,9 +751,9 @@ fn ensure_null_bytes(
     context: &'static str,
 ) -> Result<(), ColumnarError> {
     if column[row].is_some() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::reader_malformed(
             context,
-            format!("value must be null for term kind at row {row}"),
+            ReaderReason::ExpectedNull { row },
         ));
     }
     Ok(())
@@ -732,9 +761,9 @@ fn ensure_null_bytes(
 
 fn ensure_strict_order<T: Ord>(values: &[T], context: &'static str) -> Result<(), ColumnarError> {
     if values.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::reader_malformed(
             context,
-            "rows are not strictly increasing",
+            ReaderReason::RowOrder,
         ));
     }
     Ok(())
@@ -850,19 +879,85 @@ mod tests {
 
     #[test]
     fn semantic_reader_rejects_non_dense_term_ids() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let (dataset, blobs) = fixture();
         let encoded = write(&*dataset, &blobs, Compression::Uncompressed).unwrap();
+        read(&encoded.files).unwrap();
         let mut array = encoded.files.into_array();
         let mut terms = read_table(&array[0], Table::Terms).unwrap();
         let ColumnValues::Int64(ids) = &mut terms.columns[0] else {
             panic!("terms.id is INT64");
         };
-        ids.values_mut()[0] = 9;
+        ids.values_mut()[0] = i64::MAX;
+        let ColumnValues::Int64(kinds) = &mut terms.columns[1] else {
+            panic!("terms.kind is INT64");
+        };
+        kinds.values_mut()[0] = i64::MAX;
         array[0] = write_table(&terms, Compression::Uncompressed).unwrap();
+        let files = ParquetFiles::from_array(array);
+        let error = read(&files).unwrap_err();
+        drop(files);
+        drop(terms);
+        let captured = Capture::read(&error);
         assert!(matches!(
-            read(&ParquetFiles::from_array(array)),
-            Err(ColumnarError::Malformed { .. })
+            captured.field("context"),
+            ErrorValue::Code("terms.id")
         ));
+        let reason = captured.child("reason");
+        assert_eq!(
+            reason.code, "columnar-dense-id",
+            "id refusal precedes the invalid kind"
+        );
+        assert!(matches!(reason.field("row"), ErrorValue::Unsigned(0)));
+        assert!(
+            matches!(reason.field("id"), ErrorValue::Signed(value) if value == i128::from(i64::MAX))
+        );
+
+        // Mutate decoded columns, so physical certification cannot mask the
+        // original signed scope/reference or the reader's own refusal order.
+        for (column, value, code, field) in [
+            (6, i64::MAX, "columnar-scope", "scope"),
+            (3, -1, "columnar-term-id", "value"),
+            (3, i64::MAX, "columnar-term-reference", "id"),
+            (10, i64::MAX, "columnar-named-graph-flag", "flag"),
+        ] {
+            let mut array = write(&*dataset, &blobs, Compression::Uncompressed)
+                .unwrap()
+                .files
+                .into_array();
+            let mut terms = read_table(&array[0], Table::Terms).unwrap();
+            let ColumnValues::Int64(values) = &mut terms.columns[column] else {
+                panic!("the selected column is INT64");
+            };
+            let row = values.rows().position(|value| value.is_some()).unwrap();
+            values.values_mut()[0] = value;
+            array[0] = write_table(&terms, Compression::Uncompressed).unwrap();
+            let files = ParquetFiles::from_array(array);
+            let error = read(&files).unwrap_err();
+            drop(files);
+            drop(terms);
+            let captured = Capture::read(&error).child("reason");
+            assert_eq!(captured.code, code);
+            assert!(
+                matches!(captured.field("row"), ErrorValue::Unsigned(actual) if actual == row as u128)
+            );
+            if field == "id" {
+                assert!(
+                    matches!(captured.field(field), ErrorValue::Unsigned(actual) if actual == value as u128)
+                );
+            } else {
+                assert!(
+                    matches!(captured.field(field), ErrorValue::Signed(actual) if actual == i128::from(value))
+                );
+            }
+            if matches!(code, "columnar-scope" | "columnar-term-id") {
+                assert_eq!(captured.child("cause").code, "integer-conversion-range");
+                let reason = std::error::Error::source(&error).unwrap();
+                assert!(reason.source().unwrap().is::<std::num::TryFromIntError>());
+            }
+        }
     }
 
     /// Reject changed payloads through their original row-bearing integrity cause.
@@ -881,6 +976,42 @@ mod tests {
             read(&ParquetFiles::from_array(array)),
             Err(ColumnarError::BlobContent { row: 0, .. })
         ));
+
+        let digest = ContentDigest::of(b"digest case neighbor").to_hex();
+        for (bytes, code) in [
+            (vec![0xff; 64], "columnar-digest-utf8"),
+            (vec![b'g'; 64], "columnar-digest-shape"),
+            (
+                digest.to_ascii_uppercase().into_bytes(),
+                "columnar-digest-case",
+            ),
+        ] {
+            let pointer = bytes.as_ptr();
+            let expected = bytes.clone();
+            let data = TableData::new(
+                Table::Blobs,
+                vec![
+                    ColumnValues::bytes(vec![Some(bytes)]),
+                    ColumnValues::bytes(vec![Some(Vec::new())]),
+                ],
+            )
+            .unwrap();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = decode_blobs(data).unwrap_err();
+            let measured = window.close();
+            assert_eq!(measured.allocations, 0);
+            assert_eq!(measured.requested_bytes, 0);
+            let reason = purrdf_testkit::error_capture::Capture::read(&error).child("reason");
+            assert_eq!(reason.code, code);
+            assert!(
+                matches!(reason.field("bytes"), purrdf_hash::error::ErrorValue::Bytes(bytes) if bytes == expected && bytes.as_ptr() == pointer)
+            );
+            if code == "columnar-digest-utf8" {
+                assert_eq!(reason.child("cause").code, "std-utf8");
+                let reason = std::error::Error::source(&error).unwrap();
+                assert!(reason.source().unwrap().is::<str::Utf8Error>());
+            }
+        }
     }
 }
 
@@ -893,7 +1024,9 @@ mod term_walk_tests {
     use purrdf_core::langtag::is_identity_folded;
     use purrdf_core::{BlankScope, RdfLiteral, RdfTextDirection, TermBox, TermValue};
 
-    use super::{ColumnarError, TermRecord, resolve_term_record, resolve_term_records};
+    use super::{
+        ColumnarError, ReaderReason, TermRecord, resolve_term_record, resolve_term_records,
+    };
 
     fn reference_record(
         index: usize,
@@ -905,9 +1038,9 @@ mod term_walk_tests {
             return Ok(value.clone());
         }
         if states[index] == 1 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::reader_malformed(
                 "term dictionary",
-                "cyclic triple-term reference",
+                ReaderReason::CyclicTriple,
             ));
         }
         states[index] = 1;
@@ -922,29 +1055,36 @@ mod term_walk_tests {
             } => {
                 let datatype = reference_record(datatype, records, states, values)?;
                 let TermValue::Iri(datatype) = datatype else {
-                    return Err(ColumnarError::malformed(
+                    return Err(ColumnarError::reader_malformed(
                         "terms.datatype",
-                        format!("literal row {index} references a non-IRI datatype"),
+                        ReaderReason::LiteralDatatype { row: index },
                     ));
                 };
-                if let Some(language) = &language {
-                    if language.is_empty() || !is_identity_folded(language) {
-                        return Err(ColumnarError::malformed(
+                if let Some(tag) = &language {
+                    if tag.is_empty() || !is_identity_folded(tag) {
+                        return Err(ColumnarError::reader_malformed(
                             "terms.lang",
-                            format!("literal row {index} has a non-canonical language tag"),
+                            ReaderReason::LanguageTag {
+                                row: index,
+                                language: language.expect("language was present"),
+                            },
                         ));
                     }
                     let expected = RdfLiteral::language_datatype_iri(direction);
                     if datatype != expected {
-                        return Err(ColumnarError::malformed(
+                        return Err(ColumnarError::reader_malformed(
                             "terms.datatype",
-                            format!("language literal row {index} must use {expected}"),
+                            ReaderReason::LanguageDatatype {
+                                row: index,
+                                actual: datatype,
+                                expected,
+                            },
                         ));
                     }
                 } else if direction.is_some() {
-                    return Err(ColumnarError::malformed(
+                    return Err(ColumnarError::reader_malformed(
                         "terms.direction",
-                        format!("literal row {index} has a direction without a language tag"),
+                        ReaderReason::DirectionWithoutLanguage { row: index },
                     ));
                 }
                 TermValue::Literal {
@@ -977,8 +1117,8 @@ mod term_walk_tests {
                 0 => TermRecord::Iri(
                     [
                         "http://example.org/i",
-                        "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
-                        "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString",
+                        purrdf_core::vocab::rdf::LANG_STRING,
+                        purrdf_core::vocab::rdf::DIR_LANG_STRING,
                     ][index % 3]
                         .to_owned(),
                 ),
@@ -1018,11 +1158,35 @@ mod term_walk_tests {
 
     #[test]
     fn a_language_tag_with_an_ascii_uppercase_letter_is_refused_as_non_canonical() {
-        let refused = resolve_term_records(&language_literal_table("en-GB"))
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let records = language_literal_table("en-GB");
+        let refused = resolve_term_records(&records)
             .expect_err("an unfolded tag is not the canonical identity");
+        drop(records);
+        let reason = Capture::read(&refused).child("reason");
+        assert!(matches!(
+            reason.field("language"),
+            ErrorValue::Text("en-GB")
+        ));
         assert!(
             refused.to_string().contains("non-canonical language tag"),
             "{refused}"
+        );
+
+        let mut records = language_literal_table("en-gb");
+        records[0] = TermRecord::Iri("https://example.org/original-datatype".to_owned());
+        let refused = resolve_term_records(&records).unwrap_err();
+        drop(records);
+        let reason = Capture::read(&refused).child("reason");
+        assert_eq!(reason.code, "columnar-language-datatype");
+        assert!(matches!(
+            reason.field("actual"),
+            ErrorValue::Iri("https://example.org/original-datatype")
+        ));
+        assert!(
+            matches!(reason.field("expected"), ErrorValue::Iri(iri) if iri == purrdf_core::vocab::rdf::LANG_STRING)
         );
     }
 
