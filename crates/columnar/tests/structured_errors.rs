@@ -9,7 +9,8 @@ use std::sync::{Arc, Weak};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_columnar::{
-    ColumnarError, ColumnarWriteError, Compression, ParquetFiles, project, read, write,
+    ColumnarError, ColumnarWriteError, Compression, ParquetFiles, ValueBodyReason, project, read,
+    write,
 };
 use purrdf_core::{
     ContentDigest, ContentStore, ContentStoreError, DatasetView, GraphMatch, QuadIds, RdfDataset,
@@ -902,6 +903,52 @@ fn public_compact_first_fault_and_unknown_skips_do_not_allocate() {
     );
 }
 
+/// Public page decoding retains the original signed prefix after file disposal.
+fn public_plain_value_refusals_survive_file_disposal() {
+    let payload = b"original value-body payload";
+    let mut blobs = ContentStore::new();
+    blobs.insert(payload.to_vec());
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let files = write(&dataset, &blobs, Compression::Uncompressed)
+        .unwrap()
+        .files;
+    assert_eq!(read(&files).unwrap().blobs.len(), 1);
+    let mut original = (payload.len() as i32).to_le_bytes().to_vec();
+    original.extend_from_slice(payload);
+    for length in [-1_i32, i32::MIN] {
+        let mut array = files.clone().into_array();
+        let mut replacement = length.to_le_bytes().to_vec();
+        replacement.extend_from_slice(payload);
+        replace_unique(&mut array[4], &original, &replacement);
+        let changed = ParquetFiles::from_array(array);
+        let error = read(&changed).unwrap_err();
+        drop(changed);
+        let copy = error.clone();
+        drop(error);
+        assert!(matches!(
+            copy,
+            ColumnarError::ValueBody {
+                context: "PLAIN BYTE_ARRAY length",
+                reason: ValueBodyReason::NegativeLength { length: actual },
+            } if actual == length
+        ));
+        let native = std::error::Error::source(&copy)
+            .unwrap()
+            .downcast_ref::<ValueBodyReason>()
+            .unwrap();
+        let ColumnarError::ValueBody { reason, .. } = &copy else {
+            unreachable!("the original value-body variant was checked above");
+        };
+        assert!(std::ptr::eq(native, reason));
+        inspect_without_allocation(&copy);
+        let fields = Capture::read(&copy).child("reason");
+        assert_eq!(fields.code, "columnar-negative-length");
+        assert!(
+            matches!(fields.field("length"), ErrorValue::Signed(actual) if actual == i128::from(length))
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
     original_parquet_bounds_survive_file_disposal_without_narrowing,
     public_projection_and_write_preserve_source_owners_and_fields,
@@ -911,4 +958,5 @@ purrdf_testkit::harness_main!(
     native_cause_transport_preserves_storage_and_full_width_rows,
     public_compact_causes_survive_input_disposal,
     public_compact_first_fault_and_unknown_skips_do_not_allocate,
+    public_plain_value_refusals_survive_file_disposal,
 );

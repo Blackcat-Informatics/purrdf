@@ -13,7 +13,7 @@ use std::borrow::Cow;
 
 use crate::column::{Int64Column, Presence};
 use crate::compact::{CompactField, CompactReader, CompactWriter, StructState, TYPE_STRUCT};
-use crate::{ColumnSchema, ColumnarError, PhysicalType, Repetition, Table};
+use crate::{ColumnSchema, ColumnarError, PhysicalType, Repetition, Table, ValueBodyReason};
 
 const PARQUET_MAGIC: &[u8; 4] = b"PAR1";
 const FILE_VERSION: i32 = 1;
@@ -1500,21 +1500,33 @@ fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Presence, 
     let mut pos = 0usize;
     let mut levels = Presence::with_capacity(bounded_row_capacity(row_count));
     while levels.len() < row_count {
-        let header = read_varint(bytes, &mut pos)
-            .map_err(|error| ColumnarError::malformed("definition-level RLE", error.to_string()))?;
+        let offset = pos;
+        let header = read_varint(bytes, &mut pos).map_err(|cause| {
+            ColumnarError::value_body(
+                "definition-level RLE",
+                ValueBodyReason::Varint { offset, cause },
+            )
+        })?;
         if header & 1 != 0 {
-            return Err(ColumnarError::Unsupported {
-                context: "definition-level bit-packed run",
-                value: header as i64,
-            });
+            return Err(ColumnarError::value_body(
+                "definition-level bit-packed run",
+                ValueBodyReason::UnsupportedBitPackedRun { header },
+            ));
         }
-        let run_len = usize::try_from(header >> 1).map_err(|_| {
-            ColumnarError::malformed("definition-level RLE", "run length exceeds usize")
+        let length = header >> 1;
+        let run_len = usize::try_from(length).map_err(|cause| {
+            ColumnarError::value_body(
+                "definition-level RLE",
+                ValueBodyReason::RunLength { length, cause },
+            )
         })?;
         if run_len == 0 || run_len > row_count - levels.len() {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::value_body(
                 "definition-level RLE",
-                "zero or overlong run",
+                ValueBodyReason::InvalidRun {
+                    length: run_len,
+                    remaining: row_count - levels.len(),
+                },
             ));
         }
         let level = *bytes.get(pos).ok_or_else(|| {
@@ -1522,17 +1534,20 @@ fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Presence, 
         })?;
         pos += 1;
         if level > 1 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::value_body(
                 "definition-level RLE value",
-                format!("level is {level}, expected 0 or 1"),
+                ValueBodyReason::DefinitionLevel { level },
             ));
         }
         levels.push_run(level == 1, run_len);
     }
     if pos != bytes.len() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::value_body(
             "definition levels",
-            "trailing bytes after final run",
+            ValueBodyReason::TrailingLevels {
+                offset: pos,
+                available: bytes.len(),
+            },
         ));
     }
     Ok(levels)
@@ -1567,7 +1582,7 @@ pub(crate) fn encode_int64_plain(values: &[i64]) -> Vec<u8> {
 /// The count of present rows decides the body's length exactly, so the length
 /// checks happen once, before any value is read: a short body is
 /// [`ColumnarError::Truncated`] at the end offset of the first value that does
-/// not fit, and a long one is the trailing-bytes [`ColumnarError::Malformed`],
+/// not fit, and a long one is the trailing-bytes [`ColumnarError::ValueBody`],
 /// the two answers the per-value loop gives at the value it fails on. Then the
 /// body, which is the dense value vector in little-endian bytes, is read as one
 /// counted copy (`from_le_bytes` is the identity on a little-endian target, so
@@ -1590,13 +1605,25 @@ pub(crate) fn decode_int64_plain(
         let end = (bytes.len() / WIDTH)
             .checked_add(1)
             .and_then(|words| words.checked_mul(WIDTH))
-            .ok_or_else(|| ColumnarError::malformed("PLAIN INT64", "offset overflows usize"))?;
+            .ok_or_else(|| {
+                ColumnarError::value_body(
+                    "PLAIN INT64",
+                    ValueBodyReason::OffsetOverflow {
+                        offset: bytes.len() / WIDTH * WIDTH,
+                        length: WIDTH,
+                    },
+                )
+            })?;
         return Err(ColumnarError::truncated("PLAIN INT64", end, bytes.len()));
     }
     if needed != Some(bytes.len()) {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::value_body(
             "PLAIN INT64",
-            "trailing bytes after values",
+            ValueBodyReason::TrailingValues {
+                // The short-body branch above has established this product fits.
+                offset: present * WIDTH,
+                available: bytes.len(),
+            },
         ));
     }
     let (words, _) = bytes.as_chunks::<WIDTH>();
@@ -1625,22 +1652,35 @@ fn decode_plain(
                     continue;
                 }
                 let length_end = pos.checked_add(4).ok_or_else(|| {
-                    ColumnarError::malformed("PLAIN BYTE_ARRAY", "offset overflows usize")
+                    ColumnarError::value_body(
+                        "PLAIN BYTE_ARRAY",
+                        ValueBodyReason::OffsetOverflow {
+                            offset: pos,
+                            length: 4,
+                        },
+                    )
                 })?;
                 let raw_len = bytes.get(pos..length_end).ok_or_else(|| {
                     ColumnarError::truncated("PLAIN BYTE_ARRAY length", length_end, bytes.len())
                 })?;
+                // The checked range above has exactly four bytes.
                 let len =
                     i32::from_le_bytes(raw_len.try_into().expect("four-byte BYTE_ARRAY length"));
                 if len < 0 {
-                    return Err(ColumnarError::malformed(
+                    return Err(ColumnarError::value_body(
                         "PLAIN BYTE_ARRAY length",
-                        "negative length",
+                        ValueBodyReason::NegativeLength { length: len },
                     ));
                 }
                 pos = length_end;
                 let end = pos.checked_add(len as usize).ok_or_else(|| {
-                    ColumnarError::malformed("PLAIN BYTE_ARRAY", "offset overflows usize")
+                    ColumnarError::value_body(
+                        "PLAIN BYTE_ARRAY",
+                        ValueBodyReason::OffsetOverflow {
+                            offset: pos,
+                            length: len as usize,
+                        },
+                    )
                 })?;
                 let value = bytes.get(pos..end).ok_or_else(|| {
                     ColumnarError::truncated("PLAIN BYTE_ARRAY value", end, bytes.len())
@@ -1649,9 +1689,12 @@ fn decode_plain(
                 pos = end;
             }
             if pos != bytes.len() {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::value_body(
                     "PLAIN BYTE_ARRAY",
-                    "trailing bytes after values",
+                    ValueBodyReason::TrailingValues {
+                        offset: pos,
+                        available: bytes.len(),
+                    },
                 ));
             }
             Ok(ColumnValues::ByteArray(values))
@@ -1832,13 +1875,145 @@ mod tests {
 
     #[test]
     fn definition_rle_rejects_bitpacked_and_trailing_data() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         assert!(matches!(
             decode_definition_levels(&[3, 0], 8),
-            Err(ColumnarError::Unsupported { .. })
+            Err(ColumnarError::ValueBody {
+                reason: ValueBodyReason::UnsupportedBitPackedRun { header: 3 },
+                ..
+            })
         ));
         let mut encoded = encode_definition_levels(&[true, true, false].into_iter().collect());
         encoded.push(0);
-        assert!(decode_definition_levels(&encoded, 3).is_err());
+        assert_eq!(
+            decode_definition_levels(&encoded, 3),
+            Err(ColumnarError::value_body(
+                "definition levels",
+                ValueBodyReason::TrailingLevels {
+                    offset: 4,
+                    available: 5,
+                },
+            ))
+        );
+
+        let mut header = Vec::new();
+        write_varint(&mut header, u64::MAX);
+        let error = decode_definition_levels(&header, 8).unwrap_err();
+        drop(header);
+        let reason = Capture::read(&error).child("reason");
+        assert!(
+            matches!(reason.field("header"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert_eq!(
+            error.to_string(),
+            "columnar definition-level bit-packed run value -1 is unsupported"
+        );
+        assert_eq!(
+            decode_definition_levels(&[16, 1], 8).unwrap(),
+            Presence::full(8)
+        );
+
+        for (bytes, expected) in [
+            (
+                &[2, 1, 0x80][..],
+                ValueBodyReason::Varint {
+                    offset: 2,
+                    cause: purrdf_core::ir::pack::bits::PackBitsError::Truncated {
+                        needed: 4,
+                        found: 3,
+                    },
+                },
+            ),
+            (
+                &[0][..],
+                ValueBodyReason::InvalidRun {
+                    length: 0,
+                    remaining: 8,
+                },
+            ),
+            (
+                &[18][..],
+                ValueBodyReason::InvalidRun {
+                    length: 9,
+                    remaining: 8,
+                },
+            ),
+            (&[16, 2][..], ValueBodyReason::DefinitionLevel { level: 2 }),
+        ] {
+            let window = CurrentThreadWindow::open();
+            let error = decode_definition_levels(bytes, 8).unwrap_err();
+            let measured = window.close();
+            // Only the existing eight-row presence bitmap may allocate.
+            assert_eq!((measured.allocations, measured.requested_bytes), (1, 8));
+            assert_eq!(
+                (measured.retained_bytes, measured.peak_working_bytes),
+                (0, 8)
+            );
+            assert!(
+                matches!(error, ColumnarError::ValueBody { ref reason, .. } if reason == &expected)
+            );
+            if let ValueBodyReason::Varint { cause, .. } = expected {
+                let native = std::error::Error::source(&error).unwrap();
+                assert_eq!(
+                    native
+                        .source()
+                        .unwrap()
+                        .downcast_ref::<purrdf_core::ir::pack::bits::PackBitsError>(),
+                    Some(&cause)
+                );
+            }
+        }
+    }
+
+    /// Original signed lengths and trailing coordinates survive value decoding.
+    #[test]
+    fn byte_array_refusals_preserve_lengths_and_trailing_coordinates() {
+        for length in [-1_i32, i32::MIN] {
+            let bytes = length.to_le_bytes();
+            let presence = Presence::full(1);
+            let window = CurrentThreadWindow::open();
+            let error = decode_plain(&bytes, PhysicalType::ByteArray, presence, 1).unwrap_err();
+            let measured = window.close();
+            assert_eq!(
+                (measured.allocations, measured.requested_bytes),
+                (1, size_of::<Option<Vec<u8>>>() as u64)
+            );
+            // Refusal also releases the input bitmap allocated before the window.
+            assert_eq!(measured.retained_bytes, -(size_of::<u64>() as i64));
+            assert_eq!(
+                error,
+                ColumnarError::value_body(
+                    "PLAIN BYTE_ARRAY length",
+                    ValueBodyReason::NegativeLength { length },
+                )
+            );
+            assert_eq!(
+                error.to_string(),
+                "columnar PLAIN BYTE_ARRAY length is malformed: negative length"
+            );
+        }
+        let body = [1, 0, 0, 0, b'x', 9];
+        assert_eq!(
+            decode_plain(&body, PhysicalType::ByteArray, Presence::full(1), 1),
+            Err(ColumnarError::value_body(
+                "PLAIN BYTE_ARRAY",
+                ValueBodyReason::TrailingValues {
+                    offset: 5,
+                    available: 6
+                },
+            ))
+        );
+        assert_eq!(
+            decode_plain(&body[..5], PhysicalType::ByteArray, Presence::full(1), 1).unwrap(),
+            ColumnValues::bytes(vec![Some(vec![b'x'])])
+        );
+        // An impossible total byte count still reports the first missing word.
+        assert_eq!(
+            decode_int64_plain(&[], Presence::default(), usize::MAX),
+            Err(ColumnarError::truncated("PLAIN INT64", 8, 0))
+        );
     }
 
     #[test]
@@ -1910,9 +2085,15 @@ mod tests {
                 values.push(None);
                 continue;
             }
-            let end = pos
-                .checked_add(8)
-                .ok_or_else(|| ColumnarError::malformed("PLAIN INT64", "offset overflows usize"))?;
+            let end = pos.checked_add(8).ok_or_else(|| {
+                ColumnarError::value_body(
+                    "PLAIN INT64",
+                    ValueBodyReason::OffsetOverflow {
+                        offset: pos,
+                        length: 8,
+                    },
+                )
+            })?;
             let raw = bytes
                 .get(pos..end)
                 .ok_or_else(|| ColumnarError::truncated("PLAIN INT64", end, bytes.len()))?;
@@ -1922,9 +2103,12 @@ mod tests {
             pos = end;
         }
         if pos != bytes.len() {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::value_body(
                 "PLAIN INT64",
-                "trailing bytes after values",
+                ValueBodyReason::TrailingValues {
+                    offset: pos,
+                    available: bytes.len(),
+                },
             ));
         }
         Ok(values)
@@ -2110,9 +2294,12 @@ mod tests {
         );
         assert_eq!(
             decode_split(&[0; 17], &[true, false, true]),
-            Err(ColumnarError::malformed(
+            Err(ColumnarError::value_body(
                 "PLAIN INT64",
-                "trailing bytes after values"
+                ValueBodyReason::TrailingValues {
+                    offset: 16,
+                    available: 17,
+                }
             ))
         );
     }
