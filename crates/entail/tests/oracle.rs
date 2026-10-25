@@ -67,9 +67,10 @@ use std::str::FromStr as _;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_canonicalize};
+use purrdf_datalog::seminaive::EvalOptions;
 use purrdf_entail::{
     Completeness, EntailError, InconsistencyWitness, Materialization, ReasoningReport, Regime,
-    RuleId, implemented, materialize, rules,
+    RuleId, implemented, materialize, materialize_with, rules,
 };
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
@@ -5979,9 +5980,15 @@ fn render_golden(fixture: &Fixture) -> String {
     let ds = build(fixture);
     write_nquads(&mut out, "input", &try_canonicalize(&ds).unwrap().nquads);
 
+    // Frozen reports name the original native capacity profile explicitly;
+    // changing application defaults must not rewrite these historical answers.
+    let options = EvalOptions::default()
+        .with_max_stored_facts(4_194_304)
+        .with_max_join_steps(1_048_576)
+        .with_max_term_arena_bytes(1 << 24);
     for (plan, name) in ORACLE_REGIMES {
         let _ = writeln!(out, "\n=== regime {name} ===");
-        match materialize(&ds, plan) {
+        match materialize_with(&ds, plan, &options, None) {
             Ok((closed, report)) => {
                 write_nquads(
                     &mut out,
@@ -8141,7 +8148,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
 /// so a regression in either direction fails here and not only in the golden.
 ///
 /// Opacity itself is NOT the bug and is not repaired: the chase still never reasons INTO
-/// the quoted triple. rdfs14 / rdfs14a do fire over it — each concludes about a fresh
+/// the quoted triple. `rdfs14` / `rdfs14a` do fire over it — each concludes about a fresh
 /// surrogate blank node the answer may not bind, so the conclusion is withheld and counted
 /// rather than materialized — which withholds conclusions rather than inventing them, and
 /// the triple-term boundary is what tells a caller so.
@@ -8310,7 +8317,7 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
 #[test]
 fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_them() {
     // OWL-RL asserts no axiomatic triples, so its lane has no path to the premises of
-    // rdfs6 and rdfs10 and this input still entails nothing about the SUB-CLASS and
+    // `rdfs6` and `rdfs10` and this input still entails nothing about the SUB-CLASS and
     // SUB-PROPERTY hierarchies at all. The premise-free block — `prp-ap`'s nine typings,
     // `cls-thing`, `cls-nothing1`, `dt-type1`'s thirty-two, and everything `scm-cls` and
     // `eq-ref` draw from those — holds for every input including the empty graph, so it is

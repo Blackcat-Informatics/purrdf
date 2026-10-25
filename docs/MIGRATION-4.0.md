@@ -32,8 +32,14 @@ handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
 Unstated Datalog stored-fact, join-step and term-arena settings now impose no
 logical ceiling on every target. Physical storage admission and counter
 representation still apply. Select finite limits explicitly; effective settings
-remain part of contract identity. Target-specific capacity default constants
-have been removed. `EvalOptions::without_stored_fact_limit`,
+remain part of contract identity. The calculus version advances to v3 because
+chase work-counter overflow now refuses rather than permitting further work.
+All contract identities change, including explicitly finite profiles; cached
+results must be recomputed. Shared report vectors change their contract-hash
+lines while canonical model bytes stay unchanged. Historical fixture capacity
+values remain explicit; they do not retain the previous calculus identity.
+Target-specific capacity default constants have been removed.
+`EvalOptions::without_stored_fact_limit`,
 `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
 
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to

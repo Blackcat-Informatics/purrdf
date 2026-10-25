@@ -1180,6 +1180,8 @@ pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
 ///
 /// All three capacity settings are fixed so changing an application default
 /// cannot change this artifact's contract hash on any host.
+/// A calculus-version change still changes its identity; the deliberate
+/// regenerator then refreshes this current-engine artifact.
 pub const REGIME_GOLDEN_VECTOR_LIMITS: MaterializeLimits = MaterializeLimits {
     max_stored_facts: Some(4_194_304),
     max_join_steps: Some(1_048_576),

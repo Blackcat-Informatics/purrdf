@@ -345,7 +345,9 @@ fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard], nativ
 /// what [`PlanIdentity`] keys a cached PLAN on. Connectivity-first ordering changes
 /// candidate work, so `v2` deliberately changes the calculus identity too; the canonical
 /// authored clause encoding remains unchanged.
-pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v2";
+/// Version 3 also refuses unrepresentable chase work instead of permitting a
+/// saturated counter to continue past the full-width limit.
+pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v3";
 
 /// Domain-separation tag for [`contract_hash`].
 ///
@@ -1533,7 +1535,7 @@ mod tests {
             .with_max_term_arena_bytes(1 << 24);
         assert_eq!(
             contract_hash_with(&transitive_step(Q), &wasm).to_hex(),
-            "3d385bc2c0467c392ba6b46117b8b6cd547982d41b325fbaef367536ea981574",
+            "6edbbc243f3c2950ceee43f91d10a6455330673ac4b95feec8b034b07d94c4af",
             "the contract hash of the fixture program under the historical browser profile moved"
         );
         let native = EvalOptions::default()
@@ -1543,7 +1545,7 @@ mod tests {
             .with_max_term_arena_bytes(1 << 24);
         assert_eq!(
             contract_hash_with(&transitive_step(Q), &native).to_hex(),
-            "2a0bb5e502d94881573555fdc23ff32b6a64d8116e2dd8273efb2829cac24fc7",
+            "fd72be9b6d8509748d2e4e4d534a72550b0c151577023c0e3b50b6c4bbf261b0",
             "the contract hash of the fixture program under the historical native profile moved"
         );
         let hash = contract_hash(&transitive_step(Q));
@@ -1603,13 +1605,13 @@ mod tests {
         );
         assert_eq!(
             contract_hash_with(&guarded_step(Q), &stated_options()).to_hex(),
-            "a108e586708d4e70e9ea916c45005c041036e32b841b4a614b489ac920ab478f",
+            "381da965e54dd12704070b50ae495c4bb9e7524089ab435abbee0db497f247dc",
             "the guarded contract re-fold moved"
         );
         let schedule = Schedule::new(vec![crate::schedule::Layer::new(vec![vec![0]], Vec::new())]);
         assert_eq!(
             scheduled_contract_hash(&transitive_step(Q), &schedule, &stated_options()).to_hex(),
-            "71c1eb49c92901ba68c1ad7953630033d91d8829d702d09a8c5659b026b207cb",
+            "6662384d35a3137e23e8b73c4e7d6db87f7fb1877fbe4ba33f1493551f143fac",
             "the scheduled contract hash moved"
         );
         assert_eq!(

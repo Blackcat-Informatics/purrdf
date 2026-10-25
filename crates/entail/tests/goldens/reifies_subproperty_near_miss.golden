@@ -455,7 +455,7 @@
   boundaries: (0)
   withheld-surrogates: 0
   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
-  contract-hash: 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+  contract-hash: bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a
   termination: none
   inconsistency: none
   overclaims: false
@@ -477,7 +477,7 @@
       triple-term axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 3
   budget: join-steps=33 stored-facts=9 term-arena-bytes=709
-  contract-hash: 35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7
+  contract-hash: 8a130678fd2ef3086aa4a6fd840bb7a567724540ca71dd33fe57f2f9dc3c4bf3
   termination: weakly-acyclic positions=10 existential-edges=4
   inconsistency: none
   overclaims: false
@@ -617,7 +617,7 @@
       triple-term generalized-rdf axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 14
   budget: join-steps=8761 stored-facts=189 term-arena-bytes=2063
-  contract-hash: 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
+  contract-hash: 43165d4570613a4e1db0550646cf7e9103a6fd5c79c10a37abbff4719602327d
   termination: weakly-acyclic positions=27 existential-edges=8
   inconsistency: none
   overclaims: false
@@ -740,7 +740,7 @@
       triple-term generalized-rdf datatype-value-space
   withheld-surrogates: 0
   budget: join-steps=1297 stored-facts=106 term-arena-bytes=2524
-  contract-hash: f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
+  contract-hash: e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c
   termination: none
   inconsistency: none
   overclaims: false
@@ -791,7 +791,7 @@
       triple-term datatype-value-space
   withheld-surrogates: 0
   budget: join-steps=32 stored-facts=34 term-arena-bytes=1810
-  contract-hash: fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
+  contract-hash: 82674ca392c68d4ac789e7c7c9b517dbfcdfd02e344aafd961b2b1105bda5aea
   termination: none
   inconsistency: none
   overclaims: false
