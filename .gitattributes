@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+# TOML conformance payloads exercise exact CRLF, invalid bytes and whitespace.
+# Keep the frozen upstream bytes independent of checkout line-ending settings.
+crates/toml/tests/suite/** -text -diff
+
 # Preserve the revision-pinned W3C CSVW corpus byte-for-byte. Some normative
 # fixtures intentionally exercise CRLF and trailing-whitespace behavior.
 crates/rdf/tests/fixtures/csvw-w3c/** -text -diff

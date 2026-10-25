@@ -607,7 +607,7 @@ def _is_first_party_rdf_text(segments: list[str]) -> bool:
 # corpus exists to have. First-party sidecars in the same directory (this
 # repository's own README/PROVENANCE prose) stay in scope, mirroring the payload/
 # sidecar split ``check-corpus-frozen.py`` already draws.
-VENDORED_TREES = ("bindings/python/tests/rdflib_suite/vendor/",)
+VENDORED_TREES = ("bindings/python/tests/rdflib_suite/vendor/", "crates/toml/tests/suite/")
 VENDORED_FIRST_PARTY_SIDECARS = frozenset({"README.md", "PROVENANCE.md"})
 
 

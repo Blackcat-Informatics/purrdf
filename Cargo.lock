@@ -318,6 +318,7 @@ dependencies = [
  "purrdf-jsonschema",
  "purrdf-lex",
  "purrdf-testkit",
+ "purrdf-toml",
  "regex",
  "syn",
 ]
@@ -430,6 +431,7 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-text",
+ "purrdf-toml",
  "purrdf-validate",
  "purrdf-xsd",
 ]
@@ -997,6 +999,19 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-stack",
+ "purrdf-testkit",
+ "purrdf-xsd",
+]
+
+[[package]]
+name = "purrdf-toml"
+version = "3.0.1"
+dependencies = [
+ "purrdf-core",
+ "purrdf-hash",
+ "purrdf-lex",
+ "purrdf-rdf",
+ "purrdf-sparql-eval",
  "purrdf-testkit",
  "purrdf-xsd",
 ]

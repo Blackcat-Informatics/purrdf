@@ -357,6 +357,7 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-gts`](./crates/gts/) | Container, fold, verification and cryptography. |
 | [`purrdf-markdown`](./crates/markdown/) | Structural Markdown codec. |
 | [`purrdf-json`](./crates/json/) | Ordered JSON byte-cover codec. |
+| [`purrdf-toml`](./crates/toml/) | Lossless TOML 1.1 model and verified RDF byte-cover codec. |
 | [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema drafts 2020-12, 2019-09 and 07. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalogs, artifact ownership and dependencies. |
 | [`purrdf-validate`](./crates/validate/) | Shared validation, governor and diagnostic host boundary. |
