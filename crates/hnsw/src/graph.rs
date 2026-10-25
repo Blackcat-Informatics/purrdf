@@ -36,7 +36,7 @@ use purrdf_core::distance::{
     Arithmetic, BuildIdentity, BuildShape, Exact, Resolved, RowsRef, Selected,
 };
 
-use crate::error::{ArithmeticRefusal, HnswError, Result};
+use crate::error::{ArithmeticRefusal, ComponentValue, HnswError, Result};
 use crate::params::Params;
 use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
@@ -122,12 +122,18 @@ impl Vectors {
         }
     }
 
-    /// Whether every component is finite. A non-finite input would poison every candidate it
-    /// touched, so a matrix that cannot be ranked should not exist.
-    fn first_non_finite(&self) -> Option<usize> {
+    /// Locate the first rejected component and retain its original-width bits.
+    /// Healthy inputs perform no additional value capture.
+    fn first_non_finite(&self) -> Option<(usize, ComponentValue)> {
         match self {
-            Self::F32(data) => data.iter().position(|value| !value.is_finite()),
-            Self::F64(data) => data.iter().position(|value| !value.is_finite()),
+            Self::F32(data) => data
+                .iter()
+                .position(|value| !value.is_finite())
+                .map(|index| (index, ComponentValue::Binary32Bits(data[index].to_bits()))),
+            Self::F64(data) => data
+                .iter()
+                .position(|value| !value.is_finite())
+                .map(|index| (index, ComponentValue::Binary64Bits(data[index].to_bits()))),
         }
     }
 }
@@ -183,10 +189,11 @@ impl VectorMatrix {
                 },
             });
         }
-        if let Some(index) = data.first_non_finite() {
+        if let Some((index, value)) = data.first_non_finite() {
             return Err(HnswError::NonFiniteComponent {
                 row: index / dims,
                 column: index % dims,
+                value,
             });
         }
         Ok(Self { rows, dims, data })

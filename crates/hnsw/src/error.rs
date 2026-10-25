@@ -24,6 +24,22 @@ pub use profile::{CoordinateValue, ProfileRefusal};
 /// A result whose error is an [`HnswError`].
 pub type Result<T> = std::result::Result<T, HnswError>;
 
+/// One matrix component's original IEEE 754 width and complete bit pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentValue {
+    /// Original `binary32` bits, including sign and any NaN payload.
+    Binary32Bits(u32),
+    /// Original `binary64` bits, including sign and any NaN payload.
+    Binary64Bits(u64),
+}
+
+impl purrdf_hash::error::StructuredError for ComponentValue {
+    purrdf_hash::error_visit! {
+        Binary32Bits(bits) => "hnsw-component-binary32" { "value" => Float32Bits(*bits) },
+        Binary64Bits(bits) => "hnsw-component-binary64" { "value" => Float64Bits(*bits) },
+    }
+}
+
 /// Original container refusal or unresolved coordinates at the HNSW adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingFailure {
@@ -130,6 +146,8 @@ pub enum HnswError {
         row: usize,
         /// The component's column.
         column: usize,
+        /// The original component, before widening or formatting.
+        value: ComponentValue,
     },
 
     /// A vector has zero L2 norm under a metric that divides by it.
@@ -297,7 +315,10 @@ impl purrdf_hash::error::StructuredError for HnswError {
             "minimum" => Unsigned(*minimum as u128), "reason" => Text(reason),
         },
         ParameterValidation { cause } => "hnsw-parameter-validation" { "cause" => Cause(cause) },
-        NonFiniteComponent { row, column } => "hnsw-non-finite-component" { "row" => Unsigned(*row as u128), "column" => Unsigned(*column as u128) },
+        NonFiniteComponent { row, column, value } => "hnsw-non-finite-component" {
+            "row" => Unsigned(*row as u128), "column" => Unsigned(*column as u128),
+            "value" => Record(value),
+        },
         ZeroNorm { row } => "hnsw-zero-norm" { "row" => Unsigned(*row as u128) },
         NonFiniteDistance { row } => "hnsw-non-finite-distance" { "row" => Unsigned(*row as u128) },
         RowOutOfBounds { index, max } => "hnsw-row-out-of-bounds" { "index" => Unsigned(*index as u128), "max" => Unsigned(*max as u128) },
@@ -339,7 +360,11 @@ impl fmt::Display for HnswError {
             Self::ParameterValidation { cause } => {
                 write!(f, "parameters do not describe this matrix: {cause}")
             }
-            Self::NonFiniteComponent { row, column } => write!(
+            Self::NonFiniteComponent {
+                row,
+                column,
+                value: _,
+            } => write!(
                 f,
                 "row {row} component {column} is not finite; a distance over it has no \
                  defined ranking"
@@ -501,7 +526,11 @@ mod tests {
             HnswError::ParameterValidation {
                 cause: MatrixRefusal::ZeroRows { dimensions: 8 },
             },
-            HnswError::NonFiniteComponent { row: 0, column: 1 },
+            HnswError::NonFiniteComponent {
+                row: 0,
+                column: 1,
+                value: ComponentValue::Binary32Bits(f32::NAN.to_bits()),
+            },
             HnswError::ZeroNorm { row: 2 },
             HnswError::NonFiniteDistance { row: 3 },
             HnswError::RowOutOfBounds { index: 9, max: 8 },

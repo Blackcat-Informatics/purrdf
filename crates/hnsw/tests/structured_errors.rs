@@ -19,6 +19,92 @@ use purrdf_testkit::error_capture::Capture;
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
 fn matrix_and_parameter_producers_keep_original_operands() {
+    // Refusal and inspection consume only the original input and preallocated
+    // consumer buffers. A copied refusal outlives both original owners.
+    for bits in [
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc1_2345,
+        0xffc1_2345,
+        0x7f81_2345,
+        0xff81_2345,
+    ] {
+        let data = vec![0.0, -0.0, 1.0, -1.0, f32::from_bits(bits), f32::NAN];
+        let root_events = Vec::with_capacity(3);
+        let value_events = Vec::with_capacity(1);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = VectorMatrix::from_f32(2, 3, data).unwrap_err();
+        let copy = error.clone();
+        drop(error);
+        let fields = Capture::read_with_buffer(&copy, root_events);
+        let ErrorValue::Record(value) = fields.field("value") else {
+            panic!("the native component must be a borrowed record");
+        };
+        let value = Capture::read_with_buffer(value, value_events);
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        assert_eq!(measured.retained_bytes, -(6 * size_of::<f32>() as i64));
+        assert_eq!(fields.code, "hnsw-non-finite-component");
+        assert!(matches!(fields.field("row"), ErrorValue::Unsigned(1)));
+        assert!(matches!(fields.field("column"), ErrorValue::Unsigned(1)));
+        assert_eq!(value.code, "hnsw-component-binary32");
+        assert!(matches!(value.field("value"), ErrorValue::Float32Bits(actual) if actual == bits));
+        assert_eq!(
+            copy.to_string(),
+            "row 1 component 1 is not finite; a distance over it has no defined ranking"
+        );
+    }
+    for bits in [
+        0x7ff0_0000_0000_0000,
+        0xfff0_0000_0000_0000,
+        0x7ff8_1234_5678_9abc,
+        0xfff8_1234_5678_9abc,
+        0x7ff0_1234_5678_9abc,
+        0xfff0_1234_5678_9abc,
+    ] {
+        let data = vec![0.0, -0.0, 1.0, -1.0, f64::from_bits(bits), f64::NAN];
+        let root_events = Vec::with_capacity(3);
+        let value_events = Vec::with_capacity(1);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = VectorMatrix::new(2, 3, data).unwrap_err();
+        let copy = error.clone();
+        drop(error);
+        let fields = Capture::read_with_buffer(&copy, root_events);
+        let ErrorValue::Record(value) = fields.field("value") else {
+            panic!("the native component must be a borrowed record");
+        };
+        let value = Capture::read_with_buffer(value, value_events);
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        assert_eq!(measured.retained_bytes, -(6 * size_of::<f64>() as i64));
+        assert_eq!(fields.code, "hnsw-non-finite-component");
+        assert!(matches!(fields.field("row"), ErrorValue::Unsigned(1)));
+        assert!(matches!(fields.field("column"), ErrorValue::Unsigned(1)));
+        assert_eq!(value.code, "hnsw-component-binary64");
+        assert!(matches!(value.field("value"), ErrorValue::Float64Bits(actual) if actual == bits));
+        assert_eq!(
+            copy.to_string(),
+            "row 1 component 1 is not finite; a distance over it has no defined ranking"
+        );
+    }
+    for (rows, dims, code) in [
+        (0, 1, "hnsw-matrix-empty-axis"),
+        (1, 0, "hnsw-matrix-empty-axis"),
+        (2, 2, "hnsw-matrix-value-count"),
+        (usize::MAX, 2, "hnsw-arithmetic-matrix-elements"),
+    ] {
+        for error in [
+            VectorMatrix::new(rows, dims, vec![f64::NAN]).unwrap_err(),
+            VectorMatrix::from_f32(rows, dims, vec![f32::NAN]).unwrap_err(),
+        ] {
+            assert_eq!(Capture::read(&error).child("cause").code, code);
+        }
+    }
+    VectorMatrix::new(1, 2, vec![0.0, -0.0]).unwrap();
+    VectorMatrix::from_f32(1, 2, vec![0.0, -0.0]).unwrap();
+
     let error = VectorMatrix::new(2, 3, vec![1.0]).unwrap_err();
     let fields = Capture::read(&error).child("cause");
     assert_eq!(fields.code, "hnsw-matrix-value-count");
