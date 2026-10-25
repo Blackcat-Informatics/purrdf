@@ -107,6 +107,10 @@ name = "structured_inspection"
 harness = false
 
 [[test]]
+name = "loss_profiles"
+harness = false
+
+[[test]]
 name = "pack_certify"
 harness = false
 
