@@ -11,15 +11,25 @@ use structured_zstd::encoding::{CompressionLevel, compress_slice_to_vec};
 
 use std::borrow::Cow;
 
+use crate::MetadataReason;
 use crate::column::{Int64Column, Presence};
+mod profile;
 use crate::compact::{CompactField, CompactReader, CompactWriter, StructState, TYPE_STRUCT};
 use crate::{ColumnSchema, ColumnarError, PhysicalType, Repetition, Table, ValueBodyReason};
+pub use profile::{ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile};
 
 const PARQUET_MAGIC: &[u8; 4] = b"PAR1";
 const FILE_VERSION: i32 = 1;
 const SCHEMA_VERSION: &str = "1";
 const META_SCHEMA_VERSION: &str = "purrdf.columnar.schema-version";
 const META_TABLE: &str = "purrdf.columnar.table";
+
+fn expected_metadata(table: Table) -> [(&'static str, &'static str); 2] {
+    [
+        (META_SCHEMA_VERSION, SCHEMA_VERSION),
+        (META_TABLE, table.name()),
+    ]
+}
 
 const PARQUET_TYPE_INT64: i32 = 2;
 const PARQUET_TYPE_BYTE_ARRAY: i32 = 6;
@@ -561,7 +571,7 @@ fn checked_i32_len(len: usize, context: &'static str) -> Result<i32, ColumnarErr
 
 // ── Metadata reader ────────────────────────────────────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedSchemaElement {
     physical_type: Option<i32>,
     repetition: Option<i32>,
@@ -571,7 +581,7 @@ struct ParsedSchemaElement {
     logical_utf8: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedColumnMeta {
     physical_type: i32,
     encodings: Vec<i32>,
@@ -583,13 +593,13 @@ struct ParsedColumnMeta {
     data_page_offset: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedColumnChunk {
     file_offset: i64,
     metadata: ParsedColumnMeta,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedRowGroup {
     columns: Vec<ParsedColumnChunk>,
     total_byte_size: i64,
@@ -598,7 +608,7 @@ struct ParsedRowGroup {
     total_compressed_size: Option<i64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedFileMeta {
     version: i32,
     schema: Vec<ParsedSchemaElement>,
@@ -607,7 +617,7 @@ struct ParsedFileMeta {
     metadata: BTreeMap<String, String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedDataPageV2 {
     num_values: i32,
     num_nulls: i32,
@@ -618,7 +628,7 @@ struct ParsedDataPageV2 {
     is_compressed: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedPageHeader {
     page_type: i32,
     uncompressed_page_size: i32,
@@ -629,15 +639,14 @@ struct ParsedPageHeader {
 
 pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, ColumnarError> {
     let (footer_start, footer) = split_parquet_file(bytes)?;
-    let metadata = parse_file_metadata(footer)?;
-    validate_file_metadata(&metadata, table)?;
+    let metadata = validate_file_metadata(parse_file_metadata(footer)?, table)?;
     let row_count = nonnegative_usize(metadata.num_rows, "Parquet file row count")?;
 
     if row_count == 0 {
         if footer_start != PARQUET_MAGIC.len() {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::metadata(
                 "empty Parquet table",
-                "zero-row file contains page bytes",
+                MetadataReason::EmptyPages { footer_start },
             ));
         }
         let columns = table
@@ -658,16 +667,22 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
             total
                 .checked_add(column.metadata.total_uncompressed_size)
                 .ok_or_else(|| {
-                    ColumnarError::malformed(
+                    ColumnarError::metadata(
                         "row group metadata",
-                        "uncompressed byte total overflows i64",
+                        MetadataReason::UncompressedTotalOverflow {
+                            total,
+                            size: column.metadata.total_uncompressed_size,
+                        },
                     )
                 })
         })?;
     if row_group.total_byte_size != declared_uncompressed_total {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "row group metadata",
-            "total_byte_size disagrees with column chunks",
+            MetadataReason::UncompressedTotal {
+                declared: row_group.total_byte_size,
+                actual: declared_uncompressed_total,
+            },
         ));
     }
     validate_decoded_table_budget(
@@ -693,19 +708,24 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
         let column = &chunk.metadata;
         let offset = nonnegative_usize(column.data_page_offset, "data page offset")?;
         if offset != cursor {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::metadata(
                 "column chunk layout",
-                format!(
-                    "column {expected_index} starts at {offset}, expected contiguous offset {cursor}"
-                ),
+                MetadataReason::ColumnOffset {
+                    column: expected_index,
+                    actual: offset,
+                    expected: cursor,
+                },
             ));
         }
         let compression = Compression::from_parquet_id(column.codec)?;
         if let Some(previous) = observed_compression {
             if previous != compression {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::metadata(
                     "column chunk compression",
-                    "one table mixes compression codecs",
+                    MetadataReason::MixedCompression {
+                        previous,
+                        actual: compression,
+                    },
                 ));
             }
         } else {
@@ -720,7 +740,13 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
             "compressed page size",
         )?;
         let page_len = header.header_len.checked_add(body_len).ok_or_else(|| {
-            ColumnarError::malformed("column page", "page length overflows usize")
+            ColumnarError::metadata(
+                "column page",
+                MetadataReason::PageLengthOverflow {
+                    header: header.header_len,
+                    body: body_len,
+                },
+            )
         })?;
         let page = page_region
             .get(..page_len)
@@ -730,27 +756,27 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
             .expect("header length fits i64")
             + i64::from(header.uncompressed_page_size);
         if computed_uncompressed != column.total_uncompressed_size {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::metadata(
                 "column metadata",
-                format!(
-                    "{}.{} uncompressed size {} disagrees with page {computed_uncompressed}",
-                    table.name(),
-                    schema.name,
-                    column.total_uncompressed_size
-                ),
+                MetadataReason::UncompressedColumnSize {
+                    table,
+                    column: schema.name,
+                    declared: column.total_uncompressed_size,
+                    actual: computed_uncompressed,
+                },
             ));
         }
         let computed_compressed = i64::try_from(page_len)
             .map_err(|_| ColumnarError::limit("column page length", page_len, i64::MAX as usize))?;
         if computed_compressed != column.total_compressed_size {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::metadata(
                 "column metadata",
-                format!(
-                    "{}.{} compressed size {} disagrees with page {computed_compressed}",
-                    table.name(),
-                    schema.name,
-                    column.total_compressed_size
-                ),
+                MetadataReason::CompressedColumnSize {
+                    table,
+                    column: schema.name,
+                    declared: column.total_compressed_size,
+                    actual: computed_compressed,
+                },
             ));
         }
         // Validate every metadata cross-reference before allocating the decoded
@@ -759,25 +785,40 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
         uncompressed_total += computed_uncompressed;
         compressed_total += computed_compressed;
         cursor = cursor.checked_add(page_len).ok_or_else(|| {
-            ColumnarError::malformed("column chunk layout", "offset overflows usize")
+            ColumnarError::metadata(
+                "column chunk layout",
+                MetadataReason::OffsetOverflow {
+                    offset: cursor,
+                    length: page_len,
+                },
+            )
         })?;
     }
     if cursor != footer_start {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "column chunk layout",
-            format!("pages end at {cursor}, footer begins at {footer_start}"),
+            MetadataReason::PageEnd {
+                actual: cursor,
+                expected: footer_start,
+            },
         ));
     }
     if declared_uncompressed_total != uncompressed_total {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "row group metadata",
-            "total_byte_size disagrees with column chunks",
+            MetadataReason::UncompressedTotal {
+                declared: declared_uncompressed_total,
+                actual: uncompressed_total,
+            },
         ));
     }
     if row_group.total_compressed_size != Some(compressed_total) {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "row group metadata",
-            "total_compressed_size disagrees with column chunks",
+            MetadataReason::CompressedTotal {
+                declared: row_group.total_compressed_size,
+                actual: compressed_total,
+            },
         ));
     }
     TableData::new(table, decoded)
@@ -789,9 +830,9 @@ fn split_parquet_file(bytes: &[u8]) -> Result<(usize, &[u8]), ColumnarError> {
     }
     if bytes.get(..4) != Some(PARQUET_MAGIC) || bytes.get(bytes.len() - 4..) != Some(PARQUET_MAGIC)
     {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Parquet file",
-            "missing PAR1 magic",
+            MetadataReason::Magic,
         ));
     }
     let footer_len = u32::from_le_bytes(
@@ -804,12 +845,20 @@ fn split_parquet_file(bytes: &[u8]) -> Result<(usize, &[u8]), ColumnarError> {
         .checked_sub(8)
         .and_then(|end| end.checked_sub(footer_len))
         .ok_or_else(|| {
-            ColumnarError::malformed("Parquet footer", "declared length exceeds file")
+            ColumnarError::metadata(
+                "Parquet footer",
+                MetadataReason::FooterLength {
+                    length: footer_len,
+                    file_length: bytes.len(),
+                },
+            )
         })?;
     if footer_start < PARQUET_MAGIC.len() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Parquet footer",
-            "footer overlaps leading magic",
+            MetadataReason::FooterOverlap {
+                start: footer_start,
+            },
         ));
     }
     Ok((footer_start, &bytes[footer_start..bytes.len() - 8]))
@@ -844,9 +893,10 @@ fn parse_file_metadata(bytes: &[u8]) -> Result<ParsedFileMeta, ColumnarError> {
                             entry.insert(value);
                         }
                         std::collections::btree_map::Entry::Occupied(entry) => {
-                            return Err(ColumnarError::malformed(
+                            let (key, _) = entry.remove_entry();
+                            return Err(ColumnarError::metadata(
                                 "file key/value metadata",
-                                format!("duplicate key {}", entry.key()),
+                                MetadataReason::DuplicateKey { key },
                             ));
                         }
                     }
@@ -857,9 +907,12 @@ fn parse_file_metadata(bytes: &[u8]) -> Result<ParsedFileMeta, ColumnarError> {
         }
     }
     if !reader.is_finished() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Parquet footer",
-            "trailing compact bytes",
+            MetadataReason::TrailingCompact {
+                offset: reader.position(),
+                length: bytes.len(),
+            },
         ));
     }
     Ok(ParsedFileMeta {
@@ -935,9 +988,9 @@ fn parse_logical_type(
     while let Some(field) = reader.next_field(&mut logical)? {
         if field.id == 1 {
             if utf8 {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::metadata(
                     "logical type",
-                    "duplicate STRING member",
+                    MetadataReason::DuplicateString,
                 ));
             }
             let mut string_type = CompactReader::expect_struct(field)?;
@@ -946,9 +999,9 @@ fn parse_logical_type(
                 while let Some(inner) = reader.next_field(&mut string_type)? {
                     reader.skip_field(inner)?;
                 }
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::metadata(
                     "logical STRING type",
-                    "STRING marker struct is not empty",
+                    MetadataReason::NonemptyString,
                 ));
             }
             utf8 = true;
@@ -1140,9 +1193,12 @@ fn parse_struct_list<T>(
 ) -> Result<Vec<T>, ColumnarError> {
     let (len, element_type) = reader.read_list_header(field)?;
     if element_type != TYPE_STRUCT {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::compact(
             "compact struct list",
-            format!("element type is {element_type}"),
+            crate::CompactReason::ElementType {
+                actual: element_type,
+                expected: TYPE_STRUCT,
+            },
         ));
     }
     let mut values = Vec::with_capacity(len);
@@ -1153,41 +1209,41 @@ fn parse_struct_list<T>(
     Ok(values)
 }
 
-fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(), ColumnarError> {
+fn validate_file_metadata(
+    mut metadata: ParsedFileMeta,
+    table: Table,
+) -> Result<ParsedFileMeta, ColumnarError> {
     if metadata.version != FILE_VERSION {
         return Err(ColumnarError::Unsupported {
             context: "Parquet file version",
             value: i64::from(metadata.version),
         });
     }
-    let expected_metadata = [
-        (META_SCHEMA_VERSION, SCHEMA_VERSION),
-        (META_TABLE, table.name()),
-    ];
+    let expected_metadata = expected_metadata(table);
     if !metadata
         .metadata
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
         .eq(expected_metadata)
     {
-        let expected_metadata = BTreeMap::from(expected_metadata);
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Parquet key/value metadata",
-            format!(
-                "observed {:?}, expected {:?}",
-                metadata.metadata, expected_metadata
-            ),
+            MetadataReason::Metadata {
+                profile: MetadataProfile {
+                    observed: metadata.metadata,
+                    table,
+                },
+            },
         ));
     }
     let expected_schema = table.schema();
     if metadata.schema.len() != expected_schema.columns.len() + 1 {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Parquet schema",
-            format!(
-                "has {} nodes, expected {}",
-                metadata.schema.len(),
-                expected_schema.columns.len() + 1
-            ),
+            MetadataReason::SchemaNodes {
+                actual: metadata.schema.len(),
+                expected: expected_schema.columns.len() + 1,
+            },
         ));
     }
     let root = &metadata.schema[0];
@@ -1198,12 +1254,20 @@ fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(),
         || root.converted_type.is_some()
         || root.logical_utf8
     {
-        return Err(ColumnarError::malformed(
+        let observed = SchemaProfile {
+            nodes: metadata.schema,
+            selected: 0,
+        };
+        return Err(ColumnarError::metadata(
             "Parquet schema root",
-            "root shape differs from the fixed flat schema",
+            MetadataReason::SchemaRoot {
+                observed,
+                expected_children: expected_schema.columns.len(),
+            },
         ));
     }
-    for (observed, expected) in metadata.schema[1..].iter().zip(expected_schema.columns) {
+    for (index, expected) in expected_schema.columns.iter().enumerate() {
+        let observed = &metadata.schema[index + 1];
         let expected_repetition = match expected.repetition {
             Repetition::Required => REPETITION_REQUIRED,
             Repetition::Optional => REPETITION_OPTIONAL,
@@ -1215,9 +1279,16 @@ fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(),
             || observed.converted_type != expected.utf8.then_some(CONVERTED_TYPE_UTF8)
             || observed.logical_utf8 != expected.utf8
         {
-            return Err(ColumnarError::malformed(
+            let observed = SchemaProfile {
+                nodes: metadata.schema,
+                selected: index + 1,
+            };
+            return Err(ColumnarError::metadata(
                 "Parquet schema leaf",
-                format!("column {} differs from the fixed schema", expected.name),
+                MetadataReason::SchemaLeaf {
+                    observed,
+                    expected: *expected,
+                },
             ));
         }
     }
@@ -1232,17 +1303,21 @@ fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(),
     }
     if row_count == 0 {
         if !metadata.row_groups.is_empty() {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::metadata(
                 "Parquet row groups",
-                "zero-row table must have no row groups",
+                MetadataReason::EmptyRowGroups {
+                    actual: metadata.row_groups.len(),
+                },
             ));
         }
-        return Ok(());
+        return Ok(metadata);
     }
     if metadata.row_groups.len() != 1 {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Parquet row groups",
-            format!("has {}, expected one", metadata.row_groups.len()),
+            MetadataReason::RowGroups {
+                actual: metadata.row_groups.len(),
+            },
         ));
     }
     let row_group = &metadata.row_groups[0];
@@ -1251,34 +1326,50 @@ fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(),
         || row_group.total_compressed_size.is_none()
         || row_group.columns.len() != expected_schema.columns.len()
     {
-        return Err(ColumnarError::malformed(
+        let observed = RowGroupProfile(metadata.row_groups);
+        return Err(ColumnarError::metadata(
             "Parquet row group",
-            "row count, offset, size, or column count differs from the fixed profile",
+            MetadataReason::RowGroup {
+                observed,
+                expected_rows: metadata.num_rows,
+                expected_offset: PARQUET_MAGIC.len() as i64,
+                expected_columns: expected_schema.columns.len(),
+            },
         ));
     }
-    for (column, expected) in row_group.columns.iter().zip(expected_schema.columns) {
-        let metadata = &column.metadata;
+    let row_group = &mut metadata.row_groups[0];
+    for (index, expected) in expected_schema.columns.iter().enumerate() {
+        let column = &row_group.columns[index];
+        let column_metadata = &column.metadata;
         let expected_encodings: &[i32] = if expected.repetition == Repetition::Optional {
             &[ENCODING_PLAIN, ENCODING_RLE]
         } else {
             &[ENCODING_PLAIN]
         };
         if column.file_offset != 0
-            || metadata.physical_type != parquet_physical_type(expected.physical_type)
-            || metadata.encodings != expected_encodings
-            || metadata.path != [expected.name]
-            || metadata.num_values != row_group.num_rows
-            || metadata.total_uncompressed_size <= 0
-            || metadata.total_compressed_size <= 0
+            || column_metadata.physical_type != parquet_physical_type(expected.physical_type)
+            || column_metadata.encodings != expected_encodings
+            || column_metadata.path != [expected.name]
+            || column_metadata.num_values != row_group.num_rows
+            || column_metadata.total_uncompressed_size <= 0
+            || column_metadata.total_compressed_size <= 0
         {
-            return Err(ColumnarError::malformed(
+            let observed = ColumnProfile {
+                columns: std::mem::take(&mut row_group.columns),
+                selected: index,
+            };
+            return Err(ColumnarError::metadata(
                 "Parquet column metadata",
-                format!("column {} differs from the fixed profile", expected.name),
+                MetadataReason::Column {
+                    observed,
+                    expected: *expected,
+                    expected_rows: row_group.num_rows,
+                },
             ));
         }
-        Compression::from_parquet_id(metadata.codec)?;
+        Compression::from_parquet_id(column_metadata.codec)?;
     }
-    Ok(())
+    Ok(metadata)
 }
 
 fn parse_page_header(bytes: &[u8]) -> Result<ParsedPageHeader, ColumnarError> {
@@ -1408,9 +1499,13 @@ fn decode_page(
         || data.repetition_levels_byte_length != 0
         || data.is_compressed != (compression == Compression::Zstd)
     {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::metadata(
             "Data Page V2 header",
-            "counts, encoding, repetition levels, or compression flag differ from profile",
+            MetadataReason::Page {
+                observed: PageProfile(*header),
+                expected_rows: row_count,
+                compression,
+            },
         ));
     }
     let definition_len = nonnegative_usize(
@@ -1704,19 +1799,23 @@ fn decode_plain(
 
 fn set_once<T>(slot: &mut Option<T>, value: T, context: &'static str) -> Result<(), ColumnarError> {
     if slot.replace(value).is_some() {
-        Err(ColumnarError::malformed(context, "duplicate field"))
+        Err(ColumnarError::metadata(
+            context,
+            MetadataReason::DuplicateField,
+        ))
     } else {
         Ok(())
     }
 }
 
 fn required<T>(slot: Option<T>, context: &'static str) -> Result<T, ColumnarError> {
-    slot.ok_or_else(|| ColumnarError::malformed(context, "required field is absent"))
+    slot.ok_or_else(|| ColumnarError::metadata(context, MetadataReason::AbsentField))
 }
 
 fn nonnegative_usize(value: i64, context: &'static str) -> Result<usize, ColumnarError> {
-    usize::try_from(value)
-        .map_err(|_| ColumnarError::malformed(context, "value is negative or exceeds usize"))
+    usize::try_from(value).map_err(|cause| {
+        ColumnarError::metadata(context, MetadataReason::Nonnegative { value, cause })
+    })
 }
 
 #[cfg(test)]
@@ -1768,6 +1867,9 @@ mod tests {
 
     #[test]
     fn parsed_profile_validation_borrows_all_expected_fields() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
+
         for table in Table::ALL {
             let columns = table
                 .schema()
@@ -1784,7 +1886,7 @@ mod tests {
                 let (_, footer) = split_parquet_file(&bytes).unwrap();
                 let metadata = parse_file_metadata(footer).unwrap();
                 let window = CurrentThreadWindow::open();
-                let result = validate_file_metadata(&metadata, table);
+                let result = validate_file_metadata(metadata, table);
                 let measured = window.close();
                 result.unwrap();
                 assert_eq!(measured.allocations, 0, "{table:?}/{compression:?}");
@@ -1792,6 +1894,118 @@ mod tests {
                 assert_eq!(read_table(&bytes, table).unwrap(), data);
             }
         }
+
+        for case in 0..5 {
+            let bytes = write_table(&quads(), Compression::Uncompressed).unwrap();
+            let (_, footer) = split_parquet_file(&bytes).unwrap();
+            let mut metadata = parse_file_metadata(footer).unwrap();
+            let pointer = match case {
+                0 => {
+                    let value = metadata.metadata.get_mut(META_TABLE).unwrap();
+                    value.push('_');
+                    value.as_ptr()
+                }
+                1 | 2 => {
+                    let node = &mut metadata.schema[case - 1];
+                    node.name.push('_');
+                    node.name.as_ptr()
+                }
+                3 => {
+                    metadata.row_groups[0].file_offset = Some(i64::MAX);
+                    metadata.row_groups[0].columns[0].metadata.path[0].as_ptr()
+                }
+                4 => {
+                    let path = &mut metadata.row_groups[0].columns[0].metadata.path[0];
+                    path.push('_');
+                    path.as_ptr()
+                }
+                _ => unreachable!("five original metadata owner kinds"),
+            };
+            let expected_message = (case == 0).then(|| {
+                format!(
+                    "columnar Parquet key/value metadata is malformed: observed {:?}, expected {:?}",
+                    metadata.metadata,
+                    BTreeMap::from(expected_metadata(Table::Quads))
+                )
+            });
+            let window = CurrentThreadWindow::open();
+            let error = validate_file_metadata(metadata, Table::Quads).unwrap_err();
+            let measured = window.close();
+            assert_eq!(measured.allocations, 0);
+            assert_eq!(measured.requested_bytes, 0);
+            drop(bytes);
+            let reason = Capture::read(&error).child("reason");
+            let text = match case {
+                0 => {
+                    assert_eq!(error.to_string(), expected_message.unwrap());
+                    let pairs = reason.child("profile").records("observed");
+                    let pair = pairs
+                        .iter()
+                        .find(|pair| matches!(pair.field("key"), ErrorValue::Text(META_TABLE)))
+                        .unwrap();
+                    pair.field("value")
+                }
+                1 | 2 => reason.child("observed").child("original").field("name"),
+                3 | 4 => {
+                    let original = reason.child("observed").child("original");
+                    let column = if case == 3 {
+                        assert!(
+                            matches!(original.field("file_offset"), ErrorValue::Signed(value) if value == i128::from(i64::MAX))
+                        );
+                        original.records("columns").remove(0)
+                    } else {
+                        original
+                    };
+                    column
+                        .child("metadata")
+                        .events
+                        .iter()
+                        .find_map(|event| match event {
+                            Event::Value(None, ErrorValue::Text(path)) => {
+                                Some(ErrorValue::Text(path))
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                }
+                _ => unreachable!("five original metadata owner kinds"),
+            };
+            assert!(matches!(text, ErrorValue::Text(text) if text.as_ptr() == pointer));
+        }
+
+        let bytes = write_table(&quads(), Compression::Uncompressed).unwrap();
+        let mut header = parse_page_header(&bytes[4..]).unwrap();
+        header.data_v2.num_nulls = -1;
+        header.data_v2.encoding = -1;
+        let window = CurrentThreadWindow::open();
+        let error = decode_page(
+            &[],
+            &header,
+            &Table::Quads.schema().columns[0],
+            3,
+            Compression::Uncompressed,
+        )
+        .unwrap_err();
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        drop(bytes);
+        let reason = Capture::read(&error).child("reason");
+        assert_eq!(reason.code, "columnar-parquet-page");
+        let data = reason.child("observed").child("original").child("data_v2");
+        assert!(matches!(data.field("num_nulls"), ErrorValue::Signed(-1)));
+        assert!(matches!(data.field("encoding"), ErrorValue::Signed(-1)));
+        let error = nonnegative_usize(-1, "original signed count").unwrap_err();
+        let reason = Capture::read(&error).child("reason");
+        assert!(matches!(reason.field("value"), ErrorValue::Signed(-1)));
+        assert_eq!(reason.child("cause").code, "integer-conversion-range");
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .source()
+                .unwrap()
+                .is::<std::num::TryFromIntError>()
+        );
     }
 
     fn ints(rows: &[Option<i64>]) -> ColumnValues {
@@ -1869,7 +2083,10 @@ mod tests {
         bytes[0] ^= 0xff;
         assert!(matches!(
             read_table(&bytes, Table::Quads),
-            Err(ColumnarError::Malformed { .. })
+            Err(ColumnarError::Metadata {
+                reason: MetadataReason::Magic,
+                ..
+            })
         ));
     }
 
