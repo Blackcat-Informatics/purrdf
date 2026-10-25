@@ -27,7 +27,16 @@
 # non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
 # specifications themselves define.
 #
-# WHY THIS ARTIFACT MOVED: THE SHARED CALCULUS IS VERSION 2.
+# WHY THIS ARTIFACT MOVED: THE SHARED CALCULUS IS VERSION 3.
+#
+# Work beyond the largest representable chase counter now refuses instead of
+# continuing with a saturated counter. That changed refusal boundary is part of
+# the calculus identity, including for explicitly finite capacity profiles.
+# Every case still states the original native fact, join and term-arena limits.
+# The deliberate Rust regenerator changes only the nine contract-hash lines;
+# inputs, programs, canonical closures, work counts and witnesses stay unchanged.
+#
+# AN EARLIER MOVE: THE SHARED CALCULUS IS VERSION 2.
 #
 # Every contract-hash includes the versioned evaluator semantics. All nine cases
 # cover the same seven regimes and retain byte-identical input, program, closure,
@@ -203,7 +212,7 @@ mechanism none
 budget join-steps 0
 budget stored-facts 0
 budget term-arena-bytes 0
-contract-hash 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+contract-hash bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -229,7 +238,7 @@ mechanism none
 budget join-steps 25
 budget stored-facts 6
 budget term-arena-bytes 433
-contract-hash 35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7
+contract-hash 8a130678fd2ef3086aa4a6fd840bb7a567724540ca71dd33fe57f2f9dc3c4bf3
 withheld-surrogates 3
 termination weakly-acyclic positions 10 existential-edges 4
 inconsistency none
@@ -408,7 +417,7 @@ mechanism none
 budget join-steps 9455
 budget stored-facts 201
 budget term-arena-bytes 1958
-contract-hash 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
+contract-hash 43165d4570613a4e1db0550646cf7e9103a6fd5c79c10a37abbff4719602327d
 withheld-surrogates 11
 termination weakly-acyclic positions 27 existential-edges 8
 inconsistency none
@@ -578,7 +587,7 @@ mechanism none
 budget join-steps 1550
 budget stored-facts 127
 budget term-arena-bytes 2500
-contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
+contract-hash e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -734,7 +743,7 @@ mechanism none
 budget join-steps 8827
 budget stored-facts 192
 budget term-arena-bytes 1966
-contract-hash 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
+contract-hash 43165d4570613a4e1db0550646cf7e9103a6fd5c79c10a37abbff4719602327d
 withheld-surrogates 16
 termination weakly-acyclic positions 27 existential-edges 8
 inconsistency none
@@ -791,7 +800,7 @@ mechanism none
 budget join-steps 64
 budget stored-facts 98
 budget term-arena-bytes 1759
-contract-hash fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
+contract-hash 82674ca392c68d4ac789e7c7c9b517dbfcdfd02e344aafd961b2b1105bda5aea
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -940,7 +949,7 @@ mechanism none
 budget join-steps 1530
 budget stored-facts 115
 budget term-arena-bytes 2466
-contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
+contract-hash e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -974,7 +983,7 @@ mechanism none
 budget join-steps 0
 budget stored-facts 0
 budget term-arena-bytes 0
-contract-hash 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+contract-hash bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -997,7 +1006,7 @@ mechanism none
 budget join-steps 1
 budget stored-facts 2
 budget term-arena-bytes 128
-contract-hash 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+contract-hash bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a
 withheld-surrogates 0
 termination none
 inconsistency none

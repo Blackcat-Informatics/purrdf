@@ -1379,14 +1379,14 @@ fn model_only_and_recorded_models_have_explicit_evidence_and_equal_counts() {
 
 fn term_arena_limits_are_caller_selected_and_reach_contracts() {
     use purrdf_datalog::cache::contract_hash_with;
-    use purrdf_datalog::seminaive::{BudgetResource, DEFAULT_MAX_TERM_ARENA_BYTES, EvalError};
+    use purrdf_datalog::seminaive::{BudgetResource, EvalError};
 
     let rules: Vec<DlClause> = Vec::new();
     let program = compile(rules.clone()).unwrap();
     let mut input = RelationStore::new();
     input
         .insert(
-            &"x".repeat(DEFAULT_MAX_TERM_ARENA_BYTES + 1),
+            &"x".repeat((1 << 24) + 1),
             "p",
             "o",
             RelationStore::DEFAULT_GRAPH,
@@ -1394,7 +1394,12 @@ fn term_arena_limits_are_caller_selected_and_reach_contracts() {
         .unwrap();
     let bytes = input.term_bytes() as u64;
     let default = EvalOptions::default();
-    let refused = seminaive::evaluate(&program, input.clone()).unwrap_err();
+    let admitted = seminaive::evaluate(&program, input.clone()).unwrap();
+    assert_eq!(admitted.budget().term_arena_limit(), u64::MAX);
+    assert!(!admitted.budget().term_arena_limit_stated());
+
+    let limited = default.with_max_term_arena_bytes(bytes - 1);
+    let refused = evaluate_guarded(&program, input.clone(), &NoGuards, &limited, None).unwrap_err();
     assert!(
         refused
             .to_string()
@@ -1404,29 +1409,21 @@ fn term_arena_limits_are_caller_selected_and_reach_contracts() {
         panic!("arena refusal")
     };
     assert_eq!(resource, BudgetResource::TermArenaBytes);
-    assert_eq!(resource.limit(report), DEFAULT_MAX_TERM_ARENA_BYTES as u64);
-    assert!(!report.term_arena_limit_stated());
-    let raised = default.with_max_term_arena_bytes(bytes);
-    let admitted = evaluate_guarded(&program, input.clone(), &NoGuards, &raised, None).unwrap();
+    assert_eq!(resource.limit(report), bytes - 1);
+    assert!(report.term_arena_limit_stated());
+    let exact = limited.with_max_term_arena_bytes(bytes);
+    let admitted = evaluate_guarded(&program, input.clone(), &NoGuards, &exact, None).unwrap();
     assert_eq!(admitted.budget().term_arena_limit(), bytes);
-    assert!(admitted.budget().term_arena_limit_stated());
-    let unlimited = default.without_term_arena_limit();
+    let unlimited = limited.without_term_arena_limit();
     let admitted = evaluate_guarded(&program, input, &NoGuards, &unlimited, None).unwrap();
     assert_eq!(admitted.budget().term_arena_limit(), u64::MAX);
     assert_ne!(
         contract_hash_with(&rules, &default),
-        contract_hash_with(&rules, &raised)
-    );
-    assert_ne!(
-        contract_hash_with(&rules, &raised),
-        contract_hash_with(&rules, &unlimited)
+        contract_hash_with(&rules, &exact)
     );
     assert_eq!(
         contract_hash_with(&rules, &default),
-        contract_hash_with(
-            &rules,
-            &default.with_max_term_arena_bytes(DEFAULT_MAX_TERM_ARENA_BYTES as u64)
-        )
+        contract_hash_with(&rules, &unlimited)
     );
 }
 
@@ -1479,6 +1476,20 @@ fn stored_fact_admission_refuses_the_first_extra_fact_in_both_engines() {
     assert_eq!(resource, BudgetResource::StoredFacts);
     assert_eq!(report.stored_facts(), 4);
     assert_eq!(report.observed_stored_facts(), 5);
+    let unlimited = options
+        .with_max_join_steps(0)
+        .without_stored_fact_limit()
+        .without_join_step_limit();
+    let model = evaluate_guarded(&program, input.clone(), &NoGuards, &unlimited, None).unwrap();
+    assert_eq!(model.facts().row_count(), 9);
+    assert_eq!(model.budget().stored_fact_limit(), u64::MAX);
+    assert_eq!(model.budget().join_step_limit(), u64::MAX);
+    assert!(model.budget().stored_fact_limit_stated());
+    assert!(model.budget().join_step_limit_stated());
+    assert_eq!(
+        purrdf_datalog::cache::contract_hash_with(&rules, &unlimited),
+        purrdf_datalog::cache::contract_hash(&rules),
+    );
     let exact = options.with_max_stored_facts(9);
     let model = evaluate_guarded(&program, input, &NoGuards, &exact, None).unwrap();
     assert_eq!(model.facts().row_count(), 9);

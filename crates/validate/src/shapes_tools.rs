@@ -46,9 +46,9 @@
 //! over [`purrdf_shapes::RuleOptions::with_max_stored_facts`] and
 //! [`purrdf_shapes::RuleOptions::with_max_join_steps`]: the facts the evaluation store may
 //! hold — the data graph, a rule set's data and every inferred triple — and the candidate
-//! solutions the rule bodies may enumerate. `None` keeps the target's default — 4,194,304
-//! facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`. A run
-//! past either fails naming the limit, the numbers and the knob that raises it.
+//! solutions the rule bodies may enumerate. `None` imposes no logical capacity
+//! ceiling on any target. Caller-selected finite limits refuse with exact
+//! observations and the calling host's control names.
 
 use purrdf_shapes::free_expression::{self, FreeExpression};
 use purrdf_shapes::lint::{self, LintReport};
@@ -98,10 +98,10 @@ pub struct RulesRequest<'a> {
     /// The generated-term budget, or `None` for the engine default. See the
     /// [module docs](self).
     pub max_generated_terms: Option<u64>,
-    /// The stored-fact limit, or `None` for the target's default. See the
+    /// The stored-fact limit, or `None` for no logical ceiling. See the
     /// [module docs](self).
     pub max_stored_facts: Option<u64>,
-    /// The join-step limit, or `None` for the target's default. See the
+    /// The join-step limit, or `None` for no logical ceiling. See the
     /// [module docs](self).
     pub max_join_steps: Option<u64>,
     /// The host calling, whose names for the limits' knobs a refusal gives.

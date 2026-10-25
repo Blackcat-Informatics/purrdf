@@ -390,41 +390,23 @@ test("wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing 
   assert.throws(() => shaclLintShapes("@@@ not turtle"));
 });
 
-test("wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised", () => {
-  const COPIED = 70000;
-  let data = "";
-  for (let i = 0; i < COPIED; i += 1) {
-    data += `<http://example.org/ns#s${i}> <http://example.org/ns#p> <http://example.org/ns#o${i}> .\n`;
-  }
+test("wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator and names the host control", () => {
+  const data = [0, 1, 2].map(i =>
+    `<http://example.org/ns#s${i}> <http://example.org/ns#p> <http://example.org/ns#o${i}> .`,
+  ).join("\n");
   const copy = `${PREFIXES}
 ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
   sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:q ;
             sh:object [ sh:path ex:p ] ] .
 `;
-  // 70,000 data triples and 70,000 copies: 140,000 facts, past this target's default.
-  assert.throws(
-    () => shaclApplyRules(data, copy),
-    (error) =>
-      error.message ===
-      "SHACL rules did not complete: the rules exceeded the stored-fact limit: 131073 facts " +
-        "observed, 131072 permitted (the default for this target); raise it with " +
-        "shaclApplyRules's maxStoredFacts",
-  );
-  const raised = shaclApplyRules(
-    data,
-    copy,
-    undefined,
-    undefined,
-    undefined,
-    false,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    140000n,
-  );
-  assert.equal(raised.inferred.split("\n").length - 1, COPIED);
+  const apply = maxStoredFacts => shaclApplyRules(data, copy,
+    undefined, undefined, undefined, false, undefined, undefined,
+    undefined, undefined, undefined, maxStoredFacts);
+  assert.throws(() => apply(4n), error => error instanceof Error &&
+    error.message.includes("5 facts observed, 4 permitted (the caller's limit)") &&
+    error.message.endsWith("raise it with shaclApplyRules's maxStoredFacts"));
+  const raised = apply(6n);
+  assert.equal(typeof raised.inferred, "string");
   raised.free();
 });
 

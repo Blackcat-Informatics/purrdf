@@ -198,14 +198,14 @@ fn the_limits_in_force_reach_the_reports_contract_hash() {
     };
     let default = hash(&MaterializeLimits::default());
     let restated = hash(&MaterializeLimits {
-        max_stored_facts: Some(purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
-        max_join_steps: Some(purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS),
+        max_stored_facts: Some(u64::MAX),
+        max_join_steps: Some(u64::MAX),
         max_term_arena_bytes: None,
         host: RegimeHost::Rust,
     });
     assert_eq!(default, restated);
     let raised = hash(&MaterializeLimits {
-        max_stored_facts: Some(purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS * 2),
+        max_stored_facts: Some(1_000),
         ..MaterializeLimits::default()
     });
     assert_ne!(default, raised);

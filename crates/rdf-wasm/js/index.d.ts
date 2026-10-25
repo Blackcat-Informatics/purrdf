@@ -207,12 +207,12 @@ export interface EntailmentQueryOptions extends GovernedQueryOptions {
   readonly premiseIris?: readonly string[] | null;
   /**
    * The closure's stored-fact limit for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, as
-   * `entailMaterialize` takes it; omitted, this target's default (131072). A closure past
+   * `entailMaterialize` takes it; omitted, no logical ceiling. A closure past
    * it throws naming `queryEntailmentGoverned's maxStoredFacts`.
    */
   readonly maxStoredFacts?: bigint | number | null;
   /**
-   * The closure's join-step limit (default 1048576); a closure past it throws naming
+   * The closure's join-step limit (unlimited when omitted); a closure past it throws naming
    * `queryEntailmentGoverned's maxJoinSteps`.
    */
   readonly maxJoinSteps?: bigint | number | null;
@@ -2029,8 +2029,7 @@ export type EntailmentRegime =
  *
  * `maxStoredFacts` bounds the facts each evaluation store may hold and `maxJoinSteps` the
  * candidate solutions the rules may enumerate, for the `"rdf"`, `"rdfs"`, `"owl-rl"` and
- * `"d"` regimes. Omitted, each is this target's default: 131072 facts and 1048576 join
- * steps (a native build's defaults are 4194304 and 1048576). A run past either throws
+ * `"d"` regimes. Omitted settings impose no logical capacity ceiling. A run past either throws
  * naming the limit, the numbers and the argument that raises it; the report's
  * `contract-hash` names the calculus under the limits in force.
  *
@@ -2050,7 +2049,7 @@ export function entailMaterialize(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
-  /** Retained term-surface bytes; omitted, 16777216. */
+  /** Retained term-surface bytes; omitted, no logical ceiling. */
   maxTermArenaBytes?: bigint,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
@@ -2332,8 +2331,8 @@ export function entailExplainConclusion(
  *
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
- * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
  * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailCertainAnswers(
@@ -2369,8 +2368,8 @@ export function entailCertainAnswers(
  *
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
- * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
  * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailGraphEntails(
@@ -2401,8 +2400,8 @@ export function entailGraphEntails(
  *
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
- * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
  * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailVerifyEntailment(
@@ -2571,9 +2570,7 @@ export class ShaclRulesInference {
  *
  * `maxStoredFacts` bounds the facts the evaluation store may hold — the data graph, a rule
  * set's data and every inferred triple — and `maxJoinSteps` the candidate solutions the
- * rule bodies may enumerate. Omitted, each is this target's default: 131072 facts and
- * 1048576 join steps, sized for one WebAssembly linear memory (a native build's defaults
- * are 4194304 and 1048576). A run past either throws naming the limit, the numbers and
+ * rule bodies may enumerate. Omitted settings impose no logical capacity ceiling. A run past either throws naming the limit, the numbers and
  * the argument that raises it.
  *
  * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's

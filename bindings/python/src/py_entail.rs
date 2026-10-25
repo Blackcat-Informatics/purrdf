@@ -202,10 +202,10 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// `max_stored_facts` bounds the facts each evaluation store may hold — one store per
 /// graph of the dataset, holding its triples, the regime's axioms and every conclusion —
 /// and `max_join_steps` the candidate solutions the rules may enumerate, for the `RDF`,
-/// `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default: 4194304 facts and
-/// 1048576 join steps. `max_term_arena_bytes` bounds retained term surfaces and defaults
-/// to 16777216 bytes. A run past a limit raises `ValueError` naming the limit, the
-/// numbers and the keyword argument that raises it; a run inside them returns exactly the
+/// `RDFS`, `OWL_RL` and `D` regimes. `None` imposes no logical capacity ceiling.
+/// `max_term_arena_bytes` selects a retained term-surface ceiling. A run past a
+/// limit raises `ValueError` naming the limit, the numbers and the keyword argument
+/// that raises it; a run inside them returns exactly the
 /// closure larger limits would, and the report's `contract-hash` names the calculus under
 /// the limits in force.
 ///
@@ -810,10 +810,10 @@ fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
 ///
 /// Keyword-only, and [`materialize`]'s: they bound every evaluation the question is answered
 /// with — the premise's closure and each re-chase a mechanism beyond the rule table runs —
-/// for the `RDF`, `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default (4194304 facts,
-/// 1048576 join steps). A run past one raises `ValueError` naming the limit, the numbers and
-/// this function's keyword; a run inside them answers exactly as larger limits would.
-/// The term arena defaults to 16777216 bytes. [`graph_entails`] and
+/// for the `RDF`, `RDFS`, `OWL_RL` and `D` regimes. `None` imposes no logical
+/// capacity ceiling. A run past one raises `ValueError` naming the limit, the
+/// numbers and this function's keyword; a run inside them answers exactly as larger limits would.
+/// The term arena is unlimited unless explicitly bounded. [`graph_entails`] and
 /// [`verify_entailment`] take the same three controls.
 ///
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this

@@ -435,6 +435,13 @@
 # contract hash, stored-facts and term-arena-bytes field remains identical.
 # END SELECTIVE DELTA JOIN TRANSITION.
 #
+# AND EVERY CONTRACT HASH MOVED FOR CALCULUS VERSION 3.
+# The chase now refuses unrepresentable candidate work instead of continuing
+# with a saturated 64-bit counter. That refusal boundary participates in the
+# calculus identity. Every golden states its original finite capacities
+# explicitly. The five report identities change; inputs, canonical closures,
+# work counts, witnesses and rule tallies remain unchanged.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # NEW FIXTURE — no committed golden moved; this one did not exist.
@@ -466,7 +473,7 @@
   boundaries: (0)
   withheld-surrogates: 0
   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
-  contract-hash: 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+  contract-hash: bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a
   termination: none
   inconsistency: none
   overclaims: false
@@ -494,7 +501,7 @@
       axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 3
   budget: join-steps=38 stored-facts=14 term-arena-bytes=694
-  contract-hash: 35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7
+  contract-hash: 8a130678fd2ef3086aa4a6fd840bb7a567724540ca71dd33fe57f2f9dc3c4bf3
   termination: weakly-acyclic positions=10 existential-edges=4
   inconsistency: none
   overclaims: false
@@ -649,7 +656,7 @@
       axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 11
   budget: join-steps=9213 stored-facts=197 term-arena-bytes=2006
-  contract-hash: 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
+  contract-hash: 43165d4570613a4e1db0550646cf7e9103a6fd5c79c10a37abbff4719602327d
   termination: weakly-acyclic positions=27 existential-edges=8
   inconsistency: none
   overclaims: false
@@ -785,7 +792,7 @@
       datatype-value-space
   withheld-surrogates: 0
   budget: join-steps=1877 stored-facts=124 term-arena-bytes=2612
-  contract-hash: f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
+  contract-hash: e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c
   termination: none
   inconsistency: none
   overclaims: false
@@ -841,7 +848,7 @@
       datatype-value-space
   withheld-surrogates: 0
   budget: join-steps=32 stored-facts=39 term-arena-bytes=1858
-  contract-hash: fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
+  contract-hash: 82674ca392c68d4ac789e7c7c9b517dbfcdfd02e344aafd961b2b1105bda5aea
   termination: none
   inconsistency: none
   overclaims: false

@@ -77,15 +77,16 @@ Identical input yields byte-identical output, on every target.
 ## Limits refuse; they never truncate
 
 Three limits bound what every run holds and enumerates. All are caller-selected
-through `EvalOptions`, with explicit defaults:
+through `EvalOptions`; unstated settings impose no logical ceiling:
 
 | Limit | Bounds | Set with | Default on `wasm32` | Default elsewhere |
 | --- | --- | --- | --- | --- |
-| join steps | candidate solutions enumerated | `EvalOptions::with_max_join_steps` | 1,048,576 | 1,048,576 |
-| stored facts | facts seeded or derived | `EvalOptions::with_max_stored_facts` | 131,072 | 4,194,304 |
-| term arena bytes | interned term surface bytes | `EvalOptions::with_max_term_arena_bytes` | 16,777,216 | 16,777,216 |
+| join steps | candidate solutions enumerated | `EvalOptions::with_max_join_steps` | unlimited | unlimited |
+| stored facts | facts seeded or derived | `EvalOptions::with_max_stored_facts` | unlimited | unlimited |
+| term arena bytes | interned term surface bytes | `EvalOptions::with_max_term_arena_bytes` | unlimited | unlimited |
 
-`EvalOptions::without_term_arena_limit` removes the logical surface-byte ceiling.
+`EvalOptions::without_stored_fact_limit`, `without_join_step_limit` and
+`without_term_arena_limit` remove a selected logical ceiling.
 Actual storage admission still applies. The effective ceiling is available in
 the budget report and participates in the contract hash.
 
@@ -94,27 +95,18 @@ On refusal, `BudgetReport::stored_facts` reports the admitted count and
 `observed_stored_facts` reports the first refused insertion, exactly one higher.
 Duplicate candidates do not consume another stored-fact allowance.
 
-The stored-fact defaults differ because the memory the store lives in does: a
-`wasm32` evaluation shares one linear memory with the rest of its page, and its
-default is the value every target used while the limit was fixed. A native
-process can hold a far larger least model, and a ceiling sized for a browser
-refused ordinary terminating rule sets there — a single rule that copies
-each of 70,000 `ex:p` triples to `ex:q`. The default is chosen at compile time from the
-target architecture, never by a Cargo feature.
+The same unstated capacity settings apply on every target. Finite ceilings are
+application choices, selected explicitly before evaluation. Evaluation reserves
+a candidate's credit before expanding it, using one round-wide pool; an exhausted
+allowance stops further candidate expansion. Work and retained storage remain
+separate coordinates, so selecting one ceiling does not select the others.
+Physical storage admission and counter representation still apply.
 
-The join-step default is the same on every target. Evaluation reserves a
-candidate's credit before expanding it, using one round-wide pool; an exhausted
-allowance stops further candidate expansion. This is a work ceiling, separate
-from retained storage: raising it can permit larger intermediate buffers,
-without raising the stored-fact or term-arena ceilings. A caller whose program
-needs more candidate work must state that allowance explicitly
-(`--max-join-steps` on the command line).
-
-The join-step limit is not what stops a divergent rule. A SHACL shape rule
+Term-generation guards address divergent rules. A SHACL shape rule
 minting a new focus node every round is re-executed only for the focus nodes
-whose inputs changed, not for every earlier one. Term generation has its own
-guards: the term-generating round limit when new terms have bounded length,
-and the term-arena ceiling when retained surfaces grow.
+whose inputs changed, not for every earlier one. Term generation has two
+guards: the term-generating round limit and the generated-term budget.
+A caller-selected finite join-step limit can refuse a run before those guards.
 
 A limit can only refuse. A run inside its limits returns the program's least
 model, the same model under every limit that admits it. Complete-only calls

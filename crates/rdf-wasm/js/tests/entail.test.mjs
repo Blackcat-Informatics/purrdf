@@ -214,11 +214,10 @@ function parseVectors(text) {
   return cases;
 }
 
-// The artifact is written under the NATIVE default evaluation limits, which a report's
-// contract hash folds; wasm32's defaults are smaller, so this host states the native
-// values, exactly as `entailCheckGoldenVectors` does inside the module.
-const NATIVE_MAX_STORED_FACTS = 4194304n;
-const NATIVE_MAX_JOIN_STEPS = 1048576n;
+// State all three finite fixture capacities, matching `entailCheckGoldenVectors`.
+const FIXTURE_MAX_STORED_FACTS = 4194304n;
+const FIXTURE_MAX_JOIN_STEPS = 1048576n;
+const FIXTURE_MAX_TERM_ARENA_BYTES = 16777216n;
 
 test("every golden case is byte-identical across the wasm/JS boundary", async () => {
   const cases = parseVectors(await readFile(VECTORS, "utf8"));
@@ -231,8 +230,9 @@ test("every golden case is byte-identical across the wasm/JS boundary", async ()
       [],
       [],
       [],
-      NATIVE_MAX_STORED_FACTS,
-      NATIVE_MAX_JOIN_STEPS,
+      FIXTURE_MAX_STORED_FACTS,
+      FIXTURE_MAX_JOIN_STEPS,
+      FIXTURE_MAX_TERM_ARENA_BYTES,
     );
     assert.equal(closed.nquads, vector.closure, `${vector.name}: closure`);
     assert.equal(closed.report, vector.report, `${vector.name}: report`);

@@ -622,13 +622,12 @@ def test_the_golden_vector_artifact_is_readable() -> None:
     "case", _golden_cases(), ids=lambda case: str(case["name"])
 )
 def test_the_golden_vector_matches_through_python(case: dict[str, str]) -> None:
-    """Python produces the committed bytes, for both the closure and the report.
-
-    A divergence here is the same one failing artifact the other three hosts
-    report, not a fourth fixture that quietly stopped agreeing with them.
-    """
+    """Match shared closure/report bytes under the fixture's explicit capacities."""
     closure, report = entail.materialize_nt(
-        case["input"], case["regime"], case.get("program", ""), [], []
+        case["input"], case["regime"], case.get("program", ""), [], [],
+        max_stored_facts=4194304,
+        max_join_steps=1048576,
+        max_term_arena_bytes=16777216,
     )
     assert closure == case["closure"]
     assert report == case["report"]
