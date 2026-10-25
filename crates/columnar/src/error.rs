@@ -6,6 +6,8 @@
 use std::fmt;
 
 mod compact;
+mod construction;
+pub use construction::ConstructionReason;
 mod metadata;
 pub use crate::parquet::{
     ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile,
@@ -53,6 +55,13 @@ pub enum ColumnarError {
         context: &'static str,
         /// Stable diagnostic detail.
         detail: String,
+    },
+    /// Original native fixed-schema construction or encoding refusal.
+    Construction {
+        /// Structure being constructed or encoded.
+        context: &'static str,
+        /// Native reason, including original scalar operands.
+        reason: ConstructionReason,
     },
     /// Decoded rows violate the original RDF reconstruction contract.
     Reader {
@@ -126,6 +135,7 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
         Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Construction { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Reader { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
@@ -140,6 +150,10 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
+    pub(crate) fn construction(context: &'static str, reason: ConstructionReason) -> Self {
+        Self::Construction { context, reason }
+    }
+
     pub(crate) fn metadata(context: &'static str, reason: MetadataReason) -> Self {
         Self::Metadata { context, reason }
     }
@@ -217,6 +231,9 @@ impl fmt::Display for ColumnarError {
             Self::Malformed { context, detail } => {
                 write!(f, "columnar {context} is malformed: {detail}")
             }
+            Self::Construction { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::Reader { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
             }
@@ -255,6 +272,7 @@ impl fmt::Display for ColumnarError {
 }
 
 purrdf_lex::error_source!(ColumnarError => {
+    Self::Construction { reason, .. } => reason,
     Self::PageBody { reason, .. } => reason,
     Self::ValueBody { reason, .. } => reason,
     Self::Compact { reason, .. } => reason,

@@ -6,6 +6,23 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Caller-owned loss profiles
+
+Select `purrdf_core::loss::LossProfile::builtin()` and extend it with
+`LossDefinition` rows to declare caller-owned projection pairs and loss codes.
+Pass that profile to `check_ledger_sound_in` and `LossLedger::render_json_in`.
+Registration descriptions define code meanings; runtime entry notes describe
+particular losses and need not repeat those descriptions. Conflicting registered
+meanings return `LossProfileError` with the original rejected definition.
+
+Soundness now also checks that each entry belongs to the requested conversion
+pair. A reused code can no longer hide a mismatched pair. The explicit check
+returns a borrowed `LossSoundnessError` naming the first offending entry's code
+and pair operands. The builtin `check_ledger_sound` wrapper retains its string
+error type, with first-refusal presentation. Existing builtin render methods and
+generated loss matrices retain their schema and bytes. Custom profiles have no
+ambient registration and do not affect another caller's builtin profile.
+
 ## Retrieval canonical UTF-8 errors
 
 `purrdf_retrieval::PlanError::InvalidUtf8` now carries `source: core::str::Utf8Error`

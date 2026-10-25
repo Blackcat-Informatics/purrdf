@@ -76,8 +76,11 @@ const MAX_JSON_LD_DOCUMENT_BYTES: ByteLimit = ByteLimit::new(4_u64 * 1024 * 1024
 // within the decode envelope; the estimated working footprint keeps this a memory-safe
 // ceiling, not an unbounded one.
 const MAX_JSON_LD_CARRIER_ROWS: u64 = 33_554_432;
-// Source-carrier retained-text budget: the interned text actually held once.
-const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = ByteLimit::new(256_u64 * 1024 * 1024);
+// Source-carrier retained-text budget: the interned text actually held once. Every retained
+// value is written at least once into the emitted document, so the document ceiling is the
+// tightest text budget that refuses nothing the bounded writer could emit; a smaller cap
+// rejected a whole-ontology bundle carrying several hundred MB of literal text.
+const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = MAX_JSON_LD_DOCUMENT_BYTES;
 // Materialized-carrier WORKING-memory budget. The construction estimate
 // (`rows * ESTIMATED_CARRIER_ROW_BYTES + text`) * `COMPACTED_CARRIER_WORKING_COPIES` is a large
 // multiple of the retained text, so a whole-ontology bundle of tens of millions of occurrences
