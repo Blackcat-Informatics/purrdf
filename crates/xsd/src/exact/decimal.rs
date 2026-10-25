@@ -1010,13 +1010,13 @@ impl Decimal {
     }
 
     /// The canonical decimal `value × 10^-scale` for an inline coefficient: no
-    /// trailing zero to strip is the common case, decided by one remainder.
+    /// trailing zero to strip is the common case, decided without division.
     #[inline]
     fn from_small(value: i128, scale: u32) -> Self {
         if value == 0 {
             return Self::ZERO;
         }
-        let has_trailing_zero = mod10(value.unsigned_abs()) == 0;
+        let has_trailing_zero = divisible_by_ten(value.unsigned_abs());
         if scale == 0 || !has_trailing_zero {
             return Self {
                 unscaled: Integer::from_i128(value),
@@ -2126,13 +2126,13 @@ const POW10: [u128; 39] = {
     table
 };
 
-/// `x mod 10` from two 64-bit halves (`2^64 ≡ 6 (mod 10)`), so the
-/// trailing-zero test of a 128-bit coefficient costs two word remainders rather
-/// than a 128-bit division.
-const fn mod10(x: u128) -> u64 {
-    let high = (x >> 64) as u64;
-    let low = x as u64;
-    ((high % 10) * 6 + low % 10) % 10
+/// Divisibility by ten over the full coefficient without division. Multiplying
+/// by the inverse of five modulo `2^128` maps every multiple of ten to an even
+/// value `2*k`. Rotation rejects odd values (their high bit exceeds the bound)
+/// and halves even ones. The bound ensures `10*k` fits, excluding modular wraps.
+const fn divisible_by_ten(x: u128) -> bool {
+    const INVERSE_FIVE: u128 = 0xcccc_cccc_cccc_cccc_cccc_cccc_cccc_cccd;
+    x.wrapping_mul(INVERSE_FIVE).rotate_right(1) <= u128::MAX / 10
 }
 
 /// `magnitude` with up to `limit` trailing decimal zeros removed, and how many
@@ -2160,7 +2160,7 @@ fn strip_zeros(magnitude: u128, limit: u32) -> (u128, u32) {
         return (u128::from(small), removed);
     }
     let mut value = magnitude;
-    while removed < limit && value != 0 && mod10(value) == 0 {
+    while removed < limit && value != 0 && divisible_by_ten(value) {
         value /= 10;
         removed += 1;
     }

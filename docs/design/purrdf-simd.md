@@ -728,6 +728,16 @@ emulation; on both no register is read and the probe alone decides.
 
 ## 4. Inventory
 
+Exact decimal normalization uses one full-width inverse multiply, rotation and
+bound to recognize trailing zeros before its existing narrow-word stripping.
+Canonical coefficients and storage admission remain unchanged. This is scalar
+integer arithmetic with no new dispatch or SIMD kernel. The existing small
+arithmetic benchmark rows exercise its actual exact and public value callers;
+[the instruction comparison](../BENCHMARKS.md) records native reductions and the
+remaining bounded-source gap. Portable release builds establish compilation,
+without duplicating general arithmetic tests on WASM or implying an instruction
+win on unmeasured architectures.
+
 ### 4.1 Site table
 
 One row per site. `crate` is the workspace member the row belongs to; `fn` and
