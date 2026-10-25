@@ -786,6 +786,171 @@ fn native_cause_transport_preserves_storage_and_full_width_rows() {
     assert_eq!(counts.drops.load(Ordering::Relaxed), 1);
 }
 
+/// Envelope an authored footer so refusals traverse the actual public reader.
+fn compact_footer_files(footer: &[u8]) -> ParquetFiles {
+    let mut file = b"PAR1".to_vec();
+    file.extend_from_slice(footer);
+    file.extend_from_slice(&u32::try_from(footer.len()).unwrap().to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    let mut files = std::array::from_fn(|_| Vec::new());
+    files[0] = file;
+    ParquetFiles::from_array(files)
+}
+
+/// Public grammar failures retain their original cause after all bytes are gone.
+fn public_compact_causes_survive_input_disposal() {
+    use purrdf_core::ir::pack::bits::{write_varint, zigzag_encode};
+
+    let mut wide = vec![0x15]; // version: i32
+    write_varint(&mut wide, zigzag_encode(i64::MAX));
+    for (footer, code, context) in [
+        (wide, "columnar-integer-range", "compact i32"),
+        (vec![0x15, 0x80], "columnar-varint", "compact i32"),
+        // Schema list, one struct, name field, invalid second UTF-8 byte.
+        (
+            vec![0x29, 0x1c, 0x48, 2, b'a', 0xff],
+            "columnar-utf8",
+            "compact string",
+        ),
+    ] {
+        let files = compact_footer_files(&footer);
+        let error = read(&files).unwrap_err();
+        drop(files);
+        drop(footer);
+        let copy = error.clone();
+        drop(error);
+        assert!(inspect_without_allocation(&copy).records >= 3);
+        let outer = Capture::read(&copy);
+        assert_eq!(outer.code, "columnar-malformed");
+        assert!(matches!(outer.field("context"), ErrorValue::Code(value) if value == context));
+        let reason = outer.child("reason");
+        assert_eq!(reason.code, code);
+        let cause = reason.child("cause");
+        let source = std::error::Error::source(&copy).unwrap();
+        let original = source.source().unwrap();
+        match code {
+            "columnar-integer-range" => {
+                assert!(
+                    matches!(reason.field("value"), ErrorValue::Signed(value) if value == i128::from(i64::MAX))
+                );
+                assert_eq!(cause.code, "integer-conversion-range");
+                assert!(original.is::<std::num::TryFromIntError>());
+                assert_eq!(
+                    copy.to_string(),
+                    "columnar compact i32 is malformed: value exceeds i32"
+                );
+            }
+            "columnar-varint" => {
+                assert!(matches!(reason.field("offset"), ErrorValue::ByteCount(1)));
+                assert_eq!(cause.code, "pack-bits-truncated");
+                assert!(matches!(cause.field("needed"), ErrorValue::ByteCount(3)));
+                assert!(matches!(cause.field("found"), ErrorValue::ByteCount(2)));
+                assert!(original.is::<purrdf_core::ir::pack::bits::PackBitsError>());
+            }
+            "columnar-utf8" => {
+                assert_eq!(cause.code, "std-utf8");
+                assert!(matches!(
+                    cause.field("valid_up_to"),
+                    ErrorValue::ByteCount(1)
+                ));
+                assert!(matches!(cause.field("error_len"), ErrorValue::ByteCount(1)));
+                let utf8 = original.downcast_ref::<std::str::Utf8Error>().unwrap();
+                assert_eq!((utf8.valid_up_to(), utf8.error_len()), (1, Some(1)));
+                assert_eq!(
+                    copy.to_string(),
+                    "columnar compact string is malformed: invalid UTF-8"
+                );
+            }
+            _ => unreachable!("the fixture names its retained native cause"),
+        }
+    }
+}
+
+/// Early grammar refusals and nested skips allocate no diagnostic strings.
+fn public_compact_first_fault_and_unknown_skips_do_not_allocate() {
+    use purrdf_core::ir::pack::bits::write_varint;
+
+    let mut overflow = vec![0x68]; // unknown binary field
+    write_varint(&mut overflow, u64::MAX);
+    let cases = [
+        (vec![0x10, 0x15, 0x80], "columnar-stop-delta"),
+        (vec![0x18], "columnar-field-type"),
+        (vec![0x69, 0x10], "columnar-stop-element"),
+        (vec![0x6b, 1, 0x03], "columnar-stop-value"),
+        (
+            overflow,
+            if usize::BITS == 64 {
+                "columnar-byte-range"
+            } else {
+                "columnar-binary-length"
+            },
+        ),
+    ];
+    for (footer, code) in cases {
+        let files = compact_footer_files(&footer);
+        let window = CurrentThreadWindow::open();
+        let error = read(&files).unwrap_err();
+        let copy = error.clone();
+        let mut visitor = NativeInspection::default();
+        copy.visit(&mut visitor);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        drop(files);
+        drop(footer);
+        drop(error);
+        let reason = Capture::read(&copy).child("reason");
+        assert_eq!(reason.code, code);
+        match code {
+            "columnar-stop-delta" => {
+                assert!(matches!(reason.field("header"), ErrorValue::Unsigned(16)));
+            }
+            "columnar-field-type" => {
+                assert!(matches!(reason.field("id"), ErrorValue::Signed(1)));
+                assert!(matches!(reason.field("actual"), ErrorValue::Unsigned(8)));
+                assert!(matches!(reason.field("expected"), ErrorValue::Unsigned(5)));
+            }
+            "columnar-byte-range" => {
+                assert!(matches!(reason.field("offset"), ErrorValue::ByteCount(11)));
+                assert!(
+                    matches!(reason.field("length"), ErrorValue::ByteCount(value) if value == u128::from(u64::MAX))
+                );
+            }
+            "columnar-binary-length" => assert!(
+                matches!(reason.field("value"), ErrorValue::ByteCount(value) if value == u128::from(u64::MAX))
+            ),
+            _ => {}
+        }
+    }
+
+    // A complete healthy file remains valid with a nested unknown struct whose
+    // binary payload is skipped as bytes, without imposing string validation.
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let files = write(
+        &dataset,
+        &ContentStore::default(),
+        Compression::Uncompressed,
+    )
+    .unwrap();
+    let mut array = files.files.into_array();
+    let file = &mut array[0];
+    let old_length = u32::from_le_bytes(file[file.len() - 8..file.len() - 4].try_into().unwrap());
+    let footer_end = file.len() - 8;
+    assert_eq!(file[footer_end - 1], 0);
+    // An explicit field id 100, struct, binary field 1, one byte, end struct/root.
+    let extra = [0x0c, 0xc8, 0x01, 0x18, 1, 0xff, 0];
+    file.splice(footer_end - 1..footer_end - 1, extra);
+    let length_at = file.len() - 8;
+    let new_length = old_length + u32::try_from(extra.len()).unwrap();
+    file[length_at..length_at + 4].copy_from_slice(&new_length.to_le_bytes());
+    assert_eq!(
+        read(&ParquetFiles::from_array(array))
+            .unwrap()
+            .dataset
+            .quad_count(),
+        0
+    );
+}
+
 purrdf_testkit::harness_main!(
     original_parquet_bounds_survive_file_disposal_without_narrowing,
     public_projection_and_write_preserve_source_owners_and_fields,
@@ -793,4 +958,6 @@ purrdf_testkit::harness_main!(
     public_blob_read_preserves_original_integrity_cause,
     public_reconstruction_preserves_original_diagnostic,
     native_cause_transport_preserves_storage_and_full_width_rows,
+    public_compact_causes_survive_input_disposal,
+    public_compact_first_fault_and_unknown_skips_do_not_allocate,
 );
