@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::ir::{QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 use crate::{
-    BlankScope, DatasetView, GraphMatch, RdfDiagnostic, RdfStoreCapabilities, RdfTextDirection,
-    TermBox, TermValue, ViewOperationStatus,
+    BlankScope, DatasetView, FallibleDatasetView, GraphMatch, RdfDiagnostic, RdfStoreCapabilities,
+    RdfTextDirection, TermBox, TermValue, ViewOperationStatus,
 };
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
@@ -425,10 +425,107 @@ impl RowBudget {
         }
     }
 
-    /// The same typed sticky root returned by point reads after row refusal.
+    /// The typed sticky root reported by stream and operation checkpoints.
     #[must_use]
     pub fn read_error(&self) -> Option<ProbeFault> {
         self.status().error().cloned()
+    }
+}
+
+/// A view that yields `budget` rows and then faults the way an operational
+/// backend does: it STOPS YIELDING rather than erroring, so nothing about the
+/// row stream distinguishes the truncation from an honest end of stream and only
+/// the operational checkpoint can tell them apart.
+/// Cached point reads remain available after a stream refusal; complete drains
+/// must observe the sticky fault rather than process the truncated snapshot.
+#[derive(Debug)]
+pub struct BudgetedView {
+    inner: Arc<RdfDataset>,
+    budget: RowBudget,
+}
+
+impl BudgetedView {
+    /// Admit a fixture with exactly this many successful row visits.
+    #[must_use]
+    pub fn new(inner: Arc<RdfDataset>, budget: usize) -> Self {
+        Self {
+            inner,
+            budget: RowBudget::new(budget),
+        }
+    }
+}
+
+impl DatasetView for BudgetedView {
+    type Id = TermId;
+    type ReadError = ProbeFault;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
+    type ProbePlan = ();
+
+    fn read_error(&self) -> Option<Self::ReadError> {
+        self.budget.read_error()
+    }
+
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.budget.take(self.inner.quads())
+    }
+
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(self.inner.as_ref().resolve(id))
+    }
+
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok(self.inner.as_ref().term_id_by_value(value))
+    }
+
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+    fn quads_for_pattern_with_plan(
+        &self,
+        _plan: &(),
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.quads_for_pattern(s, p, o, g)
+    }
+
+    fn term_count(&self) -> u64 {
+        self.inner.term_count()
+    }
+
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.inner
+            .reifier_quads()
+            .take_while(|_| self.budget.read_error().is_none())
+    }
+
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.inner
+            .annotation_quads()
+            .take_while(|_| self.budget.read_error().is_none())
+    }
+
+    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.inner
+            .named_graphs()
+            .take_while(|_| self.budget.read_error().is_none())
+    }
+}
+
+impl FallibleDatasetView for BudgetedView {
+    type Error = ProbeFault;
+    type Evidence = usize;
+
+    fn operation_status(&self) -> ViewOperationStatus<ProbeFault, usize> {
+        self.budget.status()
     }
 }
 

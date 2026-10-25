@@ -14,7 +14,12 @@ use std::collections::BTreeSet;
 
 mod admission;
 mod inspection;
+mod read;
+mod read_error;
+#[cfg(test)]
+mod read_tests;
 pub use admission::{FnoAdmissionError, FnoAdmissionReason};
+pub use read_error::{FnoFieldKind, FnoReadError, FnoStructureKind};
 
 // --------------------------------------------------------------------------- //
 // Vocabulary
@@ -581,7 +586,7 @@ mod tests {
     /// A hand-built catalog: one function with one required + one optional param,
     /// one profile implementation, and one mapping with two param-var bindings and
     /// one return-var binding.
-    fn sample_catalog() -> FnoCatalog {
+    pub(super) fn sample_catalog() -> FnoCatalog {
         FnoCatalog::try_new(FnoCatalogInput {
             ontology_iri: "https://example.org/vocab".to_owned(),
             document_iri: "https://example.org/vocab/projections/functions".to_owned(),

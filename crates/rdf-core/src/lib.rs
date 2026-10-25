@@ -184,8 +184,8 @@ pub use diagnostic::{
 };
 pub use fno::{
     FnBlank, FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping,
-    FnoAdmissionError, FnoAdmissionReason, FnoCatalog, FnoCatalogInput,
-    to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
+    FnoAdmissionError, FnoAdmissionReason, FnoCatalog, FnoCatalogInput, FnoFieldKind, FnoReadError,
+    FnoStructureKind, to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use governor::{
     EvidenceLease, ExpressionErrorEvidence, GovernorEvidence, ResourceDimension, ResourceVector,
