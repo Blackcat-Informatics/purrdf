@@ -32,7 +32,9 @@ mod reader;
 pub mod schema;
 mod writer;
 
-pub use error::{ColumnarError, ColumnarWriteError, CompactReason, ValueBodyReason};
+pub use error::{
+    ColumnarError, ColumnarWriteError, CompactReason, PageBodyReason, ValueBodyReason,
+};
 pub use files::ParquetFiles;
 pub use parquet::Compression;
 pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};
