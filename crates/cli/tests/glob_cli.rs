@@ -548,12 +548,15 @@ ex:datum ex:value {input} .
         let work = executed(source.clone(), u64::MAX).work();
         assert_eq!(executed(source.clone(), work).indices(), [0, 2]);
         let root = id(&source, "plan");
-        let value = input(&source);
-        let weak = Arc::downgrade(&source);
-        let error = prepared(source.clone())
-            .execute(source.into(), value, work - 1, Resident)
+        let input_source = data(&format!("<{EX}datum> <{EX}value> \"猫語\"@ja--rtl ."));
+        let value = input(&input_source);
+        let weak_plan = Arc::downgrade(&source);
+        let weak_input = Arc::downgrade(&input_source);
+        let error = prepared(source)
+            .execute(input_source.into(), value, work - 1, Resident)
             .unwrap_err();
-        assert!(weak.upgrade().is_some());
+        assert!(weak_plan.upgrade().is_some());
+        assert!(weak_input.upgrade().is_some());
         assert_eq!(error.plan_id(), root);
         assert_eq!(error.input_id(), Some(value));
         let buffer = Vec::with_capacity(64);
@@ -575,7 +578,8 @@ ex:datum ex:value {input} .
         );
         drop(fields);
         drop(error);
-        assert!(weak.upgrade().is_none());
+        assert!(weak_plan.upgrade().is_none());
+        assert!(weak_input.upgrade().is_none());
     }
 
     #[test]
