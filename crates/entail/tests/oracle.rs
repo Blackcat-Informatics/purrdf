@@ -398,7 +398,8 @@ struct Fixture {
     ///
     /// Rendered into the golden beneath [`ENGINE_SWAP`], [`AXIOMATIC_PATH`],
     /// [`OWL_RL_TABLES`], [`OWL_RL_COMPLETE`], [`EXISTENTIAL_CHASE`], [`REPORT_SURFACE`]
-    /// [`EXTENSION_AND_CERTIFICATE`] and [`CAPACITY_LIMITS`], each of which states one
+    /// [`EXTENSION_AND_CERTIFICATE`], [`CAPACITY_LIMITS`] and [`CHASE_COUNTER_REFUSAL`],
+    /// each of which states one
     /// change's causes ONCE; these lines name the actual triples and tallies each cause
     /// moved HERE. The last four of those changes moved no fixture's own data in a way a
     /// per-fixture note could
@@ -932,6 +933,16 @@ const CAPACITY_LIMITS: &[&str] = &[
     "     The RDF and RDFS lanes are evaluated by the restricted chase, which has no such",
     "     decomposition, and the D lane enumerates no candidates in this corpus, so none of",
     "     their figures moved.",
+];
+
+/// Why version 3 changes report identities without changing any fixture data.
+const CHASE_COUNTER_REFUSAL: &[&str] = &[
+    "AND EVERY CONTRACT HASH MOVED FOR CALCULUS VERSION 3.",
+    "The chase now refuses unrepresentable candidate work instead of continuing",
+    "with a saturated 64-bit counter. That refusal boundary participates in the",
+    "calculus identity. Every golden states its original finite capacities",
+    "explicitly. The five report identities change; inputs, canonical closures,",
+    "work counts, witnesses and rule tallies remain unchanged.",
 ];
 
 // ── The corpus ──────────────────────────────────────────────────────────────────
@@ -5972,6 +5983,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, CONNECTED_RULE_EVALUATION);
     out.push_str("#\n");
     write_comment_block(&mut out, SELECTIVE_DELTA_JOINS);
+    out.push_str("#\n");
+    write_comment_block(&mut out, CHASE_COUNTER_REFUSAL);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));

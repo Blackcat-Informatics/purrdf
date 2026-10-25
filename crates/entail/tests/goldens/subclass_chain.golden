@@ -435,6 +435,13 @@
 # contract hash, stored-facts and term-arena-bytes field remains identical.
 # END SELECTIVE DELTA JOIN TRANSITION.
 #
+# AND EVERY CONTRACT HASH MOVED FOR CALCULUS VERSION 3.
+# The chase now refuses unrepresentable candidate work instead of continuing
+# with a saturated 64-bit counter. That refusal boundary participates in the
+# calculus identity. Every golden states its original finite capacities
+# explicitly. The five report identities change; inputs, canonical closures,
+# work counts, witnesses and rule tallies remain unchanged.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF
