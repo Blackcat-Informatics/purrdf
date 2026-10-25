@@ -15,7 +15,9 @@ use crate::MetadataReason;
 use crate::column::{Int64Column, Presence};
 mod profile;
 use crate::compact::{CompactField, CompactReader, CompactWriter, StructState, TYPE_STRUCT};
-use crate::{ColumnSchema, ColumnarError, PhysicalType, Repetition, Table, ValueBodyReason};
+use crate::{
+    ColumnSchema, ColumnarError, PageBodyReason, PhysicalType, Repetition, Table, ValueBodyReason,
+};
 pub use profile::{ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile};
 
 const PARQUET_MAGIC: &[u8; 4] = b"PAR1";
@@ -1490,6 +1492,7 @@ fn decode_page(
         });
     }
     let data = &header.data_v2;
+    // Metadata validation bounds the row count to a signed 32-bit integer.
     let expected_rows = i32::try_from(row_count).expect("row count bounded by metadata check");
     if data.num_values != expected_rows
         || data.num_rows != expected_rows
@@ -1515,9 +1518,12 @@ fn decode_page(
     if (schema.repetition == Repetition::Required && definition_len != 0)
         || (schema.repetition == Repetition::Optional && definition_len == 0)
     {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::page_body(
             "definition levels",
-            "presence disagrees with schema nullability",
+            PageBodyReason::DefinitionPresence {
+                length: definition_len,
+                repetition: schema.repetition,
+            },
         ));
     }
     let body = page
@@ -1534,9 +1540,12 @@ fn decode_page(
     let plain_len = uncompressed_body
         .checked_sub(definition_len)
         .ok_or_else(|| {
-            ColumnarError::malformed(
+            ColumnarError::page_body(
                 "uncompressed page size",
-                "smaller than definition-level section",
+                PageBodyReason::DefinitionSize {
+                    page: uncompressed_body,
+                    definitions: definition_len,
+                },
             )
         })?;
     if plain_len > MAX_DECODED_TABLE_BYTES {
@@ -1549,9 +1558,12 @@ fn decode_page(
     let plain = match compression {
         Compression::Uncompressed => {
             if encoded_values.len() != plain_len {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::page_body(
                     "uncompressed value body",
-                    format!("has {} bytes, expected {plain_len}", encoded_values.len()),
+                    PageBodyReason::PlainSize {
+                        actual: encoded_values.len(),
+                        expected: plain_len,
+                    },
                 ));
             }
             Cow::Borrowed(encoded_values)
@@ -1564,9 +1576,12 @@ fn decode_page(
                     ColumnarError::malformed("Zstandard page body", error.to_string())
                 })?;
             if written != plain_len {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::page_body(
                     "Zstandard page body",
-                    format!("decoded {written} bytes, expected {plain_len}"),
+                    PageBodyReason::DecodedSize {
+                        actual: written,
+                        expected: plain_len,
+                    },
                 ));
             }
             Cow::Owned(plain)
@@ -1580,12 +1595,12 @@ fn decode_page(
     let present = presence.count();
     let observed_nulls = row_count - present;
     if observed_nulls != data.num_nulls as usize {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::page_body(
             "definition levels",
-            format!(
-                "encode {observed_nulls} nulls, header declares {}",
-                data.num_nulls
-            ),
+            PageBodyReason::NullCount {
+                actual: observed_nulls,
+                declared: data.num_nulls,
+            },
         ));
     }
     decode_plain(&plain, schema.physical_type, presence, present)
@@ -1825,6 +1840,308 @@ mod tests {
 
     #[global_allocator]
     static GLOBAL: CountingAllocator = CountingAllocator;
+
+    /// Decode real writer output while retaining independently editable headers.
+    fn optional_page(compression: Compression) -> (Vec<u8>, ParsedPageHeader) {
+        let mut page = Vec::new();
+        encode_column(
+            &ints(&[Some(7), None]),
+            &Table::Quads.schema().columns[3],
+            2,
+            compression,
+            &mut page,
+        )
+        .unwrap();
+        let header = parse_page_header(&page).unwrap();
+        (page, header)
+    }
+
+    /// Native inspection and cloning retain original fields without allocating.
+    fn assert_page_refusal(error: ColumnarError, expected: PageBodyReason, message: &str) {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let outer_events = Vec::with_capacity(4);
+        let reason_events = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let copy = error.clone();
+        drop(error);
+        let outer = Capture::read_with_buffer(&copy, outer_events);
+        let ErrorValue::Cause(cause) = outer.field("reason") else {
+            panic!("the original page-body reason must remain borrowed");
+        };
+        let fields = Capture::read_with_buffer(cause, reason_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(
+            (measured.retained_bytes, measured.peak_working_bytes),
+            (0, 0)
+        );
+        assert_eq!(outer.code, "columnar-malformed");
+        let ColumnarError::PageBody { reason, .. } = &copy else {
+            panic!("the native page-body variant must survive cloning");
+        };
+        assert_eq!(reason, &expected);
+        assert!(std::ptr::eq(
+            std::error::Error::source(&copy)
+                .unwrap()
+                .downcast_ref::<PageBodyReason>()
+                .unwrap(),
+            reason
+        ));
+        assert_eq!(copy.to_string(), message);
+        assert_eq!(
+            fields.code,
+            match expected {
+                PageBodyReason::DefinitionPresence { .. } => "columnar-definition-presence",
+                PageBodyReason::DefinitionSize { .. } => "columnar-definition-size",
+                PageBodyReason::PlainSize { .. } => "columnar-plain-size",
+                PageBodyReason::DecodedSize { .. } => "columnar-decoded-size",
+                PageBodyReason::NullCount { .. } => "columnar-null-count",
+            }
+        );
+        match expected {
+            PageBodyReason::DefinitionPresence { length, repetition } => {
+                assert!(
+                    matches!(fields.field("length"), ErrorValue::ByteCount(value) if value == length as u128)
+                );
+                assert!(
+                    matches!(fields.field("repetition"), ErrorValue::Code(value) if value == match repetition {
+                        Repetition::Required => "required",
+                        Repetition::Optional => "optional",
+                    })
+                );
+            }
+            PageBodyReason::DefinitionSize { page, definitions } => {
+                assert!(
+                    matches!(fields.field("page"), ErrorValue::ByteCount(value) if value == page as u128)
+                );
+                assert!(
+                    matches!(fields.field("definitions"), ErrorValue::ByteCount(value) if value == definitions as u128)
+                );
+            }
+            PageBodyReason::PlainSize { actual, expected }
+            | PageBodyReason::DecodedSize { actual, expected } => {
+                assert!(
+                    matches!(fields.field("actual"), ErrorValue::ByteCount(value) if value == actual as u128)
+                );
+                assert!(
+                    matches!(fields.field("expected"), ErrorValue::ByteCount(value) if value == expected as u128)
+                );
+            }
+            PageBodyReason::NullCount { actual, declared } => {
+                assert!(
+                    matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == actual as u128)
+                );
+                assert!(
+                    matches!(fields.field("declared"), ErrorValue::Signed(value) if value == i128::from(declared))
+                );
+            }
+        }
+    }
+
+    /// Five actual page refusals preserve operands, neighbors and fault order.
+    #[test]
+    fn native_page_body_refusals_preserve_fields_and_precedence() {
+        let schema = &Table::Quads.schema().columns[3];
+        let (page, mut header) = optional_page(Compression::Uncompressed);
+        assert_eq!(
+            decode_page(&page, &header, schema, 2, Compression::Uncompressed).unwrap(),
+            ints(&[Some(7), None])
+        );
+        for (definitions, size, reason, message) in [
+            (
+                0,
+                12,
+                PageBodyReason::DefinitionPresence {
+                    length: 0,
+                    repetition: Repetition::Optional,
+                },
+                "columnar definition levels is malformed: presence disagrees with schema nullability",
+            ),
+            (
+                4,
+                3,
+                PageBodyReason::DefinitionSize {
+                    page: 3,
+                    definitions: 4,
+                },
+                "columnar uncompressed page size is malformed: smaller than definition-level section",
+            ),
+            (
+                4,
+                13,
+                PageBodyReason::PlainSize {
+                    actual: 8,
+                    expected: 9,
+                },
+                "columnar uncompressed value body is malformed: has 8 bytes, expected 9",
+            ),
+        ] {
+            header.data_v2.definition_levels_byte_length = definitions;
+            header.uncompressed_page_size = size;
+            let window = CurrentThreadWindow::open();
+            let error =
+                decode_page(&page, &header, schema, 2, Compression::Uncompressed).unwrap_err();
+            let measured = window.close();
+            assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+            assert_eq!(
+                (measured.retained_bytes, measured.peak_working_bytes),
+                (0, 0)
+            );
+            assert_page_refusal(error, reason, message);
+        }
+
+        let (page, mut header) = optional_page(Compression::Zstd);
+        assert_eq!(
+            decode_page(&page, &header, schema, 2, Compression::Zstd).unwrap(),
+            ints(&[Some(7), None])
+        );
+        header.uncompressed_page_size += 1;
+        let error = decode_page(&page, &header, schema, 2, Compression::Zstd).unwrap_err();
+        drop(page);
+        assert_page_refusal(
+            error,
+            PageBodyReason::DecodedSize {
+                actual: 8,
+                expected: 9,
+            },
+            "columnar Zstandard page body is malformed: decoded 8 bytes, expected 9",
+        );
+
+        let (mut page, mut header) = optional_page(Compression::Uncompressed);
+        // Two present runs leave too few PLAIN values; null disagreement wins.
+        page[header.header_len + 3] = 1;
+        let window = CurrentThreadWindow::open();
+        let error = decode_page(&page, &header, schema, 2, Compression::Uncompressed).unwrap_err();
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (1, 8));
+        assert_eq!(
+            (measured.retained_bytes, measured.peak_working_bytes),
+            (0, 8)
+        );
+        assert_page_refusal(
+            error,
+            PageBodyReason::NullCount {
+                actual: 0,
+                declared: 1,
+            },
+            "columnar definition levels is malformed: encode 0 nulls, header declares 1",
+        );
+        header.data_v2.num_nulls = 0;
+        assert_eq!(
+            decode_page(&page, &header, schema, 2, Compression::Uncompressed),
+            Err(ColumnarError::truncated("PLAIN INT64", 16, 8))
+        );
+        // A malformed run wins even when both the null count and PLAIN disagree.
+        header.data_v2.num_nulls = 1;
+        page[header.header_len] = 3;
+        assert!(matches!(
+            decode_page(&page, &header, schema, 2, Compression::Uncompressed),
+            Err(ColumnarError::ValueBody {
+                reason: ValueBodyReason::UnsupportedBitPackedRun { header: 3 },
+                ..
+            })
+        ));
+    }
+
+    /// Edit a page count at its parsed location without changing file geometry.
+    fn change_page_count(
+        files: &crate::ParquetFiles,
+        table: Table,
+        column: usize,
+        field_id: i16,
+        value: i32,
+    ) -> crate::ParquetFiles {
+        let mut array = files.clone().into_array();
+        let file = &mut array[crate::files::table_index(table)];
+        let (_, footer) = split_parquet_file(file).unwrap();
+        let metadata = parse_file_metadata(footer).unwrap();
+        let offset = usize::try_from(
+            metadata.row_groups[0].columns[column]
+                .metadata
+                .data_page_offset,
+        )
+        .unwrap();
+        let range = {
+            let mut reader = CompactReader::new(&file[offset..]);
+            let mut root = StructState::default();
+            let mut range = None;
+            while let Some(field) = reader.next_field(&mut root).unwrap() {
+                if field.id == 8 {
+                    let mut data = CompactReader::expect_struct(field).unwrap();
+                    while let Some(field) = reader.next_field(&mut data).unwrap() {
+                        if field.id == field_id {
+                            let start = reader.position();
+                            reader.read_i32(field).unwrap();
+                            range = Some(start..reader.position());
+                            break;
+                        }
+                        reader.skip_field(field).unwrap();
+                    }
+                    break;
+                }
+                reader.skip_field(field).unwrap();
+            }
+            range.unwrap()
+        };
+        let mut encoded = Vec::new();
+        write_varint(
+            &mut encoded,
+            purrdf_core::ir::pack::bits::zigzag_encode(i64::from(value)),
+        );
+        assert_eq!(
+            range.len(),
+            encoded.len(),
+            "the edit must preserve physical sizes"
+        );
+        file[offset + range.start..offset + range.end].copy_from_slice(&encoded);
+        crate::ParquetFiles::from_array(array)
+    }
+
+    /// Public readers retain body refusals after both-codec source disposal.
+    #[test]
+    fn public_page_body_refusals_survive_file_disposal() {
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let id = builder.intern_iri("https://example.org/page").unwrap();
+        builder.push_quad(id, id, id, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let mut blobs = purrdf_core::ContentStore::new();
+        blobs.insert(b"original native page body".to_vec());
+        for compression in [Compression::Uncompressed, Compression::Zstd] {
+            let files = crate::write(&dataset, &blobs, compression).unwrap().files;
+            assert_eq!(crate::read(&files).unwrap().dataset.quad_count(), 1);
+            for (table, column, field, value, expected, message) in [
+                (
+                    Table::Blobs,
+                    0,
+                    5,
+                    2,
+                    PageBodyReason::DefinitionPresence {
+                        length: 2,
+                        repetition: Repetition::Required,
+                    },
+                    "columnar definition levels is malformed: presence disagrees with schema nullability",
+                ),
+                (
+                    Table::Quads,
+                    3,
+                    2,
+                    0,
+                    PageBodyReason::NullCount {
+                        actual: 1,
+                        declared: 0,
+                    },
+                    "columnar definition levels is malformed: encode 1 nulls, header declares 0",
+                ),
+            ] {
+                let changed = change_page_count(&files, table, column, field, value);
+                let error = crate::read(&changed).unwrap_err();
+                drop(changed);
+                assert_page_refusal(error, expected, message);
+            }
+        }
+    }
 
     #[test]
     fn blob_page_write_allocation_growth() {

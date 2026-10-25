@@ -18,6 +18,8 @@ pub use projection::ProjectionReason;
 pub use reader::ReaderReason;
 mod value_body;
 pub use value_body::ValueBodyReason;
+mod page_body;
+pub use page_body::PageBodyReason;
 
 /// A fail-closed Parquet encoding, decoding, or RDF reconstruction error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +89,13 @@ pub enum ColumnarError {
         /// Original fields and their existing owning buffers.
         reason: MetadataReason,
     },
+    /// Original native page-body consistency refusal.
+    PageBody {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Native reason, including original consistency operands.
+        reason: PageBodyReason,
+    },
     /// A valid Parquet construct falls outside PurRDF's deliberately narrow profile.
     Unsupported {
         /// Unsupported field or construct.
@@ -122,6 +131,7 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
         Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         ValueBody { context, reason } => "columnar-value-body" { "context" => Code(context), "reason" => Cause(reason) },
         Metadata { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        PageBody { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
             "context" => Code(context), "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(u128::from(*maximum)),
@@ -140,6 +150,10 @@ impl ColumnarError {
 
     pub(crate) fn projection(context: &'static str, reason: ProjectionReason) -> Self {
         Self::Projection { context, reason }
+    }
+
+    pub(crate) fn page_body(context: &'static str, reason: PageBodyReason) -> Self {
+        Self::PageBody { context, reason }
     }
 
     pub(crate) fn value_body(context: &'static str, reason: ValueBodyReason) -> Self {
@@ -222,6 +236,9 @@ impl fmt::Display for ColumnarError {
             Self::Metadata { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
             }
+            Self::PageBody { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::Unsupported { context, value } => {
                 write!(f, "columnar {context} value {value} is unsupported")
             }
@@ -238,6 +255,7 @@ impl fmt::Display for ColumnarError {
 }
 
 purrdf_lex::error_source!(ColumnarError => {
+    Self::PageBody { reason, .. } => reason,
     Self::ValueBody { reason, .. } => reason,
     Self::Compact { reason, .. } => reason,
     Self::Metadata { reason, .. } => reason,
