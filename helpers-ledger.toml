@@ -1675,6 +1675,18 @@ names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
 
 [[distinct]]
 members = [
+    "purrdf_core::ir::composite::CompositeDatasetView::reserve_owned_workspace",
+    "purrdf_core::ir::mutable::delta_view::DeltaDatasetView::reserve_owned_workspace",
+    "purrdf_core::ir::pack::container::PackView::reserve_owned_workspace",
+    "purrdf_core::ir::paged::PagedDataset::reserve_owned_workspace",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::dataset_view::NoopReservation::owned"
+reason = "Each resident carrier must explicitly grant retained admission in its own DatasetView implementation; the default missing capability cannot imply unbounded authority. All four delegate to the single zero-sized NoopReservation owner without copying runtime allocation or accounting behavior."
+
+[[distinct]]
+members = [
     "purrdf_gts::model::Graph::reifier",
     "purrdf_rdf::native_codecs::ser_model::SerGraph::reifier",
 ]
