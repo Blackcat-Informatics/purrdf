@@ -204,8 +204,8 @@ fn bits(value: Option<f64>) -> Option<u64> {
 }
 
 /// Inspect the original observed result without rendering a refusal.
-pub(super) fn nonfinite_bits(cause: &NonFinite) -> u64 {
-    let capture = Capture::read(cause);
+pub(super) fn nonfinite_bits(cause: NonFinite) -> u64 {
+    let capture = Capture::read(&cause);
     assert_eq!(capture.code, "distance-non-finite");
     let ErrorValue::Float64Bits(bits) = capture.field("value") else {
         panic!("the refused distance must retain its binary64 bits");
@@ -596,7 +596,7 @@ fn bounded_matches_full() {
                 path.path()
             );
         };
-        assert!(f64::from_bits(nonfinite_bits(&cause)).is_nan());
+        assert!(f64::from_bits(nonfinite_bits(cause)).is_nan());
         assert_eq!(
             path.distance(Measure::SquaredEuclidean, &early, 0.0, &zero, 0.0),
             Err(cause),
@@ -622,7 +622,7 @@ fn nonfinite_checked_before_bound() {
             let cause = path
                 .distance(Measure::SquaredEuclidean, &huge, 0.0, &zero, 0.0)
                 .unwrap_err();
-            assert_eq!(nonfinite_bits(&cause), f64::INFINITY.to_bits());
+            assert_eq!(nonfinite_bits(cause), f64::INFINITY.to_bits());
             for bound in [
                 Bound::Above(f64::INFINITY),
                 // An infinity meets this bound, so a bound test that ran first would
@@ -654,11 +654,11 @@ fn nonfinite_checked_before_bound() {
             let dot = path
                 .distance(Measure::NegativeDot, &huge, 0.0, &huge, 0.0)
                 .unwrap_err();
-            assert_eq!(nonfinite_bits(&dot), f64::NEG_INFINITY.to_bits());
+            assert_eq!(nonfinite_bits(dot), f64::NEG_INFINITY.to_bits());
             let cosine = path
                 .distance(Measure::Cosine, &huge, 1e300, &huge, 1e300)
                 .unwrap_err();
-            assert!(f64::from_bits(nonfinite_bits(&cosine)).is_nan());
+            assert!(f64::from_bits(nonfinite_bits(cosine)).is_nan());
 
             // The valid neighbour: large but finite still ranks.
             let mut large = vec![0.0_f64; len];

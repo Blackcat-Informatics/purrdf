@@ -388,7 +388,7 @@ fn reassociated_bounded_agrees_with_full() {
         let Bounded::NonFinite(cause) = bounded(Bound::AtOrAbove(1e9)) else {
             panic!("the unreached bound must expose the non-finite term");
         };
-        assert!(f64::from_bits(nonfinite_bits(&cause)).is_nan());
+        assert!(f64::from_bits(nonfinite_bits(cause)).is_nan());
         assert_eq!(
             path.distance(Measure::SquaredEuclidean, &early, 0.0, &zero, 0.0),
             Err(cause),
@@ -410,15 +410,15 @@ fn reassociated_overflow_is_nonfinite() {
             let dot = path
                 .distance(Measure::NegativeDot, &huge, 0.0, &huge, 0.0)
                 .unwrap_err();
-            assert_eq!(nonfinite_bits(&dot), f64::NEG_INFINITY.to_bits());
+            assert_eq!(nonfinite_bits(dot), f64::NEG_INFINITY.to_bits());
             let cause = path
                 .distance(Measure::SquaredEuclidean, &huge, 0.0, &negative, 0.0)
                 .unwrap_err();
-            assert_eq!(nonfinite_bits(&cause), f64::INFINITY.to_bits());
+            assert_eq!(nonfinite_bits(cause), f64::INFINITY.to_bits());
             let cosine = path
                 .distance(Measure::Cosine, &huge, 1e300, &huge, 1e300)
                 .unwrap_err();
-            assert!(f64::from_bits(nonfinite_bits(&cosine)).is_nan());
+            assert!(f64::from_bits(nonfinite_bits(cosine)).is_nan());
             for bound in [
                 Bound::Above(f64::INFINITY),
                 Bound::AtOrAbove(f64::INFINITY),
