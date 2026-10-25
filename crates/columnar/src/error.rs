@@ -6,6 +6,11 @@
 use std::fmt;
 
 mod compact;
+mod metadata;
+pub use crate::parquet::{
+    ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile,
+};
+pub use metadata::MetadataReason;
 mod projection;
 mod reader;
 pub use compact::CompactReason;
@@ -77,6 +82,13 @@ pub enum ColumnarError {
         /// Native reason, including original operands and causes.
         reason: ValueBodyReason,
     },
+    /// Original native envelope, metadata or physical profile refusal.
+    Metadata {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Original fields and their existing owning buffers.
+        reason: MetadataReason,
+    },
     /// Original native page-body consistency refusal.
     PageBody {
         /// Structure being decoded.
@@ -118,6 +130,7 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
         Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         ValueBody { context, reason } => "columnar-value-body" { "context" => Code(context), "reason" => Cause(reason) },
+        Metadata { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         PageBody { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
@@ -127,8 +140,8 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
-    pub(crate) fn page_body(context: &'static str, reason: PageBodyReason) -> Self {
-        Self::PageBody { context, reason }
+    pub(crate) fn metadata(context: &'static str, reason: MetadataReason) -> Self {
+        Self::Metadata { context, reason }
     }
 
     pub(crate) fn reader_malformed(context: &'static str, reason: ReaderReason) -> Self {
@@ -137,6 +150,10 @@ impl ColumnarError {
 
     pub(crate) fn projection(context: &'static str, reason: ProjectionReason) -> Self {
         Self::Projection { context, reason }
+    }
+
+    pub(crate) fn page_body(context: &'static str, reason: PageBodyReason) -> Self {
+        Self::PageBody { context, reason }
     }
 
     pub(crate) fn value_body(context: &'static str, reason: ValueBodyReason) -> Self {
@@ -216,6 +233,9 @@ impl fmt::Display for ColumnarError {
                     write!(f, "columnar {context} is malformed: {reason}")
                 }
             }
+            Self::Metadata { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::PageBody { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
             }
@@ -238,6 +258,7 @@ purrdf_lex::error_source!(ColumnarError => {
     Self::PageBody { reason, .. } => reason,
     Self::ValueBody { reason, .. } => reason,
     Self::Compact { reason, .. } => reason,
+    Self::Metadata { reason, .. } => reason,
     Self::Projection { reason, .. } => reason,
     Self::Storage(cause) => cause,
     Self::ContentStore(cause) => cause,
