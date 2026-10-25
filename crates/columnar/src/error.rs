@@ -6,6 +6,13 @@
 use std::fmt;
 
 mod compact;
+mod construction;
+pub use construction::ConstructionReason;
+mod metadata;
+pub use crate::parquet::{
+    ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile,
+};
+pub use metadata::MetadataReason;
 mod projection;
 mod reader;
 pub use compact::CompactReason;
@@ -13,6 +20,8 @@ pub use projection::ProjectionReason;
 pub use reader::ReaderReason;
 mod value_body;
 pub use value_body::ValueBodyReason;
+mod page_body;
+pub use page_body::PageBodyReason;
 
 /// A fail-closed Parquet encoding, decoding, or RDF reconstruction error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +56,13 @@ pub enum ColumnarError {
         /// Stable diagnostic detail.
         detail: String,
     },
+    /// Original native fixed-schema construction or encoding refusal.
+    Construction {
+        /// Structure being constructed or encoded.
+        context: &'static str,
+        /// Native reason, including original scalar operands.
+        reason: ConstructionReason,
+    },
     /// Decoded rows violate the original RDF reconstruction contract.
     Reader {
         /// Structure being decoded.
@@ -74,6 +90,20 @@ pub enum ColumnarError {
         context: &'static str,
         /// Native reason, including original operands and causes.
         reason: ValueBodyReason,
+    },
+    /// Original native envelope, metadata or physical profile refusal.
+    Metadata {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Original fields and their existing owning buffers.
+        reason: MetadataReason,
+    },
+    /// Original native page-body consistency refusal.
+    PageBody {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Native reason, including original consistency operands.
+        reason: PageBodyReason,
     },
     /// A valid Parquet construct falls outside PurRDF's deliberately narrow profile.
     Unsupported {
@@ -105,10 +135,13 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
         Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Construction { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Reader { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         ValueBody { context, reason } => "columnar-value-body" { "context" => Code(context), "reason" => Cause(reason) },
+        Metadata { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        PageBody { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
             "context" => Code(context), "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(u128::from(*maximum)),
@@ -117,12 +150,24 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
+    pub(crate) fn construction(context: &'static str, reason: ConstructionReason) -> Self {
+        Self::Construction { context, reason }
+    }
+
+    pub(crate) fn metadata(context: &'static str, reason: MetadataReason) -> Self {
+        Self::Metadata { context, reason }
+    }
+
     pub(crate) fn reader_malformed(context: &'static str, reason: ReaderReason) -> Self {
         Self::Reader { context, reason }
     }
 
     pub(crate) fn projection(context: &'static str, reason: ProjectionReason) -> Self {
         Self::Projection { context, reason }
+    }
+
+    pub(crate) fn page_body(context: &'static str, reason: PageBodyReason) -> Self {
+        Self::PageBody { context, reason }
     }
 
     pub(crate) fn value_body(context: &'static str, reason: ValueBodyReason) -> Self {
@@ -186,6 +231,9 @@ impl fmt::Display for ColumnarError {
             Self::Malformed { context, detail } => {
                 write!(f, "columnar {context} is malformed: {detail}")
             }
+            Self::Construction { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::Reader { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
             }
@@ -201,6 +249,12 @@ impl fmt::Display for ColumnarError {
                 } else {
                     write!(f, "columnar {context} is malformed: {reason}")
                 }
+            }
+            Self::Metadata { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::PageBody { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
             }
             Self::Unsupported { context, value } => {
                 write!(f, "columnar {context} value {value} is unsupported")
@@ -218,8 +272,11 @@ impl fmt::Display for ColumnarError {
 }
 
 purrdf_lex::error_source!(ColumnarError => {
+    Self::Construction { reason, .. } => reason,
+    Self::PageBody { reason, .. } => reason,
     Self::ValueBody { reason, .. } => reason,
     Self::Compact { reason, .. } => reason,
+    Self::Metadata { reason, .. } => reason,
     Self::Projection { reason, .. } => reason,
     Self::Storage(cause) => cause,
     Self::ContentStore(cause) => cause,

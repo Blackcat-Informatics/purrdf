@@ -745,6 +745,52 @@ fn public_reconstruction_preserves_original_diagnostic() {
         error.to_string(),
         format!("columnar RDF reconstruction is malformed: {expected}")
     );
+
+    // Valid native output remains readable before its authored metadata key is
+    // corrupted. The native reason must retain that original decoded text.
+    let mut array = write(
+        &RdfDatasetBuilder::new().freeze().unwrap(),
+        &ContentStore::new(),
+        Compression::Uncompressed,
+    )
+    .unwrap()
+    .files
+    .into_array();
+    read(&ParquetFiles::from_array(array.clone())).unwrap();
+    replace_unique(
+        &mut array[0],
+        b"purrdf.columnar.schema-version",
+        b"xurrdf.columnar.schema-version",
+    );
+    let files = ParquetFiles::from_array(array);
+    let error = read(&files).unwrap_err();
+    drop(files);
+    inspect_without_allocation(&error);
+    let reason = Capture::read(&error).child("reason");
+    assert_eq!(reason.code, "columnar-parquet-metadata");
+    let pairs = reason.child("profile").records("observed");
+    assert!(pairs.iter().any(|pair| matches!(
+        pair.field("key"),
+        ErrorValue::Text("xurrdf.columnar.schema-version")
+    )));
+    let source = std::error::Error::source(&error).unwrap();
+    assert!(source.is::<purrdf_columnar::MetadataReason>());
+
+    // Two authored key/value structs carry the same original metadata key.
+    let footer = [
+        0x59, 0x2c, 0x18, 1, b'k', 0x18, 1, b'a', 0, 0x18, 1, b'k', 0x18, 1, b'b', 0, 0,
+    ];
+    let files = compact_footer_files(&footer);
+    let error = read(&files).unwrap_err();
+    drop(files);
+    inspect_without_allocation(&error);
+    let reason = Capture::read(&error).child("reason");
+    assert_eq!(reason.code, "columnar-parquet-duplicate-key");
+    assert!(matches!(reason.field("key"), ErrorValue::Text("k")));
+    assert_eq!(
+        error.to_string(),
+        "columnar file key/value metadata is malformed: duplicate key k"
+    );
 }
 
 /// Native wrappers move causes without allocating and keep diagnostic attachments.

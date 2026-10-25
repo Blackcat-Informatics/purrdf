@@ -33,8 +33,8 @@ pub mod schema;
 mod writer;
 
 pub use error::{
-    ColumnarError, ColumnarWriteError, CompactReason, ProjectionReason, ReaderReason,
-    ValueBodyReason,
+    ColumnarError, ColumnarWriteError, CompactReason, ConstructionReason, MetadataReason,
+    PageBodyReason, ProjectionReason, ReaderReason, ValueBodyReason,
 };
 pub use files::ParquetFiles;
 pub use parquet::Compression;
