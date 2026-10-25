@@ -2257,6 +2257,48 @@ mod operation_tests {
     }
 
     #[test]
+    fn canonical_reserved_refusal_retains_its_original_bounded_admission() {
+        use crate::{CanonError, CanonHash, TermPosition, try_canonicalize_view};
+        let (image, _) = image("urn:purrdf:rdfc:escaped");
+        let session = image
+            .open_session(SegmentedReadLimits::new(2_000_000, 1, 100, 1_000_000, 2))
+            .unwrap();
+        let budget = Arc::downgrade(&session.budget);
+        let CanonError::ReservedVocabulary(refusal) =
+            try_canonicalize_view(&session, CanonHash::Sha256).unwrap_err()
+        else {
+            panic!("the reserved IRI must be refused");
+        };
+        let duplicate = refusal.clone();
+        assert!(std::ptr::eq(
+            refusal.iri().as_ptr(),
+            duplicate.iri().as_ptr()
+        ));
+        drop(session);
+        let original = budget.upgrade().unwrap();
+        let retained = lock_read_state(&original.state).live;
+        assert!(retained > 0);
+        assert_eq!(duplicate.iri(), "urn:purrdf:rdfc:escaped");
+        assert_eq!(duplicate.position(), TermPosition::Subject);
+        let captured = purrdf_testkit::error_capture::Capture::read(&duplicate);
+        assert_eq!(captured.code, "canonical-reserved-vocabulary");
+        assert!(matches!(
+            captured.field("iri"),
+            purrdf_hash::error::ErrorValue::Iri("urn:purrdf:rdfc:escaped")
+        ));
+        assert_eq!(
+            captured.child("position").code,
+            "canonical-position-subject"
+        );
+        drop(refusal);
+        assert_eq!(lock_read_state(&original.state).live, retained);
+        drop(duplicate);
+        assert_eq!(lock_read_state(&original.state).live, 0);
+        drop(original);
+        assert!(budget.upgrade().is_none());
+    }
+
+    #[test]
     fn overflow_payload_stays_charged_until_the_last_escaped_guard() {
         let label = format!("urn:overflow:{}", "x".repeat(50_000));
         let (image, id) = image(&label);

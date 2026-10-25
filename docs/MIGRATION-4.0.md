@@ -6,6 +6,24 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Canonical reserved-vocabulary refusals
+
+`ReservedVocabulary` now lends its original IRI and position through `iri()` and
+`position()`. Cloning shares the immutable payload and its original admission
+owner. The refusal remains readable after its source is destroyed.
+
+Sources must provide `DatasetView::reserve_owned_workspace` when an offending
+IRI requires ownership. A missing capability returns
+`CanonError::OwnedWorkspaceUnavailable`; an unknown live ceiling does not grant
+permission. Original admission and source failures remain native causes.
+Verified resident carriers explicitly provide unbounded admission.
+`check_admissible` and `check_admissible_view` now return `CanonError`, including
+physical allocation refusal. Flat boundaries retain native causes through
+`ViewCanonError::Refused(CanonError<E>)`.
+
+This admission covers the retained refusal and its publication control. It does
+not certify canonicalization scratch or successful canonical result ownership.
+
 ## Canonical Function Ontology catalogs
 
 Build `FnoCatalogInput` and pass it to `FnoCatalog::try_new`. The admitted
