@@ -1423,8 +1423,7 @@ fn every_run_reports_an_empty_in_list() {
 /// node each time — is refused by `rules` naming the TERM-GENERATING ROUND limit, with
 /// `--max-join-steps` at its default and raised 256-fold out of the way, and writes no
 /// graph. The corpus's rule minting a one-character-longer IRI every iteration is refused
-/// by the fixed term-arena ceiling, which its quadratically growing term surfaces reach
-/// before the round limit, again with the join-step limit at its default and raised. The
+/// by an explicit term-generating round ceiling, with join capacity unstated and raised. The
 /// counter's neighbour bounded at 1,000 counters completes under the defaults.
 #[test]
 fn cli_rules_per_focus_divergence_is_refused_by_a_term_limit() {
@@ -1475,20 +1474,20 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
         );
         assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
 
-        let ceiling = rules(&longer, extra);
+        let mut round_options = extra.to_vec();
+        round_options.extend(["--max-term-generating-rounds", "8"]);
+        let ceiling = rules(&longer, &round_options);
         assert_eq!(code(&ceiling), 1, "{}", stderr(&ceiling));
         assert!(
-            stderr(&ceiling).contains(
-                "evaluation exceeded the term arena bytes limit: 16782539 observed, \
-                 16777216 permitted"
-            ),
+            stderr(&ceiling)
+                .contains("the rules exceeded the term-generating round limit: 9 rounds"),
             "{}",
             stderr(&ceiling)
         );
         assert!(
             stderr(&ceiling)
                 .trim_end()
-                .ends_with("reduce retained term sizes in the input or rules")
+                .ends_with("raise the limit with --max-term-generating-rounds")
         );
         assert!(
             !stderr(&ceiling).contains("join-step"),

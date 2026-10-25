@@ -424,7 +424,7 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// evaluator, and that evaluator refuses rather than approximates: a program it has no
     /// semantics for, and — the case a caller will actually meet — an input that passes
     /// the stored-fact or join-step limit in force ([`materialize_with`] states them; the
-    /// target's defaults otherwise) or the fixed term-arena ceiling. A limit refusal is
+    /// unlimited capacity otherwise) or a caller-selected term-arena ceiling. A limit refusal is
     /// TOTAL, which is why
     /// it is an error and not a boundary: there is no partial closure to hand back with a
     /// note attached, and a truncated closure presented as a complete one is exactly the
@@ -1071,10 +1071,8 @@ pub fn materialize_until<D: DatasetView>(
 ///
 /// The four rule-table lanes — `Rdf`, `Rdfs`, `OwlRl` and `D` — are evaluated by
 /// `purrdf-datalog`, each graph of the dataset in its own store, and every one of those
-/// evaluations runs under `options`. Unstated, a limit is the target's default: 4,194,304
-/// stored facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`
-/// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
-/// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). A run
+/// evaluations runs under `options`. Unstated fact, join and arena settings impose
+/// no logical ceiling on any target; physical storage admission still applies. A run
 /// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the
 /// limit, the numbers and `EvalOptions`' knob; a run inside them returns exactly the
 /// closure any larger limits would, and its report's
@@ -2919,23 +2917,13 @@ mod tests {
     /// exists to prevent, so an exhausted limit is [`EntailError::Chase`] (or
     /// [`EntailError::Evaluate`]) and the closure is not produced at all.
     ///
-    /// The input is a cross product past the `wasm32` default stored-fact limit: `p`
-    /// carries 360 `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must
-    /// conclude 136 800 typings — more than the 131,072 facts
-    /// [`WASM_DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS)
-    /// admits, and well inside the native default. Under the `wasm32` limit, stated, the
-    /// run is refused naming the knob, and the report carries the OBSERVATION that proved
-    /// the limit was passed rather than the limit itself, because a figure rounded down to
-    /// the limit would tell a caller nothing about how far over they are. Under the native
-    /// stored-fact default the run passes the default join-step limit instead, naming that
-    /// knob, and completes when it is raised too; its report names the calculus under the
-    /// limits in force.
+    /// Caller-selected fact and join ceilings refuse the cross product with
+    /// exact observations. Larger settings admit every required typing, and the
+    /// report identifies the effective calculus rather than a target preset.
     #[test]
     fn an_exhausted_budget_is_a_refusal_with_an_accurate_report() {
         use purrdf_datalog::chase::ChaseError;
-        use purrdf_datalog::seminaive::{
-            BudgetResource, NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_STORED_FACTS,
-        };
+        use purrdf_datalog::seminaive::BudgetResource;
 
         /// `rdfs:domain` declarations on `p`.
         const CLASSES: usize = 360;
@@ -2959,23 +2947,17 @@ mod tests {
         // The `RDFS` lane runs through the restricted chase (it states four existential
         // rules), so its limit refusal is the chase's — the SAME limits, charged the same
         // way, refused by name rather than truncated.
-        let wasm = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let wasm = EvalOptions::default().with_max_stored_facts(131_072);
         let refused = materialize_with(&ds, Materialization::Rdfs, &wasm, None)
             .expect_err("a cross product past the limit must be refused, not truncated");
         let EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) = &refused else {
             panic!("expected the chase's limit refusal, got {refused:?}");
         };
         assert_eq!(*resource, BudgetResource::StoredFacts);
-        assert_eq!(report.stored_facts() as u64, WASM_DEFAULT_MAX_STORED_FACTS);
-        assert_eq!(
-            report.observed_stored_facts() as u64,
-            WASM_DEFAULT_MAX_STORED_FACTS + 1
-        );
-        assert_eq!(
-            resource.observed(*report),
-            WASM_DEFAULT_MAX_STORED_FACTS + 1
-        );
-        assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(report.stored_facts() as u64, 131_072);
+        assert_eq!(report.observed_stored_facts() as u64, 131_072 + 1);
+        assert_eq!(resource.observed(*report), 131_072 + 1);
+        assert_eq!(report.stored_fact_limit(), 131_072);
         let rendered = refused.to_string();
         assert!(
             rendered.contains("131072 permitted (the caller's limit)")
@@ -2983,13 +2965,14 @@ mod tests {
             "{rendered}"
         );
 
-        // The valid neighbour: the native stored-fact default holds every typing. The chase
-        // enumerates more candidates than the default join-step limit admits, so that is
+        // The valid neighbour: the selected fact allowance holds every typing. The chase
+        // enumerates more candidates than the selected join allowance admits, so that is
         // refused naming its own knob, and a raised join-step limit admits the run.
-        let native_facts =
-            EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let native_facts = EvalOptions::default()
+            .with_max_stored_facts(4_194_304)
+            .with_max_join_steps(1_048_576);
         let steps = materialize_with(&ds, Materialization::Rdfs, &native_facts, None)
-            .expect_err("the default join-step limit is passed")
+            .expect_err("the selected finite join-step limit is passed")
             .to_string();
         assert!(
             steps.ends_with("raise it with EvalOptions::with_max_join_steps"),
@@ -3009,10 +2992,7 @@ mod tests {
             CLASSES * TRIPLES,
             "rdfs2 types every subject by every class"
         );
-        assert_eq!(
-            report.budget().stored_fact_limit(),
-            NATIVE_DEFAULT_MAX_STORED_FACTS
-        );
+        assert_eq!(report.budget().stored_fact_limit(), 4_194_304);
         assert_eq!(
             report.contract_hash(),
             purrdf_datalog::cache::contract_hash_with(&calculus_program(Regime::Rdfs), &native)
@@ -3123,7 +3103,7 @@ mod tests {
                 "{regime:?}: a term was fabricated for the triple term"
             );
             // Opacity is the licensed part, and it is REPORTED: the chase never reasons
-            // into the quoted triple. rdfs14 / rdfs14a do fire over it, but each concludes
+            // into the quoted triple. `rdfs14` / `rdfs14a` do fire over it, but each concludes
             // about a fresh surrogate the answer may not bind, so nothing they draw reaches
             // the closure and the run says so with the triple-term boundary.
             assert!(

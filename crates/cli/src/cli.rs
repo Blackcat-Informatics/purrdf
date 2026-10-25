@@ -226,7 +226,7 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) jsonld_options: Option<PathBuf>,
     /// Strict version-one geographic profile for geo, query, and update.
-    /// Omitting it selects the declared standard CRS84 profile.
+    /// Omitting it selects the declared standard `CRS84` profile.
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) geo_profile: Option<PathBuf>,
 }
@@ -392,7 +392,7 @@ pub(crate) enum Command {
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
         /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
-        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(
             long = "max-term-arena-bytes",
             value_name = "BYTES",
@@ -488,7 +488,7 @@ pub(crate) enum Command {
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
         /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
-        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(
             long = "max-term-arena-bytes",
             value_name = "BYTES",
@@ -743,7 +743,7 @@ pub(crate) enum Command {
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
         /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
-        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
         max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
@@ -839,7 +839,7 @@ pub(crate) enum Command {
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
         /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
-        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
         max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,

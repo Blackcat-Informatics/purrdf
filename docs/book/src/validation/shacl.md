@@ -1257,19 +1257,14 @@ maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)`.
   in the data graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set
   whose new terms double every iteration reaches it within a few iterations,
   long before the round limit.
-- The **stored-fact limit** bounds the facts the evaluation store holds: the
-  data graph, a rule set's data and every inferred triple. The default is
-  4,194,304 facts natively and 131,072 in WebAssembly, where the store lives in
-  one linear memory. A rule that copies each of 70,000 `ex:p` triples to
-  `ex:q`, or the transitive closure of a thousand-node chain (500,500 triples), completes
-  natively.
-- The **join-step limit** bounds the candidate solutions the rule bodies
-  enumerate. The default is 1,048,576 on every host. It bounds a rule body that
-  enumerates far more candidates than it infers triples: a body's candidates
-  for one round are held before the limit is checked, so a much larger default
-  would let a Cartesian body exhaust memory first. A rule set that needs more
-  work — the non-linear transitive closure of a thousand-node chain enumerates
-  over 67 million candidates — states a larger limit.
+- The **stored-fact limit** bounds the facts the evaluation store holds when
+  selected by the caller: the data graph, a rule set's data and every inference.
+- The **join-step limit** bounds candidate solutions when selected by the caller.
+  Credits are reserved before expansion; a refusal never returns a truncated model.
+
+Unstated fact, join and term-arena settings impose no logical ceiling on any
+host. Physical storage admission still applies. Select finite limits explicitly
+for an application, independently of the term-generation governors.
 
 A run past any limit is refused. The error names the limit, the numbers, the
 knob that raises it and, for the two term limits, the rules that inferred a new
@@ -1303,8 +1298,8 @@ same as running every focus node every iteration. What changes is the cost: a
 shape rule that mints a new focus node every iteration pays for one run per
 iteration, not one per focus node so far, so a rule that never stops is
 refused by a term limit — the round limit when its new
-terms stay short, the fixed 16 MiB term-arena ceiling when each is longer than
-the last — and never by the join-step limit.
+terms stay short, or a caller-selected term-arena ceiling when retained
+surfaces grow — and never by the join-step limit.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph

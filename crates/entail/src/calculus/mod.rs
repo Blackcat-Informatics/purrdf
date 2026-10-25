@@ -646,10 +646,7 @@ mod tests {
     use purrdf_datalog::cache::contract_hash;
     use purrdf_datalog::chase::certify;
     use purrdf_datalog::clause::HeadForm;
-    use purrdf_datalog::seminaive::{
-        EvalOptions, NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS,
-        WASM_DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_STORED_FACTS, compile,
-    };
+    use purrdf_datalog::seminaive::{EvalOptions, compile};
     use std::collections::BTreeSet;
 
     /// EVERY rule that DECLARES a `false` head really states one, in every clause.
@@ -865,7 +862,7 @@ mod tests {
                 "{regime:?}'s declared program must be admissible"
             );
         }
-        // The two lanes whose rule tables hold rdfD1 / rdfD1a / rdfs14 / rdfs14a.
+        // The two lanes whose rule tables hold `rdfD1` / `rdfD1a` / `rdfs14` / `rdfs14a`.
         assert_eq!(existential_lanes, 2);
     }
 
@@ -943,8 +940,8 @@ mod tests {
         }
     }
 
-    /// Each lane's calculus identity, pinned byte for byte — under the `wasm32` default
-    /// evaluation limits and under the native ones, each STATED, so both tables hold on
+    /// Each lane's calculus identity, pinned byte for byte — under the historical browser
+    /// and native finite profiles, each explicitly stated, so both tables hold on
     /// every target.
     ///
     /// The contract hash is a PUBLISHED identity: a consumer stores it beside a cached
@@ -961,11 +958,13 @@ mod tests {
     #[test]
     fn the_contract_hashes_are_pinned() {
         let wasm = EvalOptions::default()
-            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS)
-            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+            .with_max_stored_facts(131_072)
+            .with_max_join_steps(1_048_576)
+            .with_max_term_arena_bytes(1 << 24);
         let native = EvalOptions::default()
-            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS)
-            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS);
+            .with_max_stored_facts(4_194_304)
+            .with_max_join_steps(1_048_576)
+            .with_max_term_arena_bytes(1 << 24);
         for (options, table) in [(wasm, PINNED_WASM), (native, PINNED_NATIVE)] {
             for (regime, digest) in table {
                 assert_eq!(
@@ -975,22 +974,16 @@ mod tests {
                 );
             }
         }
-        // The published default is the current target's table.
-        let current = if cfg!(target_arch = "wasm32") {
-            PINNED_WASM
-        } else {
-            PINNED_NATIVE
-        };
-        for (regime, digest) in current {
-            assert_eq!(
-                calculus_contract_hash(*regime).to_hex(),
-                *digest,
-                "{regime:?}"
-            );
+        // Default capacity is unlimited on every target. Its identity must
+        // differ from either finite historical profile for every regime.
+        for regime in ALL_REGIMES {
+            let default = calculus_contract_hash(regime);
+            assert_ne!(default, calculus_contract_hash_with(regime, &wasm));
+            assert_ne!(default, calculus_contract_hash_with(regime, &native));
         }
     }
 
-    /// The lanes' calculus identities under the `wasm32` default limits.
+    /// The lanes' calculus identities under the historical browser finite profile.
     const PINNED_WASM: &[(Regime, &str)] = &[
         (Regime::Simple, PINNED_EMPTY_HASH),
         (Regime::Rdf, PINNED_RDF_HASH),
@@ -1001,7 +994,7 @@ mod tests {
         (Regime::D, PINNED_D_HASH),
     ];
 
-    /// The lanes' calculus identities under the native default limits.
+    /// The lanes' calculus identities under the historical native finite profile.
     const PINNED_NATIVE: &[(Regime, &str)] = &[
         (
             Regime::Simple,

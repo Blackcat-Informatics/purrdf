@@ -6,7 +6,7 @@
 //! # A stop signal is not a limit, and that distinction is the whole module
 //!
 //! This crate's [limits refuse; they never truncate](crate#limits-refuse-they-never-truncate):
-//! the stored-fact and join-step limits are the caller's, with per-target defaults, and
+//! the stored-fact and join-step ceilings are optional caller settings, and
 //! each is a NUMBER the caller states before the run — every caller passing the same
 //! options gets the same answer or the same refusal, and the effective limits are part of
 //! the result's contract hash.

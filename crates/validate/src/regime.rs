@@ -68,7 +68,7 @@
 //! * **No ambient input.** No clock, no host paths, no RNG, no floating point.
 //!   The `contract-hash` line is a digest of the *calculus*, not of a run.
 //! * **Width-independent numbers.** Counts render as plain decimal, so a 32-bit
-//!   host (wasm32) and a 64-bit host produce the same bytes.
+//!   host (`wasm32`) and a 64-bit host produce the same bytes.
 //! * **Fixed line discipline.** `\n` endings, one fact per line, always a
 //!   trailing newline, and a leading [`REPORT_FORMAT_BANNER`] line so a later
 //!   change to the format is visible instead of silent.
@@ -518,21 +518,18 @@ impl RegimeHost {
 /// [`verify_entailment_to_string`]), where they bound the closure the question is answered
 /// over AND every re-chase a mechanism beyond the rule table runs.
 ///
-/// `None` keeps the target's default: 4,194,304 stored facts and 1,048,576 join steps
-/// natively, 131,072 and 1,048,576 on `wasm32`
-/// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
-/// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). They
-/// also bound retained term surfaces to 16,777,216 bytes by default on every target.
-/// govern the four rule-table regimes (`rdf`, `rdfs`, `owl-rl`, `d`); see
+/// `None` imposes no logical fact, join or arena ceiling on any target.
+/// Physical storage admission still applies. These settings govern the four
+/// rule-table regimes (`rdf`, `rdfs`, `owl-rl`, `d`); see
 /// [`purrdf_entail::materialize_with`]. A run past one fails naming the limit, the numbers
 /// and the knob that raises it in the calling host's own terms ([`Self::host`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MaterializeLimits {
-    /// The stored-fact limit, or `None` for the target's default.
+    /// The stored-fact limit, or `None` for no logical ceiling.
     pub max_stored_facts: Option<u64>,
-    /// The join-step limit, or `None` for the target's default.
+    /// The join-step limit, or `None` for no logical ceiling.
     pub max_join_steps: Option<u64>,
-    /// Bytes of interned term spellings, or `None` for the engine's default.
+    /// Bytes of interned term spellings, or `None` for no logical ceiling.
     pub max_term_arena_bytes: Option<u64>,
     /// The host calling, whose names for the limits' knobs a refusal gives.
     pub host: RegimeHost,
@@ -1179,17 +1176,14 @@ pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
     parse_regime_vectors(REGIME_GOLDEN_VECTORS)
 }
 
-/// The evaluation limits every case of [`REGIME_GOLDEN_VECTORS`] is written and checked
-/// under: the NATIVE defaults, stated.
+/// The explicitly stated finite profile of [`REGIME_GOLDEN_VECTORS`].
 ///
-/// A report's `contract-hash` line folds the effective limits, and the defaults differ by
-/// target, so an artifact shared by every host has to name one set. A native host calling
-/// with no limits runs exactly these; a `wasm32` host states them, and its report is then
-/// byte-identical to the native one — which is the claim the artifact makes.
+/// All three capacity settings are fixed so changing an application default
+/// cannot change this artifact's contract hash on any host.
 pub const REGIME_GOLDEN_VECTOR_LIMITS: MaterializeLimits = MaterializeLimits {
-    max_stored_facts: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_STORED_FACTS),
-    max_join_steps: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS),
-    max_term_arena_bytes: None,
+    max_stored_facts: Some(4_194_304),
+    max_join_steps: Some(1_048_576),
+    max_term_arena_bytes: Some(1 << 24),
     host: RegimeHost::Rust,
 };
 

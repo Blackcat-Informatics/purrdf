@@ -406,11 +406,8 @@ impl fmt::Display for ContractHash {
 ///   ([`EvalOptions::max_join_steps`], [`EvalOptions::max_stored_facts`]) and the
 ///   effective [`EvalOptions::max_term_arena_bytes`] — a limit change turns an answer into a refusal or a refusal
 ///   into an answer, which is as large a difference as an answer can have. The effective
-///   value is hashed, never "the default": the default differs by target
-///   ([`DEFAULT_MAX_STORED_FACTS`](crate::seminaive::DEFAULT_MAX_STORED_FACTS)), so a
-///   result computed natively under the default never shares an identity with a `wasm32`
-///   evaluation under its default, and a caller who states the target's default value gets
-///   the identity the default has;
+///   value is hashed, never its origin. Unstated capacity settings are unlimited
+///   on every target; explicitly stating `u64::MAX` has the same effective identity;
 /// * [`CALCULUS_VERSION`], covering the evaluator semantics that are code rather than data.
 ///   See that constant for exactly when a change obliges a bump.
 ///
@@ -435,7 +432,7 @@ impl fmt::Display for ContractHash {
 ///
 /// Every limit is a caller parameter ([`EvalOptions`]), so [`contract_hash_with`] takes the
 /// options in force and this function is that recipe under [`EvalOptions::default`] — the
-/// current target's defaults. The stored-fact and join-step limits can bind any program,
+/// target-independent defaults. The stored-fact and join-step limits can bind any program,
 /// so they reach every program's hash. A GUARDED program's answer also depends on the term
 /// limits it runs under (the term-generating round limit and the generated-term budget):
 /// the same program refused under one limit completes under a larger one. A guard-free
@@ -541,8 +538,8 @@ pub fn scheduled_contract_hash<const N: usize>(
 /// The digest recipe behind [`contract_hash`], with every input passed explicitly.
 ///
 /// The parameters exist so the tests can prove each input actually reaches the digest: a
-/// `const` cannot be perturbed at runtime, and the defaults differ by target. The public
-/// entry points supply exactly the limits in force and the real arena constant, and
+/// fixed setting cannot be perturbed at runtime. The public entry points supply
+/// exactly the effective limits, including unlimited capacity, and
 /// `the_contract_hash_is_the_recipe_over_the_limits_in_force` pins that, so this seam
 /// cannot drift away from the thing it stands in for.
 fn contract_digest<const N: usize>(
@@ -838,11 +835,6 @@ where
 mod tests {
     use super::*;
     use crate::clause::HeadDisjunct;
-    use crate::seminaive::{
-        DEFAULT_MAX_JOIN_STEPS, DEFAULT_MAX_STORED_FACTS, DEFAULT_MAX_TERM_ARENA_BYTES,
-        NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS,
-        WASM_DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_STORED_FACTS,
-    };
     use crate::store::RelationStore;
 
     const P: &str = "https://example.org/p";
@@ -1407,20 +1399,14 @@ mod tests {
     ///
     /// The tests below perturb the recipe's parameters, which is only evidence about
     /// `contract_hash` because this equality holds: it is what stops the seam from drifting
-    /// away from the limits it stands in for. It holds for the target's defaults and for
+    /// away from the limits it stands in for. It holds for unlimited defaults and for
     /// stated limits alike.
     #[test]
     fn the_contract_hash_is_the_recipe_over_the_limits_in_force() {
         let rules = transitive_step(Q);
         assert_eq!(
             contract_hash(&rules),
-            contract_digest(
-                &rules,
-                CALCULUS_VERSION,
-                DEFAULT_MAX_JOIN_STEPS,
-                DEFAULT_MAX_STORED_FACTS,
-                DEFAULT_MAX_TERM_ARENA_BYTES as u64,
-            )
+            contract_digest(&rules, CALCULUS_VERSION, u64::MAX, u64::MAX, u64::MAX,)
         );
         let stated = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
@@ -1428,49 +1414,41 @@ mod tests {
             .with_max_stored_facts(678);
         assert_eq!(
             contract_hash_with(&rules, &stated),
-            contract_digest(
-                &rules,
-                CALCULUS_VERSION,
-                12_345,
-                678,
-                DEFAULT_MAX_TERM_ARENA_BYTES as u64
-            )
+            contract_digest(&rules, CALCULUS_VERSION, 12_345, 678, u64::MAX)
         );
     }
 
-    /// The EFFECTIVE limits are hashed, never "the default": stating the target's default
-    /// value is the default's identity, and every other value — the other target's default
-    /// included — is a different contract, for a guard-free program as much as a guarded
-    /// one.
+    /// Effective capacity settings are hashed independently of their origin. An
+    /// explicit unlimited setting matches an unstated one; finite values differ.
     #[test]
     fn the_effective_limits_reach_every_programs_hash() {
         let rules = transitive_step(Q);
         let default = contract_hash(&rules);
         let restated = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-            .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS)
-            .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS);
+            .with_max_join_steps(u64::MAX)
+            .with_max_stored_facts(u64::MAX);
         assert_eq!(contract_hash_with(&rules, &restated), default);
         let wasm = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
-            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+            .with_max_join_steps(1_048_576)
+            .with_max_stored_facts(131_072);
         let native = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
-            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+            .with_max_join_steps(1_048_576)
+            .with_max_stored_facts(4_194_304);
         assert_ne!(
             contract_hash_with(&rules, &wasm),
             contract_hash_with(&rules, &native),
-            "a native result never shares an identity with a wasm32 one"
+            "different finite capacity profiles have distinct identities"
         );
         for options in [
             EvalOptions::default()
                 .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-                .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS + 1),
+                .with_max_join_steps(u64::MAX - 1),
             EvalOptions::default()
                 .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-                .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS + 1),
+                .with_max_stored_facts(u64::MAX - 1),
         ] {
             assert_ne!(contract_hash_with(&rules, &options), default, "{options:?}");
         }
@@ -1500,26 +1478,22 @@ mod tests {
         let recipe = |steps: u64, facts: u64, bytes: u64| {
             contract_digest(&rules, CALCULUS_VERSION, steps, facts, bytes)
         };
-        let real = (
-            DEFAULT_MAX_JOIN_STEPS,
-            DEFAULT_MAX_STORED_FACTS,
-            DEFAULT_MAX_TERM_ARENA_BYTES as u64,
-        );
+        let real = (u64::MAX, u64::MAX, u64::MAX);
         assert_eq!(recipe(real.0, real.1, real.2), reference);
         assert_ne!(
             reference,
-            recipe(real.0 + 1, real.1, real.2),
+            recipe(real.0 - 1, real.1, real.2),
             "the join-step limit must reach the digest"
         );
         assert_ne!(
             reference,
-            recipe(real.0, real.1 + 1, real.2),
+            recipe(real.0, real.1 - 1, real.2),
             "the stored-fact limit must reach the digest"
         );
         assert_ne!(
             reference,
-            recipe(real.0, real.1, real.2 + 1),
-            "DEFAULT_MAX_TERM_ARENA_BYTES must reach the digest"
+            recipe(real.0, real.1, real.2 - 1),
+            "the term-arena setting must reach the digest"
         );
 
         // The calculus version.
@@ -1545,7 +1519,7 @@ mod tests {
     ///
     /// The frozen values are the point. Recomputing the digest twice in one process proves
     /// nothing about a second process, so the expected hex is pinned here — under the
-    /// `wasm32` defaults and under the native defaults, each STATED, so both pins hold on
+    /// historical browser and native finite profiles, each explicitly stated, so both pins hold on
     /// every target. If this assertion fails, exactly one of two things happened: the
     /// digest's ENCODING changed (legitimate, and the new value goes here in the same
     /// change that bumps [`CALCULUS_VERSION`]), or an input drifted without anyone
@@ -1554,21 +1528,23 @@ mod tests {
     fn the_contract_hash_is_frozen() {
         let wasm = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
-            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+            .with_max_join_steps(1_048_576)
+            .with_max_stored_facts(131_072)
+            .with_max_term_arena_bytes(1 << 24);
         assert_eq!(
             contract_hash_with(&transitive_step(Q), &wasm).to_hex(),
             "3d385bc2c0467c392ba6b46117b8b6cd547982d41b325fbaef367536ea981574",
-            "the contract hash of the fixture program under the wasm32 defaults moved"
+            "the contract hash of the fixture program under the historical browser profile moved"
         );
         let native = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
-            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
-            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+            .with_max_join_steps(1_048_576)
+            .with_max_stored_facts(4_194_304)
+            .with_max_term_arena_bytes(1 << 24);
         assert_eq!(
             contract_hash_with(&transitive_step(Q), &native).to_hex(),
             "2a0bb5e502d94881573555fdc23ff32b6a64d8116e2dd8273efb2829cac24fc7",
-            "the contract hash of the fixture program under the native defaults moved"
+            "the contract hash of the fixture program under the historical native profile moved"
         );
         let hash = contract_hash(&transitive_step(Q));
         // Recomputation is stable, and the two renderings agree.
@@ -1586,6 +1562,7 @@ mod tests {
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(1_000)
             .with_max_stored_facts(2_000)
+            .with_max_term_arena_bytes(1 << 24)
             .with_max_term_generating_rounds(3)
             .with_max_generated_terms(4_000)
     }

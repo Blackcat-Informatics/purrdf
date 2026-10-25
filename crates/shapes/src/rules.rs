@@ -309,7 +309,7 @@ impl RuleOptions {
     }
 
     /// Select a reproducible sequence of seeds for the rule execution's queries.
-    /// Each SPARQL execution takes one draw from the shared SplitMix64 law;
+    /// Each SPARQL execution takes one draw from the shared `SplitMix64` law;
     /// preparing a query consumes none. A new inference starts the sequence again.
     #[must_use]
     pub const fn with_entropy_seed(mut self, seed: u64) -> Self {
@@ -397,12 +397,9 @@ impl RuleOptions {
     /// rule set's data, and every triple inferred — and refuse one more with a
     /// [`RuleLimitExceeded`] naming the limit.
     ///
-    /// The DEFAULT is sized for the target
-    /// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS)):
-    /// 4,194,304 facts natively, and 131,072 on `wasm32`, where the store lives in one
-    /// linear memory. A rule set whose inferences are large but finite states what it
-    /// needs here; the limit can only refuse, so a run it admits infers exactly what it
-    /// would under any larger limit.
+    /// Unstated, this capacity setting imposes no logical ceiling on any target.
+    /// Physical storage admission still applies. A limit can only refuse; an
+    /// admitted run infers the same complete result under any larger ceiling.
     #[must_use]
     pub fn with_max_stored_facts(mut self, facts: u64) -> Self {
         self.max_stored_facts = Some(facts);
@@ -412,14 +409,9 @@ impl RuleOptions {
     /// Permit exactly `steps` JOIN STEPS — candidate solutions the rule bodies enumerate —
     /// and refuse one more with a [`RuleLimitExceeded`] naming the limit.
     ///
-    /// The DEFAULT is sized for the target
-    /// ([`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)):
-    /// 1,048,576 on every target — it is what refuses a rule that keeps minting new terms
-    /// promptly; see [`NATIVE_DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS).
-    /// A rule set that needs more work, such as the non-linear transitive closure of a
-    /// thousand-node chain, states it here. It also bounds a rule body that
-    /// enumerates far more candidates than it infers triples — an accidental cross
-    /// product — which the stored-fact limit alone would not see.
+    /// Unstated, this capacity setting imposes no logical ceiling on any target.
+    /// A finite setting also bounds a body that enumerates far more candidates
+    /// than it infers triples. Counter overflow remains a typed refusal.
     #[must_use]
     pub fn with_max_join_steps(mut self, steps: u64) -> Self {
         self.max_join_steps = Some(steps);
@@ -715,7 +707,7 @@ const fn capacity_origin(stated: bool) -> &'static str {
     if stated {
         "the caller's limit"
     } else {
-        "the default for this target"
+        "the unlimited setting"
     }
 }
 
@@ -841,8 +833,7 @@ pub fn apply_rules(
 /// registered, on a rule or on any rule set; a requested rule set the shapes graph does
 /// not declare; a rule or expression that fails during execution; a rule set that keeps
 /// inferring new terms past a rule-evaluation limit, or that holds or enumerates more than
-/// the stored-fact or join-step limit permits ([`RuleLimitExceeded`]); and a rule set that
-/// passes the engine's fixed term-arena ceiling.
+/// the selected stored-fact or join-step limit permits ([`RuleLimitExceeded`]).
 pub fn infer(
     data: &ShaclData,
     shapes: &Shapes,

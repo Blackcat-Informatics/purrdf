@@ -2772,16 +2772,13 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         out
     }
 
-    /// The stored-fact and join-step limits name this host's own arguments, and the
-    /// `wasm32` default refuses a 70,000-triple copy (140,000 facts) that a larger stated
-    /// limit admits. The default is STATED here, because this native test binary runs the
-    /// native default; `the_default_limits_are_sized_per_target` in `purrdf-datalog` pins
-    /// that a `wasm32` build's default is exactly this value.
+    /// Finite capacity settings reach the shared evaluator and refusal messages
+    /// name the JavaScript host's controls. Native coverage owns large models.
     #[test]
     fn wasm_apply_rules_capacity_limits() {
         use std::fmt::Write as _;
         let mut data = String::new();
-        for i in 0..70_000 {
+        for i in 0..3 {
             writeln!(
                 data,
                 "<http://example.org/ns#s{i}> <http://example.org/ns#p> \
@@ -2794,27 +2791,27 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         let request = purrdf_validate::RulesRequest {
             data_nt: &data,
             srl: Some(copy),
-            max_stored_facts: Some(purrdf::datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS),
+            max_stored_facts: Some(4),
             host: purrdf_validate::RulesHost::Wasm,
             ..purrdf_validate::RulesRequest::default()
         };
         let refused = apply_rules_impl(&request, None)
-            .expect_err("140,000 facts pass the wasm32 default")
+            .expect_err("six facts exceed the selected ceiling")
             .to_string();
         assert!(
-            refused.contains("131073 facts observed, 131072 permitted (the caller's limit)")
+            refused.contains("5 facts observed, 4 permitted (the caller's limit)")
                 && refused.ends_with("raise it with shaclApplyRules's maxStoredFacts"),
             "{refused}"
         );
         let raised = apply_rules_impl(
             &purrdf_validate::RulesRequest {
-                max_stored_facts: Some(140_000),
+                max_stored_facts: Some(6),
                 ..request
             },
             None,
         )
         .expect("a limit of exactly the store admits it");
-        assert_eq!(raised.inferred_ntriples.lines().count(), 70_000);
+        assert_eq!(raised.inferred_ntriples.lines().count(), 3);
         let steps = apply_rules_impl(
             &purrdf_validate::RulesRequest {
                 max_stored_facts: None,

@@ -343,7 +343,7 @@ function normalizeEntailmentGovernedOptions(options) {
     importDocuments: stringArrayOption(options?.importDocuments, "importDocuments"),
     premiseIris: stringArrayOption(options?.premiseIris, "premiseIris"),
     // The closure's evaluation limits, `bigint`s at the binding. A `number` is accepted and
-    // widened exactly; absent is this target's default.
+    // widened exactly; absent imposes no logical ceiling.
     maxStoredFacts: limitOption(options?.maxStoredFacts),
     maxJoinSteps: limitOption(options?.maxJoinSteps),
     maxTermArenaBytes: limitOption(options?.maxTermArenaBytes),
