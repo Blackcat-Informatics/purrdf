@@ -237,7 +237,7 @@ mod tests {
         fn probe_plan(&self, _: bool, _: bool, _: bool, _: GraphMatch) {}
         fn quads_for_pattern_with_plan(
             &self,
-            _: &(),
+            (): &(),
             s: Option<TermId>,
             p: Option<TermId>,
             o: Option<TermId>,
@@ -304,7 +304,7 @@ mod tests {
                     assert_eq!(refusal.iri(), "urn:purrdf:rdfc:original");
                 }
                 Capability::Missing => {
-                    assert!(matches!(error, CanonError::OwnedWorkspaceUnavailable))
+                    assert!(matches!(error, CanonError::OwnedWorkspaceUnavailable));
                 }
                 Capability::FactoryRefused
                 | Capability::GrowthRefused
@@ -327,7 +327,7 @@ mod tests {
                         .downcast_ref::<CallerRefusal>()
                         .unwrap();
                     assert!(std::ptr::eq(cause, borrowed));
-                    assert!(cause == &ORIGINAL);
+                    assert_eq!(cause, &ORIGINAL);
                     let captured = Capture::read(&error);
                     assert_eq!(captured.code, code);
                     assert_eq!(captured.child("cause").code, "caller-refused");
