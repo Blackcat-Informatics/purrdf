@@ -102,11 +102,12 @@ allowance stops further candidate expansion. Work and retained storage remain
 separate coordinates, so selecting one ceiling does not select the others.
 Physical storage admission and counter representation still apply.
 
-The join-step limit is not what stops a divergent rule. A SHACL shape rule
+Term-generation guards address divergent rules. A SHACL shape rule
 minting a new focus node every round is re-executed only for the focus nodes
 whose inputs changed, not for every earlier one. Term generation has its own
 guards: the term-generating round limit when new terms have bounded length,
 and a caller-selected term-arena ceiling when retained surfaces grow.
+A caller-selected finite join-step limit can refuse a run before those guards.
 
 A limit can only refuse. A run inside its limits returns the program's least
 model, the same model under every limit that admits it. Complete-only calls

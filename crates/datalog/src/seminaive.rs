@@ -301,7 +301,8 @@ impl EvalOptions {
         self.term_arena_bytes.unwrap_or(u64::MAX)
     }
 
-    /// The caller's surface-byte ceiling, or `None` when unlimited.
+    /// The caller's surface-byte setting: `None` means unstated;
+    /// `Some(u64::MAX)` is explicitly unlimited.
     #[must_use]
     pub fn stated_max_term_arena_bytes(&self) -> Option<u64> {
         self.term_arena_bytes
@@ -341,7 +342,8 @@ impl EvalOptions {
         self.stored_facts.unwrap_or(u64::MAX)
     }
 
-    /// The caller's stored-fact limit, or `None` for no logical ceiling.
+    /// The caller's stored-fact setting: `None` means unstated;
+    /// `Some(u64::MAX)` is explicitly unlimited.
     #[must_use]
     pub fn stated_max_stored_facts(&self) -> Option<u64> {
         self.stored_facts
@@ -353,7 +355,8 @@ impl EvalOptions {
         self.join_steps.unwrap_or(u64::MAX)
     }
 
-    /// The caller's join-step limit, or `None` for no logical ceiling.
+    /// The caller's join-step setting: `None` means unstated;
+    /// `Some(u64::MAX)` is explicitly unlimited.
     #[must_use]
     pub fn stated_max_join_steps(&self) -> Option<u64> {
         self.join_steps

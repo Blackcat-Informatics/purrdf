@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-24T19:22:57-06:00\n"
+"POT-Creation-Date: 2026-10-24T19:46:35-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -17840,8 +17840,8 @@ msgid ""
 "selected by the caller: the data graph, a rule set's data and every "
 "inference."
 msgstr ""
-"调用方选择**存储事实上限**时，它约束求值存储所持有的事实：数据图、规则集的数据"
-"以及每一条推出的三元组。"
+"调用方选择**存储事实上限**时，它约束求值存储所持有的事实：数据图、规则集的数"
+"据以及每一条推出的三元组。"
 
 #: src/validation/shacl.md:1262
 msgid ""
@@ -17849,8 +17849,8 @@ msgid ""
 "caller. Credits are reserved before expansion; a refusal never returns a "
 "truncated model."
 msgstr ""
-"调用方选择**连接步数上限**时，它约束候选解的数量。展开之前先预留额度；拒绝绝不"
-"返回被截断的模型。"
+"调用方选择**连接步数上限**时，它约束候选解的数量。展开之前先预留额度；拒绝绝"
+"不返回被截断的模型。"
 
 #: src/validation/shacl.md:1265
 msgid ""
@@ -17911,10 +17911,10 @@ msgid ""
 "The inferred triples, their blank-node labels and their proofs are the same "
 "as running every focus node every iteration. What changes is the cost: a "
 "shape rule that mints a new focus node every iteration pays for one run per "
-"iteration, not one per focus node so far, so a rule that never stops is "
-"refused by a term limit — the round limit when its new terms stay short, or "
-"a caller-selected term-arena ceiling when retained surfaces grow — and never "
-"by the join-step limit."
+"iteration, not one per focus node so far. Term-generation governors address "
+"divergence: the round limit when new terms stay short, or a caller-selected "
+"term-arena ceiling when retained surfaces grow. A caller-selected finite "
+"join-step limit can refuse the run sooner."
 msgstr ""
 "形状规则（即关联到某个形状、对每个焦点节点各运行一次的规则）在每次迭代中只会"
 "针对答案可能已改变的焦点节点重新运行：新出现的焦点节点，以及——按规则的三元组"
@@ -17926,9 +17926,9 @@ msgstr ""
 "点节点运行。规则所读取的图会以每次迭代新增的内容进行扩展，而不是重新构建。推"
 "出的三元组、它们的空节点标签及其证明，都与每次迭代运行全部焦点节点时完全相"
 "同。改变的是代价：一条每次迭代生成一个新焦点节点的形状规则，每次迭代只需付出"
-"一次运行的代价，而不是按迄今为止的焦点节点数各运行一次，因此一条永不停止的规"
-"则会被某个项上限拒绝——新项保持较短时为轮数上限，保留的词法形式增长时为调用方"
-"选择的项存储区上限——而绝不会被连接步数上限拒绝。"
+"一次运行的代价，而不是按迄今为止的焦点节点数各运行一次。项生成的治理参数处理"
+"发散：新项保持较短时使用轮数上限，保留的词法形式增长时使用调用方选择的项存储区"
+"上限。调用方选择的有限连接步数上限可能更早拒绝运行。"
 
 #: src/validation/shacl.md:1304
 msgid ""
@@ -22015,16 +22015,16 @@ msgid ""
 msgstr ""
 "`RDF`、`RDFS`、`OWL-RL` 与 `D` 通道在 `purrdf-datalog` 的[求值上限]"
 "(datalog.md#上限只会拒绝从不截断)下运行：每个图的存储可持有的事实，以及其规则"
-"可枚举的候选解。在任何目标平台上，未声明的事实、连接步数与项存储区设置都不施加"
-"逻辑上限。需要有限上限的调用方需声明它们——"
-"Rust 中为 `materialize_with(ds, plan, &options, stop)`，`purrdf reason` 与 "
-"`purrdf convert --entailment` 上为 `--max-stored-facts` 与 `--max-join-"
-"steps`，Python 的 `materialize` 与 `materialize_nt` 上为 `max_stored_facts=` "
-"与 `max_join_steps=`，`entailMaterialize` 上为 `maxStoredFacts` 与 "
-"`maxJoinSteps`，`purrdf_entail_materialize_to_nquads` 上为 "
-"`max_stored_facts` 与 `max_join_steps`。越过上限的运行会被拒绝，并点名该上"
-"限、相关数值以及该宿主上的参数；在上限之内的运行返回的推理闭包，与任何更大上"
-"限下的完全相同，其报告的契约哈希指名的是所生效上限下的演算。"
+"可枚举的候选解。在任何目标平台上，未声明的事实、连接步数与项存储区设置都不施"
+"加逻辑上限。需要有限上限的调用方需声明它们——Rust 中为 `materialize_with(ds, "
+"plan, &options, stop)`，`purrdf reason` 与 `purrdf convert --entailment` 上"
+"为 `--max-stored-facts` 与 `--max-join-steps`，Python 的 `materialize` 与 "
+"`materialize_nt` 上为 `max_stored_facts=` 与 `max_join_steps=`，"
+"`entailMaterialize` 上为 `maxStoredFacts` 与 `maxJoinSteps`，"
+"`purrdf_entail_materialize_to_nquads` 上为 `max_stored_facts` 与 "
+"`max_join_steps`。越过上限的运行会被拒绝，并点名该上限、相关数值以及该宿主上"
+"的参数；在上限之内的运行返回的推理闭包，与任何更大上限下的完全相同，其报告的"
+"契约哈希指名的是所生效上限下的演算。"
 
 #: src/entailment.md:264
 msgid ""
@@ -23484,8 +23484,8 @@ msgid ""
 "report and participates in the contract hash."
 msgstr ""
 "`EvalOptions::without_stored_fact_limit`、`without_join_step_limit` 与 "
-"`without_term_arena_limit` 移除已选择的逻辑上限。实际存储准入仍然适用。预算"
-"报告提供有效上限，该值也参与契约哈希。"
+"`without_term_arena_limit` 移除已选择的逻辑上限。实际存储准入仍然适用。预算报"
+"告提供有效上限，该值也参与契约哈希。"
 
 #: src/datalog.md:93
 msgid ""
@@ -23508,25 +23508,27 @@ msgid ""
 "not select the others. Physical storage admission and counter representation "
 "still apply."
 msgstr ""
-"所有目标平台采用相同的未声明容量设置。有限上限由应用程序在求值前显式选择。"
-"求值器在展开候选项之前，从轮次共享的预算池中预留该候选项的额度；额度耗尽时"
-"停止继续展开。工作量与保留存储是独立坐标，因此选择一个上限不会设置其他上限。"
-"实际存储准入与计数器的表示范围仍然适用。"
+"所有目标平台采用相同的未声明容量设置。有限上限由应用程序在求值前显式选择。求"
+"值器在展开候选项之前，从轮次共享的预算池中预留该候选项的额度；额度耗尽时停止"
+"继续展开。工作量与保留存储是独立坐标，因此选择一个上限不会设置其他上限。实际"
+"存储准入与计数器的表示范围仍然适用。"
 
 #: src/datalog.md:105
 msgid ""
-"The join-step limit is not what stops a divergent rule. A SHACL shape rule "
-"minting a new focus node every round is re-executed only for the focus nodes "
-"whose inputs changed, not for every earlier one. Term generation has its own "
+"Term-generation guards address divergent rules. A SHACL shape rule minting a "
+"new focus node every round is re-executed only for the focus nodes whose "
+"inputs changed, not for every earlier one. Term generation has its own "
 "guards: the term-generating round limit when new terms have bounded length, "
-"and a caller-selected term-arena ceiling when retained surfaces grow."
+"and a caller-selected term-arena ceiling when retained surfaces grow. A "
+"caller-selected finite join-step limit can refuse a run before those guards."
 msgstr ""
-"阻止发散规则的并不是连接步数上限。一条每轮生成一个新焦点节点的 SHACL 形状规"
+"项生成的防护处理发散规则。一条每轮生成一个新焦点节点的 SHACL 形状规"
 "则，只会针对输入发生变化的焦点节点重新执行，而不是针对此前的每一个焦点节点。"
 "项生成有独立的防护：新项长度有界时，由生成新项的轮数上限约束；保留的词法形式"
-"增长时，由调用方选择的项存储区上限约束。"
+"增长时，由调用方选择的项存储区上限约束。调用方选择的有限连接步数上限可能在这些"
+"防护之前拒绝运行。"
 
-#: src/datalog.md:111
+#: src/datalog.md:112
 msgid ""
 "A limit can only refuse. A run inside its limits returns the program's least "
 "model, the same model under every limit that admits it. Complete-only calls "
@@ -23547,7 +23549,7 @@ msgstr ""
 "组的身份。连接步数还取决于求值器的计划，因此针对某个版本收得过紧的上限，可能"
 "会在下一个版本中拒绝；留有余量的上限则不会改变一个已完成的答案。"
 
-#: src/datalog.md:122
+#: src/datalog.md:123
 msgid ""
 "The Datalog evaluator reads no clock. A host can adapt a wall-clock deadline "
 "or cancellation flag to the answer-blind `StopSignal` interface. The signal "
@@ -23558,11 +23560,11 @@ msgstr ""
 "答案无关的 `StopSignal` 接口。信号在会话入口和轮次边界处被轮询。已停止的会话"
 "可以使用新的信号继续执行；新旧信号都不会改变完成后的模型。"
 
-#: src/datalog.md:127
+#: src/datalog.md:128
 msgid "Model output, proofs and measured work"
 msgstr "模型输出、证明与工作量计数"
 
-#: src/datalog.md:129
+#: src/datalog.md:130
 msgid ""
 "Ordinary evaluation defaults to `DerivationMode::ModelOnly`. Set "
 "`EvalOptions::with_derivation_mode(DerivationMode::Record)` when exported "
@@ -23578,7 +23580,7 @@ msgstr ""
 "`Some([])`。证明构造以 `ProofError::DerivationsNotRecorded` 拒绝仅有模型的结"
 "果。记录不会改变最小模型、内部规范见证的优先选择或候选计数。"
 
-#: src/datalog.md:137
+#: src/datalog.md:138
 msgid ""
 "`Evaluation::work` separates unique input facts and committed fact "
 "insertions from physical candidate admissions. For an ordinary completed "
@@ -23592,7 +23594,7 @@ msgstr ""
 "报告给出规划器版本，调用方可以比较每个已提交事实对应的候选数。调度撤回可能导"
 "致稍后再次提交同一事实，因此产生另一次提交事件。"
 
-#: src/datalog.md:144
+#: src/datalog.md:145
 msgid ""
 "`EvalOptions::with_round_execution(RoundExecution::Sequential)` selects the "
 "direct execution path for one call, without changing a global thread pool. "
@@ -23603,7 +23605,7 @@ msgstr ""
 "择直接执行路径，不改变全局线程池。两种调度策略使用同一个求值器、按程序顺序归"
 "并并排序提交，保持相同的模型和已记录推导。"
 
-#: src/datalog.md:149
+#: src/datalog.md:150
 msgid ""
 "Complete-only entry points such as `evaluate_guarded` return no model on "
 "refusal. The error names the limit, the numbers observed and permitted, and "
@@ -23614,11 +23616,11 @@ msgstr ""
 "限、观测到的与允许的数值，以及用于提高该上限的参数；蕴涵层通过 "
 "`EntailError::Evaluate` 或 `EntailError::Chase` 报告这些错误。"
 
-#: src/datalog.md:154
+#: src/datalog.md:155
 msgid "Certified partial models and continuations"
 msgstr "经认证的部分模型与续体（continuation）"
 
-#: src/datalog.md:156
+#: src/datalog.md:157
 msgid ""
 "`EvaluationSession::new` consumes the input store and borrows the immutable "
 "program and guard evaluator. Its `SessionContext` requires the caller's "
@@ -23637,7 +23639,7 @@ msgstr ""
 "推导记录模式保持不变。任一绑定坐标发生变化时，续算会在执行前被拒绝。原始词典"
 "在每次公开读取和续算的边界处检查其绑定源是否仍然有效。"
 
-#: src/datalog.md:165
+#: src/datalog.md:166
 msgid ""
 "`ResumeProgress::Paused` carries the original resource or stop refusal. "
 "`partial_model()` borrows the seeded and proved published facts, actual "
@@ -23656,7 +23658,7 @@ msgstr ""
 "论暂不提供。部分结果的身份标识在单独的哈希域中纳入原始规范绑定、governor（执"
 "行调控器）和消耗量。运行时的项句柄和行句柄绝不参与该身份标识。"
 
-#: src/datalog.md:174
+#: src/datalog.md:175
 msgid ""
 "Raise a ceiling or supply a fresh stop signal to resume the retained joins, "
 "guards, rule/round work, sorted publication and current delta. Successful "
@@ -23672,7 +23674,7 @@ msgstr ""
 "记录且已发布的推导构造证明，并由完整模型所使用的同一个独立检查器校验。源和守"
 "卫失败仍是硬失败，并阻止进一步续算。"
 
-#: src/datalog.md:181
+#: src/datalog.md:182
 msgid ""
 "Only `ResumeProgress::Complete` enables `take_complete()` to return an "
 "`Evaluation`. An incomplete request leaves the session intact. The completed "
