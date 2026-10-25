@@ -33,7 +33,7 @@
 use std::collections::BTreeSet;
 
 use purrdf_core::distance::{
-    Arithmetic, BuildIdentity, BuildShape, Exact, Resolved, RowsRef, Selected,
+    Arithmetic, BuildIdentity, BuildShape, Exact, NonFinite, Resolved, RowsRef, Selected,
 };
 
 use crate::error::{ArithmeticRefusal, ComponentValue, HnswError, Result};
@@ -332,7 +332,7 @@ impl VectorMatrix {
 
 impl VectorMatrix {
     /// The distance between two stored rows under `kernel`, along `arithmetic`'s
-    /// resolved dispatch path, or `None` if it left the finite range.
+    /// resolved dispatch path, retaining the original checked result on refusal.
     ///
     /// `arithmetic` comes from [`Arithmetic::resolve`] (or
     /// [`Arithmetic::resolve_recorded`]), called once per scan or call site on the thread
@@ -340,7 +340,6 @@ impl VectorMatrix {
     /// than to nearest is refused, by name; every distance this type computes takes the
     /// handle it returns, so none is computed on a thread that was not checked. The handle
     /// is `Copy`, and passing it costs nothing per pair.
-    #[must_use]
     pub fn distance<A: Arithmetic>(
         &self,
         arithmetic: Resolved<A>,
@@ -349,7 +348,7 @@ impl VectorMatrix {
         a_norm: f64,
         b: usize,
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> core::result::Result<f64, NonFinite> {
         let (a_start, b_start) = (a * self.dims, b * self.dims);
         let measure = kernel.measure();
         match &self.data {
@@ -378,7 +377,6 @@ impl VectorMatrix {
     /// an arithmetic whose bits do not depend on the path it is bit-identical to a matched one.
     /// `arithmetic` is the checked handle [`VectorMatrix::distance`] takes, for the same
     /// reason.
-    #[must_use]
     pub fn distance_from_query<A: Arithmetic>(
         &self,
         arithmetic: Resolved<A>,
@@ -387,7 +385,7 @@ impl VectorMatrix {
         query_norm: f64,
         row: usize,
         row_norm: f64,
-    ) -> Option<f64> {
+    ) -> core::result::Result<f64, NonFinite> {
         let start = row * self.dims;
         let measure = kernel.measure();
         match &self.data {
@@ -465,7 +463,7 @@ impl VectorMatrix {
         seed_norm: f64,
         norms: &[f64],
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [core::result::Result<f64, NonFinite>],
     ) {
         let start = seed * self.dims;
         let measure = kernel.measure();
@@ -504,7 +502,7 @@ impl VectorMatrix {
         query_norm: f64,
         norms: &[f64],
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [core::result::Result<f64, NonFinite>],
     ) {
         let measure = kernel.measure();
         match &self.data {

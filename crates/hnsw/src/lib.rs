@@ -967,7 +967,7 @@ impl<A: Arithmetic> HnswIndex<A> {
                 b,
                 search::norm_of(&self.norms, b),
             )
-            .ok_or(HnswError::NonFiniteDistance { row: b })
+            .map_err(|cause| HnswError::NonFiniteDistance { row: b, cause })
     }
 
     /// The number of indexed rows.

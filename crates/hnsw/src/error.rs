@@ -160,6 +160,8 @@ pub enum HnswError {
     NonFiniteDistance {
         /// The candidate row whose distance overflowed.
         row: usize,
+        /// The original result observed by the shared arithmetic.
+        cause: purrdf_core::distance::NonFinite,
     },
 
     /// A row index is outside the matrix.
@@ -320,7 +322,9 @@ impl purrdf_hash::error::StructuredError for HnswError {
             "value" => Record(value),
         },
         ZeroNorm { row } => "hnsw-zero-norm" { "row" => Unsigned(*row as u128) },
-        NonFiniteDistance { row } => "hnsw-non-finite-distance" { "row" => Unsigned(*row as u128) },
+        NonFiniteDistance { row, cause } => "hnsw-non-finite-distance" {
+            "row" => Unsigned(*row as u128), "cause" => Cause(cause),
+        },
         RowOutOfBounds { index, max } => "hnsw-row-out-of-bounds" { "index" => Unsigned(*index as u128), "max" => Unsigned(*max as u128) },
         UnsupportedMetric { metric } => "hnsw-unsupported-metric" { "metric" => Record(metric) },
         EmptyGraph => "hnsw-empty-graph" {},
@@ -373,7 +377,7 @@ impl fmt::Display for HnswError {
                 f,
                 "row {row} has zero L2 norm and the declared metric divides by it"
             ),
-            Self::NonFiniteDistance { row } => write!(
+            Self::NonFiniteDistance { row, .. } => write!(
                 f,
                 "the distance to row {row} left the finite binary64 range"
             ),
@@ -472,6 +476,7 @@ impl std::error::Error for HnswError {
         match self {
             Self::Workspace(error) => Some(error),
             Self::FloatEnvironment(error) => Some(error),
+            Self::NonFiniteDistance { cause, .. } => Some(cause),
             Self::ArithmeticOverflow(cause) => Some(cause),
             Self::Embedding { cause } => Some(cause),
             Self::ParameterValidation { cause } => Some(cause),
@@ -505,7 +510,7 @@ impl From<purrdf_core::EmbeddingError> for HnswError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf_core::distance::{BuildIdentity, BuildShape};
+    use purrdf_core::distance::{Arithmetic as _, BuildIdentity, BuildShape, Exact};
 
     /// An `x86_64` shape with `features`, under `identity`.
     fn shape(features: &[&str], identity: BuildIdentity) -> BuildShape {
@@ -532,7 +537,19 @@ mod tests {
                 value: ComponentValue::Binary32Bits(f32::NAN.to_bits()),
             },
             HnswError::ZeroNorm { row: 2 },
-            HnswError::NonFiniteDistance { row: 3 },
+            HnswError::NonFiniteDistance {
+                row: 3,
+                cause: Exact::resolve()
+                    .unwrap()
+                    .distance(
+                        purrdf_core::distance::Measure::SquaredEuclidean,
+                        &[f64::MAX],
+                        0.0,
+                        &[-f64::MAX],
+                        0.0,
+                    )
+                    .unwrap_err(),
+            },
             HnswError::RowOutOfBounds { index: 9, max: 8 },
             HnswError::UnsupportedMetric {
                 metric: purrdf_core::DistanceMetric::Extension {

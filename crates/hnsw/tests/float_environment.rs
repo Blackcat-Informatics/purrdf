@@ -440,9 +440,9 @@ fn batch<A: Arithmetic>(
     data: &[f64],
     query: usize,
     row: usize,
-) -> Option<f64> {
+) -> Result<f64, purrdf_core::distance::NonFinite> {
     let rows = RowsRef::new(data, 3, 2, &[]).expect("a 3x2 matrix");
-    let mut out = [None; 3];
+    let mut out = [Ok(0.0); 3];
     resolved.distances(measure, rows.row(query), 0.0, rows, &mut out);
     out[row]
 }
@@ -455,11 +455,11 @@ fn pairs_equal_batch<A: Arithmetic>(
     kernel: Kernel,
     query: usize,
     row: usize,
-    pair: Option<f64>,
+    pair: Result<f64, purrdf_core::distance::NonFinite>,
 ) -> f64 {
     let data = subnormal_rows();
     let expected = batch(resolved, kernel.measure(), &data, query, row).expect("finite");
-    let bits = Some(expected.to_bits());
+    let bits = Ok(expected.to_bits());
     let law = A::ID;
     assert_eq!(
         pair.map(f64::to_bits),

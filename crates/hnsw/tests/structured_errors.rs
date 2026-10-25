@@ -314,9 +314,43 @@ fn real_artifact_setup_retains_its_native_cause_after_owners_drop() {
     assert!(matches!(digest.field("actual"), ErrorValue::Bytes(bytes) if bytes == actual));
 }
 
+fn computed_distance_keeps_its_original_cause_without_inspection_allocations() {
+    let matrix = VectorMatrix::new(2, 1, vec![1e300, -1e300]).unwrap();
+    let error = HnswIndex::build(
+        matrix,
+        &DistanceMetric::SquaredEuclidean,
+        Params::new(2, 2, 2, 1).unwrap(),
+    )
+    .unwrap_err();
+    let root_events = Vec::with_capacity(2);
+    let cause_events = Vec::with_capacity(1);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let copy = error.clone();
+    drop(error);
+    let root = Capture::read_with_buffer(&copy, root_events);
+    let ErrorValue::Cause(cause) = root.field("cause") else {
+        panic!("a computed distance retains its native cause");
+    };
+    let cause = Capture::read_with_buffer(cause, cause_events);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(root.code, "hnsw-non-finite-distance");
+    assert!(matches!(root.field("row"), ErrorValue::Unsigned(0 | 1)));
+    assert_eq!(cause.code, "distance-non-finite");
+    assert!(matches!(cause.field("value"), ErrorValue::Float64Bits(bits)
+        if bits == f64::INFINITY.to_bits()));
+    assert!(
+        std::error::Error::source(&copy)
+            .unwrap()
+            .is::<purrdf_core::distance::NonFinite>()
+    );
+}
+
 purrdf_testkit::harness_main!(
     matrix_and_parameter_producers_keep_original_operands,
     payload_producer_keeps_reserved_bits_after_input_disposal,
     guard_and_build_identities_keep_full_width_values,
     real_artifact_setup_retains_its_native_cause_after_owners_drop,
+    computed_distance_keeps_its_original_cause_without_inspection_allocations,
 );
