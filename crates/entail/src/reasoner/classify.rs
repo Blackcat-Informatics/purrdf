@@ -54,7 +54,7 @@
 
 use purrdf_core::TermValue;
 
-use super::certificate::{Session, Verdict};
+use super::certificate::{Certified, DirectnessRefusal, Session, Verdict};
 use super::proof::{Claim, ClaimBasis, ClaimSubject};
 use crate::owl_dl::Kb;
 use crate::owl_dl::graph::Assumptions;
@@ -264,7 +264,7 @@ pub(crate) fn subsumes(session: &mut Session<'_>, sub: u32, sup: u32) -> Verdict
 /// opaque atomic classes, so `⊥ ⊑ C ⊑ ⊤` appears for every named `C`, and a class the
 /// ontology forces empty shows up equivalent to `owl:Nothing` rather than in a separate
 /// list nobody joins against.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct ClassHierarchy {
     /// Every ESTABLISHED subsumption `C ⊑ D` with `C` and `D` distinct terms.
     subsumptions: Vec<(TermValue, TermValue)>,
@@ -274,6 +274,11 @@ pub struct ClassHierarchy {
     unsatisfiable: Vec<TermValue>,
     /// The transitive reduction of [`Self::subsumptions`].
     direct: Vec<(TermValue, TermValue)>,
+}
+
+purrdf_hash::debug_non_exhaustive! {
+    /// Unproved direct candidates remain private, including in debug output.
+    ClassHierarchy { subsumptions, equivalences, unsatisfiable }
 }
 
 impl ClassHierarchy {
@@ -304,26 +309,6 @@ impl ClassHierarchy {
     #[must_use]
     pub fn unsatisfiable(&self) -> &[TermValue] {
         &self.unsatisfiable
-    }
-
-    /// The transitive reduction of [`Self::subsumptions`]: `(C, D)` where `D` is a DIRECT
-    /// subsumer of `C`, sorted.
-    ///
-    /// Computed over equivalence-class representatives, so a cycle of mutually subsuming
-    /// classes contributes one node rather than an unreadable clique, and only the
-    /// representative appears here — the other members are in [`Self::equivalences`].
-    ///
-    /// # What a `BudgetExhausted` certificate does to this list
-    ///
-    /// The reduction is derived from the subsumptions that were ESTABLISHED. If the
-    /// certificate reports [`DlCompleteness::BudgetExhausted`](super::DlCompleteness), a
-    /// pair listed here may have an intermediate class the search did not get to, so
-    /// "direct" means "direct as far as this run decided". Every pair listed is still a
-    /// genuine subsumption; it is the DIRECTNESS that weakens, and the certificate is
-    /// where a caller finds that out.
-    #[must_use]
-    pub fn direct_subsumptions(&self) -> &[(TermValue, TermValue)] {
-        &self.direct
     }
 
     /// Derive the hierarchy from a decided subsumption matrix.
@@ -398,6 +383,20 @@ impl ClassHierarchy {
     }
 }
 
+impl Certified<ClassHierarchy> {
+    /// Exact direct class subsumptions, sorted over equivalence representatives.
+    /// Other equivalent members remain in [`ClassHierarchy::equivalences`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the original certificate in [`DirectnessRefusal`] unless the
+    /// complete supplied ontology was decided. Positive subsumptions remain
+    /// available through [`Self::answer`].
+    pub fn direct_subsumptions(&self) -> Result<&[(TermValue, TermValue)], DirectnessRefusal<'_>> {
+        Ok(&self.direct_answer()?.direct)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -405,7 +404,7 @@ mod tests {
 
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 
-    use super::{ClassHierarchy, Subsumptions};
+    use super::Subsumptions;
     use crate::owl_dl::saturate::saturate;
     use crate::reasoner::Reasoner;
     use crate::vocab::{
@@ -939,7 +938,8 @@ mod tests {
     fn no_direct_taxonomy_edge_is_implied_by_another() {
         for (name, dataset, _) in corpus() {
             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
-            let hierarchy: ClassHierarchy = reasoner.classify().expect("consistent").into_answer();
+            let certified = reasoner.classify().expect("consistent");
+            let hierarchy = certified.answer();
             let closure: BTreeSet<(&TermValue, &TermValue)> = hierarchy
                 .subsumptions()
                 .iter()
@@ -949,7 +949,13 @@ mod tests {
             let strictly_below =
                 |sub: &TermValue, sup: &TermValue| below(sub, sup) && !below(sup, sub);
             let signature = reasoner.signature();
-            for (sub, sup) in hierarchy.direct_subsumptions() {
+            let direct = certified.direct_subsumptions();
+            if certified.certificate().completeness() != crate::DlCompleteness::Decided {
+                let refusal = direct.expect_err("incomplete directness is unavailable");
+                assert!(std::ptr::eq(refusal.certificate(), certified.certificate()));
+                continue;
+            }
+            for (sub, sup) in direct.expect("fully decided hierarchy") {
                 assert!(
                     strictly_below(sub, sup),
                     "{name}: a direct edge must be a strict subsumption"

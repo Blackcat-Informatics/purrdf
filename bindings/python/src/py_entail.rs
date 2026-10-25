@@ -468,13 +468,13 @@ fn consistency(
 ///
 /// Returns `(answer, certificate)`. The answer carries `equivalent`, `subclass`
 /// (the full transitively-closed relation), `direct` (its transitive reduction) and
-/// `unsatisfiable` lines, in that block order. Both subsumption blocks are present
-/// because they are different facts: `direct` is "direct as far as this run
-/// decided", which weakens under a `budget-exhausted` certificate while every
-/// listed pair stays a genuine subsumption.
+/// `unsatisfiable` lines, in that block order. Directness requires the complete
+/// supplied ontology to be decided. Incomplete runs raise
+/// `owl-directness-unavailable` with the full original certificate in the message
+/// before emitting any answer rows.
 ///
-/// Costs one tableau decision per ORDERED pair of named classes plus the
-/// consistency check; the certificate's `decisions` line reports it.
+/// Classification reuses shared saturation; the certificate's `decisions` line
+/// records its actual tableau runs.
 ///
 /// Raises `ValueError` on a malformed document, or on an ontology with no model —
 /// every class then subsumes every other and the hierarchy would carry no
@@ -499,7 +499,8 @@ fn classify(
 /// Returns `(answer, certificate)`; the answer carries `type` lines followed by
 /// `direct-type` lines.
 ///
-/// Raises `ValueError` on a malformed document or an ontology with no model.
+/// Raises `ValueError` on a malformed document, an ontology with no model, or
+/// incomplete directness. The latter retains the original certificate in the message.
 #[pyfunction]
 #[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
 fn realize(py: Python<'_>, data: &str, step_cap: u32, work_cap: u32) -> PyResult<(String, String)> {

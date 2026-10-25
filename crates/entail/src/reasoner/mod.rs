@@ -118,7 +118,7 @@ pub(crate) mod schema_tests;
 mod borrowed_tests;
 
 pub use axiom::DlAxiom;
-pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
+pub use certificate::{Certified, DirectnessRefusal, DlCertificate, DlCompleteness, Verdict};
 pub use classify::ClassHierarchy;
 pub use module::{
     ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,
@@ -1289,6 +1289,24 @@ mod tests {
             hierarchy.certificate().completeness(),
             DlCompleteness::BudgetExhausted
         );
+        let realized = reasoner
+            .realize()
+            .expect("stopped realization remains partial");
+        for (refusal, original) in [
+            (
+                hierarchy
+                    .direct_subsumptions()
+                    .expect_err("stopped hierarchy"),
+                hierarchy.certificate(),
+            ),
+            (
+                realized.direct_types().expect_err("stopped realization"),
+                realized.certificate(),
+            ),
+        ] {
+            assert!(original.stopped());
+            assert!(std::ptr::eq(refusal.certificate(), original));
+        }
     }
 
     /// The dataset [`Reasoner::with_proofs`] is built from is wholly caller-supplied — a
