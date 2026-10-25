@@ -678,6 +678,8 @@ source on every run.
 | `b"purrdf-text/surface-source/v1\0"` | `SOURCE_DOMAIN` | `crates/text/src/surface.rs` |
 | `b"purrdf-text/triples/index/v3"` | `TRIPLE_INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/triples/source/v2"` | `TRIPLE_SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-toml-document-v1"` | `DOCUMENT_DOMAIN` | `crates/toml/src/profile.rs` |
+| `b"purrdf-toml-profile-v1"` | `PROFILE_DOMAIN` | `crates/toml/src/profile.rs` |
 | `b"purrdf.pipeline-root.v1"` | `PIPELINE_ROOT_DOMAIN` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
 | `b"purrdf.purremb.v1.artifact\0"` | `D_ARTIFACT` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.chunking\0"` | `D_CHUNKING` | `crates/rdf-core/src/ir/embedding/identity.rs` |

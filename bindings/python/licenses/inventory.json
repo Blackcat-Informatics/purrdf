@@ -877,6 +877,21 @@
       "source_checksum": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
     },
     {
+      "id": "toml-test",
+      "license": "MIT",
+      "notices": [
+        "third-party/toml-test/0-MIT.txt"
+      ],
+      "paths": [
+        "crates/toml/tests/suite/**"
+      ],
+      "provenance": [
+        "crates/toml/PROVENANCE.md"
+      ],
+      "scope": "source-only frozen TOML 1.1 grammar and typed-value conformance data; no parser implementation",
+      "source": "https://github.com/toml-lang/toml-test/tree/ff49d109861c1ad25af53f687f2aef19ab650600"
+    },
+    {
       "id": "twox-hash-2.1.2",
       "license": "MIT",
       "notices": [
@@ -1224,7 +1239,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "ab3d9a7ee682ded2ba7da437268a1b4b0a81fdb9c21870d62c0c5a753834daa9",
+    "NOTICE.txt": "373360a24aa08e7126da83302f94adcdd39bdf5e2faf963b260659afefae0738",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1388,6 +1403,7 @@
     "third-party/shex-tests/1-MIT-permission.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
     "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
     "third-party/sparql-cdt/0-LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+    "third-party/toml-test/0-MIT.txt": "01ef58ee6449fa01a284c10808e27800d66bfea271bc29281125ff8e5642b86f",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
     "third-party/w3c-owl2-rl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
     "third-party/w3c-owl2-rl/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",

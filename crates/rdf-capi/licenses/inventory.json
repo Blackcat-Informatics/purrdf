@@ -639,6 +639,21 @@
       "source_checksum": "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
     },
     {
+      "id": "toml-test",
+      "license": "MIT",
+      "notices": [
+        "third-party/toml-test/0-MIT.txt"
+      ],
+      "paths": [
+        "crates/toml/tests/suite/**"
+      ],
+      "provenance": [
+        "crates/toml/PROVENANCE.md"
+      ],
+      "scope": "source-only frozen TOML 1.1 grammar and typed-value conformance data; no parser implementation",
+      "source": "https://github.com/toml-lang/toml-test/tree/ff49d109861c1ad25af53f687f2aef19ab650600"
+    },
+    {
       "id": "twox-hash-2.1.2",
       "license": "MIT",
       "notices": [
@@ -847,7 +862,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "4e2240cd7e7fad507dc2c02ee62ca22d56e25600ce6127856fa619d4f94b015b",
+    "NOTICE.txt": "c3359dc005d1ff6fc46eab724032cd092d1b6ee836df32e5617678fab09593bf",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -981,6 +996,7 @@
     "third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
     "third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
     "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
+    "third-party/toml-test/0-MIT.txt": "01ef58ee6449fa01a284c10808e27800d66bfea271bc29281125ff8e5642b86f",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
     "third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
   },
