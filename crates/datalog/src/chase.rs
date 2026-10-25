@@ -1507,11 +1507,11 @@ where
 ///
 /// # Budgets
 ///
-/// Consumption is charged against the target's default stored-fact and join-step limits
-/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the caller-selected
-/// [`EvalOptions::max_term_arena_bytes`], exactly as [`crate::seminaive::evaluate`] charges them, and
-/// passing one is a refusal ([`ChaseError::BudgetExhausted`]) carrying an accurate report —
-/// never a truncated answer.
+/// Consumption uses [`EvalOptions::default`], with no logical stored-fact,
+/// join-step or term-arena ceiling. [`chase_with`] takes the caller's options;
+/// any selected finite ceiling is charged as in [`crate::seminaive::evaluate`].
+/// Passing a ceiling or overflowing a work counter returns
+/// [`ChaseError::BudgetExhausted`] with an accurate report, never a truncated answer.
 ///
 /// # Errors
 ///

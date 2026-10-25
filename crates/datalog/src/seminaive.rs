@@ -4512,8 +4512,10 @@ where
 ///
 /// # Errors
 ///
-/// [`EvalError::BudgetExhausted`] if the run passes the default stored-fact or join-step
-/// limit ([`EvalOptions::default`]) or the term-arena ceiling. There is no partial answer: a budget refusal is total. [`EvalError::Guard`] if the program
+/// This entry point uses [`EvalOptions::default`], with no logical stored-fact,
+/// join-step or term-arena ceiling. [`EvalError::BudgetExhausted`] still refuses
+/// unrepresentable work counts; a budget refusal never returns a partial answer.
+/// [`EvalError::Guard`] if the program
 /// carries a guard, which this entry point has no evaluator for — see
 /// [`evaluate_guarded`].
 pub fn evaluate<D: TermDictionary, const N: usize>(

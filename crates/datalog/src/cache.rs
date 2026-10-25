@@ -434,8 +434,9 @@ impl fmt::Display for ContractHash {
 ///
 /// Every limit is a caller parameter ([`EvalOptions`]), so [`contract_hash_with`] takes the
 /// options in force and this function is that recipe under [`EvalOptions::default`] — the
-/// target-independent defaults. The stored-fact and join-step limits can bind any program,
-/// so they reach every program's hash. A GUARDED program's answer also depends on the term
+/// target-independent defaults, with no logical capacity ceiling. Caller-selected
+/// finite stored-fact and join-step limits can bind any program, so their effective
+/// settings reach every program's hash. A GUARDED program's answer also depends on the term
 /// limits it runs under (the term-generating round limit and the generated-term budget):
 /// the same program refused under one limit completes under a larger one. A guard-free
 /// program cannot be bound by either (see [`EvalOptions`]), so its contract hash leaves
