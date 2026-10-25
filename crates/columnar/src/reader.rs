@@ -392,8 +392,8 @@ fn resolve_term_record(
                     ));
                 };
                 if let Some(tag) = &language {
-                    // This branch proves language is Some; rejection moves its
-                    // original string through the expect below.
+                    // Matching Some establishes that language is present;
+                    // rejection moves its original string through the expect.
                     if tag.is_empty() || !is_identity_folded(tag) {
                         return Err(ColumnarError::reader_malformed(
                             "terms.lang",
