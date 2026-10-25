@@ -1,0 +1,40 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Compiled glob matching
+
+Compile one anchored Unicode glob and reuse it without matching allocations:
+
+```rust
+use purrdf_glob::{CompiledGlob, Mode};
+let pattern = CompiledGlob::compile("**/a*b/c", Mode::Path)?;
+assert!(pattern.match_literal("axxx/y/ab/c", 1_000)?.matched);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The umbrella exposes the same implementation as `purrdf::glob`. Compilation
+accepts an owned, dedicated physical admission account through
+`compile_with_storage`; syntax and storage refusals remain distinct.
+[SPEC.md](SPEC.md) defines the exact versioned language, work accounting and
+separator rules. It includes no pattern sets, expansion or implicit IRI decoding.
+
+The CLI requires an explicit mode, surface and work allowance:
+
+```sh
+purrdf glob '**/a*b/c' 'axxx/y/ab/c' --mode path --surface literal --max-work 1000
+purrdf glob '/docs/*.ttl' 'https://example.org/docs/a.ttl?download' --mode path --surface iri-path --max-work 1000
+```
+
+Completed decisions write `matched true` or `matched false`, then `work N`, one
+line each, and exit successfully. Syntax, storage, IRI parsing and work exhaustion
+fail without a decision. An absent component is a negative match; a present empty
+component matches a pattern that accepts empty text. Quote patterns to prevent
+shell expansion.
+
+## License
+
+Licensed under any one of the following, at your option:
+
+- [MIT license](licenses/LICENSE-MIT)
+- [Apache License, Version 2.0](licenses/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](licenses/LICENSE-MULAN)

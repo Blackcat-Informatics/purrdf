@@ -121,6 +121,12 @@ pub enum CliError {
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
     /// (exit code 1).
     Runtime(String),
+    /// Original compiled glob syntax or storage refusal.
+    GlobCompile(purrdf::glob::CompileError),
+    /// Original compiled glob execution refusal.
+    GlobMatch(purrdf::glob::MatchError),
+    /// Original IRI parse failure for an explicitly selected glob IRI surface.
+    GlobIri(purrdf_iri::IriReadError),
     /// A downstream reader closed the pipe before the document finished.
     ///
     /// Not a failure: the standard Unix filter contract is to exit 0 silently when
@@ -136,7 +142,7 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::Usage(_) => 2,
-            Self::Runtime(_) => 1,
+            Self::Runtime(_) | Self::GlobCompile(_) | Self::GlobMatch(_) | Self::GlobIri(_) => 1,
             Self::DownstreamClosed => 0,
         }
     }
@@ -146,6 +152,9 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
+            Self::GlobCompile(error) => error.fmt(f),
+            Self::GlobMatch(error) => error.fmt(f),
+            Self::GlobIri(error) => error.fmt(f),
             // Never printed: this variant exits 0 and reports nothing, which is the
             // whole point of a filter whose reader stopped reading.
             Self::DownstreamClosed => Ok(()),
@@ -153,7 +162,16 @@ impl fmt::Display for CliError {
     }
 }
 
-impl std::error::Error for CliError {}
+impl std::error::Error for CliError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::GlobCompile(error) => Some(error),
+            Self::GlobMatch(error) => Some(error),
+            Self::GlobIri(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// The refusal for a command-line IRI value that denotes nothing.
 ///

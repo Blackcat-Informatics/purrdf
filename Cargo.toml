@@ -18,6 +18,7 @@ members = [
     "crates/envelope-probe",
     "crates/geo",
     "crates/geo-kernel",
+    "crates/glob",
     "crates/gts",
     "crates/hash",
     "crates/hash-conformance",
@@ -93,6 +94,7 @@ purrdf-ed25519 = { path = "crates/ed25519", version = "3.0.1" }
 purrdf-entail = { path = "crates/entail", version = "3.0.1" }
 purrdf-events = { path = "crates/rdf-events", version = "3.0.1" }
 purrdf-geo = { path = "crates/geo", version = "3.0.1" }
+purrdf-glob = { path = "crates/glob", version = "3.0.1" }
 purrdf-geo-kernel = { path = "crates/geo-kernel", version = "3.0.1" }
 purrdf-gts = { path = "crates/gts", version = "3.0.1" }
 purrdf-hash = { path = "crates/hash", version = "3.0.1" }

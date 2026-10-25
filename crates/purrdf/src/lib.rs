@@ -24,6 +24,7 @@
 //! | [`retrieval`] | [`purrdf_retrieval`] (the composition layer over the ranked producers) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`json`] | [`purrdf_json`] (byte-identical ordered JSON codec) |
+//! | [`glob`] | [`purrdf_glob`] (compiled, metered Unicode glob matching) |
 //! | [`markdown`] | [`purrdf_markdown`] (structural Markdown slicer under the shipped specification) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`viz`] | [`purrdf_rdf::viz`] |
@@ -357,6 +358,11 @@ pub mod json {
 /// Lossless TOML 1.1 authoring model and verified RDF 1.2 byte-cover codec.
 pub mod toml {
     pub use purrdf_toml::*;
+}
+
+/// Compiled, explicitly metered Unicode glob matching over literal and IRI surfaces.
+pub mod glob {
+    pub use purrdf_glob::*;
 }
 
 /// The common umbrella surface, for `use purrdf::prelude::*;`.

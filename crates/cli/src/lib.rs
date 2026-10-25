@@ -3,8 +3,10 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as sixteen subcommands:
+//! A single `Source → [transform] → Sink` pipeline with subcommands:
 //!
+//! * `glob` — match a literal or explicitly selected IRI lexical surface using a
+//!   compiled Unicode glob and caller-stated work allowance;
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
 //! * `update` — atomically apply a SPARQL UPDATE to an RDF source;
@@ -93,6 +95,7 @@ mod describe;
 mod entails;
 mod error;
 mod format;
+mod glob;
 mod governors;
 pub mod immutable;
 mod ingest;
@@ -221,6 +224,22 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         })
         .transpose()?;
     match &cli.cmd {
+        Command::Glob {
+            pattern,
+            value,
+            mode,
+            surface,
+            max_work,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob emits a match decision and has no RDF loss ledger",
+                "glob emits a match decision and accepts no JSON-LD options",
+            )?;
+            glob::run(pattern, value, *mode, *surface, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
         Command::Geo { input, output } => {
             cli::refuse_document_flags(
                 &ledger_target,

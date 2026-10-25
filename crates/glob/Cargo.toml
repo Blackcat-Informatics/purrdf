@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-glob"
+description = "Compiled, metered Unicode glob matching with constant execution workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+documentation = "https://docs.rs/purrdf-glob"
+
+[lints]
+workspace = true
+
+[dependencies]
+purrdf-hash.workspace = true
+purrdf-iri.workspace = true
+purrdf-lex.workspace = true
+
+[dev-dependencies]
+purrdf-alloc-probe.workspace = true
+purrdf-testkit.workspace = true
+
+[[test]]
+name = "matching"
+harness = false
