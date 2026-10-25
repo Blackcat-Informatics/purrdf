@@ -480,11 +480,17 @@ ex:datum ex:value {input} .
             }
         }
         for (datatype, lexical) in [("List", "[_:onlyInput]"), ("Map", "{ 'key': _:onlyInput }")] {
-            let plan = data(&document("literal", "*", "not matched", "\"unused\""));
+            let plan = data(
+                &document("literal", "*", "not matched", "\"unused\"")
+                    .replace("ex:yes", "_:onlyInput"),
+            );
             let source = data(&format!(
                 "<{EX}datum> <{EX}value> \"{lexical}\"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/{datatype}> .
                  _:onlyInput <{EX}marker> <{EX}object> ."
             ));
+            let mut staged = purrdf_core::RdfDatasetBuilder::new();
+            staged.push_dataset(&source).unwrap();
+            let source = staged.freeze().unwrap();
             let (label, scope) = source
                 .quads()
                 .find_map(|quad| match source.as_ref().resolve(quad.s) {
@@ -492,6 +498,11 @@ ex:datum ex:value {input} .
                     _ => None,
                 })
                 .unwrap();
+            assert_eq!(
+                scope.ordinal(),
+                1,
+                "exercise collision with the first plan import scope"
+            );
             assert!(plan.term_id_by_blank(&label, scope).is_none());
             let value = input(&source);
             let original = source.term_value(value);
@@ -500,7 +511,18 @@ ex:datum ex:value {input} .
                 .unwrap();
             assert_eq!(result.indices(), [0, 2]);
             let output = result.export(&format!("{EX}run"), Resident).unwrap();
-            assert!(output.term_id_by_blank(&label, scope).is_some());
+            let input_blank = output.term_id_by_blank(&label, scope).unwrap();
+            let pattern = object(
+                &output,
+                id(&output, "c0"),
+                output
+                    .term_id_by_iri(purrdf::iri::vocab::rdf::FIRST)
+                    .unwrap(),
+            );
+            assert_ne!(
+                pattern, input_blank,
+                "independent plan and input blanks stay distinct"
+            );
             let selected = object(
                 &output,
                 id(&output, "run"),
@@ -516,7 +538,15 @@ ex:datum ex:value {input} .
                     restored.term_id_by_iri(TERMS[10]).unwrap(),
                 );
                 assert_eq!(restored.term_value(selected), original);
-                assert!(restored.term_id_by_blank(&label, scope).is_some());
+                let input_blank = restored.term_id_by_blank(&label, scope).unwrap();
+                let pattern = object(
+                    &restored,
+                    id(&restored, "c0"),
+                    restored
+                        .term_id_by_iri(purrdf::iri::vocab::rdf::FIRST)
+                        .unwrap(),
+                );
+                assert_ne!(pattern, input_blank);
                 assert_eq!(
                     prepared(restored.clone())
                         .execute(restored.into(), selected, u64::MAX, Resident)

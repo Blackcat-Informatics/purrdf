@@ -724,6 +724,10 @@ impl<'v, S: Admission, W: Admission> Execution<'v, S, W> {
         let result: Result<RdfDataset, Reason> = (|| {
             let mut builder = RdfDatasetBuilder::new();
             let mut memory = Memory::new(&mut account.0);
+            // Reserve original input blank identities before standardizing the plan apart.
+            let input = builder
+                .import_native_term_with_memory(&self.input, self.input_term, &mut memory)
+                .map_err(Reason::Storage)?;
             let map = builder
                 .push_dataset_with_mapping_with_memory(&self.plan.source, &mut memory)
                 .map_err(Reason::Storage)?;
@@ -742,11 +746,6 @@ impl<'v, S: Admission, W: Admission> Execution<'v, S, W> {
                     &mut memory,
                 )?;
                 let input_predicate = builder.intern_iri_with_memory(terms[10], &mut memory)?;
-                let input = builder.import_native_term_with_memory(
-                    &self.input,
-                    self.input_term,
-                    &mut memory,
-                )?;
                 builder.push_quad_with_memory(
                     evaluation,
                     input_predicate,
