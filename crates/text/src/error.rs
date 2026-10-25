@@ -157,10 +157,10 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
             "expected" => Bytes(expected), "actual" => Bytes(actual),
         },
         SourceOverlap { document, identity } => "text-delta-source-overlap" {
-            "document" => Unsigned(*document as u128), "identity" => Bytes(identity),
+            "document" => Unsigned(u128::from(*document)), "identity" => Bytes(identity),
         },
         TermCapacity { observed, limit, cause } => "text-delta-term-capacity" {
-            "observed" => Unsigned(*observed), "limit" => Unsigned(*limit as u128),
+            "observed" => Unsigned(*observed), "limit" => Unsigned(u128::from(*limit)),
             "cause" => Cause(cause),
         },
     }

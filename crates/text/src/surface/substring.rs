@@ -98,9 +98,9 @@ impl std::error::Error for SubstringRefusal {}
 impl purrdf_hash::error::StructuredError for SubstringLimits {
     purrdf_hash::error_visit! {
         @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-limits" {
-            "posting_operations" => Unsigned(self.posting_operations as u128),
-            "candidate_spans" => Unsigned(self.candidate_spans as u128),
-            "verification_bytes" => ByteCount(self.verification_bytes as u128),
+            "posting_operations" => Unsigned(u128::from(self.posting_operations)),
+            "candidate_spans" => Unsigned(u128::from(self.candidate_spans)),
+            "verification_bytes" => ByteCount(u128::from(self.verification_bytes)),
         }
     }
 }
@@ -108,9 +108,9 @@ impl purrdf_hash::error::StructuredError for SubstringLimits {
 impl purrdf_hash::error::StructuredError for SubstringWork {
     purrdf_hash::error_visit! {
         @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-work" {
-            "posting_operations" => Unsigned(self.posting_operations as u128),
-            "candidate_spans" => Unsigned(self.candidate_spans as u128),
-            "verification_bytes" => ByteCount(self.verification_bytes as u128),
+            "posting_operations" => Unsigned(u128::from(self.posting_operations)),
+            "candidate_spans" => Unsigned(u128::from(self.candidate_spans)),
+            "verification_bytes" => ByteCount(u128::from(self.verification_bytes)),
         }
     }
 }
@@ -130,7 +130,7 @@ impl purrdf_hash::error::StructuredError for SubstringRefusal {
             "reason" => Record(&self.reason),
             "counters" => Record(&self.counters),
             "limits" => Record(&self.limits),
-            "distinct_spans" => Unsigned(self.distinct_spans as u128),
+            "distinct_spans" => Unsigned(u128::from(self.distinct_spans)),
             "generation" => Bytes(&self.generation),
         }
     }
