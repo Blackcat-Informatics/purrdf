@@ -15,6 +15,9 @@ use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf_sparql_eval::KnnGuard;
 use purrdf_testkit::error_capture::Capture;
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 fn matrix_and_parameter_producers_keep_original_operands() {
     let error = VectorMatrix::new(2, 3, vec![1.0]).unwrap_err();
     let fields = Capture::read(&error).child("cause");
@@ -32,6 +35,104 @@ fn matrix_and_parameter_producers_keep_original_operands() {
     assert!(matches!(fields.field("name"), ErrorValue::Code("M")));
     assert!(matches!(fields.field("value"), ErrorValue::Unsigned(1)));
     assert!(matches!(fields.field("minimum"), ErrorValue::Unsigned(2)));
+
+    let root_events = Vec::with_capacity(4);
+    let cause_events = Vec::with_capacity(8);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let error = VectorMatrix::new(usize::MAX, 2, Vec::new()).unwrap_err();
+    let root = Capture::read_with_buffer(&error, root_events);
+    let ErrorValue::Cause(cause) = root.field("cause") else {
+        panic!("arithmetic refusal must retain its native cause");
+    };
+    let fields = Capture::read_with_buffer(cause, cause_events);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(root.code, "hnsw-arithmetic-overflow");
+    assert_eq!(fields.code, "hnsw-arithmetic-matrix-elements");
+    assert!(matches!(
+        fields.field("operation"),
+        ErrorValue::Code("multiply")
+    ));
+    assert!(
+        matches!(fields.field("rows"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(matches!(
+        fields.field("dimensions"),
+        ErrorValue::Unsigned(2)
+    ));
+    assert!(
+        matches!(fields.field("maximum"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_hnsw::error::ArithmeticRefusal>()
+    );
+    assert_eq!(error.to_string(), "index arithmetic overflowed");
+
+    let params = Params::new(2, 2, 2, 1).unwrap();
+    let error = params.validate_against(usize::MAX, 2).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).child("cause").code,
+        "hnsw-arithmetic-matrix-elements"
+    );
+    let error = params.validate_against(usize::MAX, 1).unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "hnsw-arithmetic-matrix-bytes");
+    assert!(
+        matches!(fields.field("elements"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(matches!(
+        fields.field("element_bytes"),
+        ErrorValue::ByteCount(8)
+    ));
+    assert!(
+        matches!(fields.field("maximum"), ErrorValue::ByteCount(value) if value == usize::MAX as u128)
+    );
+    VectorMatrix::new(2, 3, vec![1.0; 6]).unwrap();
+    params.validate_against(2, 3).unwrap();
+    assert_eq!(params.footprint_bytes_32(1, 1).unwrap(), 72);
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let error = params.footprint_bytes_32(usize::MAX, 2).unwrap_err();
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "hnsw-arithmetic-vector-elements");
+        assert!(
+            matches!(fields.field("rows"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(matches!(
+            fields.field("dimensions"),
+            ErrorValue::Unsigned(2)
+        ));
+        let error = params.footprint_bytes_32(usize::MAX, 1).unwrap_err();
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "hnsw-arithmetic-vector-bytes");
+        assert!(
+            matches!(fields.field("elements"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(matches!(
+            fields.field("element_bytes"),
+            ErrorValue::ByteCount(8)
+        ));
+
+        // For powers of two the complete population sum is geometric. Every
+        // component fits; adding the adjacency to the prior bytes is the refusal.
+        let error = params.footprint_bytes_32(1_usize << 57, 5).unwrap_err();
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "hnsw-arithmetic-edge-sum");
+        assert!(matches!(fields.field("operation"), ErrorValue::Code("add")));
+        assert!(
+            matches!(fields.field("accumulated"), ErrorValue::ByteCount(value) if value == 9_u128 << 60)
+        );
+        assert!(
+            matches!(fields.field("edges"), ErrorValue::ByteCount(value) if value == (1_u128 << 63) - 32)
+        );
+        assert!(
+            matches!(fields.field("maximum"), ErrorValue::ByteCount(value) if value == u128::from(u64::MAX))
+        );
+    }
 }
 
 fn payload_producer_keeps_reserved_bits_after_input_disposal() {

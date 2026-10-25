@@ -27,6 +27,15 @@ Freeze failures previously returned as `ColumnarError::Storage` now also return
 `Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
 handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
 
+## HNSW arithmetic refusals
+
+`HnswError::ArithmeticOverflow` now carries `ArithmeticRefusal`. Update unit
+matches to `HnswError::ArithmeticOverflow(cause)`. Borrowed inspection keeps the
+outer error code and exposes the failed operation, original operands, byte/count
+units and destination limit through its cause. Integer-conversion failures retain
+their original native source. Successful calculations, refusal order and human
+messages are unchanged.
+
 ## Regime term arena controls
 
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to
