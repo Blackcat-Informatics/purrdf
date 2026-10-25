@@ -117,7 +117,7 @@ impl purrdf_hash::error::StructuredError for SubstringWork {
 
 impl purrdf_hash::error::StructuredError for SubstringRefusalReason {
     purrdf_hash::error_visit! {
-        NonSelective => "text-substring-non-selective" {},
+        NonSelective => "text-substring-nonselective" {},
         PostingOperations => "text-substring-posting-operations" {},
         CandidateSpans => "text-substring-candidate-spans" {},
         VerificationBytes => "text-substring-verification-bytes" {},

@@ -59,7 +59,7 @@ impl purrdf_hash::error::StructuredError for CapacityFailure {
         Stopped => "text-capacity-stopped" {},
         LayoutOverflow => "text-capacity-layout-overflow" {},
         Allocator { construct } => "text-capacity-allocator" {
-            "construct" => Code(construct),
+            "construct" => Text(construct),
         },
         UnstableDiagnostic => "text-capacity-unstable-diagnostic" {},
     }
