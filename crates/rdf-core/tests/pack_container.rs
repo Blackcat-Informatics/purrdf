@@ -9,16 +9,15 @@
 //! rejecting a corrupted one (a flipped section byte, a flipped magic byte)
 //! fail-closed.
 
-use purrdf_core::term_fixture::{ProbeFault, RowBudget};
+use purrdf_core::term_fixture::BudgetedView;
 use std::sync::Arc;
 
 use purrdf_core::ir::pack::container::{PackBuilder, PackCheckpoint, PackError, PackView};
 use purrdf_core::ir::pack::dict::PackDictError;
 use purrdf_core::{
     BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView,
-    FallibleDatasetView, GraphMatch, MutableDataset, QuadIds, QuadValues, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef,
-    TermValue, ViewLimits, ViewOperationStatus, verify_pack,
+    FallibleDatasetView, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfTextDirection, TermValue, ViewLimits, ViewOperationStatus, verify_pack,
 };
 use sha2::{Digest, Sha256};
 
@@ -575,92 +574,6 @@ fn build_view_bytes_over_a_graph_selection_equals_the_equivalent_flat_dataset() 
         PackBuilder::build_bytes(&selected_graph_expectation()).expect("builds"),
         "a packed selection must equal the packed flat projection"
     );
-}
-
-/// A view that yields `budget` rows and then faults the way an operational
-/// backend does: it STOPS YIELDING rather than erroring, so nothing about the
-/// row stream distinguishes the truncation from an honest end of stream and only
-/// the operational checkpoint can tell them apart.
-struct BudgetedView {
-    inner: Arc<RdfDataset>,
-    budget: RowBudget,
-}
-
-impl BudgetedView {
-    fn new(inner: Arc<RdfDataset>, budget: usize) -> Self {
-        Self {
-            inner,
-            budget: RowBudget::new(budget),
-        }
-    }
-}
-
-impl DatasetView for BudgetedView {
-    type Id = TermId;
-    type ReadError = ProbeFault;
-    type TermGuard<'a>
-        = TermRef<'a, Self::Id>
-    where
-        Self: 'a;
-    type ProbePlan = ();
-
-    fn read_error(&self) -> Option<Self::ReadError> {
-        self.budget.read_error()
-    }
-
-    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.budget.take(self.inner.quads())
-    }
-
-    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
-        self.checked_read(|_| self.inner.as_ref().resolve(id))
-    }
-
-    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
-        self.checked_read(|view| view.inner.as_ref().term_id_by_value(value))
-    }
-
-    fn capabilities(&self) -> RdfStoreCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
-
-    fn quads_for_pattern_with_plan(
-        &self,
-        _plan: &(),
-        s: Option<TermId>,
-        p: Option<TermId>,
-        o: Option<TermId>,
-        g: GraphMatch,
-    ) -> impl Iterator<Item = QuadIds> + '_ {
-        self.quads_for_pattern(s, p, o, g)
-    }
-
-    fn term_count(&self) -> u64 {
-        self.inner.term_count()
-    }
-
-    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.inner.reifier_quads()
-    }
-
-    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.inner.annotation_quads()
-    }
-
-    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
-        self.inner.named_graphs()
-    }
-}
-
-impl FallibleDatasetView for BudgetedView {
-    type Error = ProbeFault;
-    type Evidence = usize;
-
-    fn operation_status(&self) -> ViewOperationStatus<ProbeFault, usize> {
-        self.budget.status()
-    }
 }
 
 /// A pack is a claim about a dataset's WHOLE content, so a view that faulted

@@ -27,6 +27,22 @@ change output bytes. Distinct mapping labels and function IRIs no longer merge
 through sanitization. Slice's `list_functions_catalog` and `emit_list_functions`
 now return admission results and retain their explicit language retagging.
 
+Read a catalog with `FnoCatalog::from_dataset(&view, ontology_iri)`. The ontology
+IRI is explicit; the document is the unique subject whose `dcterms:isPartOf`
+names it. The reader uses the same admission path as caller-built catalogs and
+returns boxed `FnoReadError` values carrying original field operands, strict list
+causes or source-read failures. A source failure discards the entire result.
+
+The strict profile covers the complete default graph. Every statement must be
+represented by the admitted model or its RDF lists. Named graphs, reifiers,
+annotations, disconnected outputs or child mappings, unknown properties and
+extra list-cell facts are refused. Parameters and implementations may stand
+alone. Lists have disjoint blank cells; shared `rdf:nil` represents empty lists.
+Labels and descriptions preserve literal facets. Implementation formats and
+binding names are plain strings; required flags use the exact boolean spellings
+`true` and `false`. These boundaries preserve both catalog equality after a
+write/read and graph isomorphism after a read/write.
+
 ## Caller-owned loss profiles
 
 Select `purrdf_core::loss::LossProfile::builtin()` and extend it with
