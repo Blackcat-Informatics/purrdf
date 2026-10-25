@@ -145,8 +145,8 @@ pub use invocation::{
     neighbour_count, universe_size,
 };
 pub use metric::{
-    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, Selected,
-    best,
+    Arithmetic, Bound, Bounded, Exact, Kernel, NonFinite, Ranked, Reassociated, Resolved, Scalar,
+    Selected, best,
 };
 
 /// The domain separator every [`EmbeddingSpace`] generation opens with, so this
@@ -155,6 +155,43 @@ pub use metric::{
 /// `crate::property_fn_plan`'s registry fingerprint follows.
 const SPACE_GENERATION_DOMAIN: Domain =
     Domain::new(b"purrdf-sparql-eval/embedding-space-generation/v1");
+
+/// The original operands identifying a refused distance in an exact scan.
+#[derive(Debug, Clone)]
+struct DistanceRefusal {
+    query_row: usize,
+    row: usize,
+    metric: DistanceMetric,
+    cause: NonFinite,
+}
+
+impl purrdf_hash::error::StructuredError for DistanceRefusal {
+    purrdf_hash::error_visit! {
+        @record self { query_row, row, metric, cause } => "knn-non-finite-distance" {
+            "query_row" => Unsigned(self.query_row as u128),
+            "row" => Unsigned(self.row as u128),
+            "metric" => Record(&self.metric),
+            "cause" => Cause(&self.cause),
+        }
+    }
+}
+
+impl core::fmt::Display for DistanceRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "the distance from row {} to row {} left the finite range under {:?}; \
+             the artifact's magnitudes cannot be ranked under this metric",
+            self.query_row, self.row, self.metric
+        )
+    }
+}
+
+impl std::error::Error for DistanceRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The guard
@@ -607,7 +644,7 @@ impl EmbeddingSpace {
     ) -> Result<f64, EvalError> {
         let arithmetic = resolve_here(declared)?;
         let rows = self.rows(workspace)?;
-        let mut distance = [None];
+        let mut distance = [Ok(0.0)];
         arithmetic.distances_indexed(
             self.kernel.measure(),
             self.vector(query_row),
@@ -616,17 +653,26 @@ impl EmbeddingSpace {
             &[row],
             &mut distance,
         );
-        distance[0].ok_or_else(|| {
-            crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Data,
-                format_args!(
-                    "the distance from row {query_row} to row {row} left the finite range \
-                 under {:?}; the artifact's magnitudes cannot be ranked under this metric",
-                    self.metric
-                ),
-                workspace,
-            )
-        })
+        distance[0].map_err(|cause| self.distance_refusal(query_row, row, cause, workspace))
+    }
+
+    fn distance_refusal(
+        &self,
+        query_row: usize,
+        row: usize,
+        cause: NonFinite,
+        workspace: &crate::WorkspaceCapability,
+    ) -> EvalError {
+        crate::RetainedNativeFailure::error(
+            crate::NativeDiagnosticKind::Data,
+            DistanceRefusal {
+                query_row,
+                row,
+                metric: self.metric.clone(),
+                cause,
+            },
+            workspace,
+        )
     }
 
     /// Every row of this space as the batch kernels read it.
@@ -691,7 +737,7 @@ impl EmbeddingSpace {
         let rows = self.rows(workspace)?;
         let mut distances = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
         for _ in 0..self.row_count() {
-            distances.push(None)?;
+            distances.push(Ok(0.0))?;
         }
         arithmetic.distances(
             self.kernel.measure(),
@@ -702,18 +748,8 @@ impl EmbeddingSpace {
         );
         let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
         for (row, distance) in distances.into_iter().enumerate() {
-            let distance = distance.ok_or_else(|| {
-                crate::error::NativeDiagnostic::error(
-                    crate::error::NativeDiagnosticKind::Data,
-                    format_args!(
-                        "the distance from row {query_row} to row {row} left the finite range \
-                     under {:?}; the artifact's magnitudes cannot be ranked under this \
-                     metric",
-                        self.metric
-                    ),
-                    workspace,
-                )
-            })?;
+            let distance = distance
+                .map_err(|cause| self.distance_refusal(query_row, row, cause, workspace))?;
             scored.push(Ranked { distance, row })?;
         }
         let examined =

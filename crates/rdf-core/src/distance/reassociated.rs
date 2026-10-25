@@ -55,7 +55,7 @@
 use super::binary64::{Algebraic, Binary64, Precision};
 use super::exact::{cosine, finite};
 use super::sealed::{Stored, Width};
-use super::{Bound, Bounded, Measure, Path, PathUnavailable, RowsRef, Scalar};
+use super::{Bound, Bounded, Measure, NonFinite, Path, PathUnavailable, RowsRef, Scalar};
 
 /// The elements summed under one reassociation licence before the block's sum is added,
 /// in order, to the total; also the bounded fold's checkpoint interval.
@@ -293,7 +293,7 @@ pub(crate) fn recorded(path: Path) -> Result<Path, PathUnavailable> {
 
 /// The one body every compilation inlines.
 mod body {
-    use super::{Algebraic, BLOCK, Binary64, Bound, Bounded, Scalar};
+    use super::{Algebraic, BLOCK, Binary64, Bound, Bounded, Scalar, finite};
 
     /// `sum(a[i] · b[i])` over one block, under the reassociation licence.
     #[allow(
@@ -370,8 +370,8 @@ mod body {
         for (x, y) in blocks_a.iter().zip(blocks_b) {
             let block = block_squares(ops, x, y);
             total = ops.add(total, block);
-            if !total.is_finite() {
-                return Bounded::NonFinite;
+            if let Err(cause) = finite(total) {
+                return Bounded::NonFinite(cause);
             }
             if bound.is_met_by(total) {
                 return Bounded::Beyond;
@@ -381,8 +381,8 @@ mod body {
             let block = block_squares(ops, tail_a, tail_b);
             total = ops.add(total, block);
         }
-        if !total.is_finite() {
-            return Bounded::NonFinite;
+        if let Err(cause) = finite(total) {
+            return Bounded::NonFinite(cause);
         }
         if bound.is_met_by(total) {
             return Bounded::Beyond;
@@ -479,12 +479,17 @@ trait Compiled {
         bound: Bound,
     ) -> Bounded;
 
-    /// The reassociated squared Euclidean distance; an overflow is an infinity.
+    /// The reassociated squared Euclidean distance, retaining its refusal.
     #[inline]
-    fn squared_euclidean<Q: Scalar, T: Scalar>(ops: Binary64<'_>, a: &[Q], b: &[T]) -> f64 {
+    fn squared_euclidean<Q: Scalar, T: Scalar>(
+        ops: Binary64<'_>,
+        a: &[Q],
+        b: &[T],
+    ) -> Result<f64, NonFinite> {
         match Self::squared_euclidean_bounded(ops, a, b, Bound::Above(f64::INFINITY)) {
-            Bounded::Below(sum) => sum,
-            Bounded::NonFinite | Bounded::Beyond => f64::INFINITY,
+            Bounded::Below(sum) => Ok(sum),
+            Bounded::NonFinite(cause) => Err(cause),
+            Bounded::Beyond => unreachable!("a finite distance cannot exceed infinity"),
         }
     }
 }
@@ -608,7 +613,7 @@ fn batch<K: Compiled, Q: Scalar, T: Scalar>(
     query: &[Q],
     query_norm: f64,
     rows: RowsRef<'_, T>,
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     assert_eq!(
         query.len(),
@@ -627,7 +632,7 @@ fn batch<K: Compiled, Q: Scalar, T: Scalar>(
     match measure {
         Measure::SquaredEuclidean => {
             for (row, slot) in out.iter_mut().enumerate() {
-                *slot = finite(K::squared_euclidean(ops, query, rows.row(row)));
+                *slot = K::squared_euclidean(ops, query, rows.row(row));
             }
         }
         Measure::NegativeDot => {
@@ -657,7 +662,7 @@ fn batch_indexed<K: Compiled, Q: Scalar, T: Scalar>(
     query_norm: f64,
     rows: RowsRef<'_, T>,
     ids: &[usize],
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     assert_eq!(
         query.len(),
@@ -676,7 +681,7 @@ fn batch_indexed<K: Compiled, Q: Scalar, T: Scalar>(
     match measure {
         Measure::SquaredEuclidean => {
             for (&row, slot) in ids.iter().zip(out.iter_mut()) {
-                *slot = finite(K::squared_euclidean(ops, query, rows.row(row)));
+                *slot = K::squared_euclidean(ops, query, rows.row(row));
             }
         }
         Measure::NegativeDot => {
@@ -706,9 +711,9 @@ fn pair<K: Compiled, Q: Scalar, T: Scalar>(
     a_norm: f64,
     b: &[T],
     b_norm: f64,
-) -> Option<f64> {
+) -> Result<f64, NonFinite> {
     let value = match measure {
-        Measure::SquaredEuclidean => K::squared_euclidean(ops, a, b),
+        Measure::SquaredEuclidean => return K::squared_euclidean(ops, a, b),
         Measure::NegativeDot => -K::dot(ops, a, b),
         Measure::Cosine => cosine(ops, K::dot(ops, a, b), a_norm, b_norm),
     };
@@ -729,9 +734,9 @@ fn pair_bounded<K: Compiled, Q: Scalar, T: Scalar>(
         return K::squared_euclidean_bounded(ops, a, b, bound);
     }
     match pair::<K, Q, T>(ops, measure, a, a_norm, b, b_norm) {
-        None => Bounded::NonFinite,
-        Some(value) if bound.is_met_by(value) => Bounded::Beyond,
-        Some(value) => Bounded::Below(value),
+        Err(cause) => Bounded::NonFinite(cause),
+        Ok(value) if bound.is_met_by(value) => Bounded::Beyond,
+        Ok(value) => Bounded::Below(value),
     }
 }
 
@@ -742,7 +747,7 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
     query: &[Q],
     query_norm: f64,
     rows: RowsRef<'_, T>,
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     let precision = Precision::enter();
     let ops = precision.binary64();
@@ -757,7 +762,7 @@ pub(crate) fn distances_indexed<Q: Scalar, T: Scalar>(
     query_norm: f64,
     rows: RowsRef<'_, T>,
     ids: &[usize],
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     let precision = Precision::enter();
     let ops = precision.binary64();
@@ -772,7 +777,7 @@ pub(crate) fn distance<Q: Scalar, T: Scalar>(
     a_norm: f64,
     b: &[T],
     b_norm: f64,
-) -> Option<f64> {
+) -> Result<f64, NonFinite> {
     let precision = Precision::enter();
     let ops = precision.binary64();
     on_path!(path, K => pair::<K, Q, T>(ops, measure, a, a_norm, b, b_norm))

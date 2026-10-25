@@ -37,7 +37,7 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
 
-use purrdf_core::distance::{Arithmetic, Resolved};
+use purrdf_core::distance::{Arithmetic, NonFinite, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 use purrdf_sparql_eval::{
     AdmittedHeap, AdmittedMap, AdmittedVec, WorkspaceAllocation, WorkspaceCapability,
@@ -276,7 +276,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
         let candidate_norm = norm_of(self.norms, row);
         let distance = match self.target {
             Target::Vector(vector) => {
-                let mut out = [None];
+                let mut out = [Ok(0.0)];
                 self.matrix.distances_from_query(
                     self.arithmetic,
                     self.kernel,
@@ -297,7 +297,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
                 candidate_norm,
             ),
         }
-        .ok_or(HnswError::NonFiniteDistance { row })?;
+        .map_err(|cause| HnswError::NonFiniteDistance { row, cause })?;
         self.cache.insert(row, distance)?;
         Ok(distance)
     }
@@ -348,7 +348,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
             return Ok(());
         }
         scratch.scored.clear();
-        scratch.scored.resize(scratch.missing_rows.len(), None);
+        scratch.scored.resize(scratch.missing_rows.len(), Ok(0.0));
         match self.target {
             Target::Vector(vector) => self.matrix.distances_from_query(
                 self.arithmetic,
@@ -375,7 +375,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
             .zip(&scratch.missing_at)
             .zip(&scratch.scored)
         {
-            let distance = scored.ok_or(HnswError::NonFiniteDistance { row })?;
+            let distance = scored.map_err(|cause| HnswError::NonFiniteDistance { row, cause })?;
             self.cache.insert(row, distance)?;
             out[at] = distance;
         }
@@ -398,7 +398,7 @@ pub(crate) struct Scratch {
     /// Where each of those rows sits in the batch.
     missing_at: Vec<usize>,
     /// The batch kernel's output for them.
-    scored: Vec<Option<f64>>,
+    scored: Vec<core::result::Result<f64, NonFinite>>,
     rows_allocation: Option<WorkspaceAllocation>,
     at_allocation: Option<WorkspaceAllocation>,
     scored_allocation: Option<WorkspaceAllocation>,
@@ -655,5 +655,30 @@ mod tests {
             "a hit returns the same bits"
         );
         assert_eq!(query.of(1).expect("finite"), query.of(1).expect("finite"));
+    }
+
+    #[test]
+    fn a_failed_batch_preserves_first_missing_row_and_earlier_cache_entries() {
+        let matrix = VectorMatrix::new(4, 1, vec![0.0, 1.0, 1e300, -1e300]).unwrap();
+        let cache = DistanceCache::default();
+        let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 0);
+        let mut scratch = Scratch::default();
+        let mut out = Vec::new();
+        let mut allocation = None;
+        let error = query
+            .of_many(&[1, 3, 2], &mut scratch, &mut out, &mut allocation)
+            .unwrap_err();
+        let HnswError::NonFiniteDistance { row, cause } = error else {
+            panic!("the first failed row must retain its computed distance");
+        };
+        assert_eq!(row, 3);
+        assert_eq!(query.cached(1), Some(1.0));
+        assert_eq!(query.cached(2), None);
+        assert_eq!(query.cached(3), None);
+        let HnswError::NonFiniteDistance { cause: single, .. } = query.of(3).unwrap_err() else {
+            panic!("the single-row path must retain its computed distance");
+        };
+        assert_eq!(cause, single);
+        assert_eq!(query.of(1).unwrap(), 1.0);
     }
 }

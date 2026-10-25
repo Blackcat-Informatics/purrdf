@@ -60,6 +60,16 @@ Target-specific capacity default constants have been removed.
 
 ## HNSW arithmetic refusals
 
+Shared distance pair and batch APIs now return `Result<f64, NonFinite>` instead
+of `Option<f64>`. `Bounded::NonFinite` carries that same native cause. Inspection
+retains the original checked `binary64` bits, including a partial sum refused at
+an existing checkpoint. Update output buffers and refusal patterns accordingly.
+
+`HnswError::NonFiniteDistance` adds `cause` beside `row`; its standard error
+source and structured inspection borrow the original shared distance refusal.
+Exact kNN data errors also retain query and candidate rows, the metric and that
+cause. Successful values, checkpoint order and outer human messages are unchanged.
+
 `HnswError::ArithmeticOverflow` now carries `ArithmeticRefusal`. Update unit
 matches to `HnswError::ArithmeticOverflow(cause)`. Borrowed inspection keeps the
 outer error code and exposes the failed operation, original operands, byte/count

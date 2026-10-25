@@ -27,7 +27,7 @@
 use super::binary64::{Binary64, Precision};
 #[cfg(target_arch = "x86_64")]
 use super::reassociated;
-use super::{Bound, Bounded, Measure, Path, RowsRef, Scalar, exact};
+use super::{Bound, Bounded, Measure, NonFinite, Path, RowsRef, Scalar, exact};
 
 /// The path [`Exact`](super::Exact) runs on this process: AVX-512F, then AVX2, then
 /// portable, the widest the processor reports.
@@ -51,7 +51,7 @@ pub(crate) fn exact_path() -> Path {
 
 /// The generic body compiled for the target's baseline features.
 pub(crate) mod portable {
-    use super::{Binary64, Bound, Bounded, Measure, RowsRef, Scalar, exact};
+    use super::{Binary64, Bound, Bounded, Measure, NonFinite, RowsRef, Scalar, exact};
 
     /// See [`exact::distances`].
     #[inline(never)]
@@ -61,7 +61,7 @@ pub(crate) mod portable {
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         exact::distances(ops, measure, query, query_norm, rows, out);
     }
@@ -75,7 +75,7 @@ pub(crate) mod portable {
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         exact::distances_indexed(ops, measure, query, query_norm, rows, ids, out);
     }
@@ -89,7 +89,7 @@ pub(crate) mod portable {
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         exact::distance(ops, measure, a, a_norm, b, b_norm)
     }
 
@@ -119,7 +119,7 @@ pub(crate) mod portable {
 /// below, each behind a [`Path::Avx2`] that only [`exact_path`] produces.
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx2 {
-    use super::{Binary64, Bound, Bounded, Measure, RowsRef, Scalar, exact};
+    use super::{Binary64, Bound, Bounded, Measure, NonFinite, RowsRef, Scalar, exact};
 
     /// See [`exact::distances`].
     #[target_feature(enable = "avx2")]
@@ -129,7 +129,7 @@ pub(crate) mod avx2 {
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         exact::distances(ops, measure, query, query_norm, rows, out);
     }
@@ -143,7 +143,7 @@ pub(crate) mod avx2 {
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         exact::distances_indexed(ops, measure, query, query_norm, rows, ids, out);
     }
@@ -157,7 +157,7 @@ pub(crate) mod avx2 {
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         exact::distance(ops, measure, a, a_norm, b, b_norm)
     }
 
@@ -183,7 +183,7 @@ pub(crate) mod avx2 {
 /// below, each behind a [`Path::Avx512f`] that only [`exact_path`] produces.
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx512f {
-    use super::{Binary64, Bound, Bounded, Measure, RowsRef, Scalar, exact};
+    use super::{Binary64, Bound, Bounded, Measure, NonFinite, RowsRef, Scalar, exact};
 
     /// See [`exact::distances`].
     #[target_feature(enable = "avx512f")]
@@ -193,7 +193,7 @@ pub(crate) mod avx512f {
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         exact::distances(ops, measure, query, query_norm, rows, out);
     }
@@ -207,7 +207,7 @@ pub(crate) mod avx512f {
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         exact::distances_indexed(ops, measure, query, query_norm, rows, ids, out);
     }
@@ -221,7 +221,7 @@ pub(crate) mod avx512f {
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         exact::distance(ops, measure, a, a_norm, b, b_norm)
     }
 
@@ -254,7 +254,7 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
     query: &[Q],
     query_norm: f64,
     rows: RowsRef<'_, T>,
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     let precision = Precision::enter();
     let ops = precision.binary64();
@@ -284,7 +284,7 @@ pub(crate) fn distances_indexed<Q: Scalar, T: Scalar>(
     query_norm: f64,
     rows: RowsRef<'_, T>,
     ids: &[usize],
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     let precision = Precision::enter();
     let ops = precision.binary64();
@@ -315,7 +315,7 @@ pub(crate) fn distance<Q: Scalar, T: Scalar>(
     a_norm: f64,
     b: &[T],
     b_norm: f64,
-) -> Option<f64> {
+) -> Result<f64, NonFinite> {
     let precision = Precision::enter();
     let ops = precision.binary64();
     match path {
