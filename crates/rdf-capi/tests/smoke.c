@@ -148,10 +148,12 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
         report_s == NULL) {
         goto done;
     }
-    /* NULL limits: this native library's defaults, which are the limits the
-     * artifact is written under. */
+    /* Match the shared artifact's three explicit finite capacities. */
+    const uint64_t max_facts = 4194304;
+    const uint64_t max_steps = 1048576;
+    const uint64_t max_arena = 16777216;
     if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
-                                            0, NULL, 0, NULL, NULL, NULL,
+                                            0, NULL, 0, &max_facts, &max_steps, &max_arena,
                                             &nquads, &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,

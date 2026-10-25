@@ -14,7 +14,7 @@ mechanism refutation NO HEAD IN TABLES 4-9 IS A NEGATIVE FACT. Not one rule of t
 budget join-steps 1534
 budget stored-facts 118
 budget term-arena-bytes 2442
-contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
+contract-hash c176b6e64558a0c469e776275046d5cd66a030bda06f06c6ee52ef242810f606
 withheld-surrogates 0
 termination none
 inconsistency none
