@@ -139,6 +139,10 @@ pub enum CliError {
     /// is what ends the emission early instead of formatting the rest of a document
     /// nobody is reading.
     DownstreamClosed,
+    /// Original RDF plan, input, codec or I/O refusal and its retained owners.
+    GlobRdf(Box<crate::GlobRdfFailure>),
+    /// Original refusal while admitting a native diagnostic owner.
+    GlobRdfStorage(purrdf_lex::allocation::StorageError),
 }
 
 impl CliError {
@@ -151,7 +155,9 @@ impl CliError {
             | Self::GlobMatch(_)
             | Self::GlobIri(_)
             | Self::GlobSetCompile(_)
-            | Self::GlobSetMatch(_) => 1,
+            | Self::GlobSetMatch(_)
+            | Self::GlobRdf(_)
+            | Self::GlobRdfStorage(_) => 1,
             Self::DownstreamClosed => 0,
         }
     }
@@ -166,6 +172,8 @@ impl fmt::Display for CliError {
             Self::GlobSetCompile(error) => error.fmt(f),
             Self::GlobSetMatch(error) => error.fmt(f),
             Self::GlobIri(error) => error.fmt(f),
+            Self::GlobRdf(error) => error.fmt(f),
+            Self::GlobRdfStorage(error) => error.fmt(f),
             // Never printed: this variant exits 0 and reports nothing, which is the
             // whole point of a filter whose reader stopped reading.
             Self::DownstreamClosed => Ok(()),
@@ -181,6 +189,8 @@ impl std::error::Error for CliError {
             Self::GlobSetCompile(error) => Some(error),
             Self::GlobSetMatch(error) => Some(error),
             Self::GlobIri(error) => Some(error),
+            Self::GlobRdf(error) => Some(&**error),
+            Self::GlobRdfStorage(error) => Some(error),
             _ => None,
         }
     }

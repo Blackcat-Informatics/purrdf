@@ -2112,6 +2112,56 @@ impl RdfDatasetBuilder {
         other: &RdfDataset,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
+        let remap = self.merge_dataset_mapping_with_memory(other, memory)?;
+        memory.release_vec(remap)
+    }
+
+    /// Import a complete source graph and return its source-local term remap.
+    /// The mapping shares the exact import's blank-scope translation, including
+    /// quoted terms. Its capacity remains charged until the caller releases it.
+    /// # Errors
+    /// Preserves native storage refusal and rolls back logical publication.
+    pub fn push_dataset_with_mapping_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        other: &RdfDataset,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<Option<TermId>>, StorageError> {
+        self.transaction_with_memory(memory, |builder, memory| {
+            builder.merge_dataset_mapping_with_memory(other, memory)
+        })
+    }
+
+    /// Import a native term through the existing iterative term-transfer body.
+    /// Source blank scopes are preserved; the term ID must be valid in source.
+    /// This transfers a value, without merging documents or building owned terms.
+    /// # Errors
+    /// Returns original admission, layout or allocator refusal.
+    pub fn import_native_term_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        source: &RdfDataset,
+        term: TermId,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        self.transaction_with_memory(memory, |builder, memory| {
+            let mut remap = Vec::new();
+            memory.reserve(&mut remap, source.term_count())?;
+            remap.resize(source.term_count(), None);
+            let result = builder.import_term_with_memory(
+                &|id| source.resolve(id),
+                term,
+                &mut remap,
+                &mut ImportBinding::Preserve,
+                memory,
+            );
+            memory.release_vec_after(remap, result)
+        })
+    }
+
+    fn merge_dataset_mapping_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        other: &RdfDataset,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<Option<TermId>>, StorageError> {
         let mut binding = ImportBinding::Fresh(None);
         let mut remap = Vec::new();
         for _ in 0..other.term_count() {
@@ -2163,7 +2213,7 @@ impl RdfDatasetBuilder {
                 self.import_term_with_memory(&resolve, graph, &mut remap, &mut binding, memory)?;
             self.declare_named_graph_with_memory(graph, memory)?;
         }
-        memory.release_vec(remap)
+        Ok(remap)
     }
 
     /// Append a validated graph directly, without an intermediate frozen dataset.
@@ -4512,7 +4562,7 @@ mod native_graph_birth_tests {
             .intern_literal(RdfLiteral::typed(lexical, purrdf_cdt::CDT_LIST))
             .unwrap();
         let mut triple = source.intern_triple(first, predicate, second).unwrap();
-        // The immutable source's existing validation contract permits depth16.
+        // The immutable source retains all 16 nested triple terms.
         for _ in 0..15 {
             triple = source.intern_triple(first, predicate, triple).unwrap();
         }

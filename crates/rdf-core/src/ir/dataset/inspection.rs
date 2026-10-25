@@ -9,14 +9,18 @@ use super::{QuadIds, RdfDataset, TermRef};
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError, visit_list};
 
 impl<'error> TermRef<'error> {
-    fn visit_error_record(self, visitor: &mut dyn ErrorVisitor<'error>) {
+    pub(super) fn visit_error_record(
+        self,
+        name: Option<&'static str>,
+        visitor: &mut dyn ErrorVisitor<'error>,
+    ) {
         match self {
             Self::Iri(iri) => {
-                visitor.begin_record(Some("term"), "rdf-interned-iri");
+                visitor.begin_record(name, "rdf-interned-iri");
                 visitor.value(Some("iri"), ErrorValue::Iri(iri));
             }
             Self::Blank { label, scope } => {
-                visitor.begin_record(Some("term"), "rdf-interned-blank");
+                visitor.begin_record(name, "rdf-interned-blank");
                 visitor.value(Some("label"), ErrorValue::Text(label));
                 visitor.value(
                     Some("scope"),
@@ -29,7 +33,7 @@ impl<'error> TermRef<'error> {
                 language,
                 direction,
             } => {
-                visitor.begin_record(Some("term"), "rdf-interned-literal");
+                visitor.begin_record(name, "rdf-interned-literal");
                 visitor.value(Some("lexical_form"), ErrorValue::Text(lexical));
                 visitor.value(
                     Some("datatype_id"),
@@ -45,7 +49,7 @@ impl<'error> TermRef<'error> {
                 );
             }
             Self::Triple { s, p, o } => {
-                visitor.begin_record(Some("term"), "rdf-interned-triple");
+                visitor.begin_record(name, "rdf-interned-triple");
                 visitor.value(Some("subject_id"), ErrorValue::Unsigned(s.index() as u128));
                 visitor.value(
                     Some("predicate_id"),
@@ -92,7 +96,8 @@ impl StructuredError for FrozenTerms {
         for (index, term) in terms.iter().enumerate() {
             visitor.begin_record(None, "rdf-dictionary-entry");
             visitor.value(Some("id"), ErrorValue::Unsigned(index as u128));
-            self.resolve_interned(term).visit_error_record(visitor);
+            self.resolve_interned(term)
+                .visit_error_record(Some("term"), visitor);
             visitor.end_record();
         }
         visitor.end_list();

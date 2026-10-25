@@ -290,6 +290,7 @@ pub struct ListFault<Id> {
 /// A member is yielded as soon as its cell's `rdf:first` is read and its
 /// `rdf:rest` is known; a cell whose `rdf:rest` is missing or ambiguous still
 /// yields its member before the fault, as [`ListError::members`] records it.
+#[derive(Clone)]
 pub struct RdfListWalk<Id, F, R> {
     head: Id,
     nil: Option<Id>,

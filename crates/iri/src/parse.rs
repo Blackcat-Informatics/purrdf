@@ -341,6 +341,34 @@ pub fn absolute_verdict(s: &str) -> Option<bool> {
         .map(|spans| spans.scheme.is_some())
 }
 
+/// Allocation-free, verbatim components recognized by the existing IRI scanner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Components<'a> {
+    /// Scheme without its colon.
+    pub scheme: Option<&'a str>,
+    /// Authority without its slashes.
+    pub authority: Option<&'a str>,
+    /// Original path.
+    pub path: &'a str,
+    /// Query without its question mark.
+    pub query: Option<&'a str>,
+    /// Fragment without its hash.
+    pub fragment: Option<&'a str>,
+}
+
+/// Recognize original component boundaries without copying text or diagnostics.
+/// `None` is an invalid IRI reference; no normalization or decoding occurs.
+pub fn components(s: &str) -> Option<Components<'_>> {
+    let spans = scan_with(s, Mode::Iri, Diagnostics::Verdict).ok()?;
+    Some(Components {
+        scheme: spans.scheme.map(|range| &s[range]),
+        authority: spans.authority.map(|range| &s[range]),
+        path: &s[spans.path],
+        query: spans.query.map(|range| &s[range]),
+        fragment: spans.fragment.map(|range| &s[range]),
+    })
+}
+
 /// A native lexical error or a physical diagnostic-storage refusal.
 #[derive(Debug)]
 pub enum IriReadError {
