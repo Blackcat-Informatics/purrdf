@@ -6,6 +6,27 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Canonical Function Ontology catalogs
+
+Build `FnoCatalogInput` and pass it to `FnoCatalog::try_new`. The admitted
+`FnoCatalog` is immutable; `as_input()` borrows its fields. Admission checks RDF
+values, conflicting node descriptions and references before changing the input.
+An `FnoAdmissionError` owns the original rejected input and native reason.
+
+Labels, document banners and descriptions now use literal `TermValue` owners,
+preserving datatype, language and RDF 1.2 base direction. Use `FnBlank { label,
+scope }` for mapping identities instead of a sanitized `bnode_label` string.
+The existing term conversion and blank-label codec preserve those native scopes
+at RDF egress.
+
+Set-valued vectors sort canonically and indistinguishable duplicates collapse;
+compatible roles on one subject share their canonical facts. `expects` keeps
+its original list order. Emission preserves the admitted RDF
+facts while canonical order and collision-free list identities intentionally
+change output bytes. Distinct mapping labels and function IRIs no longer merge
+through sanitization. Slice's `list_functions_catalog` and `emit_list_functions`
+now return admission results and retain their explicit language retagging.
+
 ## Caller-owned loss profiles
 
 Select `purrdf_core::loss::LossProfile::builtin()` and extend it with
