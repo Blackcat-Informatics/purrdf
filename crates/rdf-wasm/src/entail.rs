@@ -146,10 +146,9 @@ pub(crate) fn materialize_impl(
 ///
 /// `maxStoredFacts` (a `bigint`) bounds the facts each evaluation store may hold and
 /// `maxJoinSteps` (a `bigint`) the candidate solutions the rules may enumerate, for the
-/// `rdf`, `rdfs`, `owl-rl` and `d` regimes. Omitted, each is this target's default:
-/// 131072 facts and 1048576 join steps, sized for one WebAssembly linear memory — a
-/// native build's defaults are 4194304 and 1048576. `maxTermArenaBytes` bounds retained
-/// term surfaces, defaulting to 16777216 bytes on every target. A run past a limit throws naming
+/// `rdf`, `rdfs`, `owl-rl` and `d` regimes. Omitted capacity settings impose no
+/// logical ceiling. `maxTermArenaBytes` selects a retained term-surface ceiling.
+/// A run past a caller-selected limit throws naming
 /// the limit, the numbers and the argument that raises it; a run inside them returns
 /// exactly the closure larger limits would, and the report's `contract-hash` names the
 /// calculus under the limits in force.

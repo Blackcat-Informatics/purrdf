@@ -446,8 +446,7 @@ impl PyQuadStore {
     ///
     /// `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` are the closure's
     /// evaluation limits, exactly as `purrdf.entail.materialize` takes them, for the `rdf`,
-    /// `rdfs`, `owl-rl` and `d` regimes; `None` keeps the default (16777216 bytes for the
-    /// term arena). A closure past one raises `ValueError` naming the
+    /// `rdfs`, `owl-rl` and `d` regimes; `None` imposes no logical capacity ceiling. A closure past one raises `ValueError` naming the
     /// limit, the numbers and this method's keyword; the governors price the evaluation over
     /// the closure and never become a limit on it.
     #[pyo3(signature = (

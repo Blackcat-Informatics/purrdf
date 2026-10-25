@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The stored-fact and join-step limits through the rules engine's public API: ordinary
-//! terminating workloads complete under the native defaults, the same workloads under
-//! the `wasm32` defaults are refused naming the knob that raises the limit, and raising
+//! terminating workloads complete with unlimited unstated capacity, the same workloads
+//! under finite caller-selected settings refuse naming the relevant control, and raising
 //! it admits them.
 //!
 //! Every refusal is paired with the neighbour that must still succeed, and each pair
@@ -13,10 +13,6 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf_datalog::seminaive::{
-    NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_JOIN_STEPS,
-    WASM_DEFAULT_MAX_STORED_FACTS,
-};
 use purrdf_rdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
@@ -98,16 +94,16 @@ fn srl_run(data: &RdfDataset, rules: &str, options: &InferOptions) -> Result<usi
         .map_err(|e| e.to_string())
 }
 
-/// The `wasm32` defaults, stated: what a `wasm32` build runs when the caller states none.
-fn wasm_defaults() -> RuleOptions {
+/// An explicitly selected finite capacity profile, independent of target.
+fn finite_capacity_profile() -> RuleOptions {
     RuleOptions::default()
-        .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS)
-        .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
+        .with_max_stored_facts(131_072)
+        .with_max_join_steps(1_048_576)
 }
 
 /// A single non-recursive rule copying 70,000 triples holds 140,000 facts: past the
-/// `wasm32` default of 131,072, well inside the native one. Natively it completes with
-/// every copy; under the `wasm32` defaults it is refused naming the numbers and the Rust
+/// selected ceiling of 131,072. Unstated capacity admits every copy; selecting the
+/// finite profile refuses the run naming the numbers and the Rust
 /// knob; a limit of exactly 140,000 admits it and 139,999 refuses it.
 #[test]
 fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm() {
@@ -115,10 +111,10 @@ fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm(
     assert_eq!(
         shacl(&data, COPY, &RuleOptions::default()),
         Ok(COPIED),
-        "the native default admits every copy"
+        "unstated capacity admits every copy"
     );
     assert_eq!(
-        shacl(&data, COPY, &wasm_defaults()),
+        shacl(&data, COPY, &finite_capacity_profile()),
         Err(
             "SHACL rules did not complete: the rules exceeded the stored-fact limit: 131073 \
              facts observed, 131072 permitted (the caller's limit); raise it with \
@@ -126,9 +122,9 @@ fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm(
                 .to_owned()
         ),
     );
-    let exact = wasm_defaults().with_max_stored_facts(2 * COPIED as u64);
+    let exact = finite_capacity_profile().with_max_stored_facts(2 * COPIED as u64);
     assert_eq!(shacl(&data, COPY, &exact), Ok(COPIED));
-    let short = wasm_defaults().with_max_stored_facts(2 * COPIED as u64 - 1);
+    let short = finite_capacity_profile().with_max_stored_facts(2 * COPIED as u64 - 1);
     let refused = shacl(&data, COPY, &short).expect_err("one fact short");
     assert!(
         refused.contains("140000 facts observed, 139999 permitted"),
@@ -136,35 +132,24 @@ fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm(
     );
 }
 
-/// Both public rule entry points retain the refused bytes and offer usable advice.
+/// Both public rule entry points admit retained surfaces beyond the former arena cap.
 #[test]
-fn arena_refusals_name_a_host_usable_remedy() {
-    let oversized = "x".repeat(purrdf_datalog::seminaive::DEFAULT_MAX_TERM_ARENA_BYTES + 1);
+fn unstated_arena_capacity_reaches_both_rule_frontends() {
+    let oversized = "x".repeat((1 << 24) + 1);
     let text = format!("ex:s ex:p \"{oversized}\" .");
-    let shapes_error = shacl(&holder(&text), COPY, &RuleOptions::default()).unwrap_err();
-    let srl_error = srl_run(
-        &dataset(&text),
-        "PREFIX ex: <http://example.org/ns#> RULE { ?s ex:q ?o } WHERE { ?s ex:p ?o }",
-        &InferOptions::default(),
-    )
-    .unwrap_err();
+    assert_eq!(shacl(&holder(&text), COPY, &RuleOptions::default()), Ok(1));
     assert_eq!(
-        srl_error.strip_prefix("SPARQL 1.2 RL evaluation failed: "),
-        Some(shapes_error.as_str()),
+        srl_run(
+            &dataset(&text),
+            "PREFIX ex: <http://example.org/ns#> RULE { ?s ex:q ?o } WHERE { ?s ex:p ?o }",
+            &InferOptions::default(),
+        ),
+        Ok(1)
     );
-    let expected_bytes =
-        oversized.len() + "<http://example.org/ns#s>".len() + "<http://example.org/ns#p>".len() + 2;
-    assert!(shapes_error.contains(&format!("limit: {expected_bytes} observed,")));
-    assert!(shapes_error.contains("term arena bytes limit:"));
-    assert!(
-        shapes_error
-            .ends_with("16777216 permitted; reduce retained term sizes in the input or rules")
-    );
-    assert!(!shapes_error.contains("EvalOptions"));
 }
 
 /// The transitive closure of a 1,000-edge chain — 500,500 inferred triples — completes
-/// natively through both frontends, and under the `wasm32` defaults each frontend refuses
+/// through both frontends, and under a finite profile each frontend refuses
 /// it at the stored-fact limit naming its own knob.
 #[test]
 fn a_thousand_node_transitive_closure_completes_natively_through_both_frontends() {
@@ -174,7 +159,8 @@ fn a_thousand_node_transitive_closure_completes_natively_through_both_frontends(
         shacl(&data, SHACL_CLOSURE, &RuleOptions::default()),
         Ok(CLOSURE)
     );
-    let refused = shacl(&data, SHACL_CLOSURE, &wasm_defaults()).expect_err("past 131,072");
+    let refused =
+        shacl(&data, SHACL_CLOSURE, &finite_capacity_profile()).expect_err("past 131,072");
     assert!(
         refused.starts_with(
             "SHACL rules did not complete: the rules exceeded the stored-fact limit: "
@@ -192,8 +178,8 @@ fn a_thousand_node_transitive_closure_completes_natively_through_both_frontends(
         &rdf,
         SRL_CLOSURE,
         &InferOptions::default()
-            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS)
-            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS),
+            .with_max_stored_facts(131_072)
+            .with_max_join_steps(1_048_576),
     )
     .expect_err("past 131,072");
     assert!(
@@ -205,12 +191,12 @@ fn a_thousand_node_transitive_closure_completes_natively_through_both_frontends(
     );
     let raised = InferOptions::default()
         .with_max_stored_facts((CLOSURE + CHAIN) as u64)
-        .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+        .with_max_join_steps(1_048_576);
     assert_eq!(
         srl_run(&rdf, SRL_CLOSURE, &raised),
         Ok(CLOSURE),
         "the base graph plus the closure is exactly the store it needs, and the linear \
-         closure's join steps fit the wasm32 default"
+         closure's join steps fit the selected finite profile"
     );
 }
 
@@ -242,8 +228,8 @@ fn the_join_step_limit_names_its_knob_and_its_neighbour_completes() {
 #[test]
 fn a_divergent_rule_set_is_refused_by_a_term_limit_with_the_capacity_limits_raised() {
     let raised = RuleOptions::default()
-        .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS * 16)
-        .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS * 16);
+        .with_max_stored_facts(4_194_304 * 16)
+        .with_max_join_steps(1_048_576 * 16);
     let counter = r#"ex:count a sh:SPARQLRule ; sh:construct
              "CONSTRUCT { ?s ex:n ?m } WHERE { ?s ex:n ?n BIND (?n + 1 AS ?m) }" ."#;
     let refused = shacl(&holder("ex:a ex:n 0 ."), counter, &raised).expect_err("never stops");
@@ -301,7 +287,7 @@ fn a_divergent_shape_rule_is_refused_by_the_round_limit_not_the_join_step_limit(
     let divergent = per_focus_counter("");
     for options in [
         RuleOptions::default(),
-        RuleOptions::default().with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS * 256),
+        RuleOptions::default().with_max_join_steps(1_048_576 * 256),
     ] {
         let refused = shacl(&data, &divergent, &options).expect_err("never stops");
         assert!(
@@ -322,13 +308,9 @@ fn a_divergent_shape_rule_is_refused_by_the_round_limit_not_the_join_step_limit(
     );
 }
 
-/// The corpus's per-focus divergence, whose minted IRI grows one character every
-/// iteration: its term surfaces grow quadratically, so at the default limits the
-/// evaluation's fixed term-arena ceiling (16 MiB) is what it passes first — after about
-/// 5,800 iterations, fewer than the 16,384 the round limit permits — and it is refused
-/// by that ceiling, never by the join-step limit, with the join-step limit at its default
-/// and raised out of the way. A caller's round limit below that point refuses it by the
-/// round limit, and its neighbour bounded by IRI length completes.
+/// Growing IRI terms are refused by a caller-selected term-generating round
+/// ceiling, independently of finite or unstated join capacity. The bounded
+/// neighbour completes without an implicit arena ceiling.
 #[test]
 fn a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_join_step_limit() {
     let fixture =
@@ -349,28 +331,17 @@ fn a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_jo
             .map_err(|error| error.to_string())
     };
     for options in [
-        RuleOptions::default(),
-        RuleOptions::default().with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS * 256),
+        RuleOptions::default().with_max_term_generating_rounds(8),
+        RuleOptions::default()
+            .with_max_term_generating_rounds(8)
+            .with_max_join_steps(1_048_576 * 256),
     ] {
-        assert_eq!(
-            run(&options),
-            Err(
-                "SHACL rules did not complete: evaluation exceeded the term arena bytes \
-                 limit: 16782539 observed, 16777216 permitted; reduce retained term sizes \
-                 in the input or rules"
-                    .to_owned()
-            )
-        );
+        let refused = run(&options).expect_err("unbounded IRI generation");
+        assert!(refused.starts_with(
+            "SHACL rules did not complete: the rules exceeded the term-generating round limit: 9 rounds"
+        ), "{refused}");
+        assert!(!refused.contains("join-step"), "{refused}");
     }
-    let rounds = run(&RuleOptions::default().with_max_term_generating_rounds(2_000))
-        .expect_err("never stops");
-    assert!(
-        rounds.starts_with(
-            "SHACL rules did not complete: the rules exceeded the term-generating round limit: \
-             2001 rounds"
-        ),
-        "{rounds}"
-    );
     let bounded = fixture.replace(
         "WHERE { $this a ex:Counter .",
         "WHERE { $this a ex:Counter . FILTER (STRLEN(STR($this)) < 1000)",

@@ -96,14 +96,12 @@ and are explicitly refused by that checker.
   Identical input yields byte-identical output, on every target.
 * **Limits refuse; they never truncate.** The STORED-FACT and JOIN-STEP limits
   are the caller's (`EvalOptions::with_max_stored_facts`,
-  `EvalOptions::with_max_join_steps`), with a default sized for the target:
-  131,072 facts and 1,048,576 join steps on `wasm32`, where the store lives in
-  one linear memory, and 4,194,304 facts and 1,048,576 join steps everywhere
-  else (`DEFAULT_MAX_STORED_FACTS`, `DEFAULT_MAX_JOIN_STEPS`, chosen at compile
-  time from the target architecture). The term-arena ceiling defaults to
-  `DEFAULT_MAX_TERM_ARENA_BYTES` (16 MiB); callers can select it with
-  `EvalOptions::with_max_term_arena_bytes` or remove the logical ceiling with
-  `EvalOptions::without_term_arena_limit`. Physical admission still applies.
+  `EvalOptions::with_max_join_steps`). Unstated fact, join and term-arena
+  settings impose no logical ceiling on any target. Callers select an arena
+  ceiling with `EvalOptions::with_max_term_arena_bytes` and remove selected
+  ceilings with `without_stored_fact_limit`, `without_join_step_limit` and
+  `without_term_arena_limit`. Physical admission and counter representation
+  still apply.
   A limit can only refuse: a run
   inside its limits returns the least model, the same under every limit that
   admits it, and a run past one returns `EvalError::BudgetExhausted` naming the

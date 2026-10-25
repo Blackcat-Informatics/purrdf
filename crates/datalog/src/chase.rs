@@ -853,7 +853,7 @@ pub enum ChaseError {
     /// A limit was passed. The report is accurate at the point the chase stopped.
     ///
     /// The limits are the stored-fact and join-step limits of the caller's [`EvalOptions`]
-    /// ([`chase_with`]; the target's defaults for [`chase`] and [`chase_until`]) and the
+    /// ([`chase_with`]; unlimited capacity for [`chase`] and [`chase_until`]) and the
     /// caller-selected [`EvalOptions::max_term_arena_bytes`], charged exactly as [`crate::seminaive::evaluate`]
     /// charges them. There is never a truncated answer presented as complete.
     BudgetExhausted {
@@ -1002,22 +1002,29 @@ struct StepMeter {
     consumed: u64,
     /// The join-step limit in force.
     limit: u64,
+    /// A further candidate cannot be represented by the full-width observation.
+    overflowed: bool,
 }
 
 impl StepMeter {
     /// A meter charging against `limit`.
     fn new(limit: u64) -> Self {
-        Self { consumed: 0, limit }
+        Self {
+            consumed: 0,
+            limit,
+            overflowed: false,
+        }
     }
 
     /// Record one enumerated candidate.
     fn charge(&mut self) {
+        self.overflowed |= self.consumed == u64::MAX;
         self.consumed = self.consumed.saturating_add(1);
     }
 
     /// Whether the ceiling has been passed, so no further candidate may be enumerated.
     fn spent(self) -> bool {
-        self.consumed > self.limit
+        self.overflowed || self.consumed > self.limit
     }
 }
 
@@ -1332,7 +1339,7 @@ where
     /// engine observed it.
     fn check_budget(&self) -> Result<(), ChaseError> {
         let report = self.report();
-        if report.join_steps() > report.join_step_limit() {
+        if self.meter.spent() {
             return Err(ChaseError::BudgetExhausted {
                 resource: BudgetResource::JoinSteps,
                 report,
@@ -1500,11 +1507,11 @@ where
 ///
 /// # Budgets
 ///
-/// Consumption is charged against the target's default stored-fact and join-step limits
-/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the caller-selected
-/// [`EvalOptions::max_term_arena_bytes`], exactly as [`crate::seminaive::evaluate`] charges them, and
-/// passing one is a refusal ([`ChaseError::BudgetExhausted`]) carrying an accurate report —
-/// never a truncated answer.
+/// Consumption uses [`EvalOptions::default`], with no logical stored-fact,
+/// join-step or term-arena ceiling. [`chase_with`] takes the caller's options;
+/// any selected finite ceiling is charged as in [`crate::seminaive::evaluate`].
+/// Passing a ceiling or overflowing a work counter returns
+/// [`ChaseError::BudgetExhausted`] with an accurate report, never a truncated answer.
 ///
 /// # Errors
 ///
@@ -1942,6 +1949,31 @@ mod tests {
             closure(&chase_with(&program, edb(), &steps, None).expect("exactly its steps")),
             closure(&unlimited)
         );
+        // The last representable candidate is admitted; a further one must refuse
+        // before the chase can commit a result, even with an unstated ceiling.
+        let options = EvalOptions::default();
+        let mut state = ChaseState {
+            store: edb(),
+            derivations: Vec::new(),
+            witnesses: SkolemRegistry::default(),
+            meter: StepMeter::new(options.max_join_steps()),
+            options,
+        };
+        state.meter.consumed = u64::MAX - 1;
+        state.meter.charge();
+        state.check_budget().expect("the full-width final credit");
+        state.meter.charge();
+        assert!(state.meter.spent());
+        let ChaseError::BudgetExhausted { resource, report } =
+            state.check_budget().expect_err("unrepresentable join work")
+        else {
+            panic!("counter overflow must use the typed budget refusal");
+        };
+        assert_eq!(resource, BudgetResource::JoinSteps);
+        assert_eq!(report.join_steps(), u64::MAX);
+        assert_eq!(report.join_step_limit(), u64::MAX);
+        assert_eq!(state.store.row_count(), 2);
+        assert_eq!(state.derivations, []);
     }
 
     // ── The restriction fires, terminates and mints blank nodes ─────────────────

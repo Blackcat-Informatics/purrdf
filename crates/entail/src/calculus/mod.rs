@@ -646,10 +646,7 @@ mod tests {
     use purrdf_datalog::cache::contract_hash;
     use purrdf_datalog::chase::certify;
     use purrdf_datalog::clause::HeadForm;
-    use purrdf_datalog::seminaive::{
-        EvalOptions, NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS,
-        WASM_DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_STORED_FACTS, compile,
-    };
+    use purrdf_datalog::seminaive::{EvalOptions, compile};
     use std::collections::BTreeSet;
 
     /// EVERY rule that DECLARES a `false` head really states one, in every clause.
@@ -865,7 +862,7 @@ mod tests {
                 "{regime:?}'s declared program must be admissible"
             );
         }
-        // The two lanes whose rule tables hold rdfD1 / rdfD1a / rdfs14 / rdfs14a.
+        // The two lanes whose rule tables hold `rdfD1` / `rdfD1a` / `rdfs14` / `rdfs14a`.
         assert_eq!(existential_lanes, 2);
     }
 
@@ -943,8 +940,8 @@ mod tests {
         }
     }
 
-    /// Each lane's calculus identity, pinned byte for byte — under the `wasm32` default
-    /// evaluation limits and under the native ones, each STATED, so both tables hold on
+    /// Each lane's calculus identity, pinned byte for byte — under the historical browser
+    /// and native finite profiles, each explicitly stated, so both tables hold on
     /// every target.
     ///
     /// The contract hash is a PUBLISHED identity: a consumer stores it beside a cached
@@ -961,11 +958,13 @@ mod tests {
     #[test]
     fn the_contract_hashes_are_pinned() {
         let wasm = EvalOptions::default()
-            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS)
-            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+            .with_max_stored_facts(131_072)
+            .with_max_join_steps(1_048_576)
+            .with_max_term_arena_bytes(1 << 24);
         let native = EvalOptions::default()
-            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS)
-            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS);
+            .with_max_stored_facts(4_194_304)
+            .with_max_join_steps(1_048_576)
+            .with_max_term_arena_bytes(1 << 24);
         for (options, table) in [(wasm, PINNED_WASM), (native, PINNED_NATIVE)] {
             for (regime, digest) in table {
                 assert_eq!(
@@ -975,22 +974,16 @@ mod tests {
                 );
             }
         }
-        // The published default is the current target's table.
-        let current = if cfg!(target_arch = "wasm32") {
-            PINNED_WASM
-        } else {
-            PINNED_NATIVE
-        };
-        for (regime, digest) in current {
-            assert_eq!(
-                calculus_contract_hash(*regime).to_hex(),
-                *digest,
-                "{regime:?}"
-            );
+        // Default capacity is unlimited on every target. Its identity must
+        // differ from either finite historical profile for every regime.
+        for regime in ALL_REGIMES {
+            let default = calculus_contract_hash(regime);
+            assert_ne!(default, calculus_contract_hash_with(regime, &wasm));
+            assert_ne!(default, calculus_contract_hash_with(regime, &native));
         }
     }
 
-    /// The lanes' calculus identities under the `wasm32` default limits.
+    /// The lanes' calculus identities under the historical browser finite profile.
     const PINNED_WASM: &[(Regime, &str)] = &[
         (Regime::Simple, PINNED_EMPTY_HASH),
         (Regime::Rdf, PINNED_RDF_HASH),
@@ -1001,52 +994,52 @@ mod tests {
         (Regime::D, PINNED_D_HASH),
     ];
 
-    /// The lanes' calculus identities under the native default limits.
+    /// The lanes' calculus identities under the historical native finite profile.
     const PINNED_NATIVE: &[(Regime, &str)] = &[
         (
             Regime::Simple,
-            "9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa",
+            "bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a",
         ),
         (
             Regime::Rdf,
-            "35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7",
+            "8a130678fd2ef3086aa4a6fd840bb7a567724540ca71dd33fe57f2f9dc3c4bf3",
         ),
         (
             Regime::Rdfs,
-            "89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739",
+            "43165d4570613a4e1db0550646cf7e9103a6fd5c79c10a37abbff4719602327d",
         ),
         (
             Regime::OwlRl,
-            "f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba",
+            "e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c",
         ),
         (
             Regime::OwlDirect,
-            "9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa",
+            "bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a",
         ),
         (
             Regime::Rif,
-            "9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa",
+            "bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a",
         ),
         (
             Regime::D,
-            "fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106",
+            "82674ca392c68d4ac789e7c7c9b517dbfcdfd02e344aafd961b2b1105bda5aea",
         ),
     ];
 
     /// The empty program's identity — the lanes with no rule table of their own — under
     /// the `wasm32` default limits.
     const PINNED_EMPTY_HASH: &str =
-        "42b60c6d0ce2cf3f4a48ab5ce4e98e9b76447390d68cd26dbac9bbadcfe01a12";
+        "d65ad12e6865a9aa83a219984b3c7c34a15cb332b17f638cc04c6e76de489cb5";
 
     /// The `RDF` lane's calculus identity, moved deliberately by stating `rdfD1` and
     /// `rdfD1a` — the two RDF patterns whose conclusions are existentially quantified.
     /// A consumer holding a closure minted under the one-rule calculus can tell, which is
     /// the whole point of the digest.
     const PINNED_RDF_HASH: &str =
-        "d72ae8a144ea0aaca3ef4554c79de1ab0797f7845175a668af410c521a67a42a";
+        "638d01641980195a1b2aa4e5df31f809b145a21ccabede7b2e3ea3280a77ece8";
     /// The `RDFS` lane's, moved for the same reason with `rdfs14` and `rdfs14a` besides.
     const PINNED_RDFS_HASH: &str =
-        "acbe19a727950484a0e3f02895fb400700ccaf5ab3855557f79f11e6137f8154";
+        "4529c2c783b2384f0720b993697ec16f38caff4e8043a0b8fd36a293c6f4d672";
     /// The `OWL-RL` lane's. This digest answers to the calculus's DECLARATION ORDER and
     /// not only to what the lane concludes, which is worth stating rather than leaving to
     /// be rediscovered: a rule whose conclusion is `false` is lowered into a clause whose
@@ -1064,9 +1057,9 @@ mod tests {
     /// renumbered the clash markers and moved the `RDF`, `RDFS` and `D` digests for a rule
     /// none of those lanes fires.
     const PINNED_OWL_RL_HASH: &str =
-        "da953ef936794dfb21dc21cbe35305603613729a411084d0c1eefd8601f02747";
+        "c7c5b2b3b26d6261d52322c54176cd08c00230661d657e9a2f51f67517f773af";
     /// The `D` lane's, moved by the same renumbering — `dt-not-type` is a constraint too.
-    const PINNED_D_HASH: &str = "f6e0e28474ddc3e6277fb638f2f9f3689a7eccd2b8e2ea6a7643ad5eb16c3f57";
+    const PINNED_D_HASH: &str = "d91cd5de3d38ea2b90d2efe269afdffd62cd7c367f83d237ad43c4ab44147d2e";
 
     /// Two lanes with different rule sets have different calculus identities, and the
     /// three rule-free regimes share the empty program's identity.

@@ -10,6 +10,8 @@
 
 use std::fmt;
 
+mod arithmetic;
+pub use arithmetic::ArithmeticRefusal;
 mod matrix;
 pub use matrix::MatrixRefusal;
 mod payload;
@@ -136,7 +138,7 @@ pub enum HnswError {
         row: usize,
     },
 
-    /// A distance left the finite binary64 range.
+    /// A distance left the finite `binary64` range.
     NonFiniteDistance {
         /// The candidate row whose distance overflowed.
         row: usize,
@@ -235,7 +237,7 @@ pub enum HnswError {
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
 
     /// A checked arithmetic operation overflowed.
-    ArithmeticOverflow,
+    ArithmeticOverflow(ArithmeticRefusal),
 
     /// The index footprint would exceed the target's addressable memory.
     AddressSpaceExceeded {
@@ -309,7 +311,7 @@ impl purrdf_hash::error::StructuredError for HnswError {
         },
         ArithmeticBuildMismatch { recorded, here } => "hnsw-arithmetic-build-mismatch" { "recorded" => Record(recorded), "here" => Record(here) },
         FloatEnvironment(cause) => "hnsw-float-environment" { "cause" => Cause(cause) },
-        ArithmeticOverflow => "hnsw-arithmetic-overflow" {},
+        ArithmeticOverflow(cause) => "hnsw-arithmetic-overflow" { "cause" => Cause(cause) },
         AddressSpaceExceeded { required, maximum } => "hnsw-address-space-exceeded" {
             "required" => ByteCount(u128::from(*required)), "maximum" => ByteCount(u128::from(*maximum)),
         },
@@ -404,7 +406,7 @@ impl fmt::Display for HnswError {
                 f,
                 "the floating-point environment cannot run the distance arithmetic: {error}"
             ),
-            Self::ArithmeticOverflow => write!(f, "index arithmetic overflowed"),
+            Self::ArithmeticOverflow(cause) => cause.fmt(f),
             Self::AddressSpaceExceeded { required, maximum } => write!(
                 f,
                 "the index would need {required} bytes, which exceeds the {maximum} \
@@ -445,6 +447,7 @@ impl std::error::Error for HnswError {
         match self {
             Self::Workspace(error) => Some(error),
             Self::FloatEnvironment(error) => Some(error),
+            Self::ArithmeticOverflow(cause) => Some(cause),
             Self::Embedding { cause } => Some(cause),
             Self::ParameterValidation { cause } => Some(cause),
             Self::InvalidPayload { reason } => Some(reason),
@@ -458,6 +461,7 @@ impl std::error::Error for HnswError {
 purrdf_lex::variant_from!(HnswError {
     Workspace(purrdf_sparql_eval::EvalError),
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+    ArithmeticOverflow(ArithmeticRefusal),
 });
 
 impl From<purrdf_core::EmbeddingError> for HnswError {
@@ -548,7 +552,10 @@ mod tests {
                     },
                 },
             ),
-            HnswError::ArithmeticOverflow,
+            HnswError::ArithmeticOverflow(ArithmeticRefusal::MatrixElements {
+                rows: usize::MAX,
+                dimensions: 2,
+            }),
             HnswError::AddressSpaceExceeded {
                 required: 10,
                 maximum: 5,

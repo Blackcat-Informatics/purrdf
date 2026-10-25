@@ -12,8 +12,8 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG5";
-pub(super) const HEADER_BYTES: usize = 408;
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG6";
+pub(super) const HEADER_BYTES: usize = 432;
 pub(super) const RECORD_HEADER: usize = 13;
 const COMPRESSED_RECORDS: u32 = 1 << 31;
 pub(super) const SUMMARY_BYTES: usize = 88;
@@ -25,6 +25,8 @@ pub(super) const GRAPHS: u8 = 4;
 pub(super) const SUMMARIES: u8 = 5;
 pub(super) const SOURCE_DIRECTORY: u8 = 10;
 pub(super) const SOURCE_CHECKPOINTS: u8 = 11;
+pub(super) const SPANNED_DICTIONARY: u8 = 12;
+pub(super) const OVERFLOW: u8 = 13;
 
 pub(super) const fn statistics_kind(section: super::super::statistics::StatisticsSection) -> u8 {
     6 + section.index() as u8
@@ -69,15 +71,24 @@ pub(super) struct Header {
     pub statistics: [Stream; 4],
     pub effective_directory: Stream,
     pub source_checkpoints: Stream,
+    pub overflow: Stream,
     pub flags: u8,
     pub source_union: purrdf_hash::multiset::Multiset256,
 }
 
 impl Header {
+    pub(super) fn dictionary_decode_bound(self, kind: u8) -> u64 {
+        if kind == SPANNED_DICTIONARY {
+            self.max_owned_term_bytes
+        } else {
+            u64::from(self.block_bytes) * u64::from(self.records_per_block)
+        }
+    }
+
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&5_u32.to_le_bytes());
+        out.extend_from_slice(&6_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -99,6 +110,7 @@ impl Header {
             self.statistics[3],
             self.effective_directory,
             self.source_checkpoints,
+            self.overflow,
         ] {
             for value in [stream.first, stream.blocks, stream.rows] {
                 out.extend_from_slice(&value.to_le_bytes());
@@ -110,7 +122,7 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(5) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(6) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile; regenerate the image from RDF input",
             ));
@@ -133,7 +145,7 @@ impl Header {
         first_term_index
             .checked_add(terms)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let mut streams = [Stream::default(); 13];
+        let mut streams = [Stream::default(); 14];
         for stream in &mut streams {
             *stream = Stream {
                 first: input.u64()?,
@@ -166,6 +178,7 @@ impl Header {
             statistics: [streams[7], streams[8], streams[9], streams[10]],
             effective_directory: streams[11],
             source_checkpoints: streams[12],
+            overflow: streams[13],
             source_union: purrdf_hash::multiset::Multiset256::from_parts(
                 source_sum,
                 source_population,
@@ -220,6 +233,9 @@ impl Header {
                 "source checkpoint packing mismatch",
             ));
         }
+        if header.overflow.rows > terms || header.overflow.blocks < header.overflow.rows {
+            return Err(SegmentedError::Corrupt("invalid overflow population"));
+        }
         Ok(header)
     }
 
@@ -239,6 +255,7 @@ impl Header {
             self.statistics[3],
             self.effective_directory,
             self.source_checkpoints,
+            self.overflow,
         ] {
             if stream.first != next || (stream.blocks == 0) != (stream.rows == 0) {
                 return Err(SegmentedError::Corrupt("non-contiguous block directory"));
@@ -543,13 +560,137 @@ fn raw_record_block(
     Ok((out, count))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct OverflowSpan {
+    pub first: u64,
+    pub bytes: u32,
+}
+
+impl OverflowSpan {
+    pub(super) fn blocks(self, block_bytes: usize) -> Result<u64, SegmentedError> {
+        let capacity = block_bytes
+            .checked_sub(5)
+            .filter(|&n| n > 0)
+            .ok_or(SegmentedError::Corrupt("invalid overflow page size"))?;
+        Ok(u64::from(self.bytes).div_ceil(capacity as u64))
+    }
+
+    fn validate(self, stream: Stream, block_bytes: usize) -> Result<(), SegmentedError> {
+        if self.bytes == 0
+            || self
+                .first
+                .checked_add(self.blocks(block_bytes)?)
+                .is_none_or(|end| end > stream.blocks)
+        {
+            return Err(SegmentedError::Corrupt("overflow span escapes its section"));
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn spanned_record(
+    id: GlobalTermId,
+    key: &[u8],
+    overflow: &mut Vec<Vec<u8>>,
+    block_bytes: usize,
+) -> Result<Vec<u8>, SegmentedError> {
+    let span = OverflowSpan {
+        first: overflow.len() as u64,
+        bytes: u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?,
+    };
+    for chunk in key.chunks(block_bytes - 5) {
+        let mut page = Vec::with_capacity(block_bytes);
+        page.push(OVERFLOW);
+        page.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+        page.extend_from_slice(chunk);
+        page.resize(block_bytes, 0);
+        overflow.push(page);
+    }
+    let mut descriptor = Vec::with_capacity(block_bytes);
+    descriptor.push(SPANNED_DICTIONARY);
+    descriptor.extend_from_slice(&1_u32.to_le_bytes());
+    descriptor.extend_from_slice(&span.bytes.to_le_bytes());
+    descriptor.extend_from_slice(&16_u32.to_le_bytes());
+    push_id(&mut descriptor, id);
+    descriptor.extend_from_slice(&span.first.to_le_bytes());
+    descriptor.resize(block_bytes, 0);
+    Ok(descriptor)
+}
+
+pub(super) fn overflow_descriptor(
+    bytes: &[u8],
+    stream: Stream,
+) -> Result<(GlobalTermId, OverflowSpan), SegmentedError> {
+    let (count, decoded, payload) = record_header(bytes, 1, u64::from(u32::MAX))?;
+    if bytes[0] != SPANNED_DICTIONARY
+        || count != 1
+        || payload != 16
+        || u64::from(decoded) + (RECORD_HEADER + 16) as u64 <= bytes.len() as u64
+    {
+        return Err(SegmentedError::Corrupt("noncanonical overflow descriptor"));
+    }
+    let mut input = Reader::at(bytes, RECORD_HEADER);
+    let id = input.id()?;
+    let span = OverflowSpan {
+        first: input.u64()?,
+        bytes: decoded,
+    };
+    if input.take(input.remaining())?.iter().any(|&byte| byte != 0) {
+        return Err(SegmentedError::Corrupt(
+            "nonzero overflow descriptor padding",
+        ));
+    }
+    span.validate(stream, bytes.len())?;
+    Ok((id, span))
+}
+
+/// Visit authenticated page payloads. A stopped visit is a selective read, never
+/// a certification of unvisited bytes; certification always visits the full span.
+pub(super) fn visit_overflow(
+    span: OverflowSpan,
+    stream: Stream,
+    block_bytes: usize,
+    mut read: impl FnMut(u64, &mut [u8]) -> Result<(), SegmentedError>,
+    mut visit: impl FnMut(&[u8]) -> core::ops::ControlFlow<()>,
+) -> Result<core::ops::ControlFlow<()>, SegmentedError> {
+    span.validate(stream, block_bytes)?;
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    let mut page = Vec::new();
+    memory.reserve(&mut page, block_bytes)?;
+    page.resize(block_bytes, 0);
+    let mut remaining = span.bytes as usize;
+    for offset in 0..span.blocks(block_bytes)? {
+        let slot = stream
+            .first
+            .checked_add(span.first)
+            .and_then(|n| n.checked_add(offset))
+            .ok_or(SegmentedError::AddressExhausted)?;
+        read(slot, &mut page)?;
+        let expected = remaining.min(block_bytes - 5);
+        if page[0] != OVERFLOW
+            || read_u32_le(&page, 1) != Some(expected as u32)
+            || page[5 + expected..].iter().any(|&byte| byte != 0)
+        {
+            return Err(SegmentedError::Corrupt("noncanonical overflow page"));
+        }
+        if visit(&page[5..5 + expected]).is_break() {
+            memory.release_vec(page)?;
+            return Ok(core::ops::ControlFlow::Break(()));
+        }
+        remaining -= expected;
+    }
+    memory.release_vec(page)?;
+    Ok(core::ops::ControlFlow::Continue(()))
+}
+
 fn record_header(
     bytes: &[u8],
     max_records: u32,
     max_decoded: u64,
 ) -> Result<(u32, u32, u32), SegmentedError> {
     let mut input = Reader::at(bytes, 0);
-    if input.byte()? != DICTIONARY {
+    if !matches!(input.byte()?, DICTIONARY | SPANNED_DICTIONARY) {
         return Err(SegmentedError::Corrupt("wrong record block kind"));
     }
     let count = input.u32()?;
@@ -608,8 +749,15 @@ impl DecodedRecords {
         bytes: &[u8],
         max_records: u32,
         max_decoded: u64,
+        overflow: Stream,
+        mut read: impl FnMut(u64, &mut [u8]) -> Result<(), SegmentedError>,
     ) -> Result<Self, SegmentedError> {
         let (count, decoded, payload) = record_header(bytes, max_records, max_decoded)?;
+        let span = if bytes[0] == SPANNED_DICTIONARY {
+            Some(overflow_descriptor(bytes, overflow)?)
+        } else {
+            None
+        };
         let end = RECORD_HEADER
             .checked_add(
                 usize::try_from(payload & !COMPRESSED_RECORDS)
@@ -650,6 +798,22 @@ impl DecodedRecords {
             &mut entries,
             usize::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?,
         )?;
+        if let Some((id, span)) = span {
+            let completed = visit_overflow(span, overflow, bytes.len(), &mut read, |chunk| {
+                arena.extend_from_slice(chunk);
+                core::ops::ControlFlow::Continue(())
+            })?;
+            if completed.is_break() {
+                return Err(SegmentedError::Corrupt(
+                    "incomplete overflow materialization",
+                ));
+            }
+            if arena.len() != decoded as usize {
+                return Err(SegmentedError::Corrupt("false expanded dictionary size"));
+            }
+            entries.push((id, 0..arena.len()));
+            return Ok(Self { arena, entries });
+        }
         for _ in 0..count {
             let prefix =
                 usize::try_from(input.u32()?).map_err(|_| SegmentedError::AddressExhausted)?;
@@ -740,6 +904,12 @@ mod text_fixture;
 mod tests {
     use super::*;
 
+    fn no_external_pages(_: u64, _: &mut [u8]) -> Result<(), SegmentedError> {
+        Err(SegmentedError::Corrupt(
+            "inline fixture requested an external page",
+        ))
+    }
+
     #[test]
     fn compressed_dictionary_refusals_retain_the_native_codec_cause() {
         let mut bytes = vec![0; 512];
@@ -748,7 +918,8 @@ mod tests {
         crate::bytes::put_u32_le(&mut bytes, 5, 1).unwrap();
         crate::bytes::put_u32_le(&mut bytes, 9, COMPRESSED_RECORDS | 1).unwrap();
         bytes[RECORD_HEADER] = 7; // BFINAL=1, reserved BTYPE=11.
-        let error = DecodedRecords::decode(&bytes, 1, 512).unwrap_err();
+        let error = DecodedRecords::decode(&bytes, 1, 512, Stream::default(), no_external_pages)
+            .unwrap_err();
         assert_eq!(
             error,
             SegmentedError::Compression(purrdf_deflate::Error::InvalidBlockType)
@@ -787,7 +958,9 @@ mod tests {
             "prefix coding cannot share these leading bytes"
         );
         assert_eq!(bytes.len(), 4096);
-        let decoded = DecodedRecords::decode(&bytes, 64, 4096 * 64).unwrap();
+        let decoded =
+            DecodedRecords::decode(&bytes, 64, 4096 * 64, Stream::default(), no_external_pages)
+                .unwrap();
         for (index, (id, key)) in records.iter().enumerate() {
             assert_eq!(decoded.entries[index].0, *id);
             assert_eq!(decoded.key(index), key);
@@ -816,7 +989,9 @@ mod tests {
                     .count(),
                 1
             );
-            let decoded = DecodedRecords::decode(&bytes, 3, 600).unwrap();
+            let decoded =
+                DecodedRecords::decode(&bytes, 3, 600, Stream::default(), no_external_pages)
+                    .unwrap();
             assert_eq!(decoded.entries.len(), expected);
             for (index, (id, key)) in records[..used].iter().enumerate() {
                 assert_eq!(decoded.entries[index].0, *id);
@@ -830,7 +1005,9 @@ mod tests {
         let (bytes, used) = raw_record_block(&records[..1], 512).unwrap();
         assert_eq!(used, 1);
         assert_eq!(
-            DecodedRecords::decode(&bytes, 1, 200).unwrap().key(0),
+            DecodedRecords::decode(&bytes, 1, 200, Stream::default(), no_external_pages)
+                .unwrap()
+                .key(0),
             records[0].1
         );
     }

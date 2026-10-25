@@ -1670,8 +1670,7 @@ impl QueryEngine {
     /// "imports nothing" case, and all three are required rather than defaulted.
     ///
     /// `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` (each a `bigint`,
-    /// or `undefined` for this target's default of 131072 facts, 1048576 join steps and
-    /// 16777216 term-surface bytes) are the closure's evaluation
+    /// or `undefined` for no logical ceiling) are the closure's evaluation
     /// limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as `entailMaterialize`
     /// takes them. A closure past one throws naming the limit, the numbers and this method's
     /// argument (`queryEntailmentGoverned's maxStoredFacts`, …); the governors price the

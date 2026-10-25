@@ -226,7 +226,7 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) jsonld_options: Option<PathBuf>,
     /// Strict version-one geographic profile for geo, query, and update.
-    /// Omitting it selects the declared standard CRS84 profile.
+    /// Omitting it selects the declared standard `CRS84` profile.
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) geo_profile: Option<PathBuf>,
 }
@@ -416,18 +416,18 @@ pub(crate) enum Command {
         /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
         /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
         /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
-        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
         /// a run it admits writes exactly the closure a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
         /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
         /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
-        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(
             long = "max-term-arena-bytes",
             value_name = "BYTES",
@@ -511,19 +511,19 @@ pub(crate) enum Command {
         imports: Vec<String>,
         /// Permit exactly `N` facts in each evaluation store the `--entailment` closure is
         /// computed in, for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the
-        /// run (exit 1) naming the limit and the numbers. Omitted, the limit is 4194304
-        /// facts. The limit can only refuse: a run it admits answers over exactly the
+        /// run (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is
+        /// applied. The limit can only refuse: a run it admits answers over exactly the
         /// closure a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
         /// while the `--entailment` closure is computed, for the `rdf`, `rdfs`, `owl-rl` and
-        /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
+        /// `d` regimes; one more fails the run (exit 1). Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
         /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
-        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(
             long = "max-term-arena-bytes",
             value_name = "BYTES",
@@ -767,18 +767,18 @@ pub(crate) enum Command {
         /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
         /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
         /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
-        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
         /// a run it admits writes exactly the closure a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
         /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
         /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
-        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
         max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
@@ -863,18 +863,18 @@ pub(crate) enum Command {
         /// Permit exactly `N` facts in each evaluation store the question is answered with —
         /// the premise's closure and every re-chase a mechanism beyond the rule table runs —
         /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, the limit is 4194304 facts. The limit
+        /// naming the limit and the numbers. Omitted, no logical ceiling is applied. The limit
         /// can only refuse: a run it admits answers exactly as a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
-        /// in each of those evaluations; one more fails the run (exit 1). Omitted, the limit
-        /// is 1048576 steps.
+        /// in each of those evaluations; one more fails the run (exit 1).
+        /// Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
         /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
         /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
-        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
+        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
         max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
@@ -1640,15 +1640,14 @@ pub(crate) enum Command {
         max_generated_terms: Option<u64>,
         /// Permit exactly `N` facts in the evaluation store — the data graph, a rule set's
         /// data and every inferred triple; one more fails the run naming the limit and the
-        /// numbers. Omitted, the limit is 4194304 facts: a rule copying a predicate over
-        /// tens of thousands of triples, or the closure of a thousand-node chain,
-        /// completes. The limit can only refuse: a run it admits writes exactly the
+        /// numbers. Omitted, no logical ceiling is applied.
+        /// The limit can only refuse: a run it admits writes exactly the
         /// inference graph a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate;
-        /// one more fails the run naming the limit and the numbers. Omitted, the limit is
-        /// 1048576 steps. It bounds a rule body that enumerates far more candidates than
+        /// one more fails the run naming the limit and the numbers. Omitted, no logical
+        /// ceiling is applied. It bounds a rule body that enumerates far more candidates than
         /// it infers triples.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,

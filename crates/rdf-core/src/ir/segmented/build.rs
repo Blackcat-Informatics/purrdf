@@ -397,6 +397,7 @@ impl SegmentedImage {
             header.statistics[3],
             header.effective_directory,
             header.source_checkpoints,
+            header.overflow,
         ]
         .iter()
         .try_fold(1_u64, |n, stream| {
@@ -567,7 +568,14 @@ fn encode_dataset(
         )?);
         records.push((map_id(local, limits.first_term_index), key));
     }
-    let dictionary = append_dictionary(&mut blocks, &records, records_per_block, block_bytes)?;
+    let mut overflow_blocks = Vec::new();
+    let (dictionary, overflow_rows) = append_dictionary(
+        &mut blocks,
+        &records,
+        records_per_block,
+        block_bytes,
+        &mut overflow_blocks,
+    )?;
     records.sort_by(|a, b| a.1.cmp(&b.1));
     let reverse = append_fixed(
         &mut blocks,
@@ -666,6 +674,12 @@ fn encode_dataset(
         32,
         block_bytes,
     )?;
+    let overflow = Stream {
+        first: blocks.len() as u64,
+        blocks: overflow_blocks.len() as u64,
+        rows: overflow_rows,
+    };
+    blocks.extend(overflow_blocks);
     let caps = dataset.capabilities();
     let flags = u8::from(caps.quoted_triples)
         | (u8::from(caps.reifiers) << 1)
@@ -688,6 +702,7 @@ fn encode_dataset(
         statistics,
         effective_directory,
         source_checkpoints,
+        overflow,
         flags,
         source_union: dataset.predicate_statistics().source_union(),
     };
@@ -796,20 +811,38 @@ fn append_dictionary(
     records: &[(GlobalTermId, Vec<u8>)],
     chunk: usize,
     block_bytes: usize,
-) -> Result<Stream, SegmentedError> {
+    overflow: &mut Vec<Vec<u8>>,
+) -> Result<(Stream, u64), SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
     let mut remaining = records;
+    let mut spanned = 0;
     while !remaining.is_empty() {
-        let (block, used) =
-            format::record_block(&remaining[..remaining.len().min(chunk)], block_bytes)?;
+        let offered = &remaining[..remaining.len().min(chunk)];
+        let inline = offered
+            .iter()
+            .position(|(_, key)| key.len().saturating_add(format::RECORD_HEADER + 16) > block_bytes)
+            .unwrap_or(offered.len());
+        let (block, used) = if inline == 0 {
+            spanned += 1;
+            (
+                format::spanned_record(offered[0].0, &offered[0].1, overflow, block_bytes)?,
+                1,
+            )
+        } else {
+            format::record_block(&offered[..inline], block_bytes)?
+        };
         blocks.push(block);
         remaining = &remaining[used..];
     }
-    Ok(Stream {
-        first,
-        blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)? - first,
-        rows: u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-    })
+    Ok((
+        Stream {
+            first,
+            blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?
+                - first,
+            rows: u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
+        },
+        spanned,
+    ))
 }
 fn append_fixed<C: AsRef<[u8]>>(
     blocks: &mut Vec<Vec<u8>>,
@@ -967,11 +1000,26 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
     let mut keys = Vec::with_capacity(
         usize::try_from(header.terms).map_err(|_| SegmentedError::AddressExhausted)?,
     );
+    let (mut overflow_blocks, mut overflow_rows) = (0, 0);
     for slot in header.dictionary.first..header.dictionary.first + header.dictionary.blocks {
+        let encoded = block(bytes, header, slot)?;
+        if encoded[0] == format::SPANNED_DICTIONARY {
+            let (_, span) = format::overflow_descriptor(encoded, header.overflow)?;
+            if span.first != overflow_blocks {
+                return Err(SegmentedError::Corrupt("noncontiguous overflow coverage"));
+            }
+            overflow_blocks += span.blocks(header.block_bytes as usize)?;
+            overflow_rows += 1;
+        }
         let records = DecodedRecords::decode(
-            block(bytes, header, slot)?,
+            encoded,
             header.records_per_block,
-            u64::from(header.block_bytes) * u64::from(header.records_per_block),
+            header.dictionary_decode_bound(encoded[0]),
+            header.overflow,
+            |slot, page| {
+                page.copy_from_slice(block(bytes, header, slot)?);
+                Ok(())
+            },
         )?;
         let remaining = header
             .terms
@@ -995,6 +1043,9 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             }
             keys.push(records.key(index).to_vec());
         }
+    }
+    if overflow_blocks != header.overflow.blocks || overflow_rows != header.overflow.rows {
+        return Err(SegmentedError::Corrupt("incomplete overflow coverage"));
     }
     if u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)? != header.terms {
         return Err(SegmentedError::Corrupt("dictionary cardinality is false"));
@@ -1731,6 +1782,57 @@ mod certification_tests {
                 Err(SegmentedError::Corrupt(
                     "statistical contents disagree with RDF rows"
                 ))
+            ));
+        }
+    }
+
+    #[test]
+    fn overflow_pages_and_descriptors_require_complete_semantic_certification() {
+        for block_bytes in [512, 4096] {
+            let mut builder = SegmentedBuilder::new(
+                SegmentedBuildLimits::new(16, 100_000, 0, block_bytes, 4).unwrap(),
+            )
+            .unwrap();
+            let values = [
+                TermValue::iri(format!("urn:overflow:{}", "x".repeat(20_000))),
+                TermValue::simple_literal("literal".repeat(2000)),
+            ];
+            builder.intern_batch(&values, |_, _| {}).unwrap();
+            let image = builder.seal().unwrap();
+            let header = Header::decode(image.bytes()).unwrap();
+            assert_eq!(header.block_bytes, block_bytes);
+            assert_eq!(header.overflow.rows, 2);
+            let descriptor = (header.dictionary.first
+                ..header.dictionary.first + header.dictionary.blocks)
+                .find(|&slot| {
+                    block(image.bytes(), &header, slot).unwrap()[0] == format::SPANNED_DICTIONARY
+                })
+                .unwrap();
+            for (slot, offset) in [
+                (descriptor, 5),
+                (descriptor, format::RECORD_HEADER + 8),
+                (header.overflow.first, 1),
+                (header.overflow.first, 5),
+            ] {
+                let mut bytes = image.bytes().to_vec();
+                bytes[slot as usize * block_bytes as usize + offset] ^= 128;
+                rehash(&mut bytes, image.receipt());
+                assert!(
+                    matches!(
+                        SegmentedImage::certify(bytes),
+                        Err(SegmentedError::Corrupt(_))
+                    ),
+                    "a rebuilt hash tree cannot authorize false overflow metadata or values"
+                );
+            }
+            let mut false_header = header;
+            false_header.overflow.rows += 1;
+            let mut bytes = image.bytes().to_vec();
+            bytes[..format::HEADER_BYTES].copy_from_slice(&false_header.encode());
+            rehash(&mut bytes, image.receipt());
+            assert!(matches!(
+                SegmentedImage::certify(bytes),
+                Err(SegmentedError::Corrupt("incomplete overflow coverage"))
             ));
         }
     }

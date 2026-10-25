@@ -58,10 +58,9 @@ pub struct EntailRequest<'a> {
     /// The generated-term budget, or `None` for the engine default (`max(65,536, 4 × N)`
     /// for `N` distinct input terms).
     pub max_generated_terms: Option<u64>,
-    /// The stored-fact limit, or `None` for the target's default (4,194,304 natively,
-    /// 131,072 on `wasm32`).
+    /// The stored-fact limit, or `None` for no logical ceiling.
     pub max_stored_facts: Option<u64>,
-    /// The join-step limit, or `None` for the target's default (1,048,576).
+    /// The join-step limit, or `None` for no logical ceiling.
     pub max_join_steps: Option<u64>,
     /// The host calling, whose names for the limits' knobs a refusal gives
     /// ([`RulesHost::entail_limit_knobs`]).

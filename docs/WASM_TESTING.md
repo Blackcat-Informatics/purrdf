@@ -13,7 +13,7 @@ digest identities. Every selection below has one of those obligations. Use exact
 case filters. Never execute a whole mixed target merely because it has a WASM
 runner. Keep the other cases in native coverage.
 
-`make wasm` builds the release crates for wasm32. `make wasm-pkg-test` checks
+`make wasm` builds the release crates for `wasm32`. `make wasm-pkg-test` checks
 the shipped JavaScript/Worker bindings and identity ABI; those are host-interface
 checks. Assembly codegen remains the separate seven-configuration `make simd-asm`
 claim. None of these substitutes for another.
@@ -23,6 +23,11 @@ Error` in `canonicalization-host-error.test.mjs` exercises the wasm-bindgen
 `JsError` construction/import and JavaScript exception prototype. It distinguishes
 a caught host Error from a WASM trap; native Rust owns the underlying reserved-
 vocabulary refusal semantics. Run only this named package case for that obligation.
+
+The packaged case `wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator
+and names the host control` checks BigInt argument transport, a JavaScript Error
+and its host-specific control name, and returned string ownership. Its fixture
+has three input statements; native Rust owns capacity-scale correctness.
 
 ## Audited focused execution
 

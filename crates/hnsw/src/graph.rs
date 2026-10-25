@@ -36,7 +36,7 @@ use purrdf_core::distance::{
     Arithmetic, BuildIdentity, BuildShape, Exact, Resolved, RowsRef, Selected,
 };
 
-use crate::error::{HnswError, Result};
+use crate::error::{ArithmeticRefusal, HnswError, Result};
 use crate::params::Params;
 use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
@@ -148,7 +148,7 @@ impl VectorMatrix {
     /// Assemble a matrix from a flat row-major `binary32` buffer.
     ///
     /// The width is kept rather than widened, which halves what the corpus costs resident.
-    /// Every distance is still computed in binary64, in the same order, with the same
+    /// Every distance is still computed in `binary64`, in the same order, with the same
     /// separate roundings.
     ///
     /// # Errors
@@ -169,7 +169,10 @@ impl VectorMatrix {
         }
         let expected = rows
             .checked_mul(dims)
-            .ok_or(HnswError::ArithmeticOverflow)?;
+            .ok_or(ArithmeticRefusal::MatrixElements {
+                rows,
+                dimensions: dims,
+            })?;
         if data.len() != expected {
             return Err(HnswError::ParameterValidation {
                 cause: crate::error::MatrixRefusal::ValueCount {
@@ -301,7 +304,7 @@ impl VectorMatrix {
     /// fold ([`Resolved::<Exact>::norm`]).
     ///
     /// `arithmetic` is the exact handle, for the reason every distance here takes one: the
-    /// fold is binary64 arithmetic, and on a thread that flushes subnormals it would
+    /// fold is `binary64` arithmetic, and on a thread that flushes subnormals it would
     /// return different bits for a row whose squared ratios are subnormal, which a cosine
     /// kernel then divides by. Such a thread cannot obtain the handle. An index running
     /// under another arithmetic obtains it with [`Resolved::exact`]: the norm has one

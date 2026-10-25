@@ -67,9 +67,10 @@ use std::str::FromStr as _;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_canonicalize};
+use purrdf_datalog::seminaive::EvalOptions;
 use purrdf_entail::{
     Completeness, EntailError, InconsistencyWitness, Materialization, ReasoningReport, Regime,
-    RuleId, implemented, materialize, rules,
+    RuleId, implemented, materialize, materialize_with, rules,
 };
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
@@ -397,7 +398,8 @@ struct Fixture {
     ///
     /// Rendered into the golden beneath [`ENGINE_SWAP`], [`AXIOMATIC_PATH`],
     /// [`OWL_RL_TABLES`], [`OWL_RL_COMPLETE`], [`EXISTENTIAL_CHASE`], [`REPORT_SURFACE`]
-    /// [`EXTENSION_AND_CERTIFICATE`] and [`CAPACITY_LIMITS`], each of which states one
+    /// [`EXTENSION_AND_CERTIFICATE`], [`CAPACITY_LIMITS`] and [`CHASE_COUNTER_REFUSAL`],
+    /// each of which states one
     /// change's causes ONCE; these lines name the actual triples and tallies each cause
     /// moved HERE. The last four of those changes moved no fixture's own data in a way a
     /// per-fixture note could
@@ -931,6 +933,16 @@ const CAPACITY_LIMITS: &[&str] = &[
     "     The RDF and RDFS lanes are evaluated by the restricted chase, which has no such",
     "     decomposition, and the D lane enumerates no candidates in this corpus, so none of",
     "     their figures moved.",
+];
+
+/// Why version 3 changes report identities without changing any fixture data.
+const CHASE_COUNTER_REFUSAL: &[&str] = &[
+    "AND EVERY CONTRACT HASH MOVED FOR CALCULUS VERSION 3.",
+    "The chase now refuses unrepresentable candidate work instead of continuing",
+    "with a saturated 64-bit counter. That refusal boundary participates in the",
+    "calculus identity. Every golden states its original finite capacities",
+    "explicitly. The five report identities change; inputs, canonical closures,",
+    "work counts, witnesses and rule tallies remain unchanged.",
 ];
 
 // ── The corpus ──────────────────────────────────────────────────────────────────
@@ -5971,6 +5983,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, CONNECTED_RULE_EVALUATION);
     out.push_str("#\n");
     write_comment_block(&mut out, SELECTIVE_DELTA_JOINS);
+    out.push_str("#\n");
+    write_comment_block(&mut out, CHASE_COUNTER_REFUSAL);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
@@ -5979,9 +5993,15 @@ fn render_golden(fixture: &Fixture) -> String {
     let ds = build(fixture);
     write_nquads(&mut out, "input", &try_canonicalize(&ds).unwrap().nquads);
 
+    // Frozen reports name the original native capacity profile explicitly;
+    // changing application defaults must not rewrite these historical answers.
+    let options = EvalOptions::default()
+        .with_max_stored_facts(4_194_304)
+        .with_max_join_steps(1_048_576)
+        .with_max_term_arena_bytes(1 << 24);
     for (plan, name) in ORACLE_REGIMES {
         let _ = writeln!(out, "\n=== regime {name} ===");
-        match materialize(&ds, plan) {
+        match materialize_with(&ds, plan, &options, None) {
             Ok((closed, report)) => {
                 write_nquads(
                     &mut out,
@@ -8141,7 +8161,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
 /// so a regression in either direction fails here and not only in the golden.
 ///
 /// Opacity itself is NOT the bug and is not repaired: the chase still never reasons INTO
-/// the quoted triple. rdfs14 / rdfs14a do fire over it — each concludes about a fresh
+/// the quoted triple. `rdfs14` / `rdfs14a` do fire over it — each concludes about a fresh
 /// surrogate blank node the answer may not bind, so the conclusion is withheld and counted
 /// rather than materialized — which withholds conclusions rather than inventing them, and
 /// the triple-term boundary is what tells a caller so.
@@ -8310,7 +8330,7 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
 #[test]
 fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_them() {
     // OWL-RL asserts no axiomatic triples, so its lane has no path to the premises of
-    // rdfs6 and rdfs10 and this input still entails nothing about the SUB-CLASS and
+    // `rdfs6` and `rdfs10` and this input still entails nothing about the SUB-CLASS and
     // SUB-PROPERTY hierarchies at all. The premise-free block — `prp-ap`'s nine typings,
     // `cls-thing`, `cls-nothing1`, `dt-type1`'s thirty-two, and everything `scm-cls` and
     // `eq-ref` draw from those — holds for every input including the empty graph, so it is

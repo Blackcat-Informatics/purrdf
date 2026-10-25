@@ -27,10 +27,34 @@ Freeze failures previously returned as `ColumnarError::Storage` now also return
 `Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
 handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
 
+## Explicit capacity limits
+
+Unstated Datalog stored-fact, join-step and term-arena settings now impose no
+logical ceiling on every target. Physical storage admission and counter
+representation still apply. Select finite limits explicitly; effective settings
+remain part of contract identity. The calculus version advances to v3 because
+chase work-counter overflow now refuses rather than permitting further work.
+All contract identities change, including explicitly finite profiles; cached
+results must be recomputed. Shared report vectors change their contract-hash
+lines while canonical model bytes stay unchanged. Historical fixture capacity
+values remain explicit; they do not retain the previous calculus identity.
+Target-specific capacity default constants have been removed.
+`EvalOptions::without_stored_fact_limit`,
+`without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
+
+## HNSW arithmetic refusals
+
+`HnswError::ArithmeticOverflow` now carries `ArithmeticRefusal`. Update unit
+matches to `HnswError::ArithmeticOverflow(cause)`. Borrowed inspection keeps the
+outer error code and exposes the failed operation, original operands, byte/count
+units and destination limit through its cause. Integer-conversion failures retain
+their original native source. Successful calculations, refusal order and human
+messages are unchanged.
+
 ## Regime term arena controls
 
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to
-retain the 16777216-byte default. `RegimeHost::limit_knobs` and `service_knobs`
+apply no logical arena ceiling. `RegimeHost::limit_knobs` and `service_knobs`
 return three names, in stored-facts, join-steps, term-arena-bytes order.
 
 Materialization, conclusion-directed services and entailment queries expose
