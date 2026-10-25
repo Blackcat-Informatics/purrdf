@@ -11,7 +11,7 @@ use purrdf_core::{
 };
 
 use crate::column::Int64Column;
-use crate::error::{ColumnarError, ColumnarWriteError};
+use crate::error::{ColumnarError, ColumnarWriteError, ProjectionReason};
 use crate::files::ParquetFiles;
 use crate::parquet::{ColumnValues, Compression, TableData};
 use crate::schema::Table;
@@ -209,30 +209,31 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
         }
         type EnterResult<I, G, E> = Result<Result<TermValue, Frame<I, G>>, ColumnarWriteError<E>>;
         let view = self.view;
-        let enter = |this: &mut Self,
-                     id: D::Id|
-         -> EnterResult<D::Id, D::TermGuard<'a>, D::ReadError> {
-            if let Some(value) = this.values.get(&id) {
-                return Ok(Ok(value.clone()));
-            }
-            if !this.active.insert(id) {
-                return Err(
-                    ColumnarError::malformed("term graph", "cyclic triple-term reference").into(),
-                );
-            }
-            let guard = view.resolve(id).map_err(ColumnarWriteError::SourceRead)?;
-            let dependencies = match guard.term() {
-                TermRef::Literal { datatype, .. } => ([datatype, datatype, datatype], 1),
-                TermRef::Triple { s, p, o } => ([s, p, o], 3),
-                TermRef::Iri(_) | TermRef::Blank { .. } => ([id, id, id], 0),
+        let enter =
+            |this: &mut Self, id: D::Id| -> EnterResult<D::Id, D::TermGuard<'a>, D::ReadError> {
+                if let Some(value) = this.values.get(&id) {
+                    return Ok(Ok(value.clone()));
+                }
+                if !this.active.insert(id) {
+                    return Err(ColumnarError::projection(
+                        "term graph",
+                        ProjectionReason::CyclicTriple,
+                    )
+                    .into());
+                }
+                let guard = view.resolve(id).map_err(ColumnarWriteError::SourceRead)?;
+                let dependencies = match guard.term() {
+                    TermRef::Literal { datatype, .. } => ([datatype, datatype, datatype], 1),
+                    TermRef::Triple { s, p, o } => ([s, p, o], 3),
+                    TermRef::Iri(_) | TermRef::Blank { .. } => ([id, id, id], 0),
+                };
+                Ok(Err(Frame {
+                    id,
+                    guard,
+                    dependencies,
+                    resolved: Vec::new(),
+                }))
             };
-            Ok(Err(Frame {
-                id,
-                guard,
-                dependencies,
-                resolved: Vec::new(),
-            }))
-        };
         let mut frames = match enter(self, id)? {
             Ok(value) => return Ok(value),
             Err(frame) => vec![frame],
@@ -266,12 +267,12 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                     direction,
                     ..
                 } => {
-                    let TermValue::Iri(datatype) =
-                        resolved.next().expect("a literal's datatype is resolved")
-                    else {
-                        return Err(ColumnarError::malformed(
+                    // A completed literal frame has resolved its one datatype dependency.
+                    let actual = resolved.next().expect("a literal's datatype is resolved");
+                    let TermValue::Iri(datatype) = actual else {
+                        return Err(ColumnarError::projection(
                             "literal datatype",
-                            "datatype id does not resolve to an IRI",
+                            ProjectionReason::DatatypeNotIri { actual },
                         )
                         .into());
                     };
@@ -298,9 +299,9 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
     }
 
     fn get(&self, id: D::Id) -> Result<&TermValue, ColumnarError> {
-        self.values
-            .get(&id)
-            .ok_or_else(|| ColumnarError::malformed("term closure", "source id was not resolved"))
+        self.values.get(&id).ok_or_else(|| {
+            ColumnarError::projection("term closure", ProjectionReason::UnresolvedSource)
+        })
     }
 }
 
@@ -348,7 +349,7 @@ impl Dictionary {
 
     fn id(&self, value: &TermValue) -> Result<i64, ColumnarError> {
         self.ids.get(value).copied().ok_or_else(|| {
-            ColumnarError::malformed("term reference", "value is absent from dictionary")
+            ColumnarError::projection("term reference", ProjectionReason::MissingTerm)
         })
     }
 
@@ -523,9 +524,9 @@ fn build_reifiers_table<D: DatasetView>(
     let mut rows = BTreeSet::new();
     for quad in &source.reifiers {
         let TermValue::Triple { s, p, o } = resolver.get(quad.o)? else {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::projection(
                 "reifier binding",
-                "object is not a triple term",
+                ProjectionReason::ReifierObject,
             ));
         };
         rows.insert((
@@ -700,6 +701,57 @@ mod tests {
                 .count(),
             2
         );
+
+        // Refuse real invariant failures after all source/workspace setup. These
+        // static grammar paths must not allocate a diagnostic string.
+        let id = dataset.as_ref().quads().next().unwrap().s;
+        let mut cyclic = Resolver::new(&*dataset);
+        cyclic.active.insert(id);
+        let empty = Resolver::new(&*dataset);
+        let dictionary = Dictionary {
+            terms: Vec::new(),
+            ids: BTreeMap::new(),
+            named_graphs: BTreeSet::new(),
+        };
+        let missing = TermValue::Iri("https://example.org/missing".to_owned());
+        let mut nontriple = Resolver::new(&*dataset);
+        nontriple.values.insert(id, missing.clone());
+        let reifier = SourceRows {
+            quads: Vec::new(),
+            reifiers: vec![QuadIds {
+                s: id,
+                p: id,
+                o: id,
+                g: None,
+            }],
+            annotations: Vec::new(),
+            named_graphs: Vec::new(),
+        };
+        for (case, code) in [
+            "columnar-projection-cyclic-triple",
+            "columnar-projection-unresolved-source",
+            "columnar-projection-missing-term",
+            "columnar-projection-reifier-object",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error: ColumnarWriteError<core::convert::Infallible> = match case {
+                0 => cyclic.resolve(id).unwrap_err(),
+                1 => empty.get(id).unwrap_err().into(),
+                2 => dictionary.id(&missing).unwrap_err().into(),
+                3 => build_reifiers_table(&reifier, &nontriple, &dictionary)
+                    .unwrap_err()
+                    .into(),
+                _ => unreachable!("each fixture names one production refusal"),
+            };
+            let measured = window.close();
+            assert_eq!(measured.allocations, 0);
+            assert_eq!(measured.requested_bytes, 0);
+            let captured = purrdf_testkit::error_capture::Capture::read(&error);
+            assert_eq!(captured.child("cause").child("reason").code, code);
+        }
     }
 
     #[test]
@@ -801,7 +853,7 @@ mod term_walk_tests {
         DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermGuard as _, TermRef, TermValue,
     };
 
-    use super::{ColumnarError, ColumnarWriteError, Resolver};
+    use super::{ColumnarError, ColumnarWriteError, ProjectionReason, Resolver};
 
     /// The recursive oracle for original term order and source refusals.
     fn reference<D: DatasetView>(
@@ -813,7 +865,7 @@ mod term_walk_tests {
         }
         if !resolver.active.insert(id) {
             return Err(
-                ColumnarError::malformed("term graph", "cyclic triple-term reference").into(),
+                ColumnarError::projection("term graph", ProjectionReason::CyclicTriple).into(),
             );
         }
         let view = resolver.view;
@@ -830,10 +882,11 @@ mod term_walk_tests {
                 language,
                 direction,
             } => {
-                let TermValue::Iri(datatype) = reference(resolver, datatype)? else {
-                    return Err(ColumnarError::malformed(
+                let actual = reference(resolver, datatype)?;
+                let TermValue::Iri(datatype) = actual else {
+                    return Err(ColumnarError::projection(
                         "literal datatype",
-                        "datatype id does not resolve to an IRI",
+                        ProjectionReason::DatatypeNotIri { actual },
                     )
                     .into());
                 };

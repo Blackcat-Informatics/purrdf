@@ -127,6 +127,7 @@ enum Phase {
     UnlatchedResolution,
     NestedResolution,
     CompletedWithCodec,
+    ProjectionDatatype,
 }
 
 impl Phase {
@@ -139,6 +140,7 @@ impl Phase {
             Self::UnlatchedResolution => "unlatched-resolution",
             Self::NestedResolution => "nested-resolution",
             Self::CompletedWithCodec => "completed-with-codec",
+            Self::ProjectionDatatype => "projection-datatype",
         }
     }
 }
@@ -225,6 +227,19 @@ impl DatasetView for FaultView {
                 language: None,
                 direction: None,
             },
+            Phase::ProjectionDatatype
+                if self.inner.term_id_by_iri("https://example.org/source") == Some(id) =>
+            {
+                TermRef::Literal {
+                    lexical: "original input",
+                    datatype: self
+                        .inner
+                        .term_id_by_blank("original datatype", purrdf_core::BlankScope(27))
+                        .unwrap(),
+                    language: None,
+                    direction: None,
+                }
+            }
             _ => self.inner.resolve(id).map_err(|never| match never {})?,
         };
         self.counts.pins.fetch_add(1, Ordering::Relaxed);
@@ -284,11 +299,16 @@ fn fault_view(phase: Phase) -> (FaultView, Weak<Owner>, Arc<Counts>) {
             | Phase::UnlatchedResolution
             | Phase::NestedResolution
             | Phase::CompletedWithCodec
+            | Phase::ProjectionDatatype
     ) {
         let term = builder.intern_iri("https://example.org/source").unwrap();
         let object = if phase == Phase::NestedResolution {
             let leaf = builder.intern_iri("https://example.org/dependent").unwrap();
             builder.intern_triple(term, term, leaf).unwrap()
+        } else if phase == Phase::ProjectionDatatype {
+            builder
+                .intern_blank("original datatype", purrdf_core::BlankScope(27))
+                .unwrap()
         } else {
             term
         };
@@ -401,7 +421,7 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
                 match phase {
                     Phase::NestedResolution => 3,
                     Phase::Resolution | Phase::UnlatchedResolution | Phase::CompletedWithCodec => 1,
-                    Phase::Initial | Phase::Completed => 0,
+                    Phase::Initial | Phase::Completed | Phase::ProjectionDatatype => 0,
                 }
             );
             assert_eq!(counts.pins.load(Ordering::Relaxed), 0);
@@ -414,6 +434,7 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
                     | Phase::Completed
                     | Phase::Resolution
                     | Phase::UnlatchedResolution => 0,
+                    Phase::ProjectionDatatype => 0,
                 }
             );
             drop(view);
@@ -452,6 +473,51 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
             assert_eq!(weak.strong_count(), 0);
             assert_eq!(counts.drops.load(Ordering::Relaxed), native_returns + 1);
         }
+    }
+
+    for compression in [
+        None,
+        Some(Compression::Uncompressed),
+        Some(Compression::Zstd),
+    ] {
+        let (view, owner, counts) = fault_view(Phase::ProjectionDatatype);
+        let blobs = ContentStore::new();
+        // The unchanged native source is valid; only the borrowed adapter's
+        // datatype view is malformed, and no operational read error masks it.
+        project(&*view.inner, &blobs).unwrap();
+        let error = match compression {
+            None => project(&view, &blobs).unwrap_err(),
+            Some(compression) => write(&view, &blobs, compression).unwrap_err(),
+        };
+        assert_eq!(counts.pins.load(Ordering::Relaxed), 0);
+        assert_eq!(counts.clones.load(Ordering::Relaxed), 0);
+        drop(view);
+        assert_eq!(owner.strong_count(), 0);
+        let ColumnarWriteError::Codec(codec) = &error else {
+            panic!("a pure grammar refusal must retain its codec reason");
+        };
+        inspect_without_allocation(codec);
+        assert_eq!(
+            error.to_string(),
+            "columnar literal datatype is malformed: datatype id does not resolve to an IRI"
+        );
+        let reason = Capture::read(codec).child("reason");
+        assert_eq!(reason.code, "columnar-projection-datatype-not-iri");
+        let actual = reason.child("actual");
+        assert_eq!(actual.code, "rdf-term-blank");
+        assert!(matches!(
+            actual.field("label"),
+            ErrorValue::Text("original datatype")
+        ));
+        assert!(matches!(actual.field("scope"), ErrorValue::Unsigned(27)));
+        let original = std::error::Error::source(codec)
+            .unwrap()
+            .downcast_ref::<purrdf_columnar::ProjectionReason>()
+            .unwrap();
+        let ColumnarError::Projection { reason, .. } = codec else {
+            panic!("the codec exposes its native projection reason");
+        };
+        assert!(std::ptr::eq(original, reason));
     }
 }
 
@@ -589,6 +655,55 @@ fn public_blob_read_preserves_original_integrity_cause() {
     assert_eq!(cause.code, "content-digest-mismatch");
     assert_content_digest(&cause.child("stored"), stored);
     assert_content_digest(&cause.child("actual"), ContentDigest::of(&changed));
+
+    // The public reader returns rejected decoded digest cells, independently of
+    // the original files and without rendering or copying a diagnostic string.
+    let mut blobs = ContentStore::new();
+    let digest = blobs.insert(first.to_vec()).to_hex();
+    for (replacement, code, message) in [
+        (vec![0xff; 64], "columnar-digest-utf8", "row 0 is not UTF-8"),
+        (
+            vec![b'g'; 64],
+            "columnar-digest-shape",
+            "row 0 is not a 64-digit SHA-256 hex value",
+        ),
+        (
+            digest.to_ascii_uppercase().into_bytes(),
+            "columnar-digest-case",
+            "row 0 is not canonical lowercase hexadecimal",
+        ),
+    ] {
+        let mut array = write(
+            &RdfDatasetBuilder::new().freeze().unwrap(),
+            &blobs,
+            Compression::Uncompressed,
+        )
+        .unwrap()
+        .files
+        .into_array();
+        replace_unique(&mut array[4], digest.as_bytes(), &replacement);
+        let files = ParquetFiles::from_array(array);
+        let error = read(&files).unwrap_err();
+        drop(files);
+        assert_eq!(inspect_without_allocation(&error).bytes, 64);
+        let reason = Capture::read(&error).child("reason");
+        assert_eq!(reason.code, code);
+        assert!(matches!(reason.field("row"), ErrorValue::Unsigned(0)));
+        assert!(matches!(reason.field("bytes"), ErrorValue::Bytes(bytes) if bytes == replacement));
+        assert_eq!(
+            error.to_string(),
+            format!("columnar blobs.digest is malformed: {message}")
+        );
+        if code == "columnar-digest-utf8" {
+            let cause = reason.child("cause");
+            assert_eq!(cause.code, "std-utf8");
+            assert!(matches!(
+                cause.field("valid_up_to"),
+                ErrorValue::ByteCount(0)
+            ));
+            assert!(matches!(cause.field("error_len"), ErrorValue::ByteCount(1)));
+        }
+    }
 }
 
 /// Actual kernel validation survives the public reader with its complete diagnostic.
