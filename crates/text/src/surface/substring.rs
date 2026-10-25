@@ -95,6 +95,47 @@ impl fmt::Display for SubstringRefusal {
 }
 impl std::error::Error for SubstringRefusal {}
 
+impl purrdf_hash::error::StructuredError for SubstringLimits {
+    purrdf_hash::error_visit! {
+        @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-limits" {
+            "posting_operations" => Unsigned(self.posting_operations as u128),
+            "candidate_spans" => Unsigned(self.candidate_spans as u128),
+            "verification_bytes" => ByteCount(self.verification_bytes as u128),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SubstringWork {
+    purrdf_hash::error_visit! {
+        @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-work" {
+            "posting_operations" => Unsigned(self.posting_operations as u128),
+            "candidate_spans" => Unsigned(self.candidate_spans as u128),
+            "verification_bytes" => ByteCount(self.verification_bytes as u128),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SubstringRefusalReason {
+    purrdf_hash::error_visit! {
+        NonSelective => "text-substring-non-selective" {},
+        PostingOperations => "text-substring-posting-operations" {},
+        CandidateSpans => "text-substring-candidate-spans" {},
+        VerificationBytes => "text-substring-verification-bytes" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SubstringRefusal {
+    purrdf_hash::error_visit! {
+        @record self { reason, counters, limits, distinct_spans, generation } => "text-substring-refusal" {
+            "reason" => Record(&self.reason),
+            "counters" => Record(&self.counters),
+            "limits" => Record(&self.limits),
+            "distinct_spans" => Unsigned(self.distinct_spans as u128),
+            "generation" => Bytes(&self.generation),
+        }
+    }
+}
+
 /// Complete matches and the logical work used to establish them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubstringReport<'a, P: CorpusProfile = GraphLanguage> {

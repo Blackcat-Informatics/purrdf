@@ -1,0 +1,212 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Borrowed native TEXT refusals remain complete after their inputs disappear.
+
+use purrdf_alloc_probe::CurrentThreadWindow;
+use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_testkit::error_capture::Capture;
+use purrdf_text::{
+    Analyzer, AnalyzerProfile, InputMode, SubstringLimits, SurfaceIndex, TextDeltaError, TextError,
+};
+use std::error::Error;
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+fn cause<'a>(fields: &Capture<'a>) -> &'a dyn StructuredError {
+    let ErrorValue::Cause(cause) = fields.field("cause") else {
+        panic!("the original refusal is a borrowed cause");
+    };
+    cause
+}
+
+#[test]
+fn substring_first_excess_retains_generation_limits_and_work_after_index_drop() {
+    let analyzer = Analyzer::with_profile(AnalyzerProfile::empty_lexicon().with_substring_limits(
+        SubstringLimits {
+            posting_operations: 3,
+            candidate_spans: u64::MAX,
+            verification_bytes: u64::MAX,
+        },
+    ))
+    .unwrap();
+    let index = SurfaceIndex::from_texts(analyzer, [(0, "abcd"), (1, "abcxbcd")]).unwrap();
+    let generation = index.generation();
+    let error = index.substring("abcd").unwrap_err();
+    drop(index);
+    let buffers = std::array::from_fn::<_, 5, _>(|_| Vec::with_capacity(5));
+    let [root, refusal, work, limits, reason] = buffers;
+    let window = CurrentThreadWindow::open();
+    let copy = error.clone();
+    drop(error);
+    let root = Capture::read_with_buffer(&copy, root);
+    let refusal = Capture::read_with_buffer(cause(&root), refusal);
+    let ErrorValue::Record(value) = refusal.field("counters") else {
+        panic!("work is a native record");
+    };
+    let work = Capture::read_with_buffer(value, work);
+    let ErrorValue::Record(value) = refusal.field("limits") else {
+        panic!("limits are a native record");
+    };
+    let limits = Capture::read_with_buffer(value, limits);
+    let ErrorValue::Record(value) = refusal.field("reason") else {
+        panic!("reason is a native record");
+    };
+    let reason = Capture::read_with_buffer(value, reason);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(root.code, "text-substring");
+    assert_eq!(reason.code, "text-substring-posting-operations");
+    assert!(matches!(
+        work.field("posting_operations"),
+        ErrorValue::Unsigned(4)
+    ));
+    assert!(matches!(
+        work.field("candidate_spans"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert!(matches!(
+        work.field("verification_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(matches!(
+        limits.field("posting_operations"),
+        ErrorValue::Unsigned(3)
+    ));
+    assert!(
+        matches!(limits.field("candidate_spans"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert!(
+        matches!(limits.field("verification_bytes"), ErrorValue::ByteCount(value) if value == u128::from(u64::MAX))
+    );
+    assert!(matches!(
+        refusal.field("distinct_spans"),
+        ErrorValue::Unsigned(2)
+    ));
+    assert!(matches!(refusal.field("generation"), ErrorValue::Bytes(value) if value == generation));
+    assert!(
+        copy.source()
+            .unwrap()
+            .downcast_ref::<purrdf_text::SubstringRefusal>()
+            .is_some()
+    );
+}
+
+#[test]
+fn phonetic_original_scalar_and_first_excess_survive_input_disposal() {
+    use purrdf_text::phonetic::{MAX_INPUT_SCALARS, canonicalize};
+
+    let input = String::from("中");
+    let error = TextError::from(canonicalize(&input).unwrap_err());
+    drop(input);
+    let root = Vec::with_capacity(1);
+    let fields = Vec::with_capacity(1);
+    let window = CurrentThreadWindow::open();
+    let copy = error.clone();
+    drop(error);
+    let root = Capture::read_with_buffer(&copy, root);
+    let fields = Capture::read_with_buffer(cause(&root), fields);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(root.code, "text-phonetic");
+    assert_eq!(fields.code, "text-phonetic-unsupported-scalar");
+    assert!(matches!(
+        fields.field("scalar"),
+        ErrorValue::Character('中')
+    ));
+    assert!(
+        copy.source()
+            .unwrap()
+            .downcast_ref::<purrdf_text::phonetic::PhoneticRefusal>()
+            .is_some()
+    );
+
+    let input = "a".repeat(MAX_INPUT_SCALARS + 1);
+    let error = canonicalize(&input).unwrap_err();
+    drop(input);
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "text-phonetic-input-too-long");
+    assert!(
+        matches!(fields.field("limit"), ErrorValue::Unsigned(value) if value == MAX_INPUT_SCALARS as u128)
+    );
+    assert!(
+        matches!(fields.field("observed"), ErrorValue::Unsigned(value) if value == MAX_INPUT_SCALARS as u128 + 1)
+    );
+    assert!(canonicalize("Smith").is_ok());
+}
+
+#[test]
+fn html_diagnostics_preserve_encounter_order_and_original_ranges() {
+    let analyzer = Analyzer::with_profile(
+        AnalyzerProfile::empty_lexicon().with_input_mode(InputMode::HtmlText),
+    )
+    .unwrap();
+    let input = String::from("&#0; &nope;");
+    let error = analyzer.terms(&input).unwrap_err();
+    drop(input);
+    drop(analyzer);
+    let buffer = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let root = Capture::read_with_buffer(&error, buffer);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(root.code, "text-html");
+    let diagnostics = root.records("diagnostics");
+    assert_eq!(diagnostics.len(), 2);
+    for (diagnostic, start, end, kind) in [
+        (&diagnostics[0], 0, 4, "null-character-reference"),
+        (&diagnostics[1], 5, 11, "unknown-named-character-reference"),
+    ] {
+        assert_eq!(diagnostic.code, "html-character-reference");
+        assert!(
+            matches!(diagnostic.field("source_start"), ErrorValue::ByteCount(value) if value == start)
+        );
+        assert!(
+            matches!(diagnostic.field("source_end"), ErrorValue::ByteCount(value) if value == end)
+        );
+        let ErrorValue::Cause(value) = diagnostic.field("kind") else {
+            panic!("the HTML kind is the original native cause");
+        };
+        assert_eq!(Capture::read(value).code, kind);
+    }
+    assert!(
+        error.source().is_none(),
+        "a diagnostic list has no single cause"
+    );
+}
+
+#[test]
+fn delta_coverage_keeps_original_term_and_full_width_populations() {
+    let predicate = String::from("urn:original:predicate");
+    let error = TextDeltaError::CoverageMismatch {
+        predicate: Box::new(purrdf_core::TermValue::iri(&predicate)),
+        before: u128::MAX,
+        added: u128::MAX - 1,
+        removed: u128::MAX - 2,
+        observed: u128::MAX - 3,
+    };
+    drop(predicate);
+    let buffer = Vec::with_capacity(5);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, buffer);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    for (name, expected) in [
+        ("before", u128::MAX),
+        ("added", u128::MAX - 1),
+        ("removed", u128::MAX - 2),
+        ("observed", u128::MAX - 3),
+    ] {
+        assert!(matches!(fields.field(name), ErrorValue::Unsigned(value) if value == expected));
+    }
+    let ErrorValue::Term(value) = fields.field("predicate") else {
+        panic!("the predicate remains a borrowed RDF term");
+    };
+    assert_eq!(Capture::read(value).code, "rdf-term-iri");
+    assert!(error.source().is_none());
+}
