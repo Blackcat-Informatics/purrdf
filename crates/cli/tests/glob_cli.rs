@@ -81,7 +81,7 @@ fn explicit_surfaces_decide_and_refusals_publish_no_answer() {
             work,
         ]);
         assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
-        assert!(refused.stdout.is_empty());
+        assert_eq!(refused.stdout, [] as [u8; 0]);
         assert!(stderr(&refused).contains(message), "{}", stderr(&refused));
     }
     let usage = run(&["glob", "*", "a"]);
