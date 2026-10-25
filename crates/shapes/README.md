@@ -67,6 +67,16 @@ head publishes no fact. A latched read failure is returned as the original
 typed `SrlError::TripleSource`; opening a new read on the same frozen source
 starts a fresh operation.
 
+For cooperative cancellation, pass a borrowed `StopSignal` to
+`srl::infer_until` or `srl::infer_triples_until`. Both take
+`Option<&dyn StopSignal>` after the inference options. `Inference::usage()`
+exposes the original deterministic `BudgetReport`, and a limit error retains
+that same complete report through `RuleLimitExceeded::usage()`. A stopped run
+returns `SrlError::Stopped { cause }`, carrying the original native stopped
+error and usage, before publishing an unfinished inference graph. Cancellation
+is checked within scheduled candidate and scan work and around synchronous
+callbacks; it does not preempt a callback or enter the program identity.
+
 A shapes graph is loaded faithfully or refused. An unknown term, an ill-typed
 parameter value, or a term the engine does not evaluate fails the load with
 its name, rather than dropping the constraint. The terms the SHACL

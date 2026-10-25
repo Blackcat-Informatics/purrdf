@@ -122,6 +122,8 @@ impl Explanation {
 /// A completed rule-set evaluation.
 #[derive(Debug)]
 pub struct Inference<D = RdfDataset> {
+    /// Original deterministic resource accounting from the completed evaluator.
+    usage: purrdf_datalog::seminaive::BudgetReport,
     /// The base graph plus every inferred triple.
     dataset: Arc<D>,
     /// The inferred triples, in canonical order.
@@ -135,6 +137,7 @@ pub struct Inference<D = RdfDataset> {
 impl<D> Clone for Inference<D> {
     fn clone(&self) -> Self {
         Self {
+            usage: self.usage,
             dataset: Arc::clone(&self.dataset),
             inferred: self.inferred.clone(),
             explanations: self.explanations.clone(),
@@ -144,6 +147,12 @@ impl<D> Clone for Inference<D> {
 }
 
 impl<D> Inference<D> {
+    /// The complete original resource report of the successful run.
+    #[must_use]
+    pub fn usage(&self) -> &purrdf_datalog::seminaive::BudgetReport {
+        &self.usage
+    }
+
     /// One classification/publication pass for either inferred-only carrier.
     fn publish_inferred<B: rules::RuleFactSink>(
         &self,
@@ -269,7 +278,7 @@ pub fn evaluate(
     shapes: &Shapes,
     options: &rules::RuleOptions,
 ) -> Result<Inference, rules::RulesError> {
-    evaluate_with(set, data, shapes, options, Reexecution::Incremental)
+    evaluate_with(set, data, shapes, options, Reexecution::Incremental, None)
 }
 
 /// How an iterating shape rule is re-executed ([module docs](self), "Re-executing a
@@ -292,8 +301,9 @@ pub(crate) fn evaluate_with(
     shapes: &Shapes,
     options: &rules::RuleOptions,
     reexecution: Reexecution,
+    stop: Option<&dyn purrdf_core::StopSignal>,
 ) -> Result<Inference, rules::RulesError> {
-    evaluate_shape::<4, RdfDataset, _>(set, shapes, options, reexecution, || {
+    evaluate_shape::<4, RdfDataset, _>(set, shapes, options, reexecution, stop, || {
         let base = data.core_arc()?;
         let triples = rules::base_triples(&base);
         Ok(PreparedRuleSource {
@@ -319,12 +329,14 @@ pub(crate) fn evaluate_triples(
     set: &RuleSet<'_>,
     base: &TripleRead<'_>,
     options: &rules::RuleOptions,
+    stop: Option<&dyn purrdf_core::StopSignal>,
 ) -> Result<Inference<TripleDataset>, rules::RulesError> {
     evaluate_shape::<3, TripleDataset, _>(
         set,
         &Shapes::default(),
         options,
         Reexecution::Incremental,
+        stop,
         || {
             let mut builder = TripleDatasetBuilder::default();
             let mut triples = Vec::new();
@@ -377,6 +389,7 @@ fn evaluate_shape<'a, const N: usize, D, F>(
     shapes: &Shapes,
     options: &rules::RuleOptions,
     reexecution: Reexecution,
+    stop: Option<&dyn purrdf_core::StopSignal>,
     prepare: impl FnOnce() -> Result<PreparedRuleSource<'a, F>, rules::RulesError>,
 ) -> Result<Inference<D>, rules::RulesError>
 where
@@ -513,9 +526,11 @@ where
         &engine,
         &mut Hooks { engine: &engine },
         &governors,
-        None,
+        stop,
     )
     .map_err(|e| refusal(&e, set, options.limit_knobs()))?;
+    let usage = evaluation.budget();
+    check_stop(stop, &usage)?;
 
     // The inference graph: every default-graph fact that is not a base triple.
     let facts = engine.model_facts(evaluation.facts())?;
@@ -531,6 +546,7 @@ where
         .derivations()
         .expect("SHACL rules requested derivation recording")
     {
+        check_stop(stop, &usage)?;
         if !Arity::<N>::is_output(derivation.fact()) {
             continue;
         }
@@ -551,6 +567,7 @@ where
     // (the data-block grammar admits "symmetric" literal subjects), is not an RDF triple,
     // and is refused by name rather than dropped from the graph.
     for triple in &inferred {
+        check_stop(stop, &usage)?;
         if let Err(why) = rdf_triple_check(triple) {
             let source = explanations.get(triple).map_or_else(
                 || "a data block".to_owned(),
@@ -569,6 +586,7 @@ where
     let mut sources: Vec<[Term; 3]> = Vec::new();
     if source_rules {
         for (index, triple) in inferred.iter().enumerate() {
+            check_stop(stop, &usage)?;
             let Some(explanation) = explanations.get(triple) else {
                 continue;
             };
@@ -595,13 +613,29 @@ where
         all.extend(sources.iter());
     }
     let reifiers = rules::reifier_subjects(all.iter().copied());
+    check_stop(stop, &usage)?;
     let dataset = finish(&inferred, &sources, &reifiers)?;
+    check_stop(stop, &usage)?;
     Ok(Inference {
+        usage,
         dataset,
         inferred,
         explanations,
         contract: program.contract_hash(&governors).to_hex(),
     })
+}
+
+/// Keep publication cancellation on the same native stopped-error path.
+fn check_stop(
+    stop: Option<&dyn purrdf_core::StopSignal>,
+    usage: &purrdf_datalog::seminaive::BudgetReport,
+) -> Result<(), rules::RulesError> {
+    if purrdf_core::governor::is_stopped(stop) {
+        return Err(rules::RulesError::Stopped {
+            cause: Box::new(EvalError::Stopped { report: *usage }),
+        });
+    }
+    Ok(())
 }
 
 /// The schedule SHACL 1.2 Inference Rules declares: one layer per distinct `sh:layer`
@@ -692,6 +726,9 @@ fn register_constants(codec: &Codec, rule: &super::ir::ElementRule) {
 /// limit) and the host's knob, or the described error.
 fn refusal(error: &EvalError, set: &RuleSet<'_>, knobs: &rules::LimitKnobs) -> rules::RulesError {
     match error {
+        EvalError::Stopped { .. } => rules::RulesError::Stopped {
+            cause: Box::new(error.clone()),
+        },
         EvalError::Storage(error) => crate::error::ShapesError::Storage(*error).into(),
         EvalError::BudgetExhausted {
             resource: resource @ (BudgetResource::StoredFacts | BudgetResource::JoinSteps),

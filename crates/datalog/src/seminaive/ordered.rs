@@ -179,7 +179,7 @@ where
         entry: RuleEntry<'_, N>,
         snapshot: JoinSnapshot<'_, D, N>,
         guards: &dyn GuardEvaluator<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), EvalError<D::Error>> {
         snapshot
             .rel
@@ -686,7 +686,10 @@ mod tests {
                 super::super::RoundExecution::Sequential,
                 JoinStrategy::Planned,
                 0,
-                &callbacks,
+                super::super::RoundControl {
+                    guards: &callbacks,
+                    stop: None,
+                },
                 &mut None,
             )
             .unwrap();
@@ -704,7 +707,10 @@ mod tests {
                 super::super::RoundExecution::Sequential,
                 JoinStrategy::Planned,
                 0,
-                &callbacks,
+                super::super::RoundControl {
+                    guards: &callbacks,
+                    stop: None
+                },
                 &mut None
             ),
             Err(EvalError::Source(SourceLost(99)))
@@ -1041,7 +1047,10 @@ mod tests {
                 execution,
                 strategy,
                 u64::MAX,
-                &callbacks,
+                super::super::RoundControl {
+                    guards: &callbacks,
+                    stop: None,
+                },
                 &mut evidenced
                     .then_some(&mut owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>),
             )
@@ -1081,7 +1090,10 @@ mod tests {
                     execution,
                     strategy,
                     cut,
-                    &current_callbacks,
+                    super::super::RoundControl {
+                        guards: &current_callbacks,
+                        stop: None,
+                    },
                     evidenced.then_some(
                         &mut current_owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
                     ),
@@ -1129,7 +1141,10 @@ mod tests {
                         scheduling,
                         strategy,
                         allowance,
-                        &callbacks,
+                        super::super::RoundControl {
+                            guards: &callbacks,
+                            stop: None,
+                        },
                         &mut evidenced.then_some(
                             &mut owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
                         ),
@@ -1263,7 +1278,10 @@ mod tests {
                     RoundExecution::Parallel,
                     JoinStrategy::Planned,
                     u64::from(page != 0),
-                    &resumed,
+                    super::super::RoundControl {
+                        guards: &resumed,
+                        stop: None,
+                    },
                     &mut None,
                 ) {
                     Err(error) => Some(error),
@@ -1502,7 +1520,10 @@ mod tests {
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
                 u64::MAX,
-                &Fixed,
+                super::super::RoundControl {
+                    guards: &Fixed,
+                    stop: None,
+                },
                 None,
             )
             .unwrap()

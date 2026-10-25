@@ -759,7 +759,7 @@ impl BudgetResource {
 /// records exhaustion without expanding its candidate. Parallel tasks share this
 /// ceiling, and their private buffers are folded in authored order before any commit.
 #[derive(Debug, Clone)]
-struct StepGovernor {
+struct StepGovernor<'s> {
     /// Remaining successful credits, including the full u64 range.
     allowance: u64,
     /// Candidates enumerated so far.
@@ -769,6 +769,8 @@ struct StepGovernor {
     row_visits: u64,
     /// One shared round-wide credit pool.
     pool: Arc<StepPool>,
+    /// Borrowed host cancellation; never part of the program's identity.
+    stop: Option<&'s dyn StopSignal>,
 }
 
 /// Successful credits and refusal are separate so the full-width ceiling cannot
@@ -777,9 +779,10 @@ struct StepGovernor {
 struct StepPool {
     used: AtomicU64,
     refused: AtomicBool,
+    stopped: AtomicBool,
 }
 
-impl StepGovernor {
+impl<'s> StepGovernor<'s> {
     /// A governor permitting `allowance` candidates.
     fn new(allowance: u64) -> Self {
         Self {
@@ -790,19 +793,51 @@ impl StepGovernor {
             pool: Arc::new(StepPool {
                 used: AtomicU64::new(0),
                 refused: AtomicBool::new(false),
+                stopped: AtomicBool::new(false),
             }),
+            stop: None,
         }
+    }
+
+    /// Attach one borrowed signal to this round and all its rule-local counters.
+    fn with_stop(mut self, stop: Option<&'s dyn StopSignal>) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    /// Cancellation is latched separately from an actually refused reservation.
+    #[inline]
+    fn stopped(&self) -> bool {
+        let Some(stop) = self.stop else {
+            return false;
+        };
+        if self.pool.stopped.load(Ordering::Relaxed) {
+            return true;
+        }
+        if stop.stopped() {
+            self.pool.stopped.store(true, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    #[inline]
+    fn refused(&self) -> bool {
+        self.pool.refused.load(Ordering::Relaxed)
     }
 
     /// Whether the allowance is spent — the next candidate may NOT be enumerated.
     #[inline]
     fn spent(&self) -> bool {
-        self.pool.refused.load(Ordering::Relaxed)
+        self.refused() || self.stopped()
     }
 
     /// Reserve a candidate; the single refusal sentinel is never expanded.
     #[inline]
     fn charge(&mut self) -> bool {
+        if self.stopped() {
+            return false;
+        }
         let reserved = self
             .pool
             .used
@@ -826,7 +861,7 @@ impl StepGovernor {
         self.pool
             .used
             .load(Ordering::Relaxed)
-            .saturating_add(u64::from(self.spent()))
+            .saturating_add(u64::from(self.refused()))
     }
 
     /// A rule-local counter sharing the round's credit pool.
@@ -837,6 +872,7 @@ impl StepGovernor {
             #[cfg(test)]
             row_visits: 0,
             pool: Arc::clone(&self.pool),
+            stop: self.stop,
         }
     }
 }
@@ -942,7 +978,7 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// Consumption when evaluation stopped, the limit in force included.
         report: BudgetReport,
     },
-    /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
+    /// The caller's [`crate::stop::StopSignal`] fired at an owned work boundary.
     ///
     /// Complete-only entry points return no model. [`EvaluationSession`] retains
     /// certified published facts and can resume with a fresh signal. This remains
@@ -2090,7 +2126,7 @@ fn extend_slot_solutions<D: TermDictionary, const N: usize>(
     indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
     solutions: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -2115,7 +2151,7 @@ fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
     indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
     solutions: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -2140,7 +2176,7 @@ fn extend_selected_atom<D: TermDictionary, const N: usize>(
     indexes: &DeltaIndexes<D::Id>,
     access: atom::Access,
     solutions: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -2281,7 +2317,7 @@ where
 fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
     run: &LeapfrogRun<'_, D, N>,
     solutions: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -2438,7 +2474,7 @@ fn join_body<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
     strategy: JoinStrategy,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
     full_counts: Option<&[Option<usize>]>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
@@ -2663,7 +2699,7 @@ where
         &self,
         solution: &SlotSolution<D::Id, N>,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<bool, D::Error> {
         self.visit_matches(
             solution,
@@ -2682,7 +2718,7 @@ where
         &self,
         solution: &SlotSolution<D::Id, N>,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         visit: impl FnMut(RowId) -> Result<bool, E>,
         source_error: impl Fn(D::Error) -> E,
     ) -> Result<bool, E> {
@@ -2698,7 +2734,7 @@ where
         &self,
         solution: &mut SlotSolution<D::Id, N>,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let mut frame = negative::Atom::new(self.source, evidence.is_some());
@@ -2874,7 +2910,7 @@ where
     fn holds<D: TermDictionary>(
         &self,
         probe: GroupProbe<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<bool, EvalError<D::Error>> {
         probe
             .rel
@@ -2900,7 +2936,7 @@ where
     fn blocks<D: TermDictionary>(
         &self,
         probe: GroupProbe<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>> {
         let mut frame = negation::Frame::new(evidence.is_some());
@@ -2943,7 +2979,7 @@ where
         k: usize,
         probe: GroupProbe<'_, D, N>,
         locals: &mut Vec<Option<LocalValue<D::Id>>>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<GroupEvidence<'_, D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(atom) = self.atoms.get(k) else {
@@ -3041,7 +3077,7 @@ where
         j: usize,
         probe: GroupProbe<'_, D, N>,
         locals: &mut Vec<Option<LocalValue<D::Id>>>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<GroupEvidence<'_, D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(guard) = self.guards.get(j) else {
@@ -3141,7 +3177,7 @@ where
 fn call_guard<D: TermDictionary, const N: usize>(
     guards: &dyn GuardEvaluator<D, N>,
     call: &GuardCall<'_, D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<crate::guard::GuardRows<D::Id>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
@@ -3554,6 +3590,8 @@ where
     join_steps: u64,
     /// A refused reservation; independent of saturated observable counts.
     join_refused: bool,
+    /// The round stopped before its winners could be published.
+    stopped: bool,
     /// Whether some entry carries a term a guard computed and the store never held — a
     /// TERM-GENERATING round ([`EvalOptions`]).
     generates_terms: bool,
@@ -3576,6 +3614,7 @@ where
             entries: BTreeMap::new(),
             join_steps: 0,
             join_refused: false,
+            stopped: false,
             generates_terms: false,
             generating_rules: BTreeSet::new(),
             confirmed: BTreeMap::new(),
@@ -3624,6 +3663,7 @@ where
         rel.interner().check_read()?;
         self.join_steps = self.join_steps.saturating_add(other.join_steps);
         self.join_refused |= other.join_refused;
+        self.stopped |= other.stopped;
         for (row, proof) in other.confirmed {
             match self.confirmed.get_mut(&row) {
                 Some(existing) => existing.merge(proof),
@@ -3780,7 +3820,7 @@ fn evaluate_rule<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
     strategy: JoinStrategy,
-    governor: StepGovernor,
+    governor: StepGovernor<'_>,
     guards: &dyn GuardEvaluator<D, N>,
     full_counts: Option<&[Option<usize>]>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
@@ -3806,7 +3846,7 @@ fn apply_body_guards<D: TermDictionary, const N: usize>(
     solutions: Vec<SlotSolution<D::Id, N>>,
     positions: std::ops::Range<usize>,
     guards: &dyn GuardEvaluator<D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
@@ -3825,7 +3865,7 @@ fn join_ordered_body<D: TermDictionary, const N: usize>(
     snapshot: JoinSnapshot<'_, D, N>,
     strategy: JoinStrategy,
     guards: &dyn GuardEvaluator<D, N>,
-    governor: &mut StepGovernor,
+    governor: &mut StepGovernor<'_>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
@@ -3841,7 +3881,7 @@ fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
     strategy: JoinStrategy,
-    mut governor: StepGovernor,
+    mut governor: StepGovernor<'_>,
     guards: &dyn GuardEvaluator<D, N>,
     mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
     full_counts: Option<&[Option<usize>]>,
@@ -3883,7 +3923,7 @@ fn reference_evaluate_rule<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
     strategy: JoinStrategy,
-    mut governor: StepGovernor,
+    mut governor: StepGovernor<'_>,
     guards: &dyn GuardEvaluator<D, N>,
     mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
     full_counts: &[Option<usize>],
@@ -4193,24 +4233,43 @@ where
     }
 }
 
-/// Evaluate every scheduled rule of one round, erasing scheduling order.
-///
-/// A round holding a guarded rule runs on the calling thread in program order: a guard is
-/// caller code, and the caller's thread-scoped evaluation context has to reach it. A
-/// guard-free round keeps the rule-parallel path, which cannot reach a guard at all.
+/// The caller's guard and cancellation authority for one round.
+pub(crate) struct RoundControl<'s, D: TermDictionary, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The original caller's guard evaluator.
+    pub(crate) guards: &'s dyn GuardEvaluator<D, N>,
+    /// Cooperative cancellation, separate from the candidate allowance.
+    pub(crate) stop: Option<&'s dyn StopSignal>,
+}
+
+impl<D: TermDictionary, const N: usize> Copy for RoundControl<'_, D, N> where Arity<N>: StoreShape<N>
+{}
+impl<D: TermDictionary, const N: usize> Clone for RoundControl<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+/// Evaluate every scheduled rule against the original frozen round snapshot.
+/// Guarded rules retain caller-thread order; guard-free rules may run in parallel.
 pub(crate) fn evaluate_round<'r, D: TermDictionary, const N: usize>(
     entries: &[RuleEntry<'r, N>],
     snapshot: RoundSnapshot<'_, D, N>,
     execution: RoundExecution,
     strategy: JoinStrategy,
     allowance: u64,
-    guards: &dyn GuardEvaluator<D, N>,
+    control: RoundControl<'_, D, N>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
     evaluate_round_with_evidence(
-        entries, snapshot, execution, strategy, allowance, guards, None,
+        entries, snapshot, execution, strategy, allowance, control, None,
     )
 }
 
@@ -4220,7 +4279,7 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
     execution: RoundExecution,
     strategy: JoinStrategy,
     allowance: u64,
-    guards: &dyn GuardEvaluator<D, N>,
+    control: RoundControl<'_, D, N>,
     mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
@@ -4232,11 +4291,13 @@ where
         execution,
         strategy,
         allowance,
-        guards,
+        control,
         &mut evidence,
     )?;
-    debug_assert!(frame.is_complete() || frame.refused());
-    frame.into_buffer(snapshot.rel)
+    debug_assert!(frame.is_complete() || frame.refused() || frame.stopped());
+    let mut buffer = frame.into_buffer(snapshot.rel)?;
+    buffer.stopped |= is_stopped(control.stop);
+    Ok(buffer)
 }
 
 /// The original call-stack round is the differential scheduling oracle.
@@ -4497,6 +4558,11 @@ where
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
         self.join_refused |= round.join_refused;
         check_budget(self)?;
+        if round.stopped {
+            return Err(EvalError::Stopped {
+                report: self.report(),
+            });
+        }
         if round.entries.is_empty() {
             return Ok(());
         }
@@ -4936,7 +5002,10 @@ where
             run.execution,
             run.strategy,
             state.allowance(),
-            run.guards,
+            RoundControl {
+                guards: run.guards,
+                stop: None,
+            },
             owner,
         )?;
         if round.is_empty() {
@@ -5224,7 +5293,10 @@ mod tests {
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
                 u64::MAX,
-                &NoGuards,
+                RoundControl {
+                    guards: &NoGuards,
+                    stop: None,
+                },
             )
             .unwrap();
             observations.push((
@@ -7984,7 +8056,10 @@ mod tests {
             RoundExecution::Parallel,
             JoinStrategy::Planned,
             state.allowance(),
-            &NoGuards,
+            RoundControl {
+                guards: &NoGuards,
+                stop: None,
+            },
         )
         .expect("round buffer");
         assert!(round.join_refused);

@@ -76,7 +76,7 @@ where
         &mut self,
         entry: RuleEntry<'r, N>,
         snapshot: RoundSnapshot<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         snapshot

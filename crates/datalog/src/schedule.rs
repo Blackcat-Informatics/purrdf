@@ -74,8 +74,8 @@ use crate::guard::{GuardEvaluator, Negation};
 use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
 use crate::seminaive::{
-    Delta, EvalError, EvalOptions, Evaluation, FixpointState, JoinStrategy, RoundSnapshot,
-    RuleEntry, RuleRuntime, check_budget, check_range_restricted, evaluate_round,
+    Delta, EvalError, EvalOptions, Evaluation, FixpointState, JoinStrategy, RoundControl,
+    RoundSnapshot, RuleEntry, RuleRuntime, check_budget, check_range_restricted, evaluate_round,
 };
 use crate::stop::{StopSignal, is_stopped};
 #[cfg(test)]
@@ -402,18 +402,38 @@ where
         return Err(EvalError::MissingBase { rule });
     }
     let mut state = FixpointState::seeded(edb, *options);
-    check_budget(&state)?;
+    check_running(&state, stop)?;
     for (layer_index, layer) in program.schedule.layers.iter().enumerate() {
         run_layer(program, layer_index, layer, &mut state, guards, hooks, stop)?;
     }
+    check_running(&state, stop)?;
     let finished = hooks.finish(&state.rel).map_err(|error| {
         error.into_eval_error(|message| EvalError::LayerHook {
             layer: None,
             message,
         })
     })?;
+    check_running(&state, stop)?;
     retract(&mut state, &finished)?;
+    check_running(&state, stop)?;
     Ok(state.finish())
+}
+
+/// Admission and actual resource refusal precede cooperative cancellation.
+fn check_running<const N: usize>(
+    state: &FixpointState<TermInterner, N>,
+    stop: Option<&dyn StopSignal>,
+) -> Result<(), EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    check_budget(state)?;
+    if is_stopped(stop) {
+        return Err(EvalError::Stopped {
+            report: state.report(),
+        });
+    }
+    Ok(())
 }
 
 /// Run one layer into `state`.
@@ -435,9 +455,11 @@ where
             message,
         })
     };
+    check_running(state, stop)?;
     // The layer's assumptions become rows like any other, flagged so a rule that derives
     // one again is recorded as having done so.
     let assumptions = hooks.assume(layer_index, &state.rel).map_err(hook_error)?;
+    check_running(state, stop)?;
     let mut assumed = purrdf_core::FastSet::default();
     assumed
         .try_reserve(assumptions.len())
@@ -608,7 +630,10 @@ where
         state.execution,
         JoinStrategy::Planned,
         state.allowance(),
-        run.guards,
+        RoundControl {
+            guards: run.guards,
+            stop: run.stop,
+        },
     )?;
     for proof in round.confirmed() {
         match run.confirmed.get_mut(proof.fact()) {
