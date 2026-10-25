@@ -392,6 +392,8 @@ fn resolve_term_record(
                     ));
                 };
                 if let Some(tag) = &language {
+                    // This branch proves language is Some; rejection moves its
+                    // original string through the expect below.
                     if tag.is_empty() || !is_identity_folded(tag) {
                         return Err(ColumnarError::reader_malformed(
                             "terms.lang",
@@ -515,6 +517,8 @@ fn decode_blobs(mut data: TableData) -> Result<ContentStore, ColumnarError> {
     let mut store = ContentStore::new();
     for row in 0..data.row_count {
         let digest_bytes = required_bytes(digests, row, "blobs.digest")?;
+        // This check proves digests[row] is Some. Only a returning refusal
+        // branch takes that same cell, so each expect below has its original.
         let digest_text = match str::from_utf8(digest_bytes) {
             Ok(text) => text,
             Err(cause) => {
