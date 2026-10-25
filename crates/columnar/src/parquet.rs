@@ -16,7 +16,8 @@ use crate::column::{Int64Column, Presence};
 mod profile;
 use crate::compact::{CompactField, CompactReader, CompactWriter, StructState, TYPE_STRUCT};
 use crate::{
-    ColumnSchema, ColumnarError, PageBodyReason, PhysicalType, Repetition, Table, ValueBodyReason,
+    ColumnSchema, ColumnarError, ConstructionReason, PageBodyReason, PhysicalType, Repetition,
+    Table, ValueBodyReason,
 };
 pub use profile::{ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile};
 
@@ -192,14 +193,13 @@ impl TableData {
 fn validate_table_columns(table: Table, columns: &[ColumnValues]) -> Result<usize, ColumnarError> {
     let schema = table.schema();
     if columns.len() != schema.columns.len() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::construction(
             "table columns",
-            format!(
-                "{} has {} columns, expected {}",
-                table.name(),
-                columns.len(),
-                schema.columns.len()
-            ),
+            ConstructionReason::ColumnCount {
+                table,
+                actual: columns.len(),
+                expected: schema.columns.len(),
+            },
         ));
     }
     let row_count = columns.first().map_or(0, ColumnValues::len);
@@ -212,36 +212,35 @@ fn validate_table_columns(table: Table, columns: &[ColumnValues]) -> Result<usiz
     }
     for (column, expected) in columns.iter().zip(schema.columns) {
         if column.len() != row_count {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::construction(
                 "table columns",
-                format!(
-                    "{}.{} has {} rows, expected {row_count}",
-                    table.name(),
-                    expected.name,
-                    column.len()
-                ),
+                ConstructionReason::ColumnRows {
+                    table,
+                    column: expected.name,
+                    actual: column.len(),
+                    expected: row_count,
+                },
             ));
         }
         if column.physical_type() != expected.physical_type {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::construction(
                 "table columns",
-                format!(
-                    "{}.{} has physical type {:?}, expected {:?}",
-                    table.name(),
-                    expected.name,
-                    column.physical_type(),
-                    expected.physical_type
-                ),
+                ConstructionReason::ColumnType {
+                    table,
+                    column: expected.name,
+                    actual: column.physical_type(),
+                    expected: expected.physical_type,
+                },
             ));
         }
         if expected.repetition == Repetition::Required && column.null_count() != 0 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::construction(
                 "table columns",
-                format!(
-                    "required column {}.{} contains null",
-                    table.name(),
-                    expected.name
-                ),
+                ConstructionReason::RequiredColumn {
+                    table,
+                    column: expected.name,
+                    nulls: column.null_count(),
+                },
             ));
         }
     }
@@ -349,9 +348,12 @@ pub(crate) fn write_table(
         total
             .checked_add(column.total_uncompressed_size)
             .ok_or_else(|| {
-                ColumnarError::malformed(
+                ColumnarError::construction(
                     "row group metadata",
-                    "uncompressed byte total overflows i64",
+                    ConstructionReason::UncompressedTotalOverflow {
+                        total,
+                        size: column.total_uncompressed_size,
+                    },
                 )
             })
     })?;
@@ -380,12 +382,12 @@ fn validate_table_data(data: &TableData) -> Result<(), ColumnarError> {
     let row_count = validate_table_columns(data.table, &data.columns)?;
     validate_decoded_table_budget(data.table, row_count, plain_columns_len(&data.columns)?)?;
     if row_count != data.row_count {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::construction(
             "table row count",
-            format!(
-                "stored row count {} disagrees with columns {}",
-                data.row_count, row_count
-            ),
+            ConstructionReason::RowCount {
+                stored: data.row_count,
+                actual: row_count,
+            },
         ));
     }
     Ok(())
@@ -417,7 +419,13 @@ fn encode_column(
     };
     let uncompressed_page_size = checked_i32_len(
         definitions.len().checked_add(plain_len).ok_or_else(|| {
-            ColumnarError::malformed("Parquet page size", "length addition overflows usize")
+            ColumnarError::construction(
+                "Parquet page size",
+                ConstructionReason::PageSizeOverflow {
+                    definitions: definitions.len(),
+                    values: plain_len,
+                },
+            )
         })?,
         "Parquet uncompressed page size",
     )?;
@@ -426,7 +434,13 @@ fn encode_column(
             .len()
             .checked_add(compressed_values.len())
             .ok_or_else(|| {
-                ColumnarError::malformed("Parquet page size", "length addition overflows usize")
+                ColumnarError::construction(
+                    "Parquet page size",
+                    ConstructionReason::PageSizeOverflow {
+                        definitions: definitions.len(),
+                        values: compressed_values.len(),
+                    },
+                )
             })?,
         "Parquet compressed page size",
     )?;
@@ -2369,26 +2383,165 @@ mod tests {
         assert_eq!(footer_start, 4);
     }
 
+    /// Original shape operands survive input disposal and allocation-free inspection.
     #[test]
     fn required_null_and_mismatched_lengths_are_rejected() {
-        assert!(
-            TableData::new(
-                Table::Quads,
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let valid = quads();
+        TableData::new(valid.table, valid.columns.clone()).unwrap();
+        for compression in [Compression::Uncompressed, Compression::Zstd] {
+            let bytes = write_table(&valid, compression).unwrap();
+            assert_eq!(read_table(&bytes, Table::Quads).unwrap(), valid);
+        }
+        let cases = [
+            (
+                vec![ints(&[None])],
+                ConstructionReason::ColumnCount {
+                    table: Table::Quads,
+                    actual: 1,
+                    expected: 4,
+                },
+                "columnar table columns is malformed: quads has 1 columns, expected 4",
+                "columnar-parquet-column-count",
+            ),
+            (
                 vec![
+                    ints(&[Some(0)]),
+                    ColumnValues::bytes(Vec::new()),
+                    ints(&[Some(0)]),
                     ints(&[None]),
+                ],
+                ConstructionReason::ColumnRows {
+                    table: Table::Quads,
+                    column: "p",
+                    actual: 0,
+                    expected: 1,
+                },
+                "columnar table columns is malformed: quads.p has 0 rows, expected 1",
+                "columnar-parquet-column-rows",
+            ),
+            (
+                vec![
+                    ColumnValues::bytes(vec![None]),
                     ints(&[Some(1)]),
                     ints(&[Some(2)]),
                     ints(&[None]),
                 ],
-            )
-            .is_err()
+                ConstructionReason::ColumnType {
+                    table: Table::Quads,
+                    column: "s",
+                    actual: PhysicalType::ByteArray,
+                    expected: PhysicalType::Int64,
+                },
+                "columnar table columns is malformed: quads.s has physical type ByteArray, expected Int64",
+                "columnar-parquet-column-type",
+            ),
+            (
+                vec![ints(&[None]), ints(&[]), ints(&[Some(2)]), ints(&[None])],
+                ConstructionReason::RequiredColumn {
+                    table: Table::Quads,
+                    column: "s",
+                    nulls: 1,
+                },
+                "columnar table columns is malformed: required column quads.s contains null",
+                "columnar-parquet-required-column",
+            ),
+        ];
+        for (columns, expected, message, code) in cases {
+            let outer_events = Vec::with_capacity(4);
+            let reason_events = Vec::with_capacity(16);
+            let window = CurrentThreadWindow::open();
+            // Each case also violates a later check: the first fault stays stable.
+            let error = TableData::new(Table::Quads, columns).unwrap_err();
+            let copy = error.clone();
+            drop(error);
+            let outer = Capture::read_with_buffer(&copy, outer_events);
+            let ErrorValue::Cause(cause) = outer.field("reason") else {
+                panic!("construction operands must stay borrowed");
+            };
+            let fields = Capture::read_with_buffer(cause, reason_events);
+            let measured = window.close();
+            assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+            assert_eq!(outer.code, "columnar-malformed");
+            assert!(matches!(
+                outer.field("context"),
+                ErrorValue::Code("table columns")
+            ));
+            assert_eq!(fields.code, code);
+            assert!(matches!(fields.field("table"), ErrorValue::Code("quads")));
+            match expected {
+                ConstructionReason::ColumnCount { .. } => {
+                    assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(1)));
+                    assert!(matches!(fields.field("expected"), ErrorValue::Unsigned(4)));
+                }
+                ConstructionReason::ColumnRows { .. } => {
+                    assert!(matches!(fields.field("column"), ErrorValue::Code("p")));
+                    assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(0)));
+                    assert!(matches!(fields.field("expected"), ErrorValue::Unsigned(1)));
+                }
+                ConstructionReason::ColumnType { .. } => {
+                    assert!(matches!(fields.field("column"), ErrorValue::Code("s")));
+                    assert_eq!(fields.child("actual").code, "columnar-physical-byte-array");
+                    assert_eq!(fields.child("expected").code, "columnar-physical-int64");
+                }
+                ConstructionReason::RequiredColumn { .. } => {
+                    assert!(matches!(fields.field("column"), ErrorValue::Code("s")));
+                    assert!(matches!(fields.field("nulls"), ErrorValue::Unsigned(1)));
+                }
+                _ => unreachable!("only reachable construction refusals are selected"),
+            }
+            let ColumnarError::Construction { reason, .. } = &copy else {
+                panic!("the native construction variant must survive cloning");
+            };
+            assert_eq!(reason, &expected);
+            assert!(std::ptr::eq(
+                std::error::Error::source(&copy)
+                    .unwrap()
+                    .downcast_ref::<ConstructionReason>()
+                    .unwrap(),
+                reason,
+            ));
+            assert_eq!(copy.to_string(), message);
+        }
+
+        let mut stale = valid;
+        stale.row_count += 1;
+        let outer_events = Vec::with_capacity(4);
+        let reason_events = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let error = write_table(&stale, Compression::Zstd).unwrap_err();
+        drop(stale);
+        let copy = error.clone();
+        drop(error);
+        let outer = Capture::read_with_buffer(&copy, outer_events);
+        let ErrorValue::Cause(cause) = outer.field("reason") else {
+            panic!("stored row-count operands must stay borrowed");
+        };
+        let fields = Capture::read_with_buffer(cause, reason_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(outer.code, "columnar-malformed");
+        assert!(matches!(
+            outer.field("context"),
+            ErrorValue::Code("table row count")
+        ));
+        assert_eq!(fields.code, "columnar-parquet-row-count");
+        assert!(matches!(fields.field("stored"), ErrorValue::Unsigned(4)));
+        assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(3)));
+        assert_eq!(
+            std::error::Error::source(&copy)
+                .unwrap()
+                .downcast_ref::<ConstructionReason>(),
+            Some(&ConstructionReason::RowCount {
+                stored: 4,
+                actual: 3
+            })
         );
-        assert!(
-            TableData::new(
-                Table::Quads,
-                vec![ints(&[Some(0)]), ints(&[]), ints(&[Some(0)]), ints(&[None]),],
-            )
-            .is_err()
+        assert_eq!(
+            copy.to_string(),
+            "columnar table row count is malformed: stored row count 4 disagrees with columns 3"
         );
     }
 
