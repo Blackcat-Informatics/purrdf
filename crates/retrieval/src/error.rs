@@ -9,6 +9,9 @@
 //! different build must be refused loudly, never silently reinterpreted under
 //! the current layout.
 
+mod profile;
+pub use profile::ProfileRefusal;
+
 /// A failure to plan a request, validate an IRI, or encode/decode a canonical
 /// [`Plan`].
 ///
@@ -110,6 +113,8 @@ pub enum PlanError {
     InvalidUtf8 {
         /// The field being decoded.
         what: &'static str,
+        /// The original decoder refusal, including its byte position and sequence length.
+        source: core::str::Utf8Error,
     },
 
     /// A canonical field did not parse as an IRI.
@@ -468,7 +473,7 @@ impl purrdf_hash::error::StructuredError for PlanError {
         RegistryDeclaration { message } => "retrieval-plan-registry-declaration" { "message" => Message(message) },
         Truncated { offset } => "retrieval-plan-truncated" { "offset" => ByteCount(*offset as u128) },
         InvalidTag { what, tag } => "retrieval-plan-invalid-tag" { "what" => Code(what), "tag" => Unsigned(u128::from(*tag)) },
-        InvalidUtf8 { what } => "retrieval-plan-invalid-utf8" { "what" => Code(what) },
+        InvalidUtf8 { what, source } => "retrieval-plan-invalid-utf8" { "what" => Code(what), "source" => Cause(source) },
         InvalidIri { text, source } => "retrieval-plan-invalid-iri" { "text" => Iri(text), "source" => Cause(source) },
         InvalidJson { pointer, reason } => "retrieval-plan-invalid-json" { "pointer" => Text(pointer), "reason" => Text(reason) },
         TrailingBytes { extra } => "retrieval-plan-trailing-bytes" { "extra" => ByteCount(*extra as u128) },
@@ -518,7 +523,7 @@ impl std::fmt::Display for PlanError {
                 f,
                 "plan canonical encoding carries invalid tag {tag} for {what}"
             ),
-            Self::InvalidUtf8 { what } => {
+            Self::InvalidUtf8 { what, .. } => {
                 write!(f, "plan canonical encoding carries invalid UTF-8 in {what}")
             }
             Self::InvalidIri { text, source } => write!(f, "invalid IRI {text:?}: {source}"),
@@ -623,6 +628,7 @@ impl std::error::Error for PlanError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidIri { source, .. } => Some(source),
+            Self::InvalidUtf8 { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -919,8 +925,8 @@ pub enum FusionError {
         requested: crate::fuse::TopK,
     },
 
-    /// A fusion profile's canonical bytes could not be decoded.
-    MalformedProfile(String),
+    /// An original profile decoder or fusion-invariant refusal.
+    MalformedProfile(Box<ProfileRefusal>),
 
     /// A candidate received more contributions than there are strata.
     ///
@@ -1034,7 +1040,7 @@ impl purrdf_hash::error::StructuredError for FusionError {
         DuplicateStratum { stratum } => "fusion-duplicate-stratum" { "stratum" => Iri(stratum) },
         PlanIdMismatch { expected, got } => "fusion-plan-id-mismatch" { "expected" => Record(expected), "got" => Value(got.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))) },
         ReadBoundMismatch { planned, requested } => "fusion-read-bound-mismatch" { "planned" => Record(planned), "requested" => Record(requested) },
-        MalformedProfile(reason) => "fusion-malformed-profile" { "reason" => Text(reason) },
+        MalformedProfile(reason) => "fusion-malformed-profile" { "reason" => Cause(reason.as_ref()) },
         MaxContributionsExceeded { item, count, max } => "fusion-max-contributions-exceeded" { "item" => Text(item), "count" => Unsigned(u128::from(*count)), "max" => Unsigned(u128::from(*max)) },
         DepthUnreachable { depth, saturates_at } => "fusion-depth-unreachable" { "depth" => Unsigned(u128::from(*depth)), "saturates_at" => Unsigned(u128::from(*saturates_at)) },
         DepthBeyondPlanRange { depth, limit } => "fusion-depth-beyond-plan-range" { "depth" => Unsigned(u128::from(*depth)), "limit" => Unsigned(u128::from(*limit)) },
@@ -1102,10 +1108,15 @@ impl std::error::Error for FusionError {
         match self {
             Self::NativeFailure(error) => Some(error),
             Self::Protocol(error) => Some(error.as_ref()),
+            Self::MalformedProfile(error) => Some(error.as_ref()),
             _ => None,
         }
     }
 }
+
+purrdf_lex::variant_from!(FusionError {
+    MalformedProfile(PlanError, ProfileRefusal) via ProfileRefusal::boxed
+});
 
 impl From<purrdf_sparql_eval::EvalError> for FusionError {
     fn from(error: purrdf_sparql_eval::EvalError) -> Self {

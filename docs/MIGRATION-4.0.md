@@ -6,6 +6,20 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Retrieval canonical UTF-8 errors
+
+`purrdf_retrieval::PlanError::InvalidUtf8` now carries `source: core::str::Utf8Error`
+beside `what`. Update explicit constructions and exhaustive field patterns.
+Borrowed structured inspection and the standard error source retain the original
+valid-prefix offset and invalid-sequence length, independently of the input buffer.
+The human message and `invalid-utf8` refusal identity are unchanged.
+
+`FusionError::MalformedProfile` now carries `Box<ProfileRefusal>` instead of a
+rendered string. Its closed native reasons retain canonical/IRI decoder causes,
+profile fields and original candidate owners. Use `StructuredError` inspection to
+recover fields and `Display` for presentation. The outer
+`fusion-malformed-profile` inspection identity and human messages are unchanged.
+
 ## Columnar projection errors
 
 `purrdf::columnar::project` and `write` return

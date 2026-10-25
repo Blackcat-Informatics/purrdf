@@ -7,6 +7,8 @@
 //! so a protocol violation can be produced deliberately; the oracle recomputes
 //! the fused order from first principles and must agree with the engine.
 
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::Capture;
 use purrdf_testkit::rng::xorshift64_next;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -1121,12 +1123,85 @@ fn a_declared_contribution_maximum_must_match_the_stratum_count() {
             2,
             "the field this test rewrites is the contribution maximum"
         );
+        let error = FusionProfile::from_canonical_bytes(&tampered).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "malformed fusion profile: profile states a contribution maximum of {forged} over 2 strata; a candidate may surface at most once per stratum"
+            )
+        );
+        let capture = Capture::read(&error);
+        assert_eq!(capture.code, "fusion-malformed-profile");
+        let reason = capture.child("reason");
+        assert_eq!(reason.code, "fusion-profile-contributions");
         assert!(
-            matches!(
-                FusionProfile::from_canonical_bytes(&tampered),
-                Err(FusionError::MalformedProfile(_))
-            ),
-            "a declared maximum of {forged} over two strata must be refused"
+            matches!(reason.field("found"), ErrorValue::Unsigned(value) if value == u128::from(forged))
+        );
+        assert!(matches!(reason.field("strata"), ErrorValue::Unsigned(2)));
+    }
+}
+
+#[test]
+fn duplicate_profile_strata_keep_the_original_key_and_first_fault() {
+    let one = profile(&[("text", Fixed::ONE)], K);
+    let original = one.canonical_bytes();
+    assert_eq!(FusionProfile::from_canonical_bytes(&original).unwrap(), one);
+    let key = stratum("text");
+    let start = original
+        .windows(key.as_str().len())
+        .position(|part| part == key.as_str().as_bytes())
+        .unwrap();
+    // Repeat the complete framed key/weight record, updating its row count.
+    let record_start = start - 8;
+    let record_end = start + key.as_str().len() + 16;
+    let mut forged = original[..record_end].to_vec();
+    forged.extend_from_slice(&original[record_start..record_end]);
+    forged.extend_from_slice(&original[record_end..]);
+    forged[record_start - 8..record_start].copy_from_slice(&2_u64.to_le_bytes());
+    let error = FusionProfile::from_canonical_bytes(&forged).unwrap_err();
+    drop(forged);
+    drop(original);
+    assert_eq!(
+        error.to_string(),
+        "malformed fusion profile: fusion profile repeats a stratum"
+    );
+    let capture = Capture::read(&error);
+    let reason = capture.child("reason");
+    assert_eq!(reason.code, "fusion-profile-duplicate-stratum");
+    assert!(matches!(reason.field("stratum"), ErrorValue::Iri(value) if value == key.as_str()));
+}
+
+#[test]
+fn profile_wire_fields_retain_native_discriminators() {
+    let one = profile(&[("text", Fixed::ONE)], K);
+    let original = one.canonical_bytes();
+    assert_eq!(FusionProfile::from_canonical_bytes(&original).unwrap(), one);
+    for (offset, width, code) in [
+        (0, 2, "fusion-profile-version"),
+        (original.len() - 11, 1, "fusion-profile-tie-break-tag"),
+        (original.len() - 6, 4, "fusion-profile-scale"),
+        (original.len() - 2, 1, "fusion-profile-rounding-tag"),
+        (original.len() - 1, 1, "fusion-profile-item-encoding-tag"),
+    ] {
+        let mut forged = original.clone();
+        forged[offset..offset + width].fill(255);
+        let expected = match width {
+            1 => u128::from(original[offset]),
+            2 => u128::from(u16::from_le_bytes(
+                original[offset..offset + 2].try_into().unwrap(),
+            )),
+            4 => u128::from(purrdf_core::bytes::read_u32_le(&original, offset).unwrap()),
+            _ => panic!("unsupported fixture field width"),
+        };
+        let found = (1_u128 << (8 * width)) - 1;
+        let error = FusionProfile::from_canonical_bytes(&forged).unwrap_err();
+        let capture = Capture::read(&error);
+        assert_eq!(capture.code, "fusion-malformed-profile");
+        let reason = capture.child("reason");
+        assert_eq!(reason.code, code);
+        assert!(matches!(reason.field("found"), ErrorValue::Unsigned(value) if value == found));
+        assert!(
+            matches!(reason.field("expected"), ErrorValue::Unsigned(value) if value == expected)
         );
     }
 }
@@ -2876,10 +2951,17 @@ fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
     // An unassigned tag is refused rather than read as a rule this build knows.
     let mut unknown = folded.canonical_bytes();
     unknown[2] = 2;
-    assert!(
-        FusionProfile::from_canonical_bytes(&unknown).is_err(),
-        "an unknown decay tag is refused"
+    let error = FusionProfile::from_canonical_bytes(&unknown).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "malformed fusion profile: unknown decay rule tag 2"
     );
+    let capture = Capture::read(&error);
+    assert_eq!(capture.child("reason").code, "fusion-profile-decay-tag");
+    assert!(matches!(
+        capture.child("reason").field("found"),
+        ErrorValue::Unsigned(2)
+    ));
 }
 
 /// The weight the deep fixtures run at: two hundred, which under the weighted
