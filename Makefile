@@ -481,10 +481,11 @@ miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT p
 	@# work natively. Each run is a distinct model: the default Stacked Borrows,
 	@# Tree Borrows, strict provenance (no integer-to-pointer casts), and a
 	@# 32-bit target, where `usize` arithmetic and layout differ.
-	cargo miri test -p purrdf-core small
-	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core small
-	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core small
-	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
+	@# Select the unsafe storage module, not unrelated semantic test names.
+	cargo miri test -p purrdf-core --lib small::tests::
+	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core --lib small::tests::
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core --lib small::tests::
+	cargo miri test -p purrdf-core --lib small::tests:: --target i686-unknown-linux-gnu
 	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
 	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
 	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash-conformance --test blake3 streaming_boundary_answers
