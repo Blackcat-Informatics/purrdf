@@ -52,6 +52,19 @@ impl core::fmt::Display for CapacityFailure {
     }
 }
 
+impl std::error::Error for CapacityFailure {}
+
+impl purrdf_hash::error::StructuredError for CapacityFailure {
+    purrdf_hash::error_visit! {
+        Stopped => "text-capacity-stopped" {},
+        LayoutOverflow => "text-capacity-layout-overflow" {},
+        Allocator { construct } => "text-capacity-allocator" {
+            "construct" => Text(construct),
+        },
+        UnstableDiagnostic => "text-capacity-unstable-diagnostic" {},
+    }
+}
+
 pub(crate) fn admitted<T>(value: Result<T, EvalError>) -> Result<T, TextError> {
     value.map_err(|error| TextError::Capacity(CapacityFailure::from_workspace(&error)))
 }

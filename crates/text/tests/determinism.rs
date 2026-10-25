@@ -406,6 +406,22 @@ fn unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failu
             failed: std::sync::atomic::AtomicBool::new(false),
         };
         let result = index.clone().with_delta(&source, &*empty, &*empty);
+        let fields = purrdf_testkit::error_capture::Capture::read(result.as_ref().unwrap_err());
+        if failure == 0 {
+            assert_eq!(fields.code, "text-delta-source-observation-unavailable");
+            assert!(fields.events.is_empty());
+        } else {
+            assert_eq!(fields.code, "text-delta-indexing");
+            let purrdf_hash::error::ErrorValue::Cause(cause) = fields.field("cause") else {
+                panic!("the original indexing refusal remains a borrowed cause");
+            };
+            let fields = purrdf_testkit::error_capture::Capture::read(cause);
+            assert_eq!(fields.code, "text-source-read");
+            assert!(
+                matches!(fields.field("message"), purrdf_hash::error::ErrorValue::Text(value)
+                if value == purrdf_core::SegmentedError::EvidenceExhausted.to_string())
+            );
+        }
         match failure {
             0 => assert!(matches!(
                 result,

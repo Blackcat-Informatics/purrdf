@@ -95,6 +95,47 @@ impl fmt::Display for SubstringRefusal {
 }
 impl std::error::Error for SubstringRefusal {}
 
+impl purrdf_hash::error::StructuredError for SubstringLimits {
+    purrdf_hash::error_visit! {
+        @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-limits" {
+            "posting_operations" => Unsigned(u128::from(self.posting_operations)),
+            "candidate_spans" => Unsigned(u128::from(self.candidate_spans)),
+            "verification_bytes" => ByteCount(u128::from(self.verification_bytes)),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SubstringWork {
+    purrdf_hash::error_visit! {
+        @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-work" {
+            "posting_operations" => Unsigned(u128::from(self.posting_operations)),
+            "candidate_spans" => Unsigned(u128::from(self.candidate_spans)),
+            "verification_bytes" => ByteCount(u128::from(self.verification_bytes)),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SubstringRefusalReason {
+    purrdf_hash::error_visit! {
+        NonSelective => "text-substring-nonselective" {},
+        PostingOperations => "text-substring-posting-operations" {},
+        CandidateSpans => "text-substring-candidate-spans" {},
+        VerificationBytes => "text-substring-verification-bytes" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SubstringRefusal {
+    purrdf_hash::error_visit! {
+        @record self { reason, counters, limits, distinct_spans, generation } => "text-substring-refusal" {
+            "reason" => Record(&self.reason),
+            "counters" => Record(&self.counters),
+            "limits" => Record(&self.limits),
+            "distinct_spans" => Unsigned(u128::from(self.distinct_spans)),
+            "generation" => Bytes(&self.generation),
+        }
+    }
+}
+
 /// Complete matches and the logical work used to establish them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubstringReport<'a, P: CorpusProfile = GraphLanguage> {

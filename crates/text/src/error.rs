@@ -138,6 +138,34 @@ impl std::error::Error for TextDeltaError {
     }
 }
 
+impl purrdf_hash::error::StructuredError for TextDeltaError {
+    purrdf_hash::error_visit! {
+        SourceObservationUnavailable => "text-delta-source-observation-unavailable" {},
+        MissingAddition { ordinal } => "text-delta-missing-addition" {
+            "ordinal" => Unsigned(*ordinal as u128),
+        },
+        SourceMismatch { expected, actual } => "text-delta-source-mismatch" {
+            "expected" => Bytes(expected), "actual" => Bytes(actual),
+        },
+        CoverageMismatch { predicate, before, added, removed, observed } => "text-delta-coverage-mismatch" {
+            "predicate" => Term(&**predicate),
+            "before" => Unsigned(*before), "added" => Unsigned(*added),
+            "removed" => Unsigned(*removed), "observed" => Unsigned(*observed),
+        },
+        Indexing(cause) => "text-delta-indexing" { "cause" => Cause(cause) },
+        AnalyzerMismatch { expected, actual } => "text-delta-analyzer-mismatch" {
+            "expected" => Bytes(expected), "actual" => Bytes(actual),
+        },
+        SourceOverlap { document, identity } => "text-delta-source-overlap" {
+            "document" => Unsigned(u128::from(*document)), "identity" => Bytes(identity),
+        },
+        TermCapacity { observed, limit, cause } => "text-delta-term-capacity" {
+            "observed" => Unsigned(*observed), "limit" => Unsigned(u128::from(*limit)),
+            "cause" => Cause(cause),
+        },
+    }
+}
+
 purrdf_lex::variant_from!(TextDeltaError {
     Indexing(TextError),
 });
@@ -155,6 +183,10 @@ pub(crate) fn term_ordinal(current_count: usize) -> Result<u32, TextDeltaError> 
 }
 
 /// A failure raised by the text index.
+///
+/// [`purrdf_hash::error::StructuredError`] exposes every retained field without
+/// rendering. Native causes and ordered HTML diagnostics remain borrowed;
+/// message variants report their existing stored text.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TextError {
@@ -241,7 +273,24 @@ impl core::fmt::Display for TextError {
     }
 }
 
-impl std::error::Error for TextError {}
+purrdf_hash::error_sources!(TextError, Capacity, Diagnostic, Substring, Phonetic);
+
+impl purrdf_hash::error::StructuredError for TextError {
+    purrdf_hash::error_visit! {
+        Capacity(cause) => "text-capacity" { "cause" => Cause(cause) },
+        Diagnostic(cause) => "text-diagnostic" { "cause" => Cause(cause) },
+        Substring(cause) => "text-substring" { "cause" => Cause(cause) },
+        Phonetic(cause) => "text-phonetic" { "cause" => Cause(cause) },
+        Config(message) => "text-config" { "message" => Text(message) },
+        Html(diagnostics) => "text-html" {
+            "diagnostics" => List(diagnostics.iter().map(|value| purrdf_hash::error::ErrorValue::Cause(value))),
+        },
+        Data(message) => "text-data" { "message" => Text(message) },
+        SourceRead(message) => "text-source-read" { "message" => Text(message) },
+        Overflow(message) => "text-overflow" { "message" => Text(message) },
+        Domain(message) => "text-domain" { "message" => Text(message) },
+    }
+}
 
 purrdf_lex::variant_from!(TextError {
     Substring(crate::surface::SubstringRefusal),
@@ -289,6 +338,88 @@ mod tests {
     use purrdf_sparql_eval::EvalError;
 
     use super::TextError;
+
+    #[global_allocator]
+    static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+    #[test]
+    fn native_workspace_layout_refusal_is_inspectable_without_allocation() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        use std::error::Error;
+
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let mut values = Vec::<u64>::new();
+        let mut allocation = None;
+        let root = Vec::with_capacity(1);
+        let fields = Vec::new();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = crate::query_workspace::admitted(workspace.reserve_vec(
+            &mut values,
+            &mut allocation,
+            usize::MAX,
+        ))
+        .unwrap_err();
+        let root = Capture::read_with_buffer(&error, root);
+        let ErrorValue::Cause(cause) = root.field("cause") else {
+            panic!("the original workspace refusal remains borrowed");
+        };
+        let fields = Capture::read_with_buffer(cause, fields);
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        assert_eq!(root.code, "text-capacity");
+        assert_eq!(fields.code, "text-capacity-layout-overflow");
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<crate::CapacityFailure>()
+                .is_some()
+        );
+        assert_eq!(values, []);
+        assert!(allocation.is_none());
+        crate::query_workspace::admitted(workspace.reserve_vec(&mut values, &mut allocation, 1))
+            .unwrap();
+        assert!(values.capacity() >= 1);
+    }
+
+    #[test]
+    fn dictionary_population_refusal_keeps_widened_count_and_original_cause() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        use std::error::Error;
+
+        let error = super::term_ordinal(u32::MAX as usize).unwrap_err();
+        let buffer = Vec::with_capacity(3);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(&error, buffer);
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        assert_eq!(fields.code, "text-delta-term-capacity");
+        assert!(
+            matches!(fields.field("observed"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX) + 1)
+        );
+        assert!(
+            matches!(fields.field("limit"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+        );
+        let ErrorValue::Cause(cause) = fields.field("cause") else {
+            panic!("the original conversion refusal remains borrowed");
+        };
+        assert_eq!(Capture::read(cause).code, "integer-conversion-range");
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::num::TryFromIntError>()
+                .is_some()
+        );
+        assert_eq!(
+            super::term_ordinal(u32::MAX as usize - 1).unwrap(),
+            u32::MAX - 1
+        );
+    }
 
     #[test]
     fn each_constructor_builds_its_own_variant() {
