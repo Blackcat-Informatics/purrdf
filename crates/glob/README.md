@@ -50,8 +50,14 @@ shell expansion.
 
 `glob-set` writes `matches N`, each matching `index I` on its own line, then
 `work N`. It publishes output only after the complete set succeeds. With no
-`--pattern`, it returns an empty result using zero work. Expansion and RDF
-projection are separate capabilities, with no silent approximation here.
+`--pattern`, it returns an empty result using zero work.
+
+`rdf::PreparedPlan` reads an RDF-authored ordered source plan using an explicit
+caller vocabulary. Execute against an original RDF term, then export the portable
+description with RDF 1.2 quoted membership provenance. Duplicate patterns preserve
+their distinct collection cells. The facade and `glob-rdf` CLI command use the
+existing Turtle and N-Triples codecs. [SPEC.md](SPEC.md) defines the schema, required
+CLI arguments, admission and refusal behavior. No namespace or identity is invented.
 
 ## License
 

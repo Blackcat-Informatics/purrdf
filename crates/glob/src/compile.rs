@@ -129,10 +129,18 @@ pub(super) fn compile_set<S: Admission>(
     mode: Mode,
     storage: S,
 ) -> Result<CompiledGlobSet<S>, SetCompileError> {
+    compile_set_iter(sources.iter().map(AsRef::as_ref), mode, storage)
+}
+
+pub(super) fn compile_set_iter<'a, S: Admission>(
+    sources: impl Clone + ExactSizeIterator<Item = &'a str>,
+    mode: Mode,
+    storage: S,
+) -> Result<CompiledGlobSet<S>, SetCompileError> {
     let mut account = Account(storage);
     let mut counts = Counts::default();
-    for (index, source) in sources.iter().enumerate() {
-        parse(source.as_ref(), mode, &mut counts)
+    for (index, source) in sources.clone().enumerate() {
+        parse(source, mode, &mut counts)
             .map_err(|cause| SetCompileError::Pattern { index, cause })?;
     }
     let mut ends = Vec::new();
@@ -143,9 +151,9 @@ pub(super) fn compile_set<S: Admission>(
         memory.reserve(&mut ends, sources.len())?;
         memory.reserve(&mut tokens, counts.tokens)?;
         memory.reserve(&mut ranges, counts.ranges)?;
-        for (index, source) in sources.iter().enumerate() {
+        for (index, source) in sources.enumerate() {
             parse(
-                source.as_ref(),
+                source,
                 mode,
                 &mut Destination {
                     tokens: &mut tokens,

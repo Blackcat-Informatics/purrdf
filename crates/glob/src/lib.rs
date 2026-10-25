@@ -8,6 +8,7 @@
 
 mod compile;
 mod execute;
+pub mod rdf;
 mod set;
 
 pub use set::{CompiledGlobSet, SetCompileError, SetMatchError, SetMatchReport};

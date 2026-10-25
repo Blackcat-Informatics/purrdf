@@ -341,9 +341,44 @@ pub(crate) enum GlobSurface {
     IriFragment,
 }
 
+/// Execute an RDF-authored ordered plan against one original RDF object.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobRdfArgs {
+    /// Source-backed RDF plan document.
+    pub plan: String,
+    /// RDF input document containing the selected object.
+    pub input: String,
+    /// Absolute IRI identifying the plan resource.
+    #[arg(long)]
+    pub root: String,
+    /// Caller-owned absolute IRI for this evaluation.
+    #[arg(long)]
+    pub evaluation: String,
+    /// Absolute IRI of the subject selecting the original input object.
+    #[arg(long)]
+    pub input_subject: String,
+    /// Absolute IRI of the predicate selecting the original input object.
+    #[arg(long)]
+    pub input_predicate: String,
+    /// Explicit role=IRI vocabulary mapping; every role is required.
+    #[arg(long = "vocabulary", required = true)]
+    pub vocabulary: Vec<String>,
+    /// Both input documents' syntax: turtle or ntriples.
+    #[arg(long, value_enum)]
+    pub from: CliNativeRdfFormat,
+    /// Output syntax: turtle or ntriples.
+    #[arg(long, value_enum)]
+    pub to: CliNativeRdfFormat,
+    /// Aggregate matching work allowance; refusal emits no RDF result.
+    #[arg(long)]
+    pub max_work: u64,
+}
+
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Execute an RDF-authored plan and emit its description and membership provenance.
+    GlobRdf(GlobRdfArgs),
     /// Return every matching index from an ordered compiled pattern set.
     GlobSet {
         /// Verbatim literal value or IRI reference.

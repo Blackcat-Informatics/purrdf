@@ -166,7 +166,7 @@ impl<S: Admission> CompiledGlobSet<S> {
         self.matches(iri_surface(iri, component), max_work, workspace)
     }
 
-    fn matches<'a>(
+    pub(super) fn matches<'a>(
         &self,
         lexical: Option<&str>,
         max_work: u64,

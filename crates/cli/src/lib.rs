@@ -96,6 +96,8 @@ mod entails;
 mod error;
 mod format;
 mod glob;
+mod glob_rdf;
+pub use glob_rdf::Failure as GlobRdfFailure;
 mod governors;
 pub mod immutable;
 mod ingest;
@@ -224,6 +226,16 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         })
         .transpose()?;
     match &cli.cmd {
+        Command::GlobRdf(args) => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob-rdf uses lossless Turtle or N-Triples and accepts no loss ledger",
+                "glob-rdf accepts no JSON-LD options",
+            )?;
+            glob_rdf::run(args)?;
+            Ok(CliOutcome::Complete)
+        }
         Command::GlobSet {
             value,
             patterns,

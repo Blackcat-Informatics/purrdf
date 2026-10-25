@@ -16,6 +16,7 @@ documentation = "https://docs.rs/purrdf-glob"
 workspace = true
 
 [dependencies]
+purrdf-core.workspace = true
 purrdf-hash.workspace = true
 purrdf-iri.workspace = true
 purrdf-lex.workspace = true

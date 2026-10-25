@@ -1768,6 +1768,19 @@ impl RdfDataset {
         self.dictionary.resolve(id)
     }
 
+    /// Inspect an original native term as an inline borrowed error record.
+    /// No owned term tree, diagnostic string or shared owner is constructed.
+    /// Literal datatypes and triple children are original local IDs; callers
+    /// retain this dataset to inspect them explicitly without recursive expansion.
+    pub fn inspect_term<'a>(
+        &'a self,
+        id: TermId,
+        name: Option<&'static str>,
+        visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'a>,
+    ) {
+        self.resolve(id).visit_error_record(name, visitor);
+    }
+
     /// Iterate `(reifier, triple-term)` bindings, graph slot dropped. Zero allocation,
     /// infallible. Consumers that need the graph dimension use
     /// [`reifiers_with_graph`](Self::reifiers_with_graph).

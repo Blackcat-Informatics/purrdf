@@ -82,6 +82,73 @@ The immutable set can be reused after any execution refusal.
 Programs occupy flat storage and execute individually. No transition sharing,
 asymptotic speedup or linear-time matching guarantee is claimed.
 
-Brace alternatives, filesystem traversal, Rust import resolution, RDF projection,
-plan serialization and compiled identities are outside this matching capability.
-They are not silently approximated here.
+## RDF-authored plans
+
+`rdf::PreparedPlan` compiles a portable source description under the exact schema
+version `purrdf-glob-rdf-v1`. It retains the original frozen dataset and uses the
+ordered compiler above. No executable bytecode is read or written. The caller
+supplies all thirteen vocabulary roles through `rdf::Vocabulary`; every role must
+occur exactly once, have an absolute IRI, and differ from all other roles and
+`rdf:type`, `rdf:first`, `rdf:rest` and `rdf:nil`. Unknown roles are refused.
+
+The plan root has exactly one value for each field below, in the default graph.
+No other outgoing field or named-graph field is accepted on a plan or pattern.
+
+| Predicate role | Required value |
+| --- | --- |
+| `rdf:type` | The caller's `description_type` IRI |
+| `version` | String `purrdf-glob-rdf-v1` |
+| `language` | String `purrdf-glob-v1` |
+| `mode` | String `text` or `path` |
+| `surface` | String `literal`, `iri`, `iri-scheme`, `iri-authority`, `iri-path`, `iri-query` or `iri-fragment` |
+| `patterns` | A finite, well-formed RDF collection of pattern resources |
+
+Each pattern resource is an IRI or blank node, has exactly one `rdf:type` value
+equal to the caller's `pattern_type` IRI, and one `source` string containing its
+glob. Configuration strings have datatype `xsd:string` and no language or direction.
+Repeated pattern resources remain distinct occurrences through their list cells.
+The empty collection is valid. Missing or multiple values, malformed collections,
+incompatible versions and malformed globs return typed refusals with original
+source context.
+
+Execution consumes the prepared plan and an original input dataset/term ID.
+Literal selection reads the original lexical form; IRI selection borrows original
+component slices without normalization or percent decoding. The complete result
+owns its input and plan snapshots, ordered matching indices and aggregate work.
+Its `into_plan` method recovers the compiled plan for another successful execution.
+Refusal retains both snapshots, original IDs, selected surface and native cause.
+Borrowed structured inspection constructs neither diagnostic strings nor term trees.
+Literal datatype and triple-child inspection reports original local IDs, resolved
+through the retained snapshot without recursive traversal.
+
+Export consumes a completed result and takes a caller-supplied absolute evaluation
+IRI and output admission. That identity must differ from plan, pattern and prior
+evaluation resources in the source. Harmless existing IRI occurrences are allowed.
+The staged output contains the source description, with coherent blank identities,
+and these evaluation fields under the caller's vocabulary:
+
+| Predicate | Value |
+| --- | --- |
+| `rdf:type` | `evaluation_type` IRI |
+| `plan` | Imported plan identity |
+| `input` | Original input term, including datatype, language and direction |
+| `matched` | One RDF 1.2 triple term `<<(cell rdf:first pattern)>>` per matching occurrence |
+| `work` | Aggregate work as `xsd:integer` |
+
+The two matched entries for a repeated pattern quote different original membership
+cells. Native term import, collection walking, triple construction and freeze use
+the shared RDF kernel homes. Generated storage and its shared control are admitted
+before publication; an export refusal retains its output account through destruction
+of its native diagnostic. No completed output is returned on storage refusal.
+
+The facade and CLI apply existing Turtle 1.2 and N-Triples 1.2 codecs outside this
+crate. Codec ingress remains caller-owned allocation; it is not retroactively
+claimed as an admitted parser. `glob-rdf PLAN INPUT` requires `--root`,
+`--evaluation`, `--input-subject`, `--input-predicate`, all `--vocabulary ROLE=IRI`
+mappings, `--from`, `--to` and `--max-work`. Its input is the unique default-graph
+object selected by the supplied subject and predicate IRIs. Both documents use
+the explicit input syntax. The complete result is serialized before stdout is
+touched; a parse, schema, work, storage or serialization refusal emits no RDF.
+
+Brace alternatives, filesystem traversal, Rust import resolution and compiled
+identities are outside these capabilities. They are not silently approximated here.

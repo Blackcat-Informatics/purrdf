@@ -163,13 +163,13 @@ pub(crate) trait ViewOp {
 }
 
 /// Read every byte of a path, or of stdin when `path` is `-`, WITHOUT decoding.
-fn read_raw_bytes(path: &str) -> Result<Vec<u8>, CliError> {
+pub(crate) fn read_raw_bytes(path: &str) -> std::io::Result<Vec<u8>> {
     if path == "-" {
         let mut buffer = Vec::new();
         std::io::stdin().read_to_end(&mut buffer)?;
         Ok(buffer)
     } else {
-        Ok(std::fs::read(path)?)
+        std::fs::read(path)
     }
 }
 
