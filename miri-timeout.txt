@@ -1,0 +1,1068 @@
+﻿2026-10-24T23:29:23.2016272Z Current runner version: '2.338.0'
+2026-10-24T23:29:23.2040855Z ##[group]Runner Image Provisioner
+2026-10-24T23:29:23.2041697Z Hosted Compute Agent
+2026-10-24T23:29:23.2042412Z Version: 20261021.618
+2026-10-24T23:29:23.2043071Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+2026-10-24T23:29:23.2043848Z Build Date: 2026-10-21T00:45:21Z
+2026-10-24T23:29:23.2044573Z Worker ID: {eefb1638-b2f0-4901-a062-8d34cf950484}
+2026-10-24T23:29:23.2045260Z Region: westus
+2026-10-24T23:29:23.2045900Z Cloud: Azure
+2026-10-24T23:29:23.2046426Z ##[endgroup]
+2026-10-24T23:29:23.2048259Z ##[group]Operating System
+2026-10-24T23:29:23.2048932Z Ubuntu
+2026-10-24T23:29:23.2049486Z 24.04.5
+2026-10-24T23:29:23.2050091Z LTS
+2026-10-24T23:29:23.2050632Z ##[endgroup]
+2026-10-24T23:29:23.2051214Z ##[group]Runner Image
+2026-10-24T23:29:23.2051819Z Image: ubuntu-24.04
+2026-10-24T23:29:23.2052377Z Version: 20261012.334.1
+2026-10-24T23:29:23.2053727Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-24T23:29:23.2055399Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-24T23:29:23.2056425Z ##[endgroup]
+2026-10-24T23:29:23.2057787Z ##[group]GITHUB_TOKEN Permissions
+2026-10-24T23:29:23.2059802Z Contents: read
+2026-10-24T23:29:23.2060392Z Metadata: read
+2026-10-24T23:29:23.2061022Z ##[endgroup]
+2026-10-24T23:29:23.2063011Z Secret source: Actions
+2026-10-24T23:29:23.2064081Z Cache mode: write
+2026-10-24T23:29:23.2064777Z Prepare workflow directory
+2026-10-24T23:29:23.2442662Z Prepare all required actions
+2026-10-24T23:29:23.2503098Z Getting action download info
+2026-10-24T23:29:23.5954333Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-24T23:29:23.7372621Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-24T23:29:24.0671247Z Complete job name: miri
+2026-10-24T23:29:24.1533559Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-24T23:29:24.1535076Z with:
+2026-10-24T23:29:24.1535532Z   persist-credentials: false
+2026-10-24T23:29:24.1536089Z   repository: Blackcat-Informatics/purrdf
+2026-10-24T23:29:24.1540374Z   token: ***
+2026-10-24T23:29:24.1540813Z   ssh-strict: true
+2026-10-24T23:29:24.1541242Z   ssh-user: git
+2026-10-24T23:29:24.1541661Z   clean: true
+2026-10-24T23:29:24.1542105Z   sparse-checkout-cone-mode: true
+2026-10-24T23:29:24.1542629Z   fetch-depth: 1
+2026-10-24T23:29:24.1543060Z   fetch-tags: false
+2026-10-24T23:29:24.1543506Z   show-progress: true
+2026-10-24T23:29:24.1543962Z   lfs: false
+2026-10-24T23:29:24.1544388Z   submodules: false
+2026-10-24T23:29:24.1544842Z   set-safe-directory: true
+2026-10-24T23:29:24.1545351Z   allow-unsafe-pr-checkout: false
+2026-10-24T23:29:24.1546189Z ##[endgroup]
+2026-10-24T23:29:24.2517599Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-24T23:29:24.2520666Z ##[group]Getting Git version info
+2026-10-24T23:29:24.2521897Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-24T23:29:24.2523139Z [command]/usr/bin/git version
+2026-10-24T23:29:24.2590534Z git version 2.55.0
+2026-10-24T23:29:24.2611910Z ##[endgroup]
+2026-10-24T23:29:24.2624187Z Temporarily overriding HOME='/home/runner/work/_temp/27d74a4e-262c-4b97-a0a0-d189be6acccd' before making global git config changes
+2026-10-24T23:29:24.2626633Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-24T23:29:24.2631738Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-24T23:29:24.2679560Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-24T23:29:24.2683371Z ##[group]Determining repository object format
+2026-10-24T23:29:24.2685221Z ##[endgroup]
+2026-10-24T23:29:24.2687710Z ##[group]Initializing the repository
+2026-10-24T23:29:24.2689798Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-24T23:29:24.2793747Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-24T23:29:24.2796265Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-24T23:29:24.2798770Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-24T23:29:24.2800674Z hint: call:
+2026-10-24T23:29:24.2807906Z hint:
+2026-10-24T23:29:24.2809275Z hint: 	git config --global init.defaultBranch <name>
+2026-10-24T23:29:24.2810986Z hint:
+2026-10-24T23:29:24.2812454Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-24T23:29:24.2814439Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-24T23:29:24.2816114Z hint:
+2026-10-24T23:29:24.2817532Z hint: 	git branch -m <name>
+2026-10-24T23:29:24.2818901Z hint:
+2026-10-24T23:29:24.2820337Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-24T23:29:24.2822438Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-24T23:29:24.2826311Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-24T23:29:24.2853851Z ##[endgroup]
+2026-10-24T23:29:24.2855642Z ##[group]Disabling automatic garbage collection
+2026-10-24T23:29:24.2857484Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-24T23:29:24.2888302Z ##[endgroup]
+2026-10-24T23:29:24.2889978Z ##[group]Setting up auth
+2026-10-24T23:29:24.2891287Z Removing SSH command configuration
+2026-10-24T23:29:24.2892956Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-24T23:29:24.2924925Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-24T23:29:24.3301740Z Removing HTTP extra header
+2026-10-24T23:29:24.3308497Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-24T23:29:24.3343136Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-24T23:29:24.3599885Z Removing includeIf entries pointing to credentials config files
+2026-10-24T23:29:24.3605522Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-24T23:29:24.3636535Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-24T23:29:24.3854873Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-24T23:29:24.3891186Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:24.3920654Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:24.3953901Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:24.3982616Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:24.4009420Z ##[endgroup]
+2026-10-24T23:29:24.4010172Z ##[group]Fetching the repository
+2026-10-24T23:29:24.4016184Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +70da2d6f1d231f590ec465d36acb4058f77ab4b6:refs/remotes/pull/711/merge
+2026-10-24T23:29:28.3736666Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-24T23:29:28.3739758Z  * [new ref]           70da2d6f1d231f590ec465d36acb4058f77ab4b6 -> pull/711/merge
+2026-10-24T23:29:28.3743653Z ##[endgroup]
+2026-10-24T23:29:28.3745037Z ##[group]Determining the checkout info
+2026-10-24T23:29:28.3746616Z ##[endgroup]
+2026-10-24T23:29:28.3752033Z [command]/usr/bin/git sparse-checkout disable
+2026-10-24T23:29:28.3800249Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-24T23:29:28.3830173Z ##[group]Checking out the ref
+2026-10-24T23:29:28.3833307Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/711/merge
+2026-10-24T23:29:29.4048945Z Updating files:  60% (11541/18964)
+2026-10-24T23:29:29.4898092Z Updating files:  61% (11569/18964)
+2026-10-24T23:29:29.4963527Z Updating files:  62% (11758/18964)
+2026-10-24T23:29:29.5235756Z Updating files:  63% (11948/18964)
+2026-10-24T23:29:29.5380636Z Updating files:  64% (12137/18964)
+2026-10-24T23:29:29.5553346Z Updating files:  65% (12327/18964)
+2026-10-24T23:29:29.5622027Z Updating files:  66% (12517/18964)
+2026-10-24T23:29:29.5694359Z Updating files:  67% (12706/18964)
+2026-10-24T23:29:29.5776537Z Updating files:  68% (12896/18964)
+2026-10-24T23:29:29.5845443Z Updating files:  69% (13086/18964)
+2026-10-24T23:29:29.5911918Z Updating files:  70% (13275/18964)
+2026-10-24T23:29:29.5974612Z Updating files:  71% (13465/18964)
+2026-10-24T23:29:29.6046387Z Updating files:  72% (13655/18964)
+2026-10-24T23:29:29.6143704Z Updating files:  73% (13844/18964)
+2026-10-24T23:29:29.6217436Z Updating files:  74% (14034/18964)
+2026-10-24T23:29:29.6284679Z Updating files:  75% (14223/18964)
+2026-10-24T23:29:29.6351095Z Updating files:  76% (14413/18964)
+2026-10-24T23:29:29.6418126Z Updating files:  77% (14603/18964)
+2026-10-24T23:29:29.6486937Z Updating files:  78% (14792/18964)
+2026-10-24T23:29:29.6566648Z Updating files:  79% (14982/18964)
+2026-10-24T23:29:29.6632545Z Updating files:  80% (15172/18964)
+2026-10-24T23:29:29.6698612Z Updating files:  81% (15361/18964)
+2026-10-24T23:29:29.6764180Z Updating files:  82% (15551/18964)
+2026-10-24T23:29:29.6830053Z Updating files:  83% (15741/18964)
+2026-10-24T23:29:29.6918974Z Updating files:  84% (15930/18964)
+2026-10-24T23:29:29.6983817Z Updating files:  85% (16120/18964)
+2026-10-24T23:29:29.7054697Z Updating files:  86% (16310/18964)
+2026-10-24T23:29:29.7121995Z Updating files:  87% (16499/18964)
+2026-10-24T23:29:29.7188637Z Updating files:  88% (16689/18964)
+2026-10-24T23:29:29.7258609Z Updating files:  89% (16878/18964)
+2026-10-24T23:29:29.7351639Z Updating files:  90% (17068/18964)
+2026-10-24T23:29:29.7420030Z Updating files:  91% (17258/18964)
+2026-10-24T23:29:29.7490231Z Updating files:  92% (17447/18964)
+2026-10-24T23:29:29.7561765Z Updating files:  93% (17637/18964)
+2026-10-24T23:29:29.7632590Z Updating files:  94% (17827/18964)
+2026-10-24T23:29:29.7706630Z Updating files:  95% (18016/18964)
+2026-10-24T23:29:29.7782892Z Updating files:  96% (18206/18964)
+2026-10-24T23:29:29.7857877Z Updating files:  97% (18396/18964)
+2026-10-24T23:29:29.7939535Z Updating files:  98% (18585/18964)
+2026-10-24T23:29:29.8014566Z Updating files:  99% (18775/18964)
+2026-10-24T23:29:29.8015267Z Updating files: 100% (18964/18964)
+2026-10-24T23:29:29.8015865Z Updating files: 100% (18964/18964), done.
+2026-10-24T23:29:29.8237478Z Note: switching to 'refs/remotes/pull/711/merge'.
+2026-10-24T23:29:29.8238184Z 
+2026-10-24T23:29:29.8238755Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-24T23:29:29.8240268Z changes and commit them, and you can discard any commits you make in this
+2026-10-24T23:29:29.8241605Z state without impacting any branches by switching back to a branch.
+2026-10-24T23:29:29.8242381Z 
+2026-10-24T23:29:29.8243117Z If you want to create a new branch to retain commits you create, you may
+2026-10-24T23:29:29.8244483Z do so (now or later) by using -c with the switch command. Example:
+2026-10-24T23:29:29.8245241Z 
+2026-10-24T23:29:29.8245585Z   git switch -c <new-branch-name>
+2026-10-24T23:29:29.8246117Z 
+2026-10-24T23:29:29.8246514Z Or undo this operation with:
+2026-10-24T23:29:29.8247536Z 
+2026-10-24T23:29:29.8247829Z   git switch -
+2026-10-24T23:29:29.8248216Z 
+2026-10-24T23:29:29.8248872Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-24T23:29:29.8249757Z 
+2026-10-24T23:29:29.8250813Z HEAD is now at 70da2d6f Merge 13744dde282cdd5fc7cd2e91ca410b5cebfca23b into 0b67da9bfbade2045d3e00b704c37bd27f7f7684
+2026-10-24T23:29:29.8280133Z ##[endgroup]
+2026-10-24T23:29:29.8323796Z [command]/usr/bin/git log -1 --format=%H
+2026-10-24T23:29:29.8348350Z 70da2d6f1d231f590ec465d36acb4058f77ab4b6
+2026-10-24T23:29:29.8357773Z ##[group]Removing auth
+2026-10-24T23:29:29.8358373Z Removing SSH command configuration
+2026-10-24T23:29:29.8361343Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-24T23:29:29.8393980Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-24T23:29:29.8662728Z Removing HTTP extra header
+2026-10-24T23:29:29.8663690Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-24T23:29:29.8694698Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-24T23:29:29.8929178Z Removing includeIf entries pointing to credentials config files
+2026-10-24T23:29:29.8933413Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-24T23:29:29.8957873Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-24T23:29:29.8958772Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-24T23:29:29.9036871Z includeif.gitdir:/github/workspace/.git.path
+2026-10-24T23:29:29.9037909Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-24T23:29:29.9040524Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-24T23:29:29.9041641Z /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9044174Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9046746Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-24T23:29:29.9056173Z /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9064769Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9096704Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-24T23:29:29.9122368Z /github/runner_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9130220Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9163623Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-24T23:29:29.9186015Z /github/runner_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9194870Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config
+2026-10-24T23:29:29.9226936Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-24T23:29:29.9461616Z Removing credentials config '/home/runner/work/_temp/git-credentials-d4cc066d-c151-411c-b312-95bee85bd867.config'
+2026-10-24T23:29:29.9472434Z ##[endgroup]
+2026-10-24T23:29:29.9794877Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-24T23:29:29.9795331Z with:
+2026-10-24T23:29:29.9795542Z   toolchain: nightly
+2026-10-24T23:29:29.9795780Z   components: miri, rust-src
+2026-10-24T23:29:29.9796023Z ##[endgroup]
+2026-10-24T23:29:29.9890565Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-24T23:29:29.9935853Z ##[group]Run : parse toolchain version
+2026-10-24T23:29:29.9936265Z [36;1m: parse toolchain version[0m
+2026-10-24T23:29:29.9936565Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-24T23:29:29.9937332Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-24T23:29:29.9937921Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-24T23:29:29.9938222Z [36;1m  exit 1[0m
+2026-10-24T23:29:29.9938567Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-24T23:29:29.9939051Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-24T23:29:29.9939597Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:29.9940122Z [36;1m  else[0m
+2026-10-24T23:29:29.9940531Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:29.9940996Z [36;1m  fi[0m
+2026-10-24T23:29:29.9941298Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-24T23:29:29.9941863Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:29.9942335Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-24T23:29:29.9942878Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:29.9943409Z [36;1melse[0m
+2026-10-24T23:29:29.9943669Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:29.9943978Z [36;1mfi[0m
+2026-10-24T23:29:30.0201845Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:30.0202374Z env:
+2026-10-24T23:29:30.0202653Z   toolchain: nightly
+2026-10-24T23:29:30.0202969Z ##[endgroup]
+2026-10-24T23:29:30.0341615Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=44]
+2026-10-24T23:29:30.0366048Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-24T23:29:30.0395400Z ##[group]Run : construct rustup command line
+2026-10-24T23:29:30.0395764Z [36;1m: construct rustup command line[0m
+2026-10-24T23:29:30.0396245Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:30.0396930Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:30.0397826Z [36;1mecho "downgrade= --allow-downgrade" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:30.0456478Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:30.0456866Z env:
+2026-10-24T23:29:30.0457453Z   targets: 
+2026-10-24T23:29:30.0457686Z   components: miri, rust-src
+2026-10-24T23:29:30.0457963Z ##[endgroup]
+2026-10-24T23:29:30.0552904Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=18]
+2026-10-24T23:29:30.0556878Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-24T23:29:30.0584942Z ##[group]Run : set $CARGO_HOME
+2026-10-24T23:29:30.0585219Z [36;1m: set $CARGO_HOME[0m
+2026-10-24T23:29:30.0585548Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-24T23:29:30.0645182Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:30.0645816Z ##[endgroup]
+2026-10-24T23:29:30.0738684Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=18]
+2026-10-24T23:29:30.0741456Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-24T23:29:30.0776524Z ##[group]Run : install rustup if needed
+2026-10-24T23:29:30.0776853Z [36;1m: install rustup if needed[0m
+2026-10-24T23:29:30.0777482Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-24T23:29:30.0778296Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-24T23:29:30.0779071Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-24T23:29:30.0779359Z [36;1mfi[0m
+2026-10-24T23:29:30.0837927Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:30.0838312Z env:
+2026-10-24T23:29:30.0838541Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:30.0838835Z ##[endgroup]
+2026-10-24T23:29:30.0926789Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=18]
+2026-10-24T23:29:30.0931613Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-24T23:29:30.0938873Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-24T23:29:30.0942632Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-24T23:29:30.0970584Z ##[group]Run rustup toolchain install nightly --component miri --component rust-src --profile minimal --allow-downgrade --no-self-update
+2026-10-24T23:29:30.0971534Z [36;1mrustup toolchain install nightly --component miri --component rust-src --profile minimal --allow-downgrade --no-self-update[0m
+2026-10-24T23:29:30.1029204Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:30.1029574Z env:
+2026-10-24T23:29:30.1029789Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:30.1030084Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-24T23:29:30.1030343Z ##[endgroup]
+2026-10-24T23:29:30.1453297Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-24T23:29:30.2589695Z info: latest update on 2026-10-24 for version 1.101.0-nightly (48f4b0553 2026-10-23)
+2026-10-24T23:29:30.2590856Z info: downloading 5 components
+2026-10-24T23:29:39.6559448Z 
+2026-10-24T23:29:39.6642090Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (48f4b0553 2026-10-23)
+2026-10-24T23:29:39.6642683Z 
+2026-10-24T23:29:39.6698943Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=9575]
+2026-10-24T23:29:39.6707415Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-24T23:29:39.6763537Z ##[group]Run rustup default nightly
+2026-10-24T23:29:39.6763870Z [36;1mrustup default nightly[0m
+2026-10-24T23:29:39.6827582Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.6828022Z env:
+2026-10-24T23:29:39.6828265Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.6828564Z ##[endgroup]
+2026-10-24T23:29:39.6952366Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-24T23:29:39.6958840Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-24T23:29:39.6959339Z 
+2026-10-24T23:29:39.7022960Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (48f4b0553 2026-10-23)
+2026-10-24T23:29:39.7024581Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-24T23:29:39.7025807Z 
+2026-10-24T23:29:39.7046004Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=33]
+2026-10-24T23:29:39.7053443Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-24T23:29:39.7096917Z ##[group]Run : create cachekey
+2026-10-24T23:29:39.7097986Z [36;1m: create cachekey[0m
+2026-10-24T23:29:39.7099042Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-24T23:29:39.7100173Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-24T23:29:39.7101014Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-24T23:29:39.7186064Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.7186635Z env:
+2026-10-24T23:29:39.7187210Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.7187655Z ##[endgroup]
+2026-10-24T23:29:39.7549790Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=49]
+2026-10-24T23:29:39.7552769Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-24T23:29:39.7583000Z ##[group]Run : disable incremental compilation
+2026-10-24T23:29:39.7583399Z [36;1m: disable incremental compilation[0m
+2026-10-24T23:29:39.7583752Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-24T23:29:39.7584104Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-24T23:29:39.7584435Z [36;1mfi[0m
+2026-10-24T23:29:39.7651705Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.7652090Z env:
+2026-10-24T23:29:39.7652319Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.7652607Z ##[endgroup]
+2026-10-24T23:29:39.7743284Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=18]
+2026-10-24T23:29:39.7746741Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-24T23:29:39.7784735Z ##[group]Run : enable colors in Cargo output
+2026-10-24T23:29:39.7785161Z [36;1m: enable colors in Cargo output[0m
+2026-10-24T23:29:39.7785565Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-24T23:29:39.7786011Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-24T23:29:39.7786404Z [36;1mfi[0m
+2026-10-24T23:29:39.7845712Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.7846108Z env:
+2026-10-24T23:29:39.7846334Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.7846631Z   CARGO_INCREMENTAL: 0
+2026-10-24T23:29:39.7846879Z ##[endgroup]
+2026-10-24T23:29:39.7934930Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=18]
+2026-10-24T23:29:39.7942163Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-24T23:29:39.7984730Z ##[group]Run : enable Cargo sparse registry
+2026-10-24T23:29:39.7985270Z [36;1m: enable Cargo sparse registry[0m
+2026-10-24T23:29:39.7985879Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-24T23:29:39.7987327Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-24T23:29:39.7988626Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-24T23:29:39.7989607Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-24T23:29:39.7990541Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-24T23:29:39.7991401Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-24T23:29:39.7992387Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-24T23:29:39.7993278Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-24T23:29:39.7993865Z [36;1m  fi[0m
+2026-10-24T23:29:39.7994176Z [36;1mfi[0m
+2026-10-24T23:29:39.8073528Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.8074137Z env:
+2026-10-24T23:29:39.8074450Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.8075034Z   CARGO_INCREMENTAL: 0
+2026-10-24T23:29:39.8075400Z   CARGO_TERM_COLOR: always
+2026-10-24T23:29:39.8075889Z ##[endgroup]
+2026-10-24T23:29:39.8385445Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=44]
+2026-10-24T23:29:39.8390987Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-24T23:29:39.8422654Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-24T23:29:39.8423121Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-24T23:29:39.8423716Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-24T23:29:39.8424383Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-24T23:29:39.8424864Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-24T23:29:39.8425193Z [36;1mfi[0m
+2026-10-24T23:29:39.8491791Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.8492194Z env:
+2026-10-24T23:29:39.8492447Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.8492739Z   CARGO_INCREMENTAL: 0
+2026-10-24T23:29:39.8492994Z   CARGO_TERM_COLOR: always
+2026-10-24T23:29:39.8493265Z ##[endgroup]
+2026-10-24T23:29:39.8699123Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=30]
+2026-10-24T23:29:39.8729920Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-24T23:29:39.8774728Z ##[group]Run rustc +nightly --version --verbose
+2026-10-24T23:29:39.8775326Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-24T23:29:39.8869906Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-24T23:29:39.8870277Z env:
+2026-10-24T23:29:39.8870487Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.8870769Z   CARGO_INCREMENTAL: 0
+2026-10-24T23:29:39.8871003Z   CARGO_TERM_COLOR: always
+2026-10-24T23:29:39.8871236Z ##[endgroup]
+2026-10-24T23:29:39.9051936Z rustc 1.101.0-nightly (48f4b0553 2026-10-23)
+2026-10-24T23:29:39.9053036Z binary: rustc
+2026-10-24T23:29:39.9053869Z commit-hash: 48f4b05538b8eca412137042d9647a61e692c6b3
+2026-10-24T23:29:39.9054631Z commit-date: 2026-10-23
+2026-10-24T23:29:39.9055345Z host: x86_64-unknown-linux-gnu
+2026-10-24T23:29:39.9056078Z release: 1.101.0-nightly
+2026-10-24T23:29:39.9056751Z LLVM version: 23.1.4
+2026-10-24T23:29:39.9072127Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=34]
+2026-10-24T23:29:39.9141978Z ##[group]Run make miri
+2026-10-24T23:29:39.9142257Z [36;1mmake miri[0m
+2026-10-24T23:29:39.9206733Z shell: /usr/bin/bash -e {0}
+2026-10-24T23:29:39.9207178Z env:
+2026-10-24T23:29:39.9207410Z   CARGO_HOME: /home/runner/.cargo
+2026-10-24T23:29:39.9207705Z   CARGO_INCREMENTAL: 0
+2026-10-24T23:29:39.9207967Z   CARGO_TERM_COLOR: always
+2026-10-24T23:29:39.9208223Z ##[endgroup]
+2026-10-24T23:29:44.2055944Z cargo miri test -p purrdf-core small
+2026-10-24T23:30:03.1276108Z Preparing a sysroot for Miri (target: x86_64-unknown-linux-gnu)... done
+2026-10-24T23:30:03.2131632Z [1m[92m    Updating[0m crates.io index
+2026-10-24T23:30:03.3450525Z [1m[92m Downloading[0m crates ...
+2026-10-24T23:30:03.3633741Z [1m[92m  Downloaded[0m crypto-common v0.2.2
+2026-10-24T23:30:03.3710048Z [1m[92m  Downloaded[0m block-buffer v0.12.1
+2026-10-24T23:30:03.3724579Z [1m[92m  Downloaded[0m cpufeatures v0.3.0
+2026-10-24T23:30:03.3738187Z [1m[92m  Downloaded[0m typenum v1.20.1
+2026-10-24T23:30:03.3778519Z [1m[92m  Downloaded[0m digest v0.11.3
+2026-10-24T23:30:03.3808348Z [1m[92m  Downloaded[0m hybrid-array v0.4.15
+2026-10-24T23:30:03.3836674Z [1m[92m  Downloaded[0m sha2 v0.11.0
+2026-10-24T23:30:03.3872256Z [1m[92m  Downloaded[0m const-oid v0.10.2
+2026-10-24T23:30:03.3894830Z [1m[92m  Downloaded[0m memchr v2.8.2
+2026-10-24T23:30:03.3948426Z [1m[92m  Downloaded[0m aho-corasick v1.1.4
+2026-10-24T23:30:03.3998615Z [1m[92m  Downloaded[0m regex v1.12.4
+2026-10-24T23:30:03.4049037Z [1m[92m  Downloaded[0m regex-syntax v0.8.11
+2026-10-24T23:30:03.4117943Z [1m[92m  Downloaded[0m libc v0.2.186
+2026-10-24T23:30:03.4495755Z [1m[92m  Downloaded[0m regex-automata v0.4.14
+2026-10-24T23:30:03.5092604Z [1m[92m   Compiling[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+2026-10-24T23:30:03.5093833Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-10-24T23:30:03.5095519Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-10-24T23:30:03.5104794Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-24T23:30:03.6361732Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-10-24T23:30:03.6542648Z [1m[92m   Compiling[0m libc v0.2.186
+2026-10-24T23:30:04.4278446Z [1m[92m   Compiling[0m cpufeatures v0.3.0
+2026-10-24T23:30:04.4698595Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-24T23:30:04.9699190Z [1m[92m   Compiling[0m hybrid-array v0.4.15
+2026-10-24T23:30:05.2898474Z [1m[92m   Compiling[0m regex-automata v0.4.14
+2026-10-24T23:30:05.6188356Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-10-24T23:30:05.9548867Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-10-24T23:30:06.2968626Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-24T23:30:06.3958669Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-24T23:30:06.5838808Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-24T23:30:06.9722215Z [1m[92m   Compiling[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+2026-10-24T23:30:06.9948941Z [1m[92m   Compiling[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+2026-10-24T23:30:07.0688426Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-10-24T23:30:07.4498531Z [1m[92m   Compiling[0m regex v1.12.4
+2026-10-24T23:30:07.4758940Z [1m[92m   Compiling[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+2026-10-24T23:30:07.6538929Z [1m[92m   Compiling[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+2026-10-24T23:30:07.7618824Z [1m[92m   Compiling[0m purrdf-alloc-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/alloc-probe)
+2026-10-24T23:30:09.5425488Z [1m[92m   Compiling[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+2026-10-24T23:30:09.5427501Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-24T23:30:11.9763316Z [1m[92m   Compiling[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+2026-10-24T23:30:25.0834439Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 21.92s
+2026-10-24T23:30:25.1330302Z [1m[92m     Running[0m unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/c7a9dc93246020b1/out/purrdf_core-c7a9dc93246020b1)
+2026-10-24T23:30:38.0497455Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:30:38.0499133Z 
+2026-10-24T23:30:46.3637673Z 
+2026-10-24T23:30:46.3638248Z running 19 tests
+2026-10-24T23:46:15.7109387Z test ir::canon::tests::n_degree_chain_uses_heap_frames_on_a_small_native_stack ... ok
+2026-10-24T23:46:15.9390729Z test small::tests::capacity_overflow_panics ... ok
+2026-10-24T23:46:16.0421994Z test small::tests::covariance_compiles ... ok
+2026-10-24T23:46:16.6556415Z test small::tests::every_ownership_path_drops_each_element_once ... ok
+2026-10-24T23:46:16.8121349Z test small::tests::forget_into_iter_no_ub ... ok
+2026-10-24T23:46:16.9336369Z test small::tests::id_rows_behave_as_slices ... ok
+2026-10-24T23:46:17.0422822Z test small::tests::macro_forms ... ok
+2026-10-24T23:46:38.4843568Z test small::tests::model_matches_vec ... ok
+2026-10-24T23:46:38.6014011Z test small::tests::no_larger_than_needed ... ok
+2026-10-24T23:46:38.7188526Z test small::tests::overaligned_elements ... ok
+2026-10-24T23:46:45.4951416Z test small::tests::ownership_matches_vec ... ok
+2026-10-24T23:46:46.0148714Z test small::tests::panic_during_clone_drops_each_element_once ... ok
+2026-10-24T23:46:46.4072631Z test small::tests::panic_during_extend_drops_each_element_once ... ok
+2026-10-24T23:46:46.6142762Z test small::tests::panic_during_extend_with_exact_hint_drops_each_element_once ... ok
+2026-10-24T23:46:46.8709985Z test small::tests::panic_in_retain_and_dedup_keeps_a_consistent_vector ... ok
+2026-10-24T23:46:47.3705377Z test small::tests::panicking_drop_no_double_free ... ok
+2026-10-24T23:46:47.5013178Z test small::tests::send_sync_bounds ... ok
+2026-10-24T23:46:47.6037858Z test small::tests::wrapping_enums_stay_the_same_size ... ok
+2026-10-24T23:46:47.7473711Z test small::tests::zst_elements ... ok
+2026-10-24T23:46:47.7631135Z 
+2026-10-24T23:46:47.8113839Z test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 890.18s
+2026-10-24T23:46:47.8114704Z 
+2026-10-24T23:46:48.0140718Z warning: 1 warning emitted
+2026-10-24T23:46:48.0141194Z 
+2026-10-24T23:46:48.0342096Z [1m[92m     Running[0m tests/artifact_identity_alloc.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/887c80525dfddf64/out/artifact_identity_alloc-887c80525dfddf64)
+2026-10-24T23:46:48.0729226Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:48.0731181Z 
+2026-10-24T23:46:48.8657208Z 
+2026-10-24T23:46:48.8657853Z running 0 tests
+2026-10-24T23:46:48.8919146Z 
+2026-10-24T23:46:48.9347867Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.04s
+2026-10-24T23:46:48.9348783Z 
+2026-10-24T23:46:48.9603329Z warning: 1 warning emitted
+2026-10-24T23:46:48.9603665Z 
+2026-10-24T23:46:48.9628052Z [1m[92m     Running[0m tests/blank_publication.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/098149a110ba2d83/out/blank_publication-098149a110ba2d83)
+2026-10-24T23:46:49.0167919Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:49.0169557Z 
+2026-10-24T23:46:49.5300863Z 
+2026-10-24T23:46:49.5301408Z running 0 tests
+2026-10-24T23:46:49.5522989Z 
+2026-10-24T23:46:49.5902143Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s
+2026-10-24T23:46:49.5903018Z 
+2026-10-24T23:46:49.6104927Z warning: 1 warning emitted
+2026-10-24T23:46:49.6105268Z 
+2026-10-24T23:46:49.6128841Z [1m[92m     Running[0m tests/builder_locations.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/1e353083a79a411b/out/builder_locations-1e353083a79a411b)
+2026-10-24T23:46:49.6469460Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:49.6471077Z 
+2026-10-24T23:46:50.1654539Z 
+2026-10-24T23:46:50.1655274Z running 0 tests
+2026-10-24T23:46:50.1878577Z 
+2026-10-24T23:46:50.2266221Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s
+2026-10-24T23:46:50.2266926Z 
+2026-10-24T23:46:50.2479691Z warning: 1 warning emitted
+2026-10-24T23:46:50.2480038Z 
+2026-10-24T23:46:50.2504075Z [1m[92m     Running[0m tests/byte_cover.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/f7f5c513433af3ad/out/byte_cover-f7f5c513433af3ad)
+2026-10-24T23:46:50.2871058Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:50.2873037Z 
+2026-10-24T23:46:50.4080652Z 
+2026-10-24T23:46:50.4081265Z running 0 tests
+2026-10-24T23:46:50.4469361Z 
+2026-10-24T23:46:50.4470281Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.02s
+2026-10-24T23:46:50.4471024Z 
+2026-10-24T23:46:50.4632191Z warning: 1 warning emitted
+2026-10-24T23:46:50.4632528Z 
+2026-10-24T23:46:50.4656486Z [1m[92m     Running[0m tests/canonical_term_mapping.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/34de20611cf976dc/out/canonical_term_mapping-34de20611cf976dc)
+2026-10-24T23:46:50.5195576Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:50.5197690Z 
+2026-10-24T23:46:51.0366886Z 
+2026-10-24T23:46:51.0367832Z running 0 tests
+2026-10-24T23:46:51.0582695Z 
+2026-10-24T23:46:51.0990275Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s
+2026-10-24T23:46:51.0990947Z 
+2026-10-24T23:46:51.1210130Z warning: 1 warning emitted
+2026-10-24T23:46:51.1210523Z 
+2026-10-24T23:46:51.1237339Z [1m[92m     Running[0m tests/cdt_blank_identity.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/f05c8b659906d91c/out/cdt_blank_identity-f05c8b659906d91c)
+2026-10-24T23:46:51.1680594Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:51.1682362Z 
+2026-10-24T23:46:51.7135483Z 
+2026-10-24T23:46:51.7136278Z running 0 tests
+2026-10-24T23:46:51.7369799Z 
+2026-10-24T23:46:51.7761723Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.03s
+2026-10-24T23:46:51.7762441Z 
+2026-10-24T23:46:51.7981366Z warning: 1 warning emitted
+2026-10-24T23:46:51.7981776Z 
+2026-10-24T23:46:51.8007531Z [1m[92m     Running[0m tests/cdt_blank_storage.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/dc69f7a592c43394/out/cdt_blank_storage-dc69f7a592c43394)
+2026-10-24T23:46:51.8615713Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:51.8618749Z 
+2026-10-24T23:46:52.6806578Z 
+2026-10-24T23:46:52.6807293Z running 0 tests
+2026-10-24T23:46:52.7059736Z 
+2026-10-24T23:46:52.7491021Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s
+2026-10-24T23:46:52.7491975Z 
+2026-10-24T23:46:52.7750774Z warning: 1 warning emitted
+2026-10-24T23:46:52.7751295Z 
+2026-10-24T23:46:52.7775107Z [1m[92m     Running[0m tests/composite_probe_alloc.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/341ed842dc1797ef/out/composite_probe_alloc-341ed842dc1797ef)
+2026-10-24T23:46:52.8679309Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:52.8680952Z 
+2026-10-24T23:46:53.6963094Z 
+2026-10-24T23:46:53.6963700Z running 0 tests
+2026-10-24T23:46:53.7217118Z 
+2026-10-24T23:46:53.7660809Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s
+2026-10-24T23:46:53.7661478Z 
+2026-10-24T23:46:53.7921540Z warning: 1 warning emitted
+2026-10-24T23:46:53.7921947Z 
+2026-10-24T23:46:53.7946515Z [1m[92m     Running[0m tests/csv_differential.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/33547370923cb2df/out/csv_differential-33547370923cb2df)
+2026-10-24T23:46:53.8880108Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:53.8881748Z 
+2026-10-24T23:46:54.3985980Z 
+2026-10-24T23:46:54.3986558Z running 0 tests
+2026-10-24T23:46:54.4207435Z 
+2026-10-24T23:46:54.4589907Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+2026-10-24T23:46:54.4590766Z 
+2026-10-24T23:46:54.4802859Z warning: 1 warning emitted
+2026-10-24T23:46:54.4803330Z 
+2026-10-24T23:46:54.4827637Z [1m[92m     Running[0m tests/csv_scan_wasm.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/0008d5a3b813dafd/out/csv_scan_wasm-0008d5a3b813dafd)
+2026-10-24T23:46:54.5219335Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:54.5221591Z 
+2026-10-24T23:46:54.6246546Z 
+2026-10-24T23:46:54.6247351Z running 0 tests
+2026-10-24T23:46:54.6640914Z 
+2026-10-24T23:46:54.6641807Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.02s
+2026-10-24T23:46:54.6642547Z 
+2026-10-24T23:46:54.6792833Z warning: 1 warning emitted
+2026-10-24T23:46:54.6793197Z 
+2026-10-24T23:46:54.6815924Z [1m[92m     Running[0m tests/dataset_state_digest.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/1fd38062e70316f1/out/dataset_state_digest-1fd38062e70316f1)
+2026-10-24T23:46:54.8408169Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:54.8409932Z 
+2026-10-24T23:46:55.2518427Z 
+2026-10-24T23:46:55.2519028Z running 0 tests
+2026-10-24T23:46:55.3025527Z 
+2026-10-24T23:46:55.3026460Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.03s
+2026-10-24T23:46:55.3027372Z 
+2026-10-24T23:46:55.3347277Z warning: 1 warning emitted
+2026-10-24T23:46:55.3347987Z 
+2026-10-24T23:46:55.3378592Z [1m[92m     Running[0m tests/graph_existence_modes.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/5114d654f7e42dca/out/graph_existence_modes-5114d654f7e42dca)
+2026-10-24T23:46:55.4080671Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:55.4083501Z 
+2026-10-24T23:46:55.9592322Z 
+2026-10-24T23:46:55.9593115Z running 0 tests
+2026-10-24T23:46:55.9822704Z 
+2026-10-24T23:46:56.0226293Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.03s
+2026-10-24T23:46:56.0227784Z 
+2026-10-24T23:46:56.0445488Z warning: 1 warning emitted
+2026-10-24T23:46:56.0446036Z 
+2026-10-24T23:46:56.0472764Z [1m[92m     Running[0m tests/import_view.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/7353315cfa908961/out/import_view-7353315cfa908961)
+2026-10-24T23:46:56.0822531Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:56.0824172Z 
+2026-10-24T23:46:56.5822719Z 
+2026-10-24T23:46:56.5823324Z running 0 tests
+2026-10-24T23:46:56.6039134Z 
+2026-10-24T23:46:56.6419421Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+2026-10-24T23:46:56.6420505Z 
+2026-10-24T23:46:56.6624127Z warning: 1 warning emitted
+2026-10-24T23:46:56.6624488Z 
+2026-10-24T23:46:56.6648061Z [1m[92m     Running[0m tests/ir_absolute_iri.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/37ca435a57515f74/out/ir_absolute_iri-37ca435a57515f74)
+2026-10-24T23:46:56.7229947Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:56.7231950Z 
+2026-10-24T23:46:57.2793114Z 
+2026-10-24T23:46:57.2793746Z running 0 tests
+2026-10-24T23:46:57.3023030Z 
+2026-10-24T23:46:57.3438188Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.03s
+2026-10-24T23:46:57.3438700Z 
+2026-10-24T23:46:57.3653342Z warning: 1 warning emitted
+2026-10-24T23:46:57.3653670Z 
+2026-10-24T23:46:57.3677650Z [1m[92m     Running[0m tests/ir_zero_alloc.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/1d98361b0d74af09/out/ir_zero_alloc-1d98361b0d74af09)
+2026-10-24T23:46:57.4344057Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:57.4345781Z 
+2026-10-24T23:46:58.2490778Z 
+2026-10-24T23:46:58.2491471Z running 0 tests
+2026-10-24T23:46:58.2743355Z 
+2026-10-24T23:46:58.3179672Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.04s
+2026-10-24T23:46:58.3180358Z 
+2026-10-24T23:46:58.3449029Z warning: 1 warning emitted
+2026-10-24T23:46:58.3449369Z 
+2026-10-24T23:46:58.3475633Z [1m[92m     Running[0m tests/iri_authority.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/2afe809d37f1c6c8/out/iri_authority-2afe809d37f1c6c8)
+2026-10-24T23:46:58.3752383Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:58.3754097Z 
+2026-10-24T23:46:58.8727826Z 
+2026-10-24T23:46:58.8728555Z running 0 tests
+2026-10-24T23:46:58.8937309Z 
+2026-10-24T23:46:58.9341244Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+2026-10-24T23:46:58.9341965Z 
+2026-10-24T23:46:58.9552309Z warning: 1 warning emitted
+2026-10-24T23:46:58.9552714Z 
+2026-10-24T23:46:58.9578116Z [1m[92m     Running[0m tests/literal_shapes.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/b715129b2f6bf4cc/out/literal_shapes-b715129b2f6bf4cc)
+2026-10-24T23:46:58.9896296Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:58.9898218Z 
+2026-10-24T23:46:59.5027120Z 
+2026-10-24T23:46:59.5028062Z running 0 tests
+2026-10-24T23:46:59.5247126Z 
+2026-10-24T23:46:59.5635013Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s
+2026-10-24T23:46:59.5635634Z 
+2026-10-24T23:46:59.5836692Z warning: 1 warning emitted
+2026-10-24T23:46:59.5837260Z 
+2026-10-24T23:46:59.5861179Z [1m[92m     Running[0m tests/materialize_configuration.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/d858be972dfda167/out/materialize_configuration-d858be972dfda167)
+2026-10-24T23:46:59.6211186Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:46:59.6213197Z 
+2026-10-24T23:47:00.1259604Z 
+2026-10-24T23:47:00.1260145Z running 0 tests
+2026-10-24T23:47:00.1477901Z 
+2026-10-24T23:47:00.1888794Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+2026-10-24T23:47:00.1889492Z 
+2026-10-24T23:47:00.2107727Z warning: 1 warning emitted
+2026-10-24T23:47:00.2108405Z 
+2026-10-24T23:47:00.2132345Z [1m[92m     Running[0m tests/model_traits.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/6c476e4fd8895589/out/model_traits-6c476e4fd8895589)
+2026-10-24T23:47:02.4534946Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:02.4536539Z 
+2026-10-24T23:47:02.6071948Z 
+2026-10-24T23:47:02.6072486Z running 0 tests
+2026-10-24T23:47:02.6486418Z 
+2026-10-24T23:47:02.6487614Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.02s
+2026-10-24T23:47:02.6488362Z 
+2026-10-24T23:47:02.6842814Z warning: 1 warning emitted
+2026-10-24T23:47:02.6843235Z 
+2026-10-24T23:47:02.6891905Z [1m[92m     Running[0m tests/mutable_declared_graph_drain.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/76464ce858617bdc/out/mutable_declared_graph_drain-76464ce858617bdc)
+2026-10-24T23:47:02.7642264Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:02.7644252Z 
+2026-10-24T23:47:03.5782094Z 
+2026-10-24T23:47:03.5782558Z running 0 tests
+2026-10-24T23:47:03.6045976Z 
+2026-10-24T23:47:03.6489776Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.04s
+2026-10-24T23:47:03.6490518Z 
+2026-10-24T23:47:03.6760509Z warning: 1 warning emitted
+2026-10-24T23:47:03.6760881Z 
+2026-10-24T23:47:03.6786150Z [1m[92m     Running[0m tests/named_graph_membership.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/4d7c5f7b605c22f5/out/named_graph_membership-4d7c5f7b605c22f5)
+2026-10-24T23:47:03.7334307Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:03.7335974Z 
+2026-10-24T23:47:04.2527615Z 
+2026-10-24T23:47:04.2528155Z running 0 tests
+2026-10-24T23:47:04.2749466Z 
+2026-10-24T23:47:04.3150268Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.03s
+2026-10-24T23:47:04.3150967Z 
+2026-10-24T23:47:04.3369941Z warning: 1 warning emitted
+2026-10-24T23:47:04.3370353Z 
+2026-10-24T23:47:04.3394151Z [1m[92m     Running[0m tests/native_regex_storage.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/515c689eec2e309f/out/native_regex_storage-515c689eec2e309f)
+2026-10-24T23:47:04.5204567Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:04.5206190Z 
+2026-10-24T23:47:05.5337502Z 
+2026-10-24T23:47:05.5338441Z running 0 tests
+2026-10-24T23:47:05.5600472Z 
+2026-10-24T23:47:05.6052590Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.04s
+2026-10-24T23:47:05.6053666Z 
+2026-10-24T23:47:05.6333846Z warning: 1 warning emitted
+2026-10-24T23:47:05.6334351Z 
+2026-10-24T23:47:05.6363741Z [1m[92m     Running[0m tests/pack_certify.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/f27fe749dbda10da/out/pack_certify-f27fe749dbda10da)
+2026-10-24T23:47:05.6827241Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:05.6829838Z 
+2026-10-24T23:47:05.8112528Z 
+2026-10-24T23:47:05.8113142Z running 0 tests
+2026-10-24T23:47:05.8495643Z 
+2026-10-24T23:47:05.8496543Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.02s
+2026-10-24T23:47:05.8497640Z 
+2026-10-24T23:47:05.8663318Z warning: 1 warning emitted
+2026-10-24T23:47:05.8663750Z 
+2026-10-24T23:47:05.8686275Z [1m[92m     Running[0m tests/pack_container.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/8fa15908d1d8a75b/out/pack_container-8fa15908d1d8a75b)
+2026-10-24T23:47:05.9427282Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:05.9429311Z 
+2026-10-24T23:47:06.4998008Z 
+2026-10-24T23:47:06.4998658Z running 1 test
+2026-10-24T23:47:06.5504779Z test regenerate_pack_small_golden ... ignored, regenerates the committed golden fixture; run explicitly with -- --ignored
+2026-10-24T23:47:06.5644941Z 
+2026-10-24T23:47:06.6029766Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 12 filtered out; finished in 0.09s
+2026-10-24T23:47:06.6031001Z 
+2026-10-24T23:47:06.6246389Z warning: 1 warning emitted
+2026-10-24T23:47:06.6246741Z 
+2026-10-24T23:47:06.6270918Z [1m[92m     Running[0m tests/pack_dataset_view.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/3cffbb8a2496a59d/out/pack_dataset_view-3cffbb8a2496a59d)
+2026-10-24T23:47:06.7055395Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:06.7057316Z 
+2026-10-24T23:47:07.2323918Z 
+2026-10-24T23:47:07.2324550Z running 0 tests
+2026-10-24T23:47:07.2551432Z 
+2026-10-24T23:47:07.2978392Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.03s
+2026-10-24T23:47:07.2979102Z 
+2026-10-24T23:47:07.3201145Z warning: 1 warning emitted
+2026-10-24T23:47:07.3201548Z 
+2026-10-24T23:47:07.3226766Z [1m[92m     Running[0m tests/pack_graph_declarations.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/f38c706d9d1f8739/out/pack_graph_declarations-f38c706d9d1f8739)
+2026-10-24T23:47:07.3806099Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:07.3809897Z 
+2026-10-24T23:47:07.9271727Z 
+2026-10-24T23:47:07.9272449Z running 0 tests
+2026-10-24T23:47:07.9516157Z 
+2026-10-24T23:47:07.9925997Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.03s
+2026-10-24T23:47:07.9926620Z 
+2026-10-24T23:47:08.0150495Z warning: 1 warning emitted
+2026-10-24T23:47:08.0150878Z 
+2026-10-24T23:47:08.0175360Z [1m[92m     Running[0m tests/pack_id_unification.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/d4ca910dc3e3d0e4/out/pack_id_unification-d4ca910dc3e3d0e4)
+2026-10-24T23:47:08.0579318Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:08.0581005Z 
+2026-10-24T23:47:08.5731752Z 
+2026-10-24T23:47:08.5732499Z running 0 tests
+2026-10-24T23:47:08.5954010Z 
+2026-10-24T23:47:08.6368263Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+2026-10-24T23:47:08.6372102Z 
+2026-10-24T23:47:08.6585781Z warning: 1 warning emitted
+2026-10-24T23:47:08.6586211Z 
+2026-10-24T23:47:08.6609029Z [1m[92m     Running[0m tests/pack_index_compare.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/3e907fe54b849e5a/out/pack_index_compare-3e907fe54b849e5a)
+2026-10-24T23:47:08.7480273Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:08.7482095Z 
+2026-10-24T23:47:09.2691824Z 
+2026-10-24T23:47:09.2692377Z running 0 tests
+2026-10-24T23:47:09.2917498Z 
+2026-10-24T23:47:09.3326280Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s
+2026-10-24T23:47:09.3327319Z 
+2026-10-24T23:47:09.3561988Z warning: 1 warning emitted
+2026-10-24T23:47:09.3562379Z 
+2026-10-24T23:47:09.3587807Z [1m[92m     Running[0m tests/pack_mmap.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/6d16eeca4019835a/out/pack_mmap-6d16eeca4019835a)
+2026-10-24T23:47:09.4052536Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:09.4054240Z 
+2026-10-24T23:47:09.9107702Z 
+2026-10-24T23:47:09.9108405Z running 0 tests
+2026-10-24T23:47:09.9346486Z 
+2026-10-24T23:47:09.9748215Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.03s
+2026-10-24T23:47:09.9748827Z 
+2026-10-24T23:47:09.9979256Z warning: 1 warning emitted
+2026-10-24T23:47:09.9979657Z 
+2026-10-24T23:47:10.0004608Z [1m[92m     Running[0m tests/pack_side.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/1fe7375ba46580dd/out/pack_side-1fe7375ba46580dd)
+2026-10-24T23:47:10.0517413Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:10.0518948Z 
+2026-10-24T23:47:10.5811738Z 
+2026-10-24T23:47:10.5812353Z running 0 tests
+2026-10-24T23:47:10.6042952Z 
+2026-10-24T23:47:10.6439622Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+2026-10-24T23:47:10.6440377Z 
+2026-10-24T23:47:10.6658635Z warning: 1 warning emitted
+2026-10-24T23:47:10.6659004Z 
+2026-10-24T23:47:10.6684423Z [1m[92m     Running[0m tests/pack_triples.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/468e9bc1aed30519/out/pack_triples-468e9bc1aed30519)
+2026-10-24T23:47:10.7359669Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:10.7361328Z 
+2026-10-24T23:47:11.2524670Z 
+2026-10-24T23:47:11.2525184Z running 0 tests
+2026-10-24T23:47:11.2753520Z 
+2026-10-24T23:47:11.3149992Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s
+2026-10-24T23:47:11.3150615Z 
+2026-10-24T23:47:11.3373214Z warning: 1 warning emitted
+2026-10-24T23:47:11.3373575Z 
+2026-10-24T23:47:11.3397976Z [1m[92m     Running[0m tests/paged_admission_law.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/de0da7638e910fdb/out/paged_admission_law-de0da7638e910fdb)
+2026-10-24T23:47:11.4829603Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:11.4832043Z 
+2026-10-24T23:47:12.0323483Z 
+2026-10-24T23:47:12.0324073Z running 0 tests
+2026-10-24T23:47:12.0552724Z 
+2026-10-24T23:47:12.0952969Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.03s
+2026-10-24T23:47:12.0953660Z 
+2026-10-24T23:47:12.1173304Z warning: 1 warning emitted
+2026-10-24T23:47:12.1173641Z 
+2026-10-24T23:47:12.1199392Z [1m[92m     Running[0m tests/paged_backend.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/4d0e0737ad772465/out/paged_backend-4d0e0737ad772465)
+2026-10-24T23:47:12.3217745Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:12.3219409Z 
+2026-10-24T23:47:12.9822079Z 
+2026-10-24T23:47:12.9822623Z running 0 tests
+2026-10-24T23:47:13.0036728Z 
+2026-10-24T23:47:13.0426550Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.03s
+2026-10-24T23:47:13.0427813Z 
+2026-10-24T23:47:13.0658849Z warning: 1 warning emitted
+2026-10-24T23:47:13.0659240Z 
+2026-10-24T23:47:13.0686856Z [1m[92m     Running[0m tests/paged_fallible.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/f92938175e7a6633/out/paged_fallible-f92938175e7a6633)
+2026-10-24T23:47:13.1564562Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:13.1566541Z 
+2026-10-24T23:47:13.7041901Z 
+2026-10-24T23:47:13.7042503Z running 0 tests
+2026-10-24T23:47:13.7262978Z 
+2026-10-24T23:47:13.7668768Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.03s
+2026-10-24T23:47:13.7669485Z 
+2026-10-24T23:47:13.7876850Z warning: 1 warning emitted
+2026-10-24T23:47:13.7877705Z 
+2026-10-24T23:47:13.7904849Z [1m[92m     Running[0m tests/paged_stack.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/6ea97a82a9de5408/out/paged_stack-6ea97a82a9de5408)
+2026-10-24T23:47:13.9734287Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:13.9735937Z 
+2026-10-24T23:47:14.6004308Z 
+2026-10-24T23:47:14.6004856Z running 0 tests
+2026-10-24T23:47:14.6217950Z 
+2026-10-24T23:47:14.6602790Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.03s
+2026-10-24T23:47:14.6603544Z 
+2026-10-24T23:47:14.6827907Z warning: 1 warning emitted
+2026-10-24T23:47:14.6828345Z 
+2026-10-24T23:47:14.6854922Z [1m[92m     Running[0m tests/purremb_adversarial.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/e3b46cf39f02b512/out/purremb_adversarial-e3b46cf39f02b512)
+2026-10-24T23:47:14.7311185Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:14.7312850Z 
+2026-10-24T23:47:15.2615538Z 
+2026-10-24T23:47:15.2616624Z running 0 tests
+2026-10-24T23:47:15.2835136Z 
+2026-10-24T23:47:15.3243808Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.03s
+2026-10-24T23:47:15.3244424Z 
+2026-10-24T23:47:15.3453017Z warning: 1 warning emitted
+2026-10-24T23:47:15.3453384Z 
+2026-10-24T23:47:15.3478386Z [1m[92m     Running[0m tests/purremb_corpus.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/36ab69ec2c94baca/out/purremb_corpus-36ab69ec2c94baca)
+2026-10-24T23:47:15.3910203Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:15.3911880Z 
+2026-10-24T23:47:15.8903541Z 
+2026-10-24T23:47:15.8904082Z running 0 tests
+2026-10-24T23:47:15.9129909Z 
+2026-10-24T23:47:15.9549045Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+2026-10-24T23:47:15.9549743Z 
+2026-10-24T23:47:15.9767880Z warning: 1 warning emitted
+2026-10-24T23:47:15.9768498Z 
+2026-10-24T23:47:15.9790712Z [1m[92m     Running[0m tests/purremb_f64.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/19d2821b04cbe9c5/out/purremb_f64-19d2821b04cbe9c5)
+2026-10-24T23:47:16.0117781Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:16.0119462Z 
+2026-10-24T23:47:16.5059843Z 
+2026-10-24T23:47:16.5060445Z running 0 tests
+2026-10-24T23:47:16.5291714Z 
+2026-10-24T23:47:16.5688305Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.03s
+2026-10-24T23:47:16.5689012Z 
+2026-10-24T23:47:16.5896400Z warning: 1 warning emitted
+2026-10-24T23:47:16.5896774Z 
+2026-10-24T23:47:16.5920906Z [1m[92m     Running[0m tests/purremb_float_environment.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/0758593b9523dbaf/out/purremb_float_environment-0758593b9523dbaf)
+2026-10-24T23:47:16.6308976Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:16.6310655Z 
+2026-10-24T23:47:17.1334319Z 
+2026-10-24T23:47:17.1335349Z running 0 tests
+2026-10-24T23:47:17.1554666Z 
+2026-10-24T23:47:17.1961767Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.03s
+2026-10-24T23:47:17.1962339Z 
+2026-10-24T23:47:17.2163985Z warning: 1 warning emitted
+2026-10-24T23:47:17.2164345Z 
+2026-10-24T23:47:17.2186032Z [1m[92m     Running[0m tests/purremb_indexes.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/c0db98fb709f106c/out/purremb_indexes-c0db98fb709f106c)
+2026-10-24T23:47:17.2767305Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:17.2768907Z 
+2026-10-24T23:47:17.7927275Z 
+2026-10-24T23:47:17.7927950Z running 0 tests
+2026-10-24T23:47:17.8150947Z 
+2026-10-24T23:47:17.8541376Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s
+2026-10-24T23:47:17.8542102Z 
+2026-10-24T23:47:17.8758139Z warning: 1 warning emitted
+2026-10-24T23:47:17.8758544Z 
+2026-10-24T23:47:17.8780870Z [1m[92m     Running[0m tests/purremb_metric.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/9927f00cb97b4cc7/out/purremb_metric-9927f00cb97b4cc7)
+2026-10-24T23:47:17.9115400Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:17.9117267Z 
+2026-10-24T23:47:18.4149533Z 
+2026-10-24T23:47:18.4150217Z running 0 tests
+2026-10-24T23:47:18.4370612Z 
+2026-10-24T23:47:18.4788423Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+2026-10-24T23:47:18.4789182Z 
+2026-10-24T23:47:18.4992198Z warning: 1 warning emitted
+2026-10-24T23:47:18.4993235Z 
+2026-10-24T23:47:18.5017474Z [1m[92m     Running[0m tests/purremb_mmap.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/fabe7beb84318d79/out/purremb_mmap-fabe7beb84318d79)
+2026-10-24T23:47:18.5399163Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:18.5400841Z 
+2026-10-24T23:47:19.0503888Z 
+2026-10-24T23:47:19.0504502Z running 0 tests
+2026-10-24T23:47:19.0731391Z 
+2026-10-24T23:47:19.1148476Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+2026-10-24T23:47:19.1149628Z 
+2026-10-24T23:47:19.1355196Z warning: 1 warning emitted
+2026-10-24T23:47:19.1355579Z 
+2026-10-24T23:47:19.1379696Z [1m[92m     Running[0m tests/purremb_rdf12.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/e56f5f9e63147e02/out/purremb_rdf12-e56f5f9e63147e02)
+2026-10-24T23:47:19.1982410Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:19.1984077Z 
+2026-10-24T23:47:19.7245218Z 
+2026-10-24T23:47:19.7245865Z running 0 tests
+2026-10-24T23:47:19.7475077Z 
+2026-10-24T23:47:19.7890340Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+2026-10-24T23:47:19.7891047Z 
+2026-10-24T23:47:19.8091971Z warning: 1 warning emitted
+2026-10-24T23:47:19.8092302Z 
+2026-10-24T23:47:19.8118658Z [1m[92m     Running[0m tests/purremb_roundtrip.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/279641883867387b/out/purremb_roundtrip-279641883867387b)
+2026-10-24T23:47:19.8633924Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:19.8635607Z 
+2026-10-24T23:47:20.3796045Z 
+2026-10-24T23:47:20.3796553Z running 0 tests
+2026-10-24T23:47:20.4030459Z 
+2026-10-24T23:47:20.4442412Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+2026-10-24T23:47:20.4443102Z 
+2026-10-24T23:47:20.4657006Z warning: 1 warning emitted
+2026-10-24T23:47:20.4678578Z 
+2026-10-24T23:47:20.4679816Z [1m[92m     Running[0m tests/purremb_source.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/a49f58ef4412264d/out/purremb_source-a49f58ef4412264d)
+2026-10-24T23:47:20.5116925Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:20.5118742Z 
+2026-10-24T23:47:21.0204057Z 
+2026-10-24T23:47:21.0204829Z running 0 tests
+2026-10-24T23:47:21.0432748Z 
+2026-10-24T23:47:21.0831566Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+2026-10-24T23:47:21.0832250Z 
+2026-10-24T23:47:21.1044563Z warning: 1 warning emitted
+2026-10-24T23:47:21.1044927Z 
+2026-10-24T23:47:21.1068096Z [1m[92m     Running[0m tests/reifier_quads_of.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/127f22f467bde711/out/reifier_quads_of-127f22f467bde711)
+2026-10-24T23:47:21.1621322Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:21.1622969Z 
+2026-10-24T23:47:21.6739228Z 
+2026-10-24T23:47:21.6739828Z running 0 tests
+2026-10-24T23:47:21.6955140Z 
+2026-10-24T23:47:21.7343229Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s
+2026-10-24T23:47:21.7343932Z 
+2026-10-24T23:47:21.7547867Z warning: 1 warning emitted
+2026-10-24T23:47:21.7548209Z 
+2026-10-24T23:47:21.7572703Z [1m[92m     Running[0m tests/segmented.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/9db06946505b0c77/out/segmented-9db06946505b0c77)
+2026-10-24T23:47:21.9080524Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:21.9082147Z 
+2026-10-24T23:47:22.2920273Z 
+2026-10-24T23:47:22.2920923Z running 0 tests
+2026-10-24T23:47:22.3428730Z 
+2026-10-24T23:47:22.3429776Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.03s
+2026-10-24T23:47:22.3430641Z 
+2026-10-24T23:47:22.3742894Z warning: 1 warning emitted
+2026-10-24T23:47:22.3743345Z 
+2026-10-24T23:47:22.3769361Z [1m[92m     Running[0m tests/segmented_stack.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/97925037487b162d/out/segmented_stack-97925037487b162d)
+2026-10-24T23:47:22.5615612Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:22.5618163Z 
+2026-10-24T23:47:22.8681567Z 
+2026-10-24T23:47:22.8695556Z running 0 tests
+2026-10-24T23:47:22.9216031Z 
+2026-10-24T23:47:22.9217322Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.03s
+2026-10-24T23:47:22.9218074Z 
+2026-10-24T23:47:22.9503156Z warning: 1 warning emitted
+2026-10-24T23:47:22.9503546Z 
+2026-10-24T23:47:22.9530321Z [1m[92m     Running[0m tests/semver_additive.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/cc6d0ea0e3ee2796/out/semver_additive-cc6d0ea0e3ee2796)
+2026-10-24T23:47:23.0000339Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:23.0001974Z 
+2026-10-24T23:47:23.5171100Z 
+2026-10-24T23:47:23.5172103Z running 0 tests
+2026-10-24T23:47:23.5391647Z 
+2026-10-24T23:47:23.5795424Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+2026-10-24T23:47:23.5796107Z 
+2026-10-24T23:47:23.6007895Z warning: 1 warning emitted
+2026-10-24T23:47:23.6008249Z 
+2026-10-24T23:47:23.6031192Z [1m[92m     Running[0m tests/shared_owned_control.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/a0e642e93c1877bd/out/shared_owned_control-a0e642e93c1877bd)
+2026-10-24T23:47:23.6391233Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:23.6392857Z 
+2026-10-24T23:47:24.4369011Z 
+2026-10-24T23:47:24.4369654Z running 0 tests
+2026-10-24T23:47:24.4632731Z 
+2026-10-24T23:47:24.5066237Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.04s
+2026-10-24T23:47:24.5067740Z 
+2026-10-24T23:47:24.5319529Z warning: 1 warning emitted
+2026-10-24T23:47:24.5320027Z 
+2026-10-24T23:47:24.5341994Z [1m[92m     Running[0m tests/shared_views.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/9af60cf30c965205/out/shared_views-9af60cf30c965205)
+2026-10-24T23:47:24.9370034Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:24.9372433Z 
+2026-10-24T23:47:25.7323531Z 
+2026-10-24T23:47:25.7324017Z running 0 tests
+2026-10-24T23:47:25.7561534Z 
+2026-10-24T23:47:25.7952629Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.03s
+2026-10-24T23:47:25.7953314Z 
+2026-10-24T23:47:25.8191098Z warning: 1 warning emitted
+2026-10-24T23:47:25.8191481Z 
+2026-10-24T23:47:25.8222124Z [1m[92m     Running[0m tests/source_directory.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/50e4bfa89907f7f9/out/source_directory-50e4bfa89907f7f9)
+2026-10-24T23:47:25.8683369Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:25.8684995Z 
+2026-10-24T23:47:26.3727413Z 
+2026-10-24T23:47:26.3727685Z running 0 tests
+2026-10-24T23:47:26.3942462Z 
+2026-10-24T23:47:26.4342237Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+2026-10-24T23:47:26.4342922Z 
+2026-10-24T23:47:26.4544890Z warning: 1 warning emitted
+2026-10-24T23:47:26.4545588Z 
+2026-10-24T23:47:26.4568007Z [1m[92m     Running[0m tests/source_observation.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/c0f846bf1ef4c901/out/source_observation-c0f846bf1ef4c901)
+2026-10-24T23:47:26.5961974Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:26.5963647Z 
+2026-10-24T23:47:27.1733756Z 
+2026-10-24T23:47:27.1734198Z running 0 tests
+2026-10-24T23:47:27.1967458Z 
+2026-10-24T23:47:27.2362252Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.03s
+2026-10-24T23:47:27.2362883Z 
+2026-10-24T23:47:27.2573580Z warning: 1 warning emitted
+2026-10-24T23:47:27.2573941Z 
+2026-10-24T23:47:27.2599662Z [1m[92m     Running[0m tests/structured_inspection.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/19027a4fc8bb4ad2/out/structured_inspection-19027a4fc8bb4ad2)
+2026-10-24T23:47:27.3296271Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:27.3298196Z 
+2026-10-24T23:47:27.5111801Z 
+2026-10-24T23:47:27.5112593Z running 0 tests
+2026-10-24T23:47:27.5613237Z 
+2026-10-24T23:47:27.5614084Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.03s
+2026-10-24T23:47:27.5615046Z 
+2026-10-24T23:47:27.5829808Z warning: 1 warning emitted
+2026-10-24T23:47:27.5830619Z 
+2026-10-24T23:47:27.5856519Z [1m[92m     Running[0m tests/triple_carrier.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/5e4f247cd4610c33/out/triple_carrier-5e4f247cd4610c33)
+2026-10-24T23:47:27.6792179Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:27.6793822Z 
+2026-10-24T23:47:27.8099305Z 
+2026-10-24T23:47:27.8099812Z running 0 tests
+2026-10-24T23:47:27.8488065Z 
+2026-10-24T23:47:27.8488890Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.02s
+2026-10-24T23:47:27.8489555Z 
+2026-10-24T23:47:27.8662655Z warning: 1 warning emitted
+2026-10-24T23:47:27.8663017Z 
+2026-10-24T23:47:27.8688839Z [1m[92m     Running[0m tests/validated_append.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/560f64b38ffe65af/out/validated_append-560f64b38ffe65af)
+2026-10-24T23:47:27.9123598Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:27.9125269Z 
+2026-10-24T23:47:28.4388295Z 
+2026-10-24T23:47:28.4389245Z running 0 tests
+2026-10-24T23:47:28.4612627Z 
+2026-10-24T23:47:28.5044542Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+2026-10-24T23:47:28.5045248Z 
+2026-10-24T23:47:28.5256519Z warning: 1 warning emitted
+2026-10-24T23:47:28.5256874Z 
+2026-10-24T23:47:28.5281764Z [1m[92m     Running[0m tests/wrapper_graph_narrowing.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/7cf93c242d14a104/out/wrapper_graph_narrowing-7cf93c242d14a104)
+2026-10-24T23:47:28.5939944Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:28.5941599Z 
+2026-10-24T23:47:29.1206095Z 
+2026-10-24T23:47:29.1206782Z running 0 tests
+2026-10-24T23:47:29.1430567Z 
+2026-10-24T23:47:29.1833019Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+2026-10-24T23:47:29.1833702Z 
+2026-10-24T23:47:29.2047884Z warning: 1 warning emitted
+2026-10-24T23:47:29.2048188Z 
+2026-10-24T23:47:29.2070419Z [1m[92m     Running[0m tests/xsd_regex_conformance.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/eca580cf60d7c75a/out/xsd_regex_conformance-eca580cf60d7c75a)
+2026-10-24T23:47:29.2735975Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:29.2737955Z 
+2026-10-24T23:47:29.7877541Z 
+2026-10-24T23:47:29.7878454Z running 0 tests
+2026-10-24T23:47:29.8100912Z 
+2026-10-24T23:47:29.8528408Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s
+2026-10-24T23:47:29.8529594Z 
+2026-10-24T23:47:29.8743090Z warning: 1 warning emitted
+2026-10-24T23:47:29.8743538Z 
+2026-10-24T23:47:29.8816833Z MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core small
+2026-10-24T23:47:30.0449464Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 0.05s
+2026-10-24T23:47:30.0791239Z [1m[92m     Running[0m unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/purrdf-core/c7a9dc93246020b1/out/purrdf_core-c7a9dc93246020b1)
+2026-10-24T23:47:42.8915487Z warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+2026-10-24T23:47:42.8917747Z 
+2026-10-24T23:47:52.3934233Z 
+2026-10-24T23:47:52.3934884Z running 19 tests
+2026-10-24T23:59:34.9769962Z ##[error]The operation was canceled.
+2026-10-24T23:59:34.9915053Z Post job cleanup.
+2026-10-24T23:59:35.0870678Z [command]/usr/bin/git version
+2026-10-24T23:59:35.0915597Z git version 2.55.0
+2026-10-24T23:59:35.0954453Z Temporarily overriding HOME='/home/runner/work/_temp/51b6fde6-0a66-4db9-8594-c723bef1e540' before making global git config changes
+2026-10-24T23:59:35.0955901Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-24T23:59:35.0960676Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-24T23:59:35.0993793Z Removing SSH command configuration
+2026-10-24T23:59:35.1000488Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-24T23:59:35.1037899Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-24T23:59:35.2261343Z Removing HTTP extra header
+2026-10-24T23:59:35.2262493Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-24T23:59:35.2265490Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-24T23:59:35.2268672Z Removing includeIf entries pointing to credentials config files
+2026-10-24T23:59:35.2269773Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-24T23:59:35.2272081Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-24T23:59:35.2369389Z Cleaning up orphan processes
+2026-10-24T23:59:35.2856212Z Terminate orphan process: pid (2479) (make)
+2026-10-24T23:59:35.2941424Z Terminate orphan process: pid (3651) (sh)
+2026-10-24T23:59:35.2989381Z Terminate orphan process: pid (3652) (cargo)
+2026-10-24T23:59:35.3042777Z Terminate orphan process: pid (3669) (miri)

@@ -1,0 +1,52 @@
+{
+  "ok": true,
+  "head": "f1bad25c953bbfc911f7472f8567a58479d6ef27",
+  "items": [
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABfOm7Qw",
+      "kind": "comment",
+      "body": "Technical review projection for final head\nf1bad25c953bbfc911f7472f8567a58479d6ef27.\n\nThe final Makefile increment reviewed 13744dde2 through f1bad25c9. The exact-charge\nincrement covered fcad5d31d through 13744dde2; substantive implementation review\ncovered base 0b67da9bf through a60e405b6. All three changed files are covered. No actionable current-head defect or merge-blocking risk is established.\nMerge risk is minimal; architecture risk is low, with no retained concern.\n\nThe review describes private frame/group/candidate owners and the shared work\nlist replacing native recursive child searches. Parents resume with child\nhashes and issuers. Permutation ordering, budget charging, lexicographic\npruning/ties, issuer adoption and final hashing remain in the production path.\nThe native 256-node chain runs on a 128 KiB stack and checks issuer order and\nremaining budget. Constructor authorities use source:a0a182593706ad6a;\nother proof fields remain unchanged.\n\nThe formal exact-charge test finding is addressed by the strengthened existing\ncase. It consumes 256 frame entries and 510 related-group permutations, exactly\n766 units. Focused native execution, full source/helper qualification and normal\nsigned hooks/push pass. No new case or production runtime branch was added by\nthat correction.\n\nThe initial architecture assessment observed all-or-nothing result publication,\nexisting search charging and cancellation controls. It retained uncertainty\nabout peak heap consumption and allocator failure: WorkList::push ultimately\nuses infallible Vec::push, and work units do not meter heap bytes. The baseline\nalready allocated issuer copies and search containers; no introduced regression\nwas established. Caller-owned byte admission and explicit allocation refusal\nremain original active parent requirements, not a completion claim here.\nDeployment-specific host/tenant exposure was not supplied.\n\nTitle, description, linked-issue coding requirements and scope checks pass.\nThe direct target is 710; configurable budgets, dataset-state controls and heap\nUDF execution remain outside this unit under 489. The profile and dependencies\nare unchanged. The implementation has no recursive fallback or semantic WASM\ncopy. Docstring coverage is reported as 100 percent over six functions, with one\nunsupported item skipped.\n\nNo formal approval or independently rerun test qualification is inferred.\nAny review wording implying hosted success is governed by actual final CI\nevidence, not adopted while checks are pending. Decorative UI, navigation,\nbilling, automation controls/prompts and poems are omitted from this projection.\n\nThe final Makefile review covers all four SmallVec Miri selectors. Each selects\npurrdf-core library cases matching small::tests::. Default, Tree Borrows, strict\nprovenance and i686 models remain. The selection correction preserves the\nunsafe-storage obligations and avoids running the native semantic stack fixture\nunder Miri. No actionable comment was generated for this increment. Current\narchitecture assessment covers the three changed files and retains no concern.\n",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/711#issuecomment-6390659907",
+      "author": "coderabbitai",
+      "updated_at": "2026-10-25T00:41:09Z",
+      "state": null,
+      "commit": null
+    },
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABfO0tsQ",
+      "kind": "comment",
+      "body": "Addressed the exact-charge finding in the existing deep-chain case. Its\n256 frame entries and 510 related-group permutations now assert exactly\n766 work units. The focused case passes on the same 128 KiB native stack;\nno test case or production runtime branch was added.\n\nThe source census retains the same 173 constructor files and every original\nsink. Aggregate bindings are refreshed and the complete helper gate passes.\nThe prior behavioral, frozen-conformance and strict production qualification\nremains applicable because the review fix changes the test assertion only.\n\nThe review's memory-containment limitation remains explicit under the active\nparent requirements; this bounded change removes native recursion and makes\nno byte-admission guarantee.\n\nReview: https://github.com/Blackcat-Informatics/purrdf/pull/711#pullrequestreview-5640555936\n",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/711#issuecomment-6390885809",
+      "author": "paudley",
+      "updated_at": "2026-10-24T23:29:03Z",
+      "state": null,
+      "commit": null
+    },
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABfPOmpQ",
+      "kind": "comment",
+      "body": "The cancelled Miri job exceeded its 30-minute deadline, as confirmed by the\ncheck annotation. Its broad `small` filter selected the new canonicalization\nstack case, spending over 15 minutes there before the intended storage cases.\n\nThe gate now targets `--lib small::tests::` under each existing model. All 18\nSmallVec cases remain in every model, and the BLAKE3 probe is unchanged. The\ncomplete corrected `make miri` gate passes locally: four sets of 18 storage\ncases plus the streaming probe. No deadline or assertion was relaxed. The\nsemantic canonicalization case remains in normal native coverage.\n",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/711#issuecomment-6391309989",
+      "author": "paudley",
+      "updated_at": "2026-10-25T00:16:39Z",
+      "state": null,
+      "commit": null
+    },
+    {
+      "id": "github:review:PRR_kwDOTKq-Ms8AAAABUDQNoA",
+      "kind": "review",
+      "body": "Technical formal-review projection.\nSource review: https://github.com/Blackcat-Informatics/purrdf/pull/711#pullrequestreview-5640555936\nReviewed head: fcad5d31d7efa9f3bc54847df32c8de82d7ec9ea.\nReview state: COMMENTED; this is not an approval.\n\nOne finding, classified trivial functional correctness, concerns\ncrates/rdf-core/src/ir/canon.rs lines 5598 through 5638:\nthe new deep-chain test's loose budget comparison cannot detect a missing or\nextra frame-entry or permutation charge. The expected fixture total is\n3 * COUNT - 2: one entry per blank, one permutation at each endpoint and two\nat each internal node. The suggested replacement is:\n\n```rust\nassert_eq!(\n    state.budget,\n    RDFC_CALL_LIMIT - (3 * COUNT as u64 - 2),\n);\n```\n\nAddressed in 13744dde282cdd5fc7cd2e91ca410b5cebfca23b by strengthening the existing\nassertion. The focused native case proves exactly 766 units on the same 128 KiB\nstack. Source/helper qualification and normal signed hooks/push pass, and the\ndisposition and public response are recorded. No other substantive finding is\npresent in this formal review.\n\nIts increment was a60e405b6 through fcad5d31d; canon.rs was selected but also\nreported similar to prior changes. This coverage limit is retained.\nDecorative UI, billing, automation instructions and repeated generated prompts\nare omitted; the technical finding and code suggestion are retained.\n",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/711#pullrequestreview-5640555936",
+      "author": "coderabbitai",
+      "updated_at": "2026-10-24T23:18:20Z",
+      "state": "COMMENTED",
+      "commit": "fcad5d31d7efa9f3bc54847df32c8de82d7ec9ea"
+    }
+  ],
+  "coverage": {
+    "comments": "complete",
+    "reviews": "complete",
+    "inline_comments": "complete",
+    "threads": "complete"
+  }
+}

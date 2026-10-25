@@ -1,0 +1,400 @@
+{
+  "issue": 710,
+  "pr_number": 711,
+  "branch": "paudley/710-move-rdfc-n-degree-search-onto-heap",
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap",
+  "observed_at": "2026-10-25T00:12:15.920838+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "dirty",
+      "message": "Source changes remain outside the selected Stage directory"
+    },
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Inspect and commit the intended source changes",
+    "Inspect saved failed-job excerpts",
+    "Complete: pr-checks.txt, validation.md"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/pr-comments.md",
+    "status": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/status.json",
+    "checks": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "0b67da9bfbade2045d3e00b704c37bd27f7f7684",
+    "headRefName": "paudley/710-move-rdfc-n-degree-search-onto-heap",
+    "headRefOid": "13744dde282cdd5fc7cd2e91ca410b5cebfca23b",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 711,
+    "state": "OPEN",
+    "title": "Run RDFC n-degree search on heap frames",
+    "url": "https://github.com/Blackcat-Informatics/purrdf/pull/711"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121025645420",
+        "name": "test",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121023798422",
+        "name": "simd-asm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121021061743",
+        "name": "conformance",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/runs/121018324266",
+        "name": "CodeQL",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265949",
+        "name": "aarch64",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265931",
+        "name": "test (integration-4)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266127",
+        "name": "miri",
+        "state": "CANCELLED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266074",
+        "name": "cross-arch-riscv64 (determinism-more-workers)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266039",
+        "name": "cross-arch-riscv64 (determinism-one-worker)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266118",
+        "name": "windows-mtime",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266186",
+        "name": "msrv",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265999",
+        "name": "simd-asm-config (aarch64-neoverse-v1)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265845",
+        "name": "test (integration-1)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265829",
+        "name": "projection-oracles",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265962",
+        "name": "conformance (python)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265814",
+        "name": "doc",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266180",
+        "name": "test (integration-3)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265891",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266139",
+        "name": "wasm-package",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265692",
+        "name": "wasm-exec",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266187",
+        "name": "geo-determinism",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266205",
+        "name": "wasm-schema-oracles",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265878",
+        "name": "simd-asm-config (x86_64)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266086",
+        "name": "simd-asm-config (x86_64-v3)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266136",
+        "name": "simd-asm-config (x86_64-v4)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266079",
+        "name": "simd-asm-config (aarch64)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265956",
+        "name": "workspace",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266144",
+        "name": "simd-asm-config (wasm32)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266166",
+        "name": "simd-asm-config (wasm32-simd128)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265997",
+        "name": "conformance (shapes)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266005",
+        "name": "test (integration-2)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265957",
+        "name": "conformance (sparql)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265831",
+        "name": "test (integration-5)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266041",
+        "name": "cross-arch-riscv64 (suites)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265983",
+        "name": "cross-arch-riscv64 (determinism-serial)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265817",
+        "name": "test (doc)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265938",
+        "name": "test (lib)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266097",
+        "name": "avx512-sde",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266132",
+        "name": "pytest",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266223",
+        "name": "python-publisher",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266165",
+        "name": "conformance (core)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265990",
+        "name": "cross-arch",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018265879",
+        "name": "capi",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266642",
+        "name": "simd-asm-projection",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266853",
+        "name": "native-profile-admission",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266810",
+        "name": "native-profile",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266857",
+        "name": "native-profile-comparison",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142905531/job/121018183866",
+        "name": "Analyze (rust)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142905531/job/121018183738",
+        "name": "Analyze (python)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142905531/job/121018183863",
+        "name": "Analyze (javascript-typescript)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142905531/job/121018184055",
+        "name": "Analyze (c-cpp)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142905531/job/121018183936",
+        "name": "Analyze (actions)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "",
+        "name": "CodeRabbit",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "13744dde282cdd5fc7cd2e91ca410b5cebfca23b",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 3,
+    "change_token": "c0fb2d0cb933c2233678710e4708809ac5be9e3086feee7c7e37216114f3fffd"
+  },
+  "local": {
+    "head": "13744dde282cdd5fc7cd2e91ca410b5cebfca23b",
+    "branch": "paudley/710-move-rdfc-n-degree-search-onto-heap",
+    "dirty_paths": [
+      "Makefile"
+    ]
+  },
+  "ci_logs": {
+    "pr": 711,
+    "jobs": [
+      {
+        "name": "miri",
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266127",
+        "path": "/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/ci-logs/github-job-121018266127.log",
+        "excerpt": [
+          "455: 2026-10-24T23:46:47.7631135Z ",
+          "456: 2026-10-24T23:46:47.8113839Z test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 890.18s",
+          "457: 2026-10-24T23:46:47.8114704Z ",
+          "458: 2026-10-24T23:46:48.0140718Z warning: 1 warning emitted",
+          "465: 2026-10-24T23:46:48.8919146Z ",
+          "466: 2026-10-24T23:46:48.9347867Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.04s",
+          "467: 2026-10-24T23:46:48.9348783Z ",
+          "468: 2026-10-24T23:46:48.9603329Z warning: 1 warning emitted",
+          "475: 2026-10-24T23:46:49.5522989Z ",
+          "476: 2026-10-24T23:46:49.5902143Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s",
+          "477: 2026-10-24T23:46:49.5903018Z ",
+          "478: 2026-10-24T23:46:49.6104927Z warning: 1 warning emitted",
+          "485: 2026-10-24T23:46:50.1878577Z ",
+          "486: 2026-10-24T23:46:50.2266221Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s",
+          "487: 2026-10-24T23:46:50.2266926Z ",
+          "488: 2026-10-24T23:46:50.2479691Z warning: 1 warning emitted",
+          "495: 2026-10-24T23:46:50.4469361Z ",
+          "496: 2026-10-24T23:46:50.4470281Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.02s",
+          "497: 2026-10-24T23:46:50.4471024Z ",
+          "498: 2026-10-24T23:46:50.4632191Z warning: 1 warning emitted",
+          "505: 2026-10-24T23:46:51.0582695Z ",
+          "506: 2026-10-24T23:46:51.0990275Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s",
+          "507: 2026-10-24T23:46:51.0990947Z ",
+          "508: 2026-10-24T23:46:51.1210130Z warning: 1 warning emitted",
+          "515: 2026-10-24T23:46:51.7369799Z ",
+          "516: 2026-10-24T23:46:51.7761723Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.03s",
+          "517: 2026-10-24T23:46:51.7762441Z ",
+          "518: 2026-10-24T23:46:51.7981366Z warning: 1 warning emitted",
+          "525: 2026-10-24T23:46:52.7059736Z ",
+          "526: 2026-10-24T23:46:52.7491021Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s",
+          "527: 2026-10-24T23:46:52.7491975Z ",
+          "528: 2026-10-24T23:46:52.7750774Z warning: 1 warning emitted",
+          "(52 further error matches; see saved log)"
+        ]
+      }
+    ],
+    "ok": true,
+    "summary": "# PR #711 failed CI logs\n\n## miri\nhttps://github.com/Blackcat-Informatics/purrdf/actions/runs/40142908688/job/121018266127\n\n/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/ci-logs/github-job-121018266127.log\n455: 2026-10-24T23:46:47.7631135Z \n456: 2026-10-24T23:46:47.8113839Z test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 890.18s\n457: 2026-10-24T23:46:47.8114704Z \n458: 2026-10-24T23:46:48.0140718Z warning: 1 warning emitted\n465: 2026-10-24T23:46:48.8919146Z \n466: 2026-10-24T23:46:48.9347867Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.04s\n467: 2026-10-24T23:46:48.9348783Z \n468: 2026-10-24T23:46:48.9603329Z warning: 1 warning emitted\n475: 2026-10-24T23:46:49.5522989Z \n476: 2026-10-24T23:46:49.5902143Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s\n477: 2026-10-24T23:46:49.5903018Z \n478: 2026-10-24T23:46:49.6104927Z warning: 1 warning emitted\n485: 2026-10-24T23:46:50.1878577Z \n486: 2026-10-24T23:46:50.2266221Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s\n487: 2026-10-24T23:46:50.2266926Z \n488: 2026-10-24T23:46:50.2479691Z warning: 1 warning emitted\n495: 2026-10-24T23:46:50.4469361Z \n496: 2026-10-24T23:46:50.4470281Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.02s\n497: 2026-10-24T23:46:50.4471024Z \n498: 2026-10-24T23:46:50.4632191Z warning: 1 warning emitted\n505: 2026-10-24T23:46:51.0582695Z \n506: 2026-10-24T23:46:51.0990275Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s\n507: 2026-10-24T23:46:51.0990947Z \n508: 2026-10-24T23:46:51.1210130Z warning: 1 warning emitted\n515: 2026-10-24T23:46:51.7369799Z \n516: 2026-10-24T23:46:51.7761723Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.03s\n517: 2026-10-24T23:46:51.7762441Z \n518: 2026-10-24T23:46:51.7981366Z warning: 1 warning emitted\n525: 2026-10-24T23:46:52.7059736Z \n526: 2026-10-24T23:46:52.7491021Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s\n527: 2026-10-24T23:46:52.7491975Z \n528: 2026-10-24T23:46:52.7750774Z warning: 1 warning emitted\n(52 further error matches; see saved log)\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "pr-checks.txt",
+    "validation.md"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

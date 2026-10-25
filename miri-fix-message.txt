@@ -1,0 +1,1 @@
+Scope Miri storage checks to the SmallVec module

@@ -1,0 +1,10 @@
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+PR #711 — paudley/710-move-rdfc-n-degree-search-onto-heap
+CI: pending
+Blockers: 3; unavailable sources: 0
+Watch: changed
+NEXT Wait for CI changes
+NEXT Read pr-comments.md and record each disposition with review-disposition
+NEXT Complete: pr-checks.txt, review-debt.md, validation.md
+Evidence: /home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/status.json

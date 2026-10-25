@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Parent: #489.\n\nRDFC's n-degree search recursively calls itself for newly issued related\nblank nodes. A caller-removable work budget must not leave native recursion\nas an accidental implementation ceiling.\n\nReplace that recursion with explicit owned heap frames on the production path.\nPreserve the exact RDFC traversal, permutation/pruning order, issuer ownership,\nhash choice, successful bytes, existing call/permutation charging and stop\nchecks. Do not retain a second recursive implementation or add a dependency.\n\nAcceptance: existing native canonicalization/profile and W3C conformance cases\nretain exact output and refusal behavior; a focused deep n-degree case exercises\nthe iterative path; affected strict compilation, helper proofs, normal hooks,\nindependent review and hosted gates pass. No general-semantic WASM copies.\n\nThis unit does not introduce configurable budgets, change profile identity,\nport dataset-state controls or implement heap UDF execution. Those requirements\nremain in #489, which stays open. Budget this coherent delivery at no more than\nfour active engineering/local-validation hours, reassessing at two hours.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-24T22:36:22Z",
+  "labels": [],
+  "milestone": null,
+  "number": 710,
+  "state": "OPEN",
+  "title": "Move RDFC n-degree search onto heap frames",
+  "updatedAt": "2026-10-24T22:36:22Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/710"
+}

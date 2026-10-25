@@ -1,0 +1,67 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/rdf-core)
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/sparql-algebra)
+   Compiling ctutils v0.4.2
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/ed25519)
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling universal-hash v0.6.1
+   Compiling visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+   Compiling crossbeam-deque v0.8.6
+   Compiling unicode-ident v1.0.24
+   Compiling polyval v0.7.3
+   Compiling quote v1.0.46
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/jsonschema)
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling rayon v1.12.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/gts)
+   Compiling syn v2.0.118
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 3m 22s
+     Running tests/rdf12_canon_profile.rs (/opt/.cargo/92/44bbfb51647c9b/debug/build/purrdf-rdf/4a72b15a487a1329/out/rdf12_canon_profile-4a72b15a487a1329)
+
+running 12 tests
+test a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph ... ok
+test a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph ... ok
+test a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation ... ok
+test a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells ... ok
+test flat_view_leaves_an_ordinary_quad_unchanged ... ok
+test a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells ... ok
+test a_spelled_reifier_co_canonicalizes_with_the_row_it_spells ... ok
+test the_corpus_digest_matches_the_constant_a_consumer_pins ... ok
+test the_profile_identity_is_readable_from_the_api ... ok
+test no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation ... ok
+test the_corpus_pairs_hold_their_declared_relations ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+     Running tests/rdfc_w3c.rs (/opt/.cargo/92/44bbfb51647c9b/debug/build/purrdf-rdf/d41d08a877810329/out/rdfc_w3c-d41d08a877810329)
+
+running 6 tests
+test w3c_inventory ... ok
+test w3c_rdfc10_shard_2 ... ok
+test w3c_rdfc10_shard_0 ... ok
+test w3c_rdfc10_shard_1 ... ok
+test w3c_rdfc10_shard_3 ... ok
+test w3c_rdfc10_heavy_offgate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+

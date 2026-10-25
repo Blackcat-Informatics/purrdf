@@ -1,0 +1,92 @@
+# Issue #489: Make the RDFC call limit and SPARQL UDF depth removable, and stop canonicalize from panicking on exhaustion
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+## Summary
+
+Two fixed ceilings remain that a caller can neither raise nor remove, and one of them panics on its trusted path:
+
+1. **RDFC canonicalization**: `RDFC_CALL_LIMIT = 1_000_000` bounds the n-degree hash search, and `canonicalize` / `canonicalize_with` `panic!` when it is exhausted.
+2. **SPARQL UDF depth**: `MAX_UDF_DEPTH = 32` bounds function-to-function call chains, pinned even under `QueryGovernors::UNBOUNDED`.
+
+We ask that neither entry point can panic, that both bounds become caller-settable and removable, and that the remaining limit in each case be the physical one (memory, and a caller's stop signal), reached with typed evidence.
+
+## Current behaviour (`main` at `6273b6173`)
+
+**RDFC**
+- `crates/rdf-core/src/ir/canon.rs:198-206`: `pub const RDFC_CALL_LIMIT: u64 = 1_000_000;` "exhaustion means a pathologically symmetric blank graph and is a hard `panic!` (no knob, no degraded fallback)". It is part of `CANON_PROFILE_ID`'s contract.
+- Charged once per `hash_n_degree` call (`canon.rs:2395`) and per permutation (`canon.rs:2419`).
+- `run()` (`canon.rs:2279-2283`): `Err(err) => panic!("{err}")`, used by `canonicalize` and `canonicalize_with`.
+- The fallible entry points (`try_canonicalize*`, `canonical_relabel`, flat-view variants) return `CanonError::BudgetExceeded(BudgetExceeded { blank_count })` (`canon.rs:2315`), and `DatasetState` returns `DatasetStateError::SearchBudgetExceeded` (`canon/state.rs:99, 663, 668`). The private `canonical_bytes(&mut self, limit: u64)` (`state.rs:701`) already takes the limit as a parameter; its one caller passes the constant.
+- The module docs (`canon.rs:124-127`) still say the routine panics on exhaustion, which is now true only of the trusted-caller functions.
+
+**UDF depth**
+- `crates/sparql-eval/src/eval.rs:836`: `pub(crate) const MAX_UDF_DEPTH: u32 = 32;`
+- `governor/mod.rs:576-589`: `UNBOUNDED` pins `UdfDepth` to it, "because a caller-relaxable stack-recursion bound is not a bound".
+- Exceeded: ungoverned `EvalError::Function("… exceeded the depth bound of 32")` (`eval.rs:2696-2699`, `user_fn.rs:1459-1464`); governed `BudgetExhausted` with `PartialAnswers::Unknown` (`user_fn.rs:2560-2575`).
+
+## Why it matters
+
+Katamari uses purrdf's RDFC-1.0 (with triple terms) as the equality check when it rebuilds derived RDF from its authority (ADR-0038 38.8): a rebuild compares equal under RDFC or it is a defect. That runs inside a long-lived store process over data it does not choose. A panic there takes down the store, and a fixed call count means a valid graph can be impossible to compare for a reason that is not physical. Katamari's no-limits rule permits only physical limits on caller work; the hard part of RDFC (pathological symmetry) is real, but the right response is the caller's choice of budget plus a stop signal, and a typed outcome, not a process abort.
+
+UDF depth: the stated reason for pinning it is the native stack. That is a physical limit, but it is a property of the implementation's recursion, not of the function program: an evaluator that keeps UDF frames on the heap has memory as its limit instead. Katamari's derived views and placement rules are expected to call declared functions; 32 is a chosen number between them and the memory the host actually has.
+
+## Proposed direction (a sketch)
+
+**RDFC**
+- Make `canonicalize` / `canonicalize_with` non-panicking (return `Result`), or deprecate them in favour of the `try_` forms; no public entry point should abort the process on input.
+- Expose the budget as a caller option, with `RDFC_CALL_LIMIT` as the default and an explicit unlimited setting; accept a `StopSignal` so a host can bound time without a number.
+- Keep profile identity exact: the identity names the algorithm and how the budget was set (default, stated value, or unlimited), so a result never claims another configuration's identity.
+- Update the module docs.
+
+**UDF depth**
+- Evaluate UDF bodies with an explicit heap-allocated frame stack (or a trampolined call), so depth no longer consumes native stack.
+- Then make `UdfDepth` an ordinary caller-settable dimension (default 32 if a default is wanted), removable, charged to the memory budget (#486), and stoppable by the stop signal.
+- The shapes engine's separate recursion guard may deserve the same treatment; noting it, not asking for it here.
+
+## Acceptance criteria
+
+- No public canonicalization function panics on any input (a test with a symmetric blank graph past the default budget asserts a typed error from every entry point).
+- With an unlimited budget and a stop signal, the same graph runs until the signal fires, then returns `BudgetExceeded`-style evidence with the work done.
+- A recursive SPARQL function of depth 10,000 evaluates with the depth ceiling removed, on the default thread stack.
+- Depth 33 still refuses under the default setting (unchanged behaviour by default).
+
+## Related
+
+#364, #488 (partial results), #486 (memory budget).
+
+
+## Comments (2)
+
+### paudley — 2026-10-09T06:49:58Z
+
+## Also in scope: the Datalog evaluator's compiled-in defaults
+
+The same ask applies to `crates/datalog/src/seminaive.rs` (at `3b6ec4d9f`), which has compiled-in default limits: `DEFAULT_MAX_STORED_FACTS` (4,194,304, or `1 << 17` on wasm32) and `DEFAULT_MAX_JOIN_STEPS` (1,048,576). Exceeding one is a typed refusal, not a truncation, which is the honest form. But the numbers are chosen, not physical.
+
+For Katamari's use (ADR-0045 45.21, Proposed): every bound the evaluator applies is either a declared property of the caller's profile or a physical limit (memory, where #486's spill seam applies). So we ask for:
+- a way to run with **no** stored-fact or join-step limit at all, not merely a larger one;
+- the defaults to stop being applied silently when the caller has not set them. If a default stays for other consumers, it should be one the caller opts into, visibly.
+
+The same applies to the 16 MiB term-arena constant already noted in #486 (`seminaive.rs:195`).
+
+
+### paudley — 2026-10-24T16:59:34Z
+
+The approved optimized queue decomposes this issue into complete production
+behaviors before it grows into another long-running branch. New child #704 owns
+removing trusted/panicking canonicalization APIs and propagating their original
+native failures through every in-repository caller. The v4 migration removes
+obsolete entry points rather than preserving API compatibility.
+
+Caller-configurable/removable RDFC and dataset-state search budgets, exact
+configuration/work identities, heap-framed UDF execution and explicit Datalog
+logical defaults remain mandatory in #489. This parent stays open until every
+original acceptance criterion passes; the child does not replace that contract.
+
+The stagectl checkout is isolated from the Columnar delivery qualifying in PR
+#703. No new native runtime result or canonicalization PR is claimed yet.
+
+

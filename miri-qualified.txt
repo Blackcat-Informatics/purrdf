@@ -1,0 +1,194 @@
+cargo miri test -p purrdf-core --lib small::tests::
+Preparing a sysroot for Miri (target: x86_64-unknown-linux-gnu)... done
+WARNING: Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping.
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/rdf-core)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/alloc-probe)
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/testkit)
+   Compiling regex v1.12.4
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 9.85s
+     Running unittests src/lib.rs (/opt/.cargo/92/44bbfb51647c9b/x86_64-unknown-linux-gnu/debug/build/purrdf-core/36f7bb00155e4fff/out/purrdf_core-36f7bb00155e4fff)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+running 18 tests
+test small::tests::capacity_overflow_panics ... ok
+test small::tests::covariance_compiles ... ok
+test small::tests::every_ownership_path_drops_each_element_once ... ok
+test small::tests::forget_into_iter_no_ub ... ok
+test small::tests::id_rows_behave_as_slices ... ok
+test small::tests::macro_forms ... ok
+test small::tests::model_matches_vec ... ok
+test small::tests::no_larger_than_needed ... ok
+test small::tests::overaligned_elements ... ok
+test small::tests::ownership_matches_vec ... ok
+test small::tests::panic_during_clone_drops_each_element_once ... ok
+test small::tests::panic_during_extend_drops_each_element_once ... ok
+test small::tests::panic_during_extend_with_exact_hint_drops_each_element_once ... ok
+test small::tests::panic_in_retain_and_dedup_keeps_a_consistent_vector ... ok
+test small::tests::panicking_drop_no_double_free ... ok
+test small::tests::send_sync_bounds ... ok
+test small::tests::wrapping_enums_stay_the_same_size ... ok
+test small::tests::zst_elements ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1385 filtered out; finished in 39.72s
+
+warning: 1 warning emitted
+
+MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core --lib small::tests::
+WARNING: Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping.
+    Finished `test` profile [optimized] target(s) in 0.26s
+     Running unittests src/lib.rs (/opt/.cargo/92/44bbfb51647c9b/x86_64-unknown-linux-gnu/debug/build/purrdf-core/36f7bb00155e4fff/out/purrdf_core-36f7bb00155e4fff)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+running 18 tests
+test small::tests::capacity_overflow_panics ... ok
+test small::tests::covariance_compiles ... ok
+test small::tests::every_ownership_path_drops_each_element_once ... ok
+test small::tests::forget_into_iter_no_ub ... ok
+test small::tests::id_rows_behave_as_slices ... ok
+test small::tests::macro_forms ... ok
+test small::tests::model_matches_vec ... ok
+test small::tests::no_larger_than_needed ... ok
+test small::tests::overaligned_elements ... ok
+test small::tests::ownership_matches_vec ... ok
+test small::tests::panic_during_clone_drops_each_element_once ... ok
+test small::tests::panic_during_extend_drops_each_element_once ... ok
+test small::tests::panic_during_extend_with_exact_hint_drops_each_element_once ... ok
+test small::tests::panic_in_retain_and_dedup_keeps_a_consistent_vector ... ok
+test small::tests::panicking_drop_no_double_free ... ok
+test small::tests::send_sync_bounds ... ok
+test small::tests::wrapping_enums_stay_the_same_size ... ok
+test small::tests::zst_elements ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1385 filtered out; finished in 39.83s
+
+warning: 1 warning emitted
+
+MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core --lib small::tests::
+WARNING: Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping.
+    Finished `test` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/opt/.cargo/92/44bbfb51647c9b/x86_64-unknown-linux-gnu/debug/build/purrdf-core/36f7bb00155e4fff/out/purrdf_core-36f7bb00155e4fff)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+running 18 tests
+test small::tests::capacity_overflow_panics ... ok
+test small::tests::covariance_compiles ... ok
+test small::tests::every_ownership_path_drops_each_element_once ... ok
+test small::tests::forget_into_iter_no_ub ... ok
+test small::tests::id_rows_behave_as_slices ... ok
+test small::tests::macro_forms ... ok
+test small::tests::model_matches_vec ... ok
+test small::tests::no_larger_than_needed ... ok
+test small::tests::overaligned_elements ... ok
+test small::tests::ownership_matches_vec ... ok
+test small::tests::panic_during_clone_drops_each_element_once ... ok
+test small::tests::panic_during_extend_drops_each_element_once ... ok
+test small::tests::panic_during_extend_with_exact_hint_drops_each_element_once ... ok
+test small::tests::panic_in_retain_and_dedup_keeps_a_consistent_vector ... ok
+test small::tests::panicking_drop_no_double_free ... ok
+test small::tests::send_sync_bounds ... ok
+test small::tests::wrapping_enums_stay_the_same_size ... ok
+test small::tests::zst_elements ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1385 filtered out; finished in 39.72s
+
+warning: 1 warning emitted
+
+cargo miri test -p purrdf-core --lib small::tests:: --target i686-unknown-linux-gnu
+Preparing a sysroot for Miri (target: i686-unknown-linux-gnu)... done
+WARNING: Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping.
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/stack)
+   Compiling regex-automata v0.4.14
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/testkit)
+   Compiling regex v1.12.4
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 8.26s
+     Running unittests src/lib.rs (/opt/.cargo/92/44bbfb51647c9b/i686-unknown-linux-gnu/debug/build/purrdf-core/80630a0ecf1392b5/out/purrdf_core-80630a0ecf1392b5)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+running 18 tests
+test small::tests::capacity_overflow_panics ... ok
+test small::tests::covariance_compiles ... ok
+test small::tests::every_ownership_path_drops_each_element_once ... ok
+test small::tests::forget_into_iter_no_ub ... ok
+test small::tests::id_rows_behave_as_slices ... ok
+test small::tests::macro_forms ... ok
+test small::tests::model_matches_vec ... ok
+test small::tests::no_larger_than_needed ... ok
+test small::tests::overaligned_elements ... ok
+test small::tests::ownership_matches_vec ... ok
+test small::tests::panic_during_clone_drops_each_element_once ... ok
+test small::tests::panic_during_extend_drops_each_element_once ... ok
+test small::tests::panic_during_extend_with_exact_hint_drops_each_element_once ... ok
+test small::tests::panic_in_retain_and_dedup_keeps_a_consistent_vector ... ok
+test small::tests::panicking_drop_no_double_free ... ok
+test small::tests::send_sync_bounds ... ok
+test small::tests::wrapping_enums_stay_the_same_size ... ok
+test small::tests::zst_elements ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1379 filtered out; finished in 40.12s
+
+warning: 1 warning emitted
+
+MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash-conformance --test blake3 streaming_boundary_answers
+WARNING: Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping.
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/testkit)
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 9.15s
+     Running tests/blake3.rs (/opt/.cargo/92/44bbfb51647c9b/x86_64-unknown-linux-gnu/debug/build/purrdf-hash-conformance/b33eaf9cd2ac0c6e/out/blake3-b33eaf9cd2ac0c6e)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+running 1 test
+test streaming_boundary_answers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 121.89s
+
+warning: 1 warning emitted
+

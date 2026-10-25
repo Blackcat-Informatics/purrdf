@@ -1,0 +1,709 @@
+diff --git Makefile Makefile
+index 34dcb7c92..182561008 100644
+--- Makefile
++++ Makefile
+@@ -481,10 +481,11 @@ miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT p
+ 	@# work natively. Each run is a distinct model: the default Stacked Borrows,
+ 	@# Tree Borrows, strict provenance (no integer-to-pointer casts), and a
+ 	@# 32-bit target, where `usize` arithmetic and layout differ.
+-	cargo miri test -p purrdf-core small
+-	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core small
+-	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core small
+-	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
++	@# Select the unsafe storage module, not unrelated semantic test names.
++	cargo miri test -p purrdf-core --lib small::tests::
++	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core --lib small::tests::
++	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core --lib small::tests::
++	cargo miri test -p purrdf-core --lib small::tests:: --target i686-unknown-linux-gnu
+ 	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
+ 	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
+ 	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash-conformance --test blake3 streaming_boundary_answers
+diff --git crates/rdf-core/src/ir/canon.rs crates/rdf-core/src/ir/canon.rs
+index e8150f718..cb4123b8c 100644
+--- crates/rdf-core/src/ir/canon.rs
++++ crates/rdf-core/src/ir/canon.rs
+@@ -146,6 +146,7 @@ use std::convert::Infallible;
+ mod state;
+ pub use state::{DatasetStateDigest, DatasetStateError};
+ 
++use purrdf_lex::walk::WorkList;
+ use sha2::{Digest, Sha256, Sha384};
+ 
+ use super::dataset::{QuadIds, RdfDataset, TermRef};
+@@ -1883,6 +1884,29 @@ impl<Id: ViewTermId> IdIssuer<Id> {
+     }
+ }
+ 
++/// One suspended n-degree invocation. Child results resume its current path;
++/// none of these owners recursively contains another frame.
++struct NDegreeFrame<Id> {
++    issuer: IdIssuer<Id>,
++    related: std::collections::btree_map::IntoIter<HashHex, Vec<Id>>,
++    data: String,
++    group: Option<NDegreeGroup<Id>>,
++}
++
++struct NDegreeGroup<Id> {
++    permutations: Permutations<Id>,
++    chosen_path: Option<String>,
++    chosen_issuer: Option<IdIssuer<Id>>,
++    candidate: Option<NDegreeCandidate<Id>>,
++}
++
++struct NDegreeCandidate<Id> {
++    issuer: IdIssuer<Id>,
++    path: String,
++    recursion: std::vec::IntoIter<Id>,
++    pending: Option<Id>,
++}
++
+ /// Per-run canonicalization state over ONE view.
+ ///
+ /// Generic over `D: DatasetView` and keyed on `D::Id`: the working tables below are
+@@ -2483,8 +2507,131 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
+     fn hash_n_degree(
+         &mut self,
+         identifier: D::Id,
+-        mut issuer: IdIssuer<D::Id>,
++        issuer: IdIssuer<D::Id>,
+     ) -> Result<(HashHex, IdIssuer<D::Id>), CanonError> {
++        let mut frame = self.n_degree_frame(identifier, issuer)?;
++        let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
++        loop {
++            if let Some(group) = frame.group.as_mut() {
++                if let Some(mut candidate) = group.candidate.take() {
++                    if let Some(related) = candidate.recursion.next() {
++                        // §4.8 step 5.4.5: suspend this path while its child runs.
++                        self.check_stop()?;
++                        let child_issuer = candidate.issuer.clone();
++                        candidate.pending = Some(related);
++                        group.candidate = Some(candidate);
++                        let child = self.n_degree_frame(related, child_issuer)?;
++                        parents.push(frame);
++                        frame = child;
++                        continue;
++                    }
++                    // 5.4.6: first path wins ties, exactly as in permutation order.
++                    if group
++                        .chosen_path
++                        .as_ref()
++                        .is_none_or(|best| candidate.path.as_str() < best.as_str())
++                    {
++                        group.chosen_path = Some(candidate.path);
++                        group.chosen_issuer = Some(candidate.issuer);
++                    }
++                }
++
++                if let Some(perm) = group.permutations.next() {
++                    // Charge after obtaining each permutation, including pruned ones.
++                    self.charge_search()?;
++                    let mut issuer = frame.issuer.clone();
++                    let mut path = String::new();
++                    let mut recursion = Vec::new();
++                    let mut pruned = false;
++                    for related in perm {
++                        self.check_stop()?;
++                        if let Some(id) = self.canonical.issued_for(related) {
++                            path.push_str("_:");
++                            path.push_str(id);
++                        } else {
++                            if !issuer.has(related) {
++                                recursion.push(related);
++                            }
++                            path.push_str("_:");
++                            path.push_str(issuer.issue(related));
++                        }
++                        // 5.4.4.3: discard a partial path that cannot win.
++                        if group.chosen_path.as_ref().is_some_and(|best| {
++                            path.len() >= best.len() && path.as_str() > best.as_str()
++                        }) {
++                            pruned = true;
++                            break;
++                        }
++                    }
++                    if !pruned {
++                        group.candidate = Some(NDegreeCandidate {
++                            issuer,
++                            path,
++                            recursion: recursion.into_iter(),
++                            pending: None,
++                        });
++                    }
++                    continue;
++                }
++
++                // 5.5–5.6: finish this related-hash group and adopt its winner.
++                let group = frame.group.take().expect("the active group is present");
++                frame
++                    .data
++                    .push_str(group.chosen_path.as_deref().unwrap_or(""));
++                if let Some(issuer) = group.chosen_issuer {
++                    frame.issuer = issuer;
++                }
++                continue;
++            }
++
++            if let Some((hash, related)) = frame.related.next() {
++                self.check_stop()?;
++                frame.data.push_str(hash.as_str());
++                frame.group = Some(NDegreeGroup {
++                    permutations: permutations(&related),
++                    chosen_path: None,
++                    chosen_issuer: None,
++                    candidate: None,
++                });
++                continue;
++            }
++
++            let hash = digest_hex(self.hash, frame.data.as_bytes());
++            let Some(mut parent) = parents.pop() else {
++                return Ok((hash, frame.issuer));
++            };
++            let group = parent.group.as_mut().expect("a child has a parent group");
++            let candidate = group
++                .candidate
++                .as_mut()
++                .expect("a child has a suspended candidate");
++            let related = candidate
++                .pending
++                .take()
++                .expect("a child has its related ID");
++            candidate.path.push_str("_:");
++            candidate.path.push_str(candidate.issuer.issue(related));
++            candidate.path.push('<');
++            candidate.path.push_str(hash.as_str());
++            candidate.path.push('>');
++            candidate.issuer = frame.issuer;
++            // 5.4.5.5: prune only after the complete child result is appended.
++            if group.chosen_path.as_ref().is_some_and(|best| {
++                candidate.path.len() >= best.len() && candidate.path.as_str() > best.as_str()
++            }) {
++                group.candidate = None;
++            }
++            frame = parent;
++        }
++    }
++
++    /// Enter §4.8 once. Work and stop checks have the same order at every depth.
++    fn n_degree_frame(
++        &mut self,
++        identifier: D::Id,
++        issuer: IdIssuer<D::Id>,
++    ) -> Result<NDegreeFrame<D::Id>, CanonError> {
+         self.charge_search()?;
+ 
+         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
+@@ -2496,93 +2643,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
+             })?;
+         }
+ 
+-        let mut data_to_hash = String::new();
+-        // §4.8 step 5: for each related hash, ascending.
+-        for (related_hash, related_list) in &hn {
+-            self.check_stop()?;
+-            data_to_hash.push_str(related_hash.as_str());
+-            let mut chosen_path: Option<String> = None;
+-            let mut chosen_issuer: Option<IdIssuer<D::Id>> = None;
+-
+-            // §4.8 step 5.4: every permutation of the related list, identity first.
+-            for perm in permutations(related_list) {
+-                // Charge the poison budget PER PERMUTATION: a related group of size k
+-                // contributes k! permutations, so this — not the recursive-call count —
+-                // is the dominant cost on a pathologically symmetric graph (e.g. a
+-                // 10-blank clique). Counting it here bounds the actual work.
+-                self.charge_search()?;
+-                let mut issuer_copy = issuer.clone();
+-                let mut path = String::new();
+-                let mut recursion: Vec<D::Id> = Vec::new();
+-                let mut pruned = false;
+-
+-                // 5.4.4
+-                for related in &perm {
+-                    self.check_stop()?;
+-                    if let Some(id) = self.canonical.issued_for(*related) {
+-                        path.push_str("_:");
+-                        path.push_str(id);
+-                    } else {
+-                        if !issuer_copy.has(*related) {
+-                            recursion.push(*related);
+-                        }
+-                        path.push_str("_:");
+-                        path.push_str(issuer_copy.issue(*related));
+-                    }
+-                    // 5.4.4.3: prune if this partial path can no longer win.
+-                    if let Some(best) = &chosen_path
+-                        && path.len() >= best.len()
+-                        && path.as_str() > best.as_str()
+-                    {
+-                        pruned = true;
+-                        break;
+-                    }
+-                }
+-                if pruned {
+-                    continue;
+-                }
+-
+-                // 5.4.5: recurse into newly-seen related blanks in path order.
+-                for related in &recursion {
+-                    self.check_stop()?;
+-                    let (rec_hash, rec_issuer) =
+-                        self.hash_n_degree(*related, issuer_copy.clone())?;
+-                    path.push_str("_:");
+-                    path.push_str(issuer_copy.issue(*related));
+-                    path.push('<');
+-                    path.push_str(rec_hash.as_str());
+-                    path.push('>');
+-                    issuer_copy = rec_issuer;
+-                    if let Some(best) = &chosen_path
+-                        && path.len() >= best.len()
+-                        && path.as_str() > best.as_str()
+-                    {
+-                        pruned = true;
+-                        break;
+-                    }
+-                }
+-                if pruned {
+-                    continue;
+-                }
+-
+-                // 5.4.6: keep the lexicographically least path (first wins ties).
+-                if chosen_path
+-                    .as_ref()
+-                    .is_none_or(|best| path.as_str() < best.as_str())
+-                {
+-                    chosen_path = Some(path);
+-                    chosen_issuer = Some(issuer_copy);
+-                }
+-            }
+-
+-            // 5.5–5.6: fold the winning path and adopt its issuer.
+-            data_to_hash.push_str(chosen_path.as_deref().unwrap_or(""));
+-            if let Some(winner) = chosen_issuer {
+-                issuer = winner;
+-            }
+-        }
+-
+-        Ok((digest_hex(self.hash, data_to_hash.as_bytes()), issuer))
++        Ok(NDegreeFrame {
++            issuer,
++            related: hn.into_iter(),
++            data: String::new(),
++            group: None,
++        })
+     }
+ 
+     /// §4.8 step 3 + §4.7: for each related blank of `comp` (other than `focus`),
+@@ -5529,6 +5595,49 @@ mod tests {
+         assert!(state.incident.is_empty());
+     }
+ 
++    /// Deep n-degree traversal suspends owned issuers without native recursion.
++    #[cfg(not(target_arch = "wasm32"))]
++    #[test]
++    fn n_degree_chain_uses_heap_frames_on_a_small_native_stack() {
++        purrdf_stack::on_stack(128 * 1024, || {
++            const COUNT: usize = 256;
++            let mut builder = RdfDatasetBuilder::new();
++            let predicate = iri(&mut builder, "edge");
++            let blanks: Vec<_> = (0..COUNT)
++                .map(|index| {
++                    builder
++                        .intern_blank(&format!("chain{index}"), BlankScope(0))
++                        .unwrap()
++                })
++                .collect();
++            for pair in blanks.windows(2) {
++                builder
++                    .push_quad(pair[0], predicate, pair[1], None)
++                    .unwrap();
++            }
++            let dataset = builder.freeze().unwrap();
++            let mut state = CanonState::new(
++                &*dataset,
++                CanonScope::Dataset,
++                CanonPresentation::Overlay,
++                CanonHash::Sha256,
++            );
++            state.collect_incidence().unwrap();
++            for &blank in &state.blanks {
++                let hash = state.hash_first_degree(blank).unwrap();
++                state.first_degree.insert(blank, hash);
++            }
++            let mut issuer = IdIssuer::new(TEMP_PREFIX);
++            issuer.issue(blanks[0]);
++            let (_, issuer) = state.hash_n_degree(blanks[0], issuer).unwrap();
++            assert_eq!(issuer.order(), blanks);
++            // One entry per blank, plus one permutation at each endpoint
++            // and two at each internal node: COUNT + 2 * (COUNT - 1).
++            assert_eq!(state.budget, RDFC_CALL_LIMIT - (3 * COUNT as u64 - 2));
++        })
++        .unwrap();
++    }
++
+     /// Cancellation reaches the exponential search, rather than only its entry.
+     #[test]
+     fn controlled_canonicalization_unwinds_inside_permutation_search() {
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 1afb37223..548bd487f 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3138,7 +3138,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3154,7 +3154,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3170,7 +3170,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3186,7 +3186,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3202,7 +3202,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3219,7 +3219,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3236,7 +3236,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3252,7 +3252,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3268,7 +3268,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3284,7 +3284,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3298,7 +3298,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:97d0de139ab31ff2",
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3313,7 +3313,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+     "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3328,7 +3328,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+     "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3345,7 +3345,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3362,7 +3362,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3379,7 +3379,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3396,7 +3396,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3413,7 +3413,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3430,7 +3430,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:57ff17ef53a819dd",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3447,7 +3447,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:9d73ba6870970982",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3460,7 +3460,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:e9db6463871b2877",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3473,7 +3473,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:e9db6463871b2877",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3490,7 +3490,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:04fc92cdfa199602",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3507,7 +3507,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:04fc92cdfa199602",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3524,7 +3524,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3541,7 +3541,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3559,7 +3559,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3577,7 +3577,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3591,7 +3591,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:06399db5856a0664",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3608,7 +3608,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3625,7 +3625,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3642,7 +3642,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3659,7 +3659,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3678,7 +3678,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3697,7 +3697,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3716,7 +3716,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3735,7 +3735,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:48243fb234fbcaaf",
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "encode_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3752,7 +3752,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+     "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3769,7 +3769,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+     "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3786,7 +3786,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+     "crates/rdf-core/src/turtle_render.rs=source:709dd6553dd0b117",
+ ]
+-constructors = "source:85d94cb0bf107df0"
++constructors = "source:a0a182593706ad6a"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]

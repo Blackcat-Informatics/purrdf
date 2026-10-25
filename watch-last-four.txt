@@ -1,0 +1,47 @@
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+No change in PR, CI, reviews or local evidence
+PR #711 — paudley/710-move-rdfc-n-degree-search-onto-heap
+CI: fail
+Blockers: 2; unavailable sources: 0
+Watch: changed
+NEXT Inspect saved failed-job excerpts
+NEXT Complete: pr-checks.txt, validation.md
+LOG /home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/ci-logs/github-job-121018266127.log
+455: 2026-10-24T23:46:47.7631135Z 
+456: 2026-10-24T23:46:47.8113839Z test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 890.18s
+457: 2026-10-24T23:46:47.8114704Z 
+458: 2026-10-24T23:46:48.0140718Z warning: 1 warning emitted
+465: 2026-10-24T23:46:48.8919146Z 
+466: 2026-10-24T23:46:48.9347867Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.04s
+467: 2026-10-24T23:46:48.9348783Z 
+468: 2026-10-24T23:46:48.9603329Z warning: 1 warning emitted
+475: 2026-10-24T23:46:49.5522989Z 
+476: 2026-10-24T23:46:49.5902143Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s
+477: 2026-10-24T23:46:49.5903018Z 
+478: 2026-10-24T23:46:49.6104927Z warning: 1 warning emitted
+485: 2026-10-24T23:46:50.1878577Z 
+486: 2026-10-24T23:46:50.2266221Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s
+487: 2026-10-24T23:46:50.2266926Z 
+488: 2026-10-24T23:46:50.2479691Z warning: 1 warning emitted
+495: 2026-10-24T23:46:50.4469361Z 
+496: 2026-10-24T23:46:50.4470281Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.02s
+497: 2026-10-24T23:46:50.4471024Z 
+498: 2026-10-24T23:46:50.4632191Z warning: 1 warning emitted
+505: 2026-10-24T23:46:51.0582695Z 
+506: 2026-10-24T23:46:51.0990275Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.03s
+507: 2026-10-24T23:46:51.0990947Z 
+508: 2026-10-24T23:46:51.1210130Z warning: 1 warning emitted
+515: 2026-10-24T23:46:51.7369799Z 
+516: 2026-10-24T23:46:51.7761723Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.03s
+517: 2026-10-24T23:46:51.7762441Z 
+518: 2026-10-24T23:46:51.7981366Z warning: 1 warning emitted
+525: 2026-10-24T23:46:52.7059736Z 
+526: 2026-10-24T23:46:52.7491021Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.04s
+527: 2026-10-24T23:46:52.7491975Z 
+528: 2026-10-24T23:46:52.7750774Z warning: 1 warning emitted
+(52 further error matches; see saved log)
+Evidence: /home/paudley/Active/purrdf/.worktrees/710-move-rdfc-n-degree-search-onto-heap/.stage/move-rdfc-n-degree-search-onto-heap/status.json
