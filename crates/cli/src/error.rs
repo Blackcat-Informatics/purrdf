@@ -125,6 +125,10 @@ pub enum CliError {
     GlobCompile(purrdf::glob::CompileError),
     /// Original compiled glob execution refusal.
     GlobMatch(purrdf::glob::MatchError),
+    /// Original ordered pattern-set compilation refusal.
+    GlobSetCompile(purrdf::glob::SetCompileError),
+    /// Original ordered pattern-set workspace or work refusal.
+    GlobSetMatch(purrdf::glob::SetMatchError),
     /// Original IRI parse failure for an explicitly selected glob IRI surface.
     GlobIri(purrdf_iri::IriReadError),
     /// A downstream reader closed the pipe before the document finished.
@@ -142,7 +146,12 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::Usage(_) => 2,
-            Self::Runtime(_) | Self::GlobCompile(_) | Self::GlobMatch(_) | Self::GlobIri(_) => 1,
+            Self::Runtime(_)
+            | Self::GlobCompile(_)
+            | Self::GlobMatch(_)
+            | Self::GlobIri(_)
+            | Self::GlobSetCompile(_)
+            | Self::GlobSetMatch(_) => 1,
             Self::DownstreamClosed => 0,
         }
     }
@@ -154,6 +163,8 @@ impl fmt::Display for CliError {
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
             Self::GlobCompile(error) => error.fmt(f),
             Self::GlobMatch(error) => error.fmt(f),
+            Self::GlobSetCompile(error) => error.fmt(f),
+            Self::GlobSetMatch(error) => error.fmt(f),
             Self::GlobIri(error) => error.fmt(f),
             // Never printed: this variant exits 0 and reports nothing, which is the
             // whole point of a filter whose reader stopped reading.
@@ -167,6 +178,8 @@ impl std::error::Error for CliError {
         match self {
             Self::GlobCompile(error) => Some(error),
             Self::GlobMatch(error) => Some(error),
+            Self::GlobSetCompile(error) => Some(error),
+            Self::GlobSetMatch(error) => Some(error),
             Self::GlobIri(error) => Some(error),
             _ => None,
         }

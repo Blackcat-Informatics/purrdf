@@ -8,6 +8,9 @@
 
 mod compile;
 mod execute;
+mod set;
+
+pub use set::{CompiledGlobSet, SetCompileError, SetMatchError, SetMatchReport};
 
 pub use purrdf_lex::allocation::{Admission, Resident, StorageError};
 
@@ -242,17 +245,20 @@ impl<S: Admission> CompiledGlob<S> {
         component: IriComponent,
         max_work: u64,
     ) -> Result<MatchReport, MatchError> {
-        let text = match component {
-            IriComponent::Lexical => Some(iri.as_str()),
-            IriComponent::Scheme => iri.scheme(),
-            IriComponent::Authority => iri.authority(),
-            IriComponent::Path => Some(iri.path()),
-            IriComponent::Query => iri.query(),
-            IriComponent::Fragment => iri.fragment(),
-        };
-        match text {
+        match iri_surface(iri, component) {
             Some(text) => self.match_literal(text, max_work),
             None => execute::absent(max_work),
         }
+    }
+}
+
+fn iri_surface(iri: &purrdf_iri::Iri, component: IriComponent) -> Option<&str> {
+    match component {
+        IriComponent::Lexical => Some(iri.as_str()),
+        IriComponent::Scheme => iri.scheme(),
+        IriComponent::Authority => iri.authority(),
+        IriComponent::Path => Some(iri.path()),
+        IriComponent::Query => iri.query(),
+        IriComponent::Fragment => iri.fragment(),
     }
 }

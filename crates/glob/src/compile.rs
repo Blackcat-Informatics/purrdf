@@ -4,6 +4,7 @@
 use super::{
     Account, Admission, CompileError, CompiledGlob, Mode, Range, StorageError, SyntaxReason, Token,
 };
+use super::{CompiledGlobSet, SetCompileError};
 use purrdf_lex::allocation::Memory;
 
 #[derive(Default)]
@@ -113,23 +114,7 @@ pub(super) fn compile<S: Admission>(
                 ranges: &mut ranges,
             },
         )?;
-        for token in &mut tokens {
-            if let Token::Class { start, end, .. } = token {
-                let class = &mut ranges[*start..*end];
-                class.sort_unstable();
-                let mut kept = 0;
-                for index in 0..class.len() {
-                    let (first, last) = class[index];
-                    if kept > 0 && first <= class[kept - 1].1.saturating_add(1) {
-                        class[kept - 1].1 = class[kept - 1].1.max(last);
-                    } else {
-                        class[kept] = (first, last);
-                        kept += 1;
-                    }
-                }
-                *end = *start + kept;
-            }
-        }
+        normalize(&mut tokens, &mut ranges);
     }
     Ok(CompiledGlob {
         tokens,
@@ -137,6 +122,69 @@ pub(super) fn compile<S: Admission>(
         mode,
         _account: account,
     })
+}
+
+pub(super) fn compile_set<S: Admission>(
+    sources: &[impl AsRef<str>],
+    mode: Mode,
+    storage: S,
+) -> Result<CompiledGlobSet<S>, SetCompileError> {
+    let mut account = Account(storage);
+    let mut counts = Counts::default();
+    for (index, source) in sources.iter().enumerate() {
+        parse(source.as_ref(), mode, &mut counts)
+            .map_err(|cause| SetCompileError::Pattern { index, cause })?;
+    }
+    let mut ends = Vec::new();
+    let mut tokens = Vec::new();
+    let mut ranges = Vec::new();
+    {
+        let mut memory = Memory::new(&mut account.0);
+        memory.reserve(&mut ends, sources.len())?;
+        memory.reserve(&mut tokens, counts.tokens)?;
+        memory.reserve(&mut ranges, counts.ranges)?;
+        for (index, source) in sources.iter().enumerate() {
+            parse(
+                source.as_ref(),
+                mode,
+                &mut Destination {
+                    tokens: &mut tokens,
+                    ranges: &mut ranges,
+                },
+            )
+            .map_err(|cause| SetCompileError::Pattern { index, cause })?;
+            // The source slice length was admitted before construction.
+            ends.push(tokens.len());
+        }
+        normalize(&mut tokens, &mut ranges);
+    }
+    Ok(CompiledGlobSet {
+        tokens,
+        ranges,
+        ends,
+        mode,
+        _account: account,
+    })
+}
+
+fn normalize(tokens: &mut [Token], ranges: &mut [Range]) {
+    for token in tokens {
+        if let Token::Class { start, end, .. } = token {
+            let class = &mut ranges[*start..*end];
+            class.sort_unstable();
+            let mut kept = 0;
+            for index in 0..class.len() {
+                let (first, last) = class[index];
+                if kept > 0 && first <= class[kept - 1].1.saturating_add(1) {
+                    class[kept - 1].1 = class[kept - 1].1.max(last);
+                } else {
+                    class[kept] = (first, last);
+                    kept += 1;
+                }
+            }
+            *end = *start + kept;
+        }
+    }
 }
 
 fn parse(source: &str, mode: Mode, out: &mut impl Output) -> Result<(), CompileError> {

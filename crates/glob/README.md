@@ -16,13 +16,30 @@ The umbrella exposes the same implementation as `purrdf::glob`. Compilation
 accepts an owned, dedicated physical admission account through
 `compile_with_storage`; syntax and storage refusals remain distinct.
 [SPEC.md](SPEC.md) defines the exact versioned language, work accounting and
-separator rules. It includes no pattern sets, expansion or implicit IRI decoding.
+separator rules. It includes ordered pattern sets without implicit IRI decoding.
+
+Compile an ordered set once and supply its result workspace when matching:
+
+```rust
+use purrdf_glob::{CompiledGlobSet, Mode};
+let set = CompiledGlobSet::compile(&["**", "other", "**"], Mode::Path)?;
+let mut indices = [0; 3];
+let result = set.match_literal("a", 100, &mut indices)?;
+assert_eq!(result.indices, [0, 2]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The set returns every matching source index, preserving order and duplicates.
+One aggregate work allowance covers the complete result. Matching allocates
+nothing; the caller supplies one index slot per pattern. On refusal, no completed
+report is returned and workspace contents are scratch.
 
 The CLI requires an explicit mode, surface and work allowance:
 
 ```sh
 purrdf glob '**/a*b/c' 'axxx/y/ab/c' --mode path --surface literal --max-work 1000
 purrdf glob '/docs/*.ttl' 'https://example.org/docs/a.ttl?download' --mode path --surface iri-path --max-work 1000
+purrdf glob-set 'a' --pattern '**' --pattern 'other' --pattern '**' --mode path --surface literal --max-work 1000
 ```
 
 Completed decisions write `matched true` or `matched false`, then `work N`, one
@@ -30,6 +47,11 @@ line each, and exit successfully. Syntax, storage, IRI parsing and work exhausti
 fail without a decision. An absent component is a negative match; a present empty
 component matches a pattern that accepts empty text. Quote patterns to prevent
 shell expansion.
+
+`glob-set` writes `matches N`, each matching `index I` on its own line, then
+`work N`. It publishes output only after the complete set succeeds. With no
+`--pattern`, it returns an empty result using zero work. Expansion and RDF
+projection are separate capabilities, with no silent approximation here.
 
 ## License
 

@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-# Single-pattern glob language
+# Compiled glob language
 
 `purrdf-glob-v1` matches an entire UTF-8 surface, case-sensitively and without
 normalization. `?` consumes one Unicode scalar; `*` consumes zero or more.
@@ -55,6 +55,33 @@ is a completed negative decision, charged one selection predicate. It is never
 coerced to a present empty component. Path mode applied to
 an IRI path recognizes only literal slashes, never `%2F` or `%2f`.
 
-Pattern sets, brace alternatives, filesystem traversal, Rust import resolution,
-RDF projection, plan serialization and compiled identities are outside this
-single-pattern language. They are not silently approximated here.
+## Ordered pattern sets
+
+A compiled set uses the same language and one mode for every source pattern.
+It retains source order and duplicate occurrences. Matching returns every matching
+source index in order, rather than a chosen winner or a deduplicated pattern.
+An empty set returns no indices and consumes no work.
+
+Compilation validates every pattern before allocating flat token, range and
+program-boundary arrays under one initially empty admission account. A pattern
+failure retains its original index and compiler cause; combined storage failure
+retains its native cause without inventing a responsible pattern. Arrays die
+before their account is refunded. No source text or separately owned single-pattern
+plans are retained. Storage grows linearly with total pattern size and count.
+
+The caller supplies an index workspace with at least one slot per source pattern.
+Insufficient workspace refuses before execution. Matching allocates nothing and
+uses constant internal workspace beyond that caller-owned output. Patterns execute
+in source order through the same matcher, with one shared work meter: successful
+work is the sum of individual decisions. An absent IRI component costs one negative
+selection per pattern. Exhaustion retains the responsible pattern index, original
+input offset, aggregate consumed work and original aggregate allowance. No report
+is returned on refusal; workspace contents then remain scratch, not a partial answer.
+The immutable set can be reused after any execution refusal.
+
+Programs occupy flat storage and execute individually. No transition sharing,
+asymptotic speedup or linear-time matching guarantee is claimed.
+
+Brace alternatives, filesystem traversal, Rust import resolution, RDF projection,
+plan serialization and compiled identities are outside this matching capability.
+They are not silently approximated here.
