@@ -3,12 +3,15 @@
 
 use super::{MatchError, MatchReport, Mode, Range, Token};
 
-struct Meter {
-    work: u64,
+pub(super) struct Meter {
+    pub(super) work: u64,
     limit: u64,
 }
 impl Meter {
-    fn tick(&mut self, offset: usize) -> Result<(), MatchError> {
+    pub(super) fn new(limit: u64) -> Self {
+        Self { work: 0, limit }
+    }
+    pub(super) fn tick(&mut self, offset: usize) -> Result<(), MatchError> {
         if self.work == self.limit {
             return Err(MatchError::WorkExceeded {
                 consumed: self.work,
@@ -34,7 +37,7 @@ struct Retry {
 }
 
 pub(super) fn absent(limit: u64) -> Result<MatchReport, MatchError> {
-    let mut meter = Meter { work: 0, limit };
+    let mut meter = Meter::new(limit);
     meter.tick(0)?;
     Ok(meter.report(false))
 }
@@ -46,7 +49,16 @@ pub(super) fn matches(
     input: &str,
     limit: u64,
 ) -> Result<MatchReport, MatchError> {
-    let mut meter = Meter { work: 0, limit };
+    matches_metered(tokens, ranges, mode, input, &mut Meter::new(limit))
+}
+
+pub(super) fn matches_metered(
+    tokens: &[Token],
+    ranges: &[Range],
+    mode: Mode,
+    input: &str,
+    meter: &mut Meter,
+) -> Result<MatchReport, MatchError> {
     let mut token = 0;
     let mut at = 0;
     let mut star: Option<Retry> = None;

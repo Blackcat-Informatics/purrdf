@@ -224,6 +224,22 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         })
         .transpose()?;
     match &cli.cmd {
+        Command::GlobSet {
+            value,
+            patterns,
+            mode,
+            surface,
+            max_work,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob-set emits matching indices and has no RDF loss ledger",
+                "glob-set emits matching indices and accepts no JSON-LD options",
+            )?;
+            glob::run_set(patterns, value, *mode, *surface, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
         Command::Glob {
             pattern,
             value,

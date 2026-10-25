@@ -344,6 +344,23 @@ pub(crate) enum GlobSurface {
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Return every matching index from an ordered compiled pattern set.
+    GlobSet {
+        /// Verbatim literal value or IRI reference.
+        value: String,
+        /// Source pattern, repeatable; order and duplicate occurrences survive.
+        #[arg(long = "pattern")]
+        patterns: Vec<String>,
+        /// Treat slashes as ordinary text or path-component boundaries.
+        #[arg(long, value_enum)]
+        mode: GlobMode,
+        /// Select the literal or an exact lexical component of a parsed IRI.
+        #[arg(long, value_enum)]
+        surface: GlobSurface,
+        /// Aggregate work allowance; exhaustion publishes no result.
+        #[arg(long)]
+        max_work: u64,
+    },
     /// Match one complete literal or explicitly selected IRI surface.
     Glob {
         /// Unicode pattern in the purrdf-glob-v1 language.

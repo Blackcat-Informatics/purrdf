@@ -92,3 +92,85 @@ fn explicit_surfaces_decide_and_refusals_publish_no_answer() {
         assert!(stdout_utf8(&help).contains(flag));
     }
 }
+
+#[test]
+fn ordered_pattern_sets_publish_all_indices_only_after_complete_success() {
+    let command = [
+        "glob-set",
+        "a",
+        "--pattern",
+        "**",
+        "--pattern",
+        "z",
+        "--pattern",
+        "**",
+        "--mode",
+        "path",
+        "--surface",
+        "literal",
+        "--max-work",
+    ];
+    let mut args = command.to_vec();
+    args.push("3");
+    let matched = run(&args);
+    assert!(matched.status.success(), "{}", stderr(&matched));
+    assert_eq!(
+        stdout_utf8(&matched),
+        "matches 2\nindex 0\nindex 2\nwork 3\n"
+    );
+    *args.last_mut().unwrap() = "2";
+    let refused = run(&args);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty());
+    assert!(stderr(&refused).contains("glob pattern 2: glob work refused"));
+    let empty = run(&[
+        "glob-set",
+        "a",
+        "--mode",
+        "path",
+        "--surface",
+        "literal",
+        "--max-work",
+        "0",
+    ]);
+    assert!(empty.status.success(), "{}", stderr(&empty));
+    assert_eq!(stdout_utf8(&empty), "matches 0\nwork 0\n");
+    let iri = run(&[
+        "glob-set",
+        "https://example.org/a/%2F?q",
+        "--pattern",
+        "/a/%2F",
+        "--pattern",
+        "/a//",
+        "--mode",
+        "path",
+        "--surface",
+        "iri-path",
+        "--max-work",
+        "100",
+    ]);
+    assert!(iri.status.success(), "{}", stderr(&iri));
+    assert!(stdout_utf8(&iri).starts_with("matches 1\nindex 0\nwork "));
+    for (value, pattern, surface, message) in [
+        ("a", "[z-a]", "literal", "glob pattern 1: glob syntax"),
+        ("http://[", "*", "iri", "malformed authority"),
+    ] {
+        let refusal = run(&[
+            "glob-set",
+            value,
+            "--pattern",
+            "*",
+            "--pattern",
+            pattern,
+            "--mode",
+            "text",
+            "--surface",
+            surface,
+            "--max-work",
+            "100",
+        ]);
+        assert_eq!(refusal.status.code(), Some(1));
+        assert!(refusal.stdout.is_empty());
+        assert!(stderr(&refusal).contains(message), "{}", stderr(&refusal));
+    }
+}

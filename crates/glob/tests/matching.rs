@@ -350,10 +350,268 @@ fn greedy_checkpoints_agree_with_finite_denotation() {
     }
 }
 
+fn ordered_sets_agree_with_individual_patterns_and_iri_surfaces() {
+    use purrdf_glob::CompiledGlobSet;
+    let patterns = ["", "**/a*b/c", "**", "[α-ω]*", "**/a*b/c", "?"];
+    for mode in [Mode::Text, Mode::Path] {
+        let set = CompiledGlobSet::compile(&patterns, mode).unwrap();
+        let singles: Vec<_> = patterns
+            .iter()
+            .map(|pattern| CompiledGlob::compile(pattern, mode).unwrap())
+            .collect();
+        for input in ["", "猫", "β猫", "axxx/y/ab/c", "a/b", "/a/%2F"] {
+            let reports: Vec<_> = singles
+                .iter()
+                .map(|glob| glob.match_literal(input, u64::MAX).unwrap())
+                .collect();
+            let expected: Vec<_> = reports
+                .iter()
+                .enumerate()
+                .filter_map(|(index, report)| report.matched.then_some(index))
+                .collect();
+            let mut workspace = [usize::MAX; 6];
+            let report = set.match_literal(input, u64::MAX, &mut workspace).unwrap();
+            assert_eq!(report.indices, expected, "{mode:?} {input:?}");
+            assert_eq!(
+                report.work,
+                reports.iter().map(|report| report.work).sum::<u64>()
+            );
+        }
+        for text in [
+            "https://example.org/a/%2F?x=#",
+            "relative/path",
+            "relative/path?",
+        ] {
+            let iri = purrdf_iri::parse(text).unwrap();
+            for component in [
+                IriComponent::Lexical,
+                IriComponent::Scheme,
+                IriComponent::Authority,
+                IriComponent::Path,
+                IriComponent::Query,
+                IriComponent::Fragment,
+            ] {
+                let reports: Vec<_> = singles
+                    .iter()
+                    .map(|glob| glob.match_iri(&iri, component, u64::MAX).unwrap())
+                    .collect();
+                let expected: Vec<_> = reports
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, report)| report.matched.then_some(index))
+                    .collect();
+                let mut workspace = [0; 6];
+                let report = set
+                    .match_iri(&iri, component, u64::MAX, &mut workspace)
+                    .unwrap();
+                assert_eq!(report.indices, expected, "{mode:?} {text} {component:?}");
+                assert_eq!(
+                    report.work,
+                    reports.iter().map(|report| report.work).sum::<u64>()
+                );
+            }
+        }
+    }
+    let empty = CompiledGlobSet::compile(&[] as &[&str], Mode::Text).unwrap();
+    let report = empty.match_literal("anything", 0, &mut []).unwrap();
+    assert_eq!(report.indices, []);
+    assert_eq!(report.work, 0);
+}
+
+fn set_refusals_preserve_pattern_index_original_cause_and_exact_limits() {
+    use purrdf_glob::{CompiledGlobSet, SetCompileError, SetMatchError};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    let invalid = CompiledGlobSet::compile(&["*", "é[z-a]", "[]"], Mode::Text).unwrap_err();
+    let native = CompileError::Syntax {
+        offset: 3,
+        reason: SyntaxReason::ReversedRange,
+    };
+    assert_eq!(
+        invalid,
+        SetCompileError::Pattern {
+            index: 1,
+            cause: native
+        }
+    );
+    assert_eq!(
+        std::error::Error::source(&invalid)
+            .unwrap()
+            .downcast_ref::<CompileError>(),
+        Some(&native)
+    );
+    let inspected = Capture::read(&invalid);
+    assert!(matches!(inspected.field("index"), ErrorValue::Unsigned(1)));
+    assert_eq!(inspected.child("cause").code, "glob-syntax");
+    assert!(CompiledGlobSet::compile(&["*", "é[a-z]", "[x]"], Mode::Text).is_ok());
+
+    let set = CompiledGlobSet::compile(&["**", "a"], Mode::Path).unwrap();
+    assert_eq!(
+        set.match_literal("a", 0, &mut [0]).unwrap_err(),
+        SetMatchError::Workspace {
+            required: 2,
+            provided: 1
+        }
+    );
+    let mut workspace = [0; 2];
+    let report = set.match_literal("a", 3, &mut workspace).unwrap();
+    assert_eq!(report.indices, [0, 1]);
+    assert_eq!(report.work, 3);
+    let events = Vec::with_capacity(16);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let error = set.match_literal("a", 2, &mut workspace).unwrap_err();
+    let inspected = Capture::read_with_buffer(&error, events);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    let cause = MatchError::WorkExceeded {
+        consumed: 2,
+        limit: 2,
+        offset: 1,
+    };
+    assert_eq!(error, SetMatchError::Pattern { index: 1, cause });
+    assert_eq!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<MatchError>(),
+        Some(&cause)
+    );
+    assert!(matches!(
+        inspected.child("cause").field("consumed"),
+        ErrorValue::Unsigned(2)
+    ));
+    assert!(matches!(
+        inspected.child("cause").field("limit"),
+        ErrorValue::Unsigned(2)
+    ));
+
+    let absent = purrdf_iri::parse("a").unwrap();
+    let set = CompiledGlobSet::compile(&["*", "?", ""], Mode::Text).unwrap();
+    let mut workspace = [0; 3];
+    let report = set
+        .match_iri(&absent, IriComponent::Query, 3, &mut workspace)
+        .unwrap();
+    assert_eq!(report.indices, []);
+    assert_eq!(report.work, 3);
+    assert!(matches!(
+        set.match_iri(&absent, IriComponent::Query, 2, &mut workspace),
+        Err(SetMatchError::Pattern {
+            index: 2,
+            cause: MatchError::WorkExceeded {
+                consumed: 2,
+                limit: 2,
+                offset: 0
+            }
+        })
+    ));
+    let present = purrdf_iri::parse("a?").unwrap();
+    assert_eq!(
+        set.match_iri(&present, IriComponent::Query, 100, &mut workspace)
+            .unwrap()
+            .indices,
+        [0, 2]
+    );
+}
+
+fn set_admission_refunds_and_measured_growth_keep_matching_allocation_free() {
+    use purrdf_glob::{CompiledGlobSet, SetCompileError};
+    let state = Rc::new(Cell::new((0, 0)));
+    let patterns = ["**/a[bc]*", "**/a[bc]*", "[z-a]"];
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    assert!(CompiledGlobSet::compile(&patterns, Mode::Path).is_err());
+    assert_eq!(
+        window.close().allocations,
+        0,
+        "all validation precedes allocation"
+    );
+    let patterns = &patterns[..2];
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let set = CompiledGlobSet::compile_with_storage(
+        patterns,
+        Mode::Path,
+        Budget {
+            state: state.clone(),
+            limit: usize::MAX,
+        },
+    )
+    .unwrap();
+    let measured = window.close();
+    let bytes = state.get().0;
+    assert_eq!(measured.allocations, 3);
+    assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), bytes);
+    assert_eq!(usize::try_from(measured.requested_bytes).unwrap(), bytes);
+    let mut workspace = [0; 2];
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    for _ in 0..1000 {
+        assert_eq!(
+            set.match_literal("z/abcd", u64::MAX, &mut workspace)
+                .unwrap()
+                .indices,
+            [0, 1]
+        );
+        assert!(set.match_literal("z/abcd", 0, &mut workspace).is_err());
+    }
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(
+        state.get().0,
+        bytes,
+        "execution retains the compilation owner"
+    );
+    drop(set);
+    assert_eq!(state.get().0, 0);
+    for limit in [bytes, bytes - 1, 0] {
+        let result = CompiledGlobSet::compile_with_storage(
+            patterns,
+            Mode::Path,
+            Budget {
+                state: state.clone(),
+                limit,
+            },
+        );
+        if limit == bytes {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(
+                result,
+                Err(SetCompileError::Storage(StorageError::AdmissionFailed))
+            ));
+        }
+        drop(result);
+        assert_eq!(state.get().0, 0);
+    }
+    let one = CompiledGlob::compile(patterns[0], Mode::Path)
+        .unwrap()
+        .match_literal("z/abcd", u64::MAX)
+        .unwrap()
+        .work;
+    for count in [1, 8, 64] {
+        let patterns = vec![patterns[0]; count];
+        let mut workspace = vec![0; count];
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let set = CompiledGlobSet::compile(&patterns, Mode::Path).unwrap();
+        let allocation = window.close();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let report = set
+            .match_literal("z/abcd", u64::MAX, &mut workspace)
+            .unwrap();
+        let matching = window.close();
+        assert_eq!(matching.allocations, 0);
+        assert_eq!(report.indices.len(), count);
+        assert!(report.indices.iter().copied().eq(0..count));
+        assert_eq!(report.work, one * u64::try_from(count).unwrap());
+        println!(
+            "glob set growth: patterns={count} work={} compilation_allocations={} compilation_bytes={} matching_allocations={}",
+            report.work, allocation.allocations, allocation.requested_bytes, matching.allocations
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
     grammar_and_path_boundaries,
     explicit_iri_surfaces_and_zero_execution_allocations,
     compiled_storage_is_admitted_retained_and_refunded,
     deterministic_work_refuses_at_the_exact_boundary,
-    greedy_checkpoints_agree_with_finite_denotation
+    greedy_checkpoints_agree_with_finite_denotation,
+    ordered_sets_agree_with_individual_patterns_and_iri_surfaces,
+    set_refusals_preserve_pattern_index_original_cause_and_exact_limits,
+    set_admission_refunds_and_measured_growth_keep_matching_allocation_free
 );
