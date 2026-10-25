@@ -42,6 +42,17 @@ Target-specific capacity default constants have been removed.
 `EvalOptions::without_stored_fact_limit`,
 `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
 
+## HNSW arithmetic refusals
+
+`HnswError::ArithmeticOverflow` now carries `ArithmeticRefusal`. Update unit
+matches to `HnswError::ArithmeticOverflow(cause)`. Borrowed inspection keeps the
+outer error code and exposes the failed operation, original operands, byte/count
+units and destination limit through its cause. Integer-conversion failures retain
+their original native source. Successful calculations, refusal order and human
+messages are unchanged.
+
+## Regime term arena controls
+
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to
 apply no logical arena ceiling. `RegimeHost::limit_knobs` and `service_knobs`
 return three names, in stored-facts, join-steps, term-arena-bytes order.

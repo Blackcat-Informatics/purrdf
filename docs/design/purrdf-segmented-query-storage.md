@@ -25,11 +25,16 @@ The lexical-order reverse index stores only eight-byte identifiers into this dic
 Its blocks fill their physical eight-byte identifier slots independently of the
 dictionary record-count ceiling and carry no lexical payload or decoded text
 arena. Their populations and block counts may differ from dictionary blocks.
-One encoded record, including its framing, must fit a block or sealing
-returns `ConstructionLimit`. The encoder does not retry the complete image with
-a larger layout. Selective term lookup uses authenticated stored ID ranges;
+An encoded key too large for an ordinary block is stored once across authenticated
+overflow pages. Its forward-dictionary page contains a single identifier and a
+span descriptor; it carries no copy of the key. Overflow pages have a five-byte
+kind/length header and canonical zero padding. The physical block size remains
+the caller's choice. Full certification checks each span, its reconstructed RDF
+value and exact contiguous coverage of the overflow section.
+
+Selective term lookup uses authenticated stored ID ranges;
 opening still loads no dictionary directory or term map. Full-population
-blocks retain their direct first-probe lookup. Data profile 5 refuses older
+blocks retain their direct first-probe lookup. Data profile 6 refuses older
 profiles; regenerate their images from the original RDF input.
 
 Reverse lookup compares the referenced dictionary keys through the same admitted
@@ -37,6 +42,15 @@ reader as forward lookup. A held reverse-index block may leave the payload cache
 while its original reservation remains charged until the last internal owner
 drops. This allows a one-slot cache to read the dictionary during lookup without
 evicting an escaped lexical term guard or hiding its live bytes.
+
+Oversized-key comparisons stream authenticated pages until their ordering is
+known, admitting one physical page of scratch. Routing and small reverse lookups
+do not allocate the complete oversized key. A forward lexical guard materializes
+the key once inside its cached descriptor owner, after admitting the complete
+decoded payload and page scratch. That payload remains charged until its last
+escaped guard drops, even after the session drops. Failed reads preserve the
+original provider request and typed cause; incomplete payloads never enter the
+cache.
 
 `SegmentedReadLimits` specifies ceilings, not arrays to allocate at opening.
 The exact request ledger, payload cache and learned routing bounds grow as they are used. Their
@@ -88,7 +102,7 @@ ordinary positive LIMIT need not intern every reifier in the image.
 
 ## Statistical metadata
 
-Data profile 5 retains four authenticated statistical sections: predicate/scope
+Data profile 6 retains four authenticated statistical sections: predicate/scope
 records, compressed distinct-ID domains, selected object frequencies and
 object-category/datatype counts. Predicate records carry row and distinct counts
 and ranges into the other sections. Each predicate/scope record also carries
@@ -109,7 +123,7 @@ require regeneration from their RDF input; this reader refuses unsupported
 profiles. The certification receipt's encoding and hash laws remain distinct
 from the data profile.
 
-The 408-byte profile 5 header also retains the exact normalized statement-union
+The 432-byte profile 6 header also retains the exact normalized statement-union
 and reifier multiset: asserted and annotation occurrences of the same value quad
 count once in that union, while a virtual reifier declaration remains a separate
 family. Its 128-bit population and 256-bit sum are reconstructed and compared

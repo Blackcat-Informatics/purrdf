@@ -172,7 +172,7 @@ fn scan_bookkeeping_and_pins_follow_blocks_across_all_streams() {
                 let block = &state.cache.iter().next().unwrap().block;
                 assert_eq!(Arc::strong_count(block), 2);
                 let pinned = Arc::downgrade(block);
-                let charge = block.reservation.bytes();
+                let charge = block.retained_charge();
                 drop(state);
                 (pinned, charge)
             };
