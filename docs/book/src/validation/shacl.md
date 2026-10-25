@@ -1262,9 +1262,9 @@ maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)`.
 - The **join-step limit** bounds candidate solutions when selected by the caller.
   Credits are reserved before expansion; a refusal never returns a truncated model.
 
-Unstated fact, join and term-arena settings impose no logical ceiling on any
-host. Physical storage admission still applies. Select finite limits explicitly
-for an application, independently of the term-generation governors.
+Unstated fact and join limits impose no logical ceiling. Select finite limits
+independently of term-generation governors. Rule frontends expose no term-arena
+setting and leave it unlimited. Physical storage admission still applies.
 
 A run past any limit is refused. The error names the limit, the numbers, the
 knob that raises it and, for the two term limits, the rules that inferred a new
