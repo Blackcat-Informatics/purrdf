@@ -104,9 +104,8 @@ Physical storage admission and counter representation still apply.
 
 Term-generation guards address divergent rules. A SHACL shape rule
 minting a new focus node every round is re-executed only for the focus nodes
-whose inputs changed, not for every earlier one. Term generation has its own
-guards: the term-generating round limit when new terms have bounded length,
-and a caller-selected term-arena ceiling when retained surfaces grow.
+whose inputs changed, not for every earlier one. Term generation has two
+guards: the term-generating round limit and the generated-term budget.
 A caller-selected finite join-step limit can refuse a run before those guards.
 
 A limit can only refuse. A run inside its limits returns the program's least

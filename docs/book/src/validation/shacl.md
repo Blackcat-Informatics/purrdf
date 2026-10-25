@@ -1296,10 +1296,9 @@ The graph the rules read is extended by what each iteration added rather than
 rebuilt. The inferred triples, their blank-node labels and their proofs are the
 same as running every focus node every iteration. What changes is the cost: a
 shape rule that mints a new focus node every iteration pays for one run per
-iteration, not one per focus node so far. Term-generation governors address
-divergence: the round limit when new terms stay short, or a caller-selected
-term-arena ceiling when retained surfaces grow. A caller-selected finite
-join-step limit can refuse the run sooner.
+iteration, not one per focus node so far. The term-generating round limit and
+generated-term budget address divergence. A caller-selected finite join-step
+limit can refuse the run sooner.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph
