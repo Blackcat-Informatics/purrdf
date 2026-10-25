@@ -6,7 +6,9 @@
 use std::fmt;
 
 mod compact;
+mod projection;
 pub use compact::CompactReason;
+pub use projection::ProjectionReason;
 
 /// A fail-closed Parquet encoding, decoding, or RDF reconstruction error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +50,13 @@ pub enum ColumnarError {
         /// Native reason, including original operands and causes.
         reason: CompactReason,
     },
+    /// Original native RDF projection refusal.
+    Projection {
+        /// Structure being projected.
+        context: &'static str,
+        /// Native reason and any already-owned rejected value.
+        reason: ProjectionReason,
+    },
     /// A valid Parquet construct falls outside PurRDF's deliberately narrow profile.
     Unsupported {
         /// Unsupported field or construct.
@@ -79,6 +88,7 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
         },
         Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
         Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
             "context" => Code(context), "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(u128::from(*maximum)),
@@ -87,6 +97,10 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
+    pub(crate) fn projection(context: &'static str, reason: ProjectionReason) -> Self {
+        Self::Projection { context, reason }
+    }
+
     pub(crate) fn compact(context: &'static str, reason: CompactReason) -> Self {
         Self::Compact { context, reason }
     }
@@ -147,6 +161,9 @@ impl fmt::Display for ColumnarError {
             Self::Compact { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
             }
+            Self::Projection { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
             Self::Unsupported { context, value } => {
                 write!(f, "columnar {context} value {value} is unsupported")
             }
@@ -164,6 +181,7 @@ impl fmt::Display for ColumnarError {
 
 purrdf_lex::error_source!(ColumnarError => {
     Self::Compact { reason, .. } => reason,
+    Self::Projection { reason, .. } => reason,
     Self::Storage(cause) => cause,
     Self::ContentStore(cause) => cause,
     Self::BlobContent { cause, .. } => cause,
