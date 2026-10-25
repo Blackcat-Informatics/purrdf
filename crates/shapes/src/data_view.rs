@@ -923,6 +923,17 @@ impl DatasetView for ShaclDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+    fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Option<Result<purrdf_core::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>>
+    {
+        match &self.source {
+            Source::Native(source) => source.reserve_owned_workspace(bytes),
+            Source::Composite(dense) => dense.source.reserve_owned_workspace(bytes),
+            Source::Delta(dense) => dense.source.reserve_owned_workspace(bytes),
+        }
+    }
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)
     }

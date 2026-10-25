@@ -703,6 +703,14 @@ impl DatasetView for ClassMembershipView {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Option<Result<purrdf_core::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>>
+    {
+        self.base.reserve_owned_workspace(bytes)
+    }
+
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.base
             .quads()
@@ -1039,6 +1047,59 @@ mod tests {
     use purrdf_testkit::prop::prelude::*;
 
     const EX: &str = "https://example.org/class-membership/";
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn canonical_refusals_cross_resident_shacl_adapters() {
+        use purrdf_core::{CanonError, CanonHash, TermPosition, try_canonicalize_view};
+        use purrdf_rdf::ir::{CompositeDatasetView, MutableDataset, ViewLimits};
+
+        for reserved in [false, true] {
+            let iri = if reserved {
+                "urn:purrdf:rdfc:wrapped"
+            } else {
+                EX
+            };
+            let mut builder = RdfDatasetBuilder::new();
+            let subject = builder.intern_iri(iri).unwrap();
+            let predicate = builder.intern_iri("urn:predicate").unwrap();
+            builder
+                .push_quad(subject, predicate, subject, None)
+                .unwrap();
+            let source = builder.freeze().unwrap();
+            let composite = Arc::new(
+                CompositeDatasetView::new(vec![Arc::clone(&source)], ViewLimits::default())
+                    .unwrap(),
+            );
+            let delta = Arc::new(
+                MutableDataset::new(Arc::clone(&source))
+                    .snapshot_view()
+                    .unwrap(),
+            );
+            let views = [
+                ShaclDatasetView::native(source),
+                ShaclDatasetView::composite(composite, false, ViewLimits::default()).unwrap(),
+                ShaclDatasetView::delta(delta, false, ViewLimits::default()).unwrap(),
+            ];
+            for view in views {
+                let view = Arc::new(view);
+                let plain = try_canonicalize_view(view.as_ref(), CanonHash::Sha256);
+                let membership = ClassMembershipView::from_view(view);
+                let derived = try_canonicalize_view(&membership, CanonHash::Sha256);
+                drop(membership);
+                for result in [plain, derived] {
+                    match (reserved, result) {
+                        (true, Err(CanonError::ReservedVocabulary(refusal))) => {
+                            assert_eq!(refusal.iri(), iri);
+                            assert_eq!(refusal.position(), TermPosition::Subject);
+                        }
+                        (false, Ok(_)) => {}
+                        (_, result) => panic!("unexpected wrapped canonicalization: {result:?}"),
+                    }
+                }
+            }
+        }
+    }
 
     fn fixture() -> (ClassMembershipView, [TermId; 8]) {
         let mut builder = RdfDatasetBuilder::new();
