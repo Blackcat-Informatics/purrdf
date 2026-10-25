@@ -116,6 +116,8 @@ pub struct CompiledGlobSet<S: Admission = Resident> {
 }
 impl CompiledGlobSet {
     /// Compile an ordered set with resident physical storage.
+    /// Source occurrences preserve order, duplicates and matching indices under
+    /// one shared admission account.
     /// # Errors
     /// Preserves native syntax and storage refusals.
     pub fn compile(patterns: &[impl AsRef<str>], mode: Mode) -> Result<Self, SetCompileError> {

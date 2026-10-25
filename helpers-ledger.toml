@@ -3026,6 +3026,16 @@ reason = "Resident conveniences for two separate persisted grammars: statement-l
 
 [[distinct]]
 members = [
+    "purrdf_glob::CompiledGlob::compile",
+    "purrdf_glob::set::CompiledGlobSet::compile",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_glob::set::CompiledGlobSet::compile"
+reason = "The resident entry points construct different typed owners: one pattern versus an ordered set preserving duplicate source occurrences and their indices under one flat admission account. Both reuse the same native parser and matcher; the shared forwarding shape duplicates no compilation or matching algorithm."
+
+[[distinct]]
+members = [
     "purrdf_shapes::query_law::replace",
     "purrdf_shapes::sparql::coordinates::replace",
     "purrdf_shapes::xpath::replace",
