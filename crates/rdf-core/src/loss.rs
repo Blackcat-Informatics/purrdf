@@ -31,14 +31,21 @@
 //! the bidirectional RDF 1.2 dataset↔OKF profile, the bidirectional RDF↔LPG
 //! semantic lowering, and the OBO Graphs/SKOS views;
 //! [`loss_matrix_json`] renders that same enumerable registry.
+//!
+//! Callers extend [`LossProfile::builtin`] with their own [`LossDefinition`]
+//! rows and pass the resulting profile explicitly to [`check_ledger_sound_in`]
+//! and [`LossLedger::render_json_in`]. Custom meanings never mutate the builtin
+//! registry or another caller's profile.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::collections::BTreeSet;
 
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::RdfLocation;
+
+mod profile;
+pub use profile::{LossDefinition, LossProfile, LossProfileError, LossSoundnessError};
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
 /// an `rdf:reifies` triple pattern) but whose template drops that reifier — the
@@ -191,6 +198,13 @@ impl LossLedger {
     /// JSON-array shape instead (no `schema_version`), so the committed
     /// `generated/*.json` matrix artifacts stay unchanged.
     pub fn render_json(&self) -> String {
+        self.render_json_in(&LossProfile::builtin())
+    }
+
+    /// Render using the caller's explicit profile to judge each entry's intent.
+    /// Ordering and schema are identical to [`Self::render_json`]; occurrence
+    /// notes and locations are retained independently of code descriptions.
+    pub fn render_json_in(&self, profile: &LossProfile) -> String {
         let mut sorted = self.entries.clone();
         sorted.sort_by(|a, b| {
             a.from
@@ -199,7 +213,7 @@ impl LossLedger {
                 .then_with(|| a.code.cmp(&b.code))
                 .then_with(|| a.location.cmp(&b.location))
         });
-        render_versioned(&sorted)
+        render_versioned(&sorted, profile)
     }
 }
 
@@ -2111,26 +2125,6 @@ fn schema_shacl_entries(source: &'static str) -> Vec<LossEntry> {
         .collect()
 }
 
-/// Extract the `&'static str` payload of a **contract**-discipline
-/// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
-///
-/// The registry only ever enumerates contract entries (the direction ledgers
-/// and [`pair_loss_ledger`]); a `Cow::Owned` reaching here would mean a
-/// runtime `record`-discipline entry leaked into the static registry, which is
-/// a programming error — hard-fail, per the no-optionality doctrine.
-///
-/// Takes `&Cow<'static, str>` rather than `&str` on purpose (this is NOT the
-/// usual over-indirection `clippy::ptr_arg` warns about): the whole point is
-/// to inspect which *variant* the caller built, which a plain `&str` cannot
-/// distinguish.
-#[allow(clippy::ptr_arg)]
-fn static_str(cow: &Cow<'static, str>) -> &'static str {
-    match cow {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(_) => unreachable!("registry codes are always static contract literals"),
-    }
-}
-
 /// The single source of truth every enumerable-registry consumer reads: the
 /// RDF↔GTS direction ledgers ([`rdf_to_gts_loss_ledger`] /
 /// [`gts_to_rdf_loss_ledger`]), RDF↔OKF direction ledgers
@@ -2146,7 +2140,7 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// ([`empty_named_graph_entries`]), and the standalone JSON Schema emitter profiles.
 ///
 /// [`loss_matrix_json`] renders these rows (with their `note` text intact) and
-/// [`registry`] folds them into a `(from, to) -> codes` lookup table — both
+/// [`LossProfile::builtin`] indexes their pair-scoped code descriptions — both
 /// derive from this ONE function, so the rendered matrix and the
 /// `registered_pairs()`/`profile_for()` contract can never drift apart. Order
 /// is unspecified; callers sort as needed.
@@ -2205,39 +2199,11 @@ pub fn loss_matrix_json() -> String {
     render(&entries, false)
 }
 
-/// The single source of truth backing [`registered_pairs`] and [`profile_for`]
-/// — built by folding [`registry_entries`] (the same rows [`loss_matrix_json`]
-/// renders) down to a `(from, to) -> codes` lookup, dropping the `note` text —
-/// mapping every `(from, to)` pair this crate knows a loss profile for to the
-/// closed set of codes that pair's conversion may drop.
-///
-/// [`registry_entries`] is pure, compile-time-derived data (the same rows on
-/// every call), so the folded map is built once behind a [`OnceLock`] and
-/// reused for the process lifetime — `profile_for` sits on the soundness
-/// check's hot path (once per code checked), and `registered_pairs`/
-/// [`loss_matrix_json`]'s registry rendering both want the same table, so
-/// rebuilding a fresh `BTreeMap` on every call was pure wasted allocation.
-fn registry() -> &'static BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
-    static REGISTRY: OnceLock<BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>>> =
-        OnceLock::new();
-    REGISTRY.get_or_init(|| {
-        let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> =
-            BTreeMap::new();
-        for entry in &registry_entries() {
-            table
-                .entry((static_str(&entry.from), static_str(&entry.to)))
-                .or_default()
-                .insert(static_str(&entry.code));
-        }
-        table
-    })
-}
-
 /// Every `(from, to)` pair with a registered loss profile: the RDF↔GTS
 /// directions, graph/tabular/view profiles, every non-identity syntax/projection
 /// transcode pair, the shapes projection, and schema-language emitter profiles.
 pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
-    registry().keys().copied()
+    profile::builtin_pairs()
 }
 
 /// The closed set of loss codes a `from -> to` conversion may drop, per the
@@ -2247,10 +2213,7 @@ pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> 
 /// has no declared profile for) — never a panic, since callers may probe
 /// arbitrary pairs to check whether a profile is known.
 pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
-    registry()
-        .iter()
-        .find(|((f, t), _)| *f == from && *t == to)
-        .map_or_default(|(_, codes)| codes.clone())
+    profile::builtin_codes(from, to).collect()
 }
 
 // ── Sound + complete verification surface ────────────────────────────────────
@@ -2333,25 +2296,42 @@ pub fn assert_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) {
 ///
 /// # Errors
 ///
-/// Returns `Err` naming every offending code (and the declared profile) when
-/// `ledger` carries at least one code outside `profile_for(from, to)`.
+/// Returns `Err` naming the first offending code when an entry has a different
+/// conversion pair or a code outside `profile_for(from, to)`.
 pub fn check_ledger_sound(ledger: &LossLedger, from: &str, to: &str) -> Result<(), String> {
-    let profile = profile_for(from, to);
-    let offenders: BTreeSet<&str> = ledger
-        .entries()
-        .iter()
-        .map(|e| e.code.as_ref())
-        .filter(|code| !profile.contains(code))
-        .collect();
-    if offenders.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "loss ledger unsound for (\"{from}\", \"{to}\"): code(s) {offenders:?} were \
-             recorded but are not in the declared profile {profile:?} — a recorded code outside \
-             the profile is an undeclared, unintentional loss (a bug), not an accepted contract"
-        ))
+    check_ledger_sound_in(&LossProfile::builtin(), ledger, from, to)
+        .map_err(|error| error.to_string())
+}
+
+/// Check each original entry's pair and code against an explicit profile.
+///
+/// The first refusal borrows its original code and pair operands; it allocates
+/// nothing. Empty ledgers remain sound, including for unregistered pairs.
+pub fn check_ledger_sound_in<'a>(
+    profile: &LossProfile,
+    ledger: &'a LossLedger,
+    from: &'a str,
+    to: &'a str,
+) -> Result<(), LossSoundnessError<'a>> {
+    for entry in ledger.entries() {
+        if entry.from != from || entry.to != to {
+            return Err(LossSoundnessError::PairMismatch {
+                code: &entry.code,
+                actual_from: &entry.from,
+                actual_to: &entry.to,
+                expected_from: from,
+                expected_to: to,
+            });
+        }
+        if profile.description(from, to, &entry.code).is_none() {
+            return Err(LossSoundnessError::UnregisteredCode {
+                code: &entry.code,
+                from: &entry.from,
+                to: &entry.to,
+            });
+        }
     }
+    Ok(())
 }
 
 /// Panicking wrapper over [`check_ledger_sound`]: every code `ledger`
@@ -2378,6 +2358,10 @@ pub fn assert_ledger_sound(ledger: &LossLedger, from: &str, to: &str) {
 /// entries never carry a location anyway); [`LossLedger::render_json`] passes
 /// `true` so a runtime `record`-discipline location is visible.
 fn render(entries: &[LossEntry], emit_location: bool) -> String {
+    render_in(entries, emit_location, &LossProfile::builtin())
+}
+
+fn render_in(entries: &[LossEntry], emit_location: bool, profile: &LossProfile) -> String {
     let mut out = String::from("[\n");
     for (i, entry) in entries.iter().enumerate() {
         out.push_str("  {\n");
@@ -2389,7 +2373,9 @@ fn render(entries: &[LossEntry], emit_location: bool) -> String {
         // iff it is a member of the declared profile for its `(from, to)` pair.
         // Deriving here (rather than trusting a caller-set bool) makes the two
         // impossible to drift apart.
-        let intentional = profile_for(&entry.from, &entry.to).contains(entry.code.as_ref());
+        let intentional = profile
+            .description(&entry.from, &entry.to, &entry.code)
+            .is_some();
         push_bool_field(&mut out, "intentional", intentional);
         let location = emit_location.then_some(entry.location.as_deref()).flatten();
         push_field(&mut out, "note", entry.note.as_ref(), location.is_none());
@@ -2410,8 +2396,8 @@ fn render(entries: &[LossEntry], emit_location: bool) -> String {
 /// in the versioned envelope `{ "schema_version": 1, "losses": [ ... ] }` —
 /// the schema [`LossLedger::render_json`] exposes. `schema_version` is a plain
 /// integer bumped only on a breaking shape change to this envelope.
-fn render_versioned(entries: &[LossEntry]) -> String {
-    let array = render(entries, true);
+fn render_versioned(entries: &[LossEntry], profile: &LossProfile) -> String {
+    let array = render_in(entries, true, profile);
     let mut out = String::from("{\n  \"schema_version\": 1,\n  \"losses\": ");
     for (i, line) in array.lines().enumerate() {
         if i > 0 {
