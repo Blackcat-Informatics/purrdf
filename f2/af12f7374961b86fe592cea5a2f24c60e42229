@@ -1,0 +1,19 @@
+ghprsq source head backlink metadata
+
+parent_hashes: f2af12f7374961b86fe592cea5a2f24c60e42229
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 757
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/757
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 7eb3a9bbe8182539ec4b6e178f50d50a830d5cc5
+GhpRsq-Head-Ref: paudley/749-srl-governed-infer-with-a-stop-signal
+GhpRsq-Head-OID: f2af12f7374961b86fe592cea5a2f24c60e42229
+GhpRsq-Result-Tree: 2d08ae90be2d9633dae413df82e1d5a0993ec6ff
+GhpRsq-Result-Commit: 194280b8d735046bead71112b16c68d36bcaaf7f
+GhpRsq-Parent-Hashes: f2af12f7374961b86fe592cea5a2f24c60e42229
+GhpRsq-Squash-Notes-SHA256: 1c83aa728f73d5d243edcba4009090abd9d5afe62aeaf012469efa169a8b1d66
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
