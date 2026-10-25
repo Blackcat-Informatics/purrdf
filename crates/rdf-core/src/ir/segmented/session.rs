@@ -2275,7 +2275,7 @@ mod operation_tests {
         let retained = guard.block.retained_charge();
         assert!(retained >= label.len() as u64);
         drop(session);
-        assert!(guard.term() == TermRef::Iri(&label));
+        assert_eq!(guard.term(), TermRef::Iri(&label));
         assert!(lock_read_state(&budget.state).live >= retained);
         drop(guard);
         assert_eq!(lock_read_state(&budget.state).live, 0);
