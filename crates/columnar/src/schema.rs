@@ -190,6 +190,22 @@ const BLOBS: TableSchema = TableSchema {
     columns: BLOBS_COLUMNS,
 };
 
+impl purrdf_hash::error::StructuredError for Repetition {
+    purrdf_hash::error_visit! {
+        Required => "columnar-required" {},
+        Optional => "columnar-optional" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ColumnSchema {
+    purrdf_hash::error_visit! {
+        @record self { name, physical_type, repetition, utf8 } => "columnar-column-schema" {
+            "name" => Code(self.name), "physical_type" => Record(&self.physical_type),
+            "repetition" => Record(&self.repetition), "utf8" => Boolean(self.utf8),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
