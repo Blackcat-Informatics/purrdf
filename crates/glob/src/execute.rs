@@ -91,6 +91,8 @@ pub(super) fn matches(
                 star = None;
             }
             token += 1;
+            // Only Literal, Separator, Any and Class can accept here; each
+            // requires `ch` to be Some. Other token arms return or continue.
             at += ch.expect("an accepted scalar token has input").len_utf8();
             continue;
         }
