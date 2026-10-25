@@ -183,7 +183,8 @@ pub use diagnostic::{
     RdfDiagnostic, RdfLocation, RdfSeverity,
 };
 pub use fno::{
-    FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
+    FnBlank, FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping,
+    FnoAdmissionError, FnoAdmissionReason, FnoCatalog, FnoCatalogInput,
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use governor::{
