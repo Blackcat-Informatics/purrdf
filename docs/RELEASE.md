@@ -457,6 +457,27 @@ git tag npm-v0.1.5
 git push origin npm-v0.1.5
 ```
 
+## W3C SHACL implementation reports
+
+Submit the EARL reports to the W3C data-shapes working group right after every
+release that changes SHACL behavior. Starting with 4.0.0, this is the first
+step after the release lanes finish.
+
+1. Download `purrdf-shacl-earl.ttl` (SHACL 2017) and `purrdf-shacl12-earl.ttl`
+   (SHACL 1.2) from the published GitHub Release. Verify their attestation as
+   described under [Verification](#verification). Submit those exact bytes and
+   do not regenerate them: they were produced on the tagged commit by
+   `make w3c-earl`.
+2. Check that each report names the released version and tag, and that its
+   pass counts agree with the [conformance scoreboard](./CONFORMANCE.md) at
+   that tag.
+3. Open a pull request to [`w3c/data-shapes`](https://github.com/w3c/data-shapes)
+   that adds or replaces the PurRDF reports. Put them where that repository's
+   implementation-report instructions say, and link the GitHub Release as their
+   provenance.
+4. After the reports merge, record the accepted report locations in
+   [CONFORMANCE.md](./CONFORMANCE.md).
+
 ## Verification
 
 Download a published crate and verify its GitHub attestation:
