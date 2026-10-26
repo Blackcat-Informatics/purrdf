@@ -1227,8 +1227,13 @@ fn schema_grammar_placement_and_rich_operands_survive_input_disposal() {
                 label_tokens,
                 reference_tokens,
             } => {
-                assert!(label.ends_with("label"));
-                assert!(reference.ends_with("reference"));
+                let (expected_label, expected_reference) = if source.contains("_:") {
+                    ("_:label", "_:reference")
+                } else {
+                    ("urn:label", "urn:reference")
+                };
+                assert_eq!(label, expected_label);
+                assert_eq!(reference, expected_reference);
                 assert_eq!(label_tokens[0].token, Token::Dollar);
                 assert_eq!(reference_tokens[0].token, Token::LParen);
                 assert_eq!(reference_tokens.last().unwrap().token, Token::RParen);
