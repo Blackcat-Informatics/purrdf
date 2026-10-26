@@ -18,8 +18,8 @@ Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 - Cached Datalog plans and reasoning-contract results: the plan solver
   (`purrdf-datalog-plan-v6`) and calculus (`purrdf-datalog-calculus-v3`)
   identities changed.
-- Full-text profile and index fingerprints: the ranking identity is now
-  `purrdf-bm25f-fixed-v2`.
+- Full-text profile, index and source fingerprints: the ranking identity is now
+  `purrdf-bm25f-fixed-v2` and the text identity domains are revised.
 - Developer-schema compilations cached under an earlier `SchemaCompilation.key`.
 
 Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
@@ -372,12 +372,13 @@ list. A consumer that needs such a list can clone the shared view's names at
 that boundary; expanding every nested wildcard snapshot recreates the repeated
 prefix work the compact representation avoids.
 
-## Segmented data profile 3
+## Segmented data profile 6
 
-Segmented stores use data profile 3. The reverse index stores identifiers into
-the forward dictionary, and dictionary blocks read their first key from the
-record instead of a second stored fence. The reader refuses earlier segmented
-profiles. Regenerate those stores from their original RDF input; there is no
+Segmented stores use data profile 6 (`PURRSEG6`). The reverse index stores
+identifiers into the forward dictionary, dictionary blocks read their first key
+from the record instead of a second stored fence, source directories use sparse
+authenticated prefixes, and oversized terms live in authenticated overflow
+pages. The reader refuses earlier segmented profiles. Regenerate those stores from their original RDF input; there is no
 in-place upgrade. Receipt encoding and hash laws are a separate contract and do
 not change with the data profile.
 
@@ -536,3 +537,57 @@ refuses an untyped IRI. An `sh:includesRuleSet` value that is not a declared
 rule set fails when the shapes graph loads. `validate_change` on a shapes graph
 that declares rules entailment answers with the whole graph and the reason
 `rules entailment`.
+
+## Fallible canonical identities
+
+The panicking canonicalization adapters are removed: `canonicalize`,
+`canonicalize_with`, `canonicalize_view`, `canonicalize_graph_view`,
+`graph_digest_view` and `ontology_identity`. Call their `try_` forms and handle
+the returned refusal, either a reserved-vocabulary refusal or an exhausted
+search budget. `datasets_isomorphic` returns `Result<bool, CanonError>`.
+`Justification::digest` and `digest_hex`, `PipelineBundle::digest` and
+`canonical_flat_nquads` return the original refusal. JavaScript
+`Dataset.isomorphic` throws an `Error` carrying it. Successful canonical bytes,
+labels and digests are unchanged.
+
+## Datalog store coordinates
+
+`RelationStore::rows_from` takes a `u64` boundary. `row_slots` reports the next
+logical append coordinate, which differs from the live `row_count` once rows are
+removed. Indexed removal leaves surviving rows and handles in place, and a
+reinserted row receives a fresh identity. Do not use either value as a slice
+index.
+
+## CDT parse error causes
+
+`CdtError::BadEscape` and `CdtError::BadLanguageTag` gain a `cause` field with
+the original UCHAR or language-tag refusal. Update explicit constructions and
+exhaustive field patterns. The standard error source and structured inspection
+also expose it, and messages are unchanged.
+
+## SHACL shape catalogs and recursion refusals
+
+A shapes graph with a cyclic shape reference (a self-reference, mutual
+reference, logical shape list or nested property shape) is refused at load with
+`ShapesError::Recursion`. Its `RecursionRefusal` lists the component's members
+and its dependency edges with their polarity. Shared acyclic references are
+accepted. Preparation that would cross the stack margin, or a reference outside
+its catalog, returns `ShapesError::Preparation`. Exhaustive `ShapesError`
+matches must handle both. `path::eval` and `eval_ids` now return a `Result`.
+
+## Incremental text indexes
+
+Text index and source fingerprints change because their identity domains are
+revised. `token_occurrences`, `documents_with_subject`, `SurfaceTerm::documents`
+and the `words` and `spans` accessors return iterators instead of slices; call
+`.collect()` where a slice or vector was required. `SurfaceTerm` and the
+substring and phonetic match types gain a corpus-profile type parameter that
+defaults to `GraphLanguage`. Inconsistent deltas and unavailable source
+evidence are refused.
+
+## OpenAPI schema references
+
+OpenAPI output now references its definitions as `#/components/schemas/...`
+instead of `#/$defs/...`. Update tooling that rewrote or followed the old
+references. JSON Schema output is unchanged. The schema policy salt includes
+`openapi-3.1-local-refs-v1`, so `SchemaCompilation.key` changes.

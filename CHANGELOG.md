@@ -23,7 +23,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   their standard sources still borrow the original limit value. Unstopped
   results, proofs, contract identities and effective limits remain unchanged.
 
-- **Segmented data profile 3 (breaking persisted format):** the reverse index
+- **Segmented data profile 6 (breaking persisted format):** the reverse index
   stores identifiers into the forward dictionary, and dictionary blocks read
   their first key from its record instead of a second stored fence. Exact reverse
   lookup uses the same authenticated forward reader. Older segmented profiles
@@ -32,6 +32,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Dictionary payloads use native DEFLATE when it admits more records per physical
   block; numeric reverse-index pages fill independently of the dictionary record
   cap. Readers admit bounded inflation scratch and preserve native codec causes.
+  Source directories store each normalized source row in 37 bytes with one
+  cumulative digest per 32 rows, so prefix reads reconstruct at most 31 tail
+  digests; a 1,025-row image uses 82 directory and checkpoint pages instead of
+  205 at the same 512-byte page size. An oversized dictionary term no longer
+  sets every page's size: it is stored in fixed-size authenticated overflow
+  pages behind a small routing descriptor, reverse comparisons stream only the
+  bytes needed to order it, and lexical materialization admits its payload and
+  scratch. Independent certification checks exact directory, checkpoint and
+  overflow contents.
 
 - **Regime arena controls (C ABI 0.12.0):** Rust, Python, JavaScript, C and
   CLI callers can set the retained term-surface byte limit. Refusals preserve
@@ -87,8 +96,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Advice is frozen before rule tasks run, so a sibling warming a lazy index
   cannot change the round's candidate work.
   Dynamic probes constrain every already-bound position and retain authored
-  proof order. Physical planner version 5 identifies the changed candidate
-  accounting; completed models and semantic fact counts retain their meaning.
+  proof order. A new physical planner version (`purrdf-datalog-plan-v6` at
+  release) identifies the changed candidate accounting; completed models and
+  semantic fact counts retain their meaning.
 
 - **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
   visit only that predicate's partitions. `RelationStore::rows_for_predicate`
@@ -128,7 +138,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Rational, numeric codecs and geometric facades share binary `u64` limbs.
   Small exact integers retain inline `i128` arithmetic; the binary engine adds
   inline magnitude storage, bounded reusable scratch and Karatsuba products.
-  Governor profile 14 prices binary storage and decimal base conversion.
+  The governor profile now prices binary storage and decimal base conversion
+  (`GOVERNOR_PROFILE_VERSION` is 22 at release).
 
 - **RDFLib compatibility queries:** Graph, Dataset, ConjunctiveGraph and the
   SPARQL processor compile contextual mappings through the shared Rust evaluator.
@@ -140,13 +151,134 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Canonical reserved-vocabulary refusals:** `ReservedVocabulary` lends its
+  original IRI and position through `iri()` and `position()`; clones share the
+  immutable payload and its original admission owner, and the refusal stays
+  readable after its source is destroyed. A source provides
+  `DatasetView::reserve_owned_workspace` when an offending IRI must be owned;
+  without that capability canonicalization returns
+  `CanonError::OwnedWorkspaceUnavailable`, and an unknown live ceiling grants
+  no permission. `check_admissible` and `check_admissible_view` return
+  `CanonError`, including physical allocation refusal, and flat boundaries
+  retain native causes through `ViewCanonError::Refused`.
+
+- **Canonical Function Ontology catalogs:** build an `FnoCatalogInput` and
+  admit it with `FnoCatalog::try_new`; the admitted catalog is immutable and
+  `as_input()` borrows its fields. Admission checks RDF values, conflicting
+  node descriptions and references first, and an `FnoAdmissionError` owns the
+  original rejected input and native reason. Labels, banners and descriptions
+  are literal `TermValue`s that keep datatype, language and base direction;
+  mapping identities use `FnBlank { label, scope }` instead of a sanitized
+  label string. Set-valued fields sort canonically, `expects` keeps its list
+  order, and distinct mapping labels and function IRIs no longer merge, so
+  emitted bytes change while the admitted RDF facts are preserved. Slice's
+  `list_functions_catalog` and `emit_list_functions` return admission results.
+  `FnoCatalog::from_dataset(&view, ontology_iri)` reads a catalog through the
+  same admission path under a strict profile that must account for every
+  default-graph statement; unsupported content, named graphs and extra list
+  facts are refused with boxed `FnoReadError` values, and a source failure
+  discards the whole result. A write and read preserve catalog equality, and a
+  read and write preserve graph isomorphism.
+
+- **Fallible canonical identities:** canonicalization refusals (reserved
+  vocabulary, exhausted search budgets) reach callers as errors instead of
+  panics. The panicking `canonicalize`, `canonicalize_with`,
+  `canonicalize_view`, `canonicalize_graph_view`, `graph_digest_view` and
+  `ontology_identity` adapters are removed; use their `try_` forms.
+  `datasets_isomorphic` returns `Result<bool, CanonError>`, and
+  `Justification::digest` and `digest_hex`, `PipelineBundle::digest` and
+  `canonical_flat_nquads` return the original refusal. JavaScript
+  `Dataset.isomorphic` throws a JavaScript `Error` carrying it. Successful
+  canonical bytes, labels and digest algorithms are unchanged.
+
+- **Explicit Datalog capacity limits:** unstated stored-fact, join-step and
+  term-arena settings impose no logical ceiling on any target; physical storage
+  admission still applies. The target-specific `DEFAULT_MAX_STORED_FACTS`,
+  `DEFAULT_MAX_JOIN_STEPS`, `DEFAULT_MAX_TERM_ARENA_BYTES` and their
+  `NATIVE_`/`WASM_` presets are removed. Explicit limits keep typed refusals
+  with original consumption, and `EvalOptions::without_stored_fact_limit`,
+  `without_join_step_limit` and `without_term_arena_limit` remove a selected
+  ceiling. Rule, entailment, SHACL rule and CLI, Python and JavaScript host
+  paths share these options, so an omitted CLI limit no longer means 4,194,304
+  facts, 1,048,576 steps or 16 MiB. The chase refuses a candidate past its
+  last representable work observation, which advances the calculus identity to
+  `purrdf-datalog-calculus-v3`; every reasoning-contract identity changes, and
+  cached results must be recomputed. Canonical model bytes are unchanged.
+
+- **Datalog store coordinates:** `RelationStore::rows_from` takes a `u64`
+  boundary, and `row_slots` reports the next logical append coordinate apart
+  from the live `row_count`. Indexed removal leaves surviving rows and handles
+  in place; a reinserted row receives a fresh append identity, and an old
+  handle never denotes a different row.
+
+- **Retrieval decoding and profile errors:**
+  `purrdf_retrieval::PlanError::InvalidUtf8` carries the original
+  `source: core::str::Utf8Error` beside `what`, and
+  `FusionError::MalformedProfile` carries `Box<ProfileRefusal>` instead of a
+  rendered string. Its native reasons retain decoder and IRI causes, wire
+  fields and original candidate owners; the inspected `reason` field is now a
+  borrowed cause. Human messages and refusal identities are unchanged.
+
+- **Columnar errors keep native causes:** `purrdf::columnar::project` and
+  `write` return `ColumnarWriteError<D::ReadError>`, whose `SourceRead` carries
+  the provider's original read error and whose `Codec` carries a
+  `ColumnarError`. Content integrity failures are `ColumnarError::ContentStore`
+  and `BlobContent { row, cause }`, and RDF reconstruction and freeze failures
+  are `Reconstruction(RdfDiagnostic)`, replacing formatted `Malformed` details
+  and `Storage` for freezes. Compact metadata, Parquet metadata and profile,
+  page-body, value-decoder, fixed-schema construction, reader and projection
+  refusals move from `Malformed` text to the `Compact`, `Metadata`, `PageBody`,
+  `ValueBody`, `Construction`, `Reader` and `Projection` variants, which retain
+  original operands and causes through borrowed inspection and standard error
+  sources. Human messages, refusal order and emitted bytes are unchanged.
+
+- **HNSW and distance refusals:** shared distance pair and batch APIs return
+  `Result<f64, NonFinite>` instead of `Option<f64>`, and `Bounded::NonFinite`
+  carries the same cause with the original checked `binary64` bits.
+  `HnswError::NonFiniteDistance` adds `cause` beside `row`, exact kNN errors
+  retain query and candidate rows and the metric, and
+  `HnswError::ArithmeticOverflow` carries an `ArithmeticRefusal` naming the
+  failed operation, original operands, units and destination limit.
+  `HnswError::NonFiniteComponent` adds a `value: ComponentValue` keeping the
+  original component width, sign and NaN payload. Successful values,
+  checkpoint order and human messages are unchanged.
+
+- **CDT parse error causes:** `CdtError::BadEscape` and
+  `CdtError::BadLanguageTag` gain a `cause` field holding the original UCHAR or
+  language-tag refusal, also reachable through the standard error source. CDT
+  errors and comparison type errors expose every field through structured
+  inspection. Grammar, messages and lexical bytes are unchanged.
+
+- **SHACL shape catalogs and recursion refusals:** shapes graphs parse each
+  definition once and retain the original shape and function domains behind
+  identity references; `PropertyReference` edges keep their overrides apart
+  from the shared property-shape definition. A cyclic shape reference
+  (self-reference, mutual reference, logical shape list or nested property
+  shape) is refused when the shapes graph loads with the new
+  `ShapesError::Recursion`, whose `RecursionRefusal` lists the component's
+  members and its dependency edges with their polarity; a shared acyclic
+  reference is accepted. Preparation that would enter the stack margin, or a
+  reference outside its catalog, returns the new `ShapesError::Preparation`.
+  Exhaustive `ShapesError` matches must handle both, and `path::eval` and
+  `eval_ids` now return a `Result`.
+
+- **Incremental text indexes:** text updates maintain source identity and
+  coverage and edit the persistent lexical and surface tables for changed
+  subjects instead of collecting every literal row of the next source.
+  Inconsistent deltas and unavailable source evidence are refused. Source and
+  index identity domains are revised, so text index and source fingerprints
+  change. `token_occurrences`, `documents_with_subject`,
+  `SurfaceTerm::documents` and the `words` and `spans` accessors return
+  iterators instead of slices, and `SurfaceTerm` and the substring and phonetic
+  match types gain a corpus-profile parameter defaulting to `GraphLanguage`.
+
 - **Explicit Datalog evidence and governors:** ordinary evaluation defaults to
   model-only output. Request `DerivationMode::Record` for exported derivations;
   `Evaluation::derivations` returns an `Option`, and proof construction returns
   a typed refusal if recording was disabled. Entailment and SHACL proof callers
   request recording explicitly. The term-arena ceiling is caller-selected through
-  `EvalOptions`, with a removable 16 MiB default named
-  `DEFAULT_MAX_TERM_ARENA_BYTES`. Stored-fact refusal reports distinguish the
+  `EvalOptions`; an unstated ceiling imposes no logical limit (see "Explicit
+  Datalog capacity limits"). Stored-fact refusal reports distinguish the
   admitted count from the first refused insertion. Semantic fact counts and
   versioned candidate work are available through `Evaluation::work`, and each
   call can select sequential rule execution without changing a global pool.
@@ -156,7 +288,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and stratified programs. Recorded derivations expose the authored head
   ordinal. Independent proof encoding moves to version 2 and records that
   ordinal; version 1 proof bytes require regeneration. Physical plans use
-  planner version 4, invalidating earlier cached plan identities.
+  planner version 6 (`purrdf-datalog-plan-v6`), invalidating earlier cached
+  plan identities.
 
 - **Native Datalog inequality:** `Guard::not_equal` filters exact bound terms
   without a caller callback, including inside negated groups. Independent proofs
@@ -391,6 +524,87 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **`purrdf-glob` compiled Unicode globs:** a new crate, also at
+  `purrdf::glob`, compiles one anchored Unicode glob in the `purrdf-glob-v1`
+  language. Callers choose `Mode::Text` or `Mode::Path` semantics, a literal
+  or an explicit lexical `IriComponent`, and a work allowance; percent escapes
+  stay lexical and an absent IRI component differs from an empty one.
+  Compilation validates before allocating, matching allocates nothing, and
+  exhaustion publishes no partial decision. `CompiledGlobSet` holds an ordered
+  pattern set and returns every matching source index, keeping order, overlaps
+  and duplicate occurrences under one aggregate allowance. The `rdf` module
+  executes RDF-authored ordered plans (`purrdf-glob-rdf-v1`) against original
+  RDF literal or IRI terms and exports the plan description, evaluation and
+  input identities, exact work and RDF 1.2 quoted membership statements, with
+  every vocabulary role supplied by the caller. The CLI adds `purrdf glob` and
+  `purrdf glob-set`, which require an explicit `--mode`, `--surface` and
+  `--max-work`, and `purrdf glob-rdf`, which reads Turtle or N-Triples with an
+  explicit `--vocabulary` mapping and `--max-work` and writes nothing on
+  refusal.
+
+- **`purrdf-toml` TOML 1.1 codec:** a new crate, also at `purrdf::toml`,
+  analyzes TOML 1.1 source into a typed, ordered stand-off model and projects it
+  into an RDF 1.2 dataset whose source cover reconstructs every original byte,
+  including comments, whitespace, CRLF and numeric spellings. `analyze`,
+  `project`, `encode` and `decode_document` take an explicit `Profile`;
+  `Profile::standard()` selects the shipped vocabulary and `Profile::new` a
+  caller's own. `decode_document` reparses the reconstructed bytes and verifies
+  the whole projected metadata graph, refusing fabricated values, paths,
+  parentage or keys. Parsing, projection and destruction use heap frames and a
+  flat arena, so nesting consumes no native stack per level, and grammar and
+  resource refusals carry byte, line and column locations.
+
+- **Maintained Datalog models:** `seminaive::Maintained` keeps one materialized
+  model across signed `maintenance::ChangeBatch` transactions over original
+  dictionary IDs, so recursive deletion, alternative groundings and stratified
+  negation update only affected facts. `apply`, `begin`, `resume` and
+  `resume_until` retain a transaction under a cumulative work allowance, with
+  `MaintenanceError::WorkLimit` stating consumed and required work;
+  `apply_next` polls a `ChangeSource`. `model_delta` and `applied_watermark`
+  publish exact net deltas only at completed host watermarks, and `relation`
+  distinguishes complete, sound lower-bound and withheld extensions. Witnesses
+  are repaired even when membership is unchanged. `store::ReclaimingInterner`
+  with `Maintained::new_reclaiming` retires unused terms for fresh-term
+  streams. Entailment refutation uses the maintained model.
+
+- **Resumable Datalog sessions with certified partial models:**
+  `EvaluationSession` retains rule, round, ordered publication and stratum
+  progress, including positive joins, guard batches, negative searches and
+  factored products, across resource and stop refusals; raising a cumulative
+  allowance resumes without replaying completed joins or guard calls. A
+  `SessionContext` binds caller-supplied snapshot, guard-semantics and
+  evidence-regime identities beside the authored-program digest, and a changed
+  binding or derivation mode is refused before work. `partial_model` exposes
+  published certified facts, independently checkable recorded derivations and
+  per-stratum `StratumStatus`; only completion permits `take_complete`.
+
+- **Fallible evidence queries and scoped retrieval:** lazy sources that can
+  fail mid-query are accepted by `NativeSparqlEngine`'s
+  `query_evidence_answer_fallible_view`, `query_evidence_status_fallible_view`,
+  `query_interned_evidence_fallible_view` and
+  `execute_witnessed_evidence_fallible`, and by retrieval's
+  `search_scoped_fallible` and `execute_scoped_in_read`. A shared
+  `ReadOperation` (entered through `with_fallible_read`) keeps the original
+  typed read error through deferred reads, fusion and the final checkpoint;
+  provider refusal or stream failure publishes no partial answer. Answer tiers,
+  unknowns and evidence receipts keep their meaning.
+
+- **Caller-owned loss profiles:** `purrdf_core::loss::LossProfile::builtin()`
+  extends with `LossDefinition` rows declaring caller-owned projection pairs
+  and loss codes; pass the profile to `check_ledger_sound_in` and
+  `LossLedger::render_json_in`. Conflicting registered meanings return
+  `LossProfileError` with the rejected definition. Soundness also checks that
+  each entry belongs to the requested conversion pair, so a reused code can no
+  longer hide a mismatched pair; the explicit check returns a borrowed
+  `LossSoundnessError`. Builtin renders and generated loss matrices keep their
+  bytes, and a custom profile never affects another caller's builtin profile.
+
+- **Structured TEXT errors:** `TextError`, `TextDeltaError`, capacity,
+  substring and phonetic refusals expose every retained field (native causes,
+  ordered HTML diagnostics, original terms, generation identities, work
+  counters and limits) through borrowed structured inspection, and single
+  native causes through the standard error source.
+
 - **Dated SHACL profiles:** `purrdf_shapes::ShaclProfile` selects the law a
   validation follows: `ShaclProfile::LEGACY` (the default, unchanged),
   `ShaclProfile::REC_20170720` (the SHACL Recommendation of 20 July 2017) and
@@ -491,9 +705,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `named_graphs`. UPDATE, governed UPDATE, checkpoint and compaction retain the
   selected policy. WASM snapshots, matches and synchronous/asynchronous UPDATEs
   also retain their source dataset policy.
-- **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
-  freezing its result and before publishing it, and before each declaration a
-  bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
+- **SPARQL governed UPDATE stop checks:** governed UPDATE checks the stop
+  signal after freezing its result and before publishing it, and before each
+  declaration a bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The governor profile
+  version advances; the charge schedule is unchanged.
 - **Arbitrary-precision numeric tower (`purrdf_xsd::exact`):** exact
   `xsd:integer`, `xsd:decimal` and `owl:rational` values of any size, beside
   the bounded types, which are unchanged. `exact::Integer` keeps values that
@@ -897,6 +1112,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   approximation too. SHACL-derived schemas keep SHACL's tag check.
 ### Changed
 
+- **Exact decimal parse, render and normalization work:** canonical decimal
+  output reserves its exact prepared length, binary64 conversion keeps its
+  inline and range gates together, and normalization tests divisibility by ten
+  with an inverse multiply instead of a remainder. On the `exact` benches, per
+  1,024 parse-render values allocation calls fall from 1,966 to 1,024 and
+  requested bytes from 24,687 to 13,359; measured instruction counts fall about
+  13.6% for parse and render, 3.3% for binary64 conversion and 3.7% for exact
+  multiplication. Values, rounding and governor admission are unchanged.
+
+- **Columnar allocation traffic:** Parquet headers, definition levels and
+  compressed values are appended directly into the final output buffer and the
+  footer is reserved exactly; a 1 MiB uncompressed write requests 3,147,054
+  bytes instead of 5,244,206 and retains 1,048,878 instead of 2,097,340.
+  Successful validation borrows its static metadata expectations, and blob
+  decoding moves checked payloads into the content store instead of copying
+  them. All frozen file identities are unchanged.
+
+- **Grouped SPARQL output traffic:** parallel group aggregation consumes the
+  original worker buffers in order instead of joining every minted row into a
+  second full bag, cutting requested bytes by about 397 KB per measured numeric
+  query with identical retained bytes, row order and governor accounting.
+
 - **OWL-Direct decisions that used to run out of budget now decide.** A
   witness that a nominal axiom (`D ⊑ {n}`, `D ⊑ {n, l}`) would absorb no longer
   mints a chain of witnesses of its own under a universal over a transitive
@@ -943,7 +1180,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   needs arms for the two new variants (the enum is `#[non_exhaustive]`, so
   existing wildcard arms compile); code that relied on `OutOfRange` to reject
   large values must check the variant or the magnitude itself.
-- **Governor profile version 13:** the charge schedule is unchanged. Every
+- **Governed exact numeric operations:** the charge schedule is unchanged. Every
   operation on a value past machine words — arithmetic, comparison, the
   unary functions, casts, the rendering of a result, `SUM`, `AVG`, `MIN`,
   `MAX`, `ORDER BY` and the statistical aggregates — and every division under
@@ -1003,11 +1240,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the corpus's `concat` cases charge 465 (353 before).
   `exists-inner-counters` charges 153 (76 before). The custom aggregate's
   scratch over-bound case certifies the fold's empty prefix.
-  `GOVERNOR_CORPUS_DIGEST` is
-  `160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb`.
-  `GOVERNOR_PROFILE_VERSION` is 13 and `GOVERNOR_PROFILE_DIGEST` is
-  `7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70`;
-  consumers that pin either must re-pin.
+  `GOVERNOR_CORPUS_DIGEST`, `GOVERNOR_PROFILE_VERSION` (22 at release) and
+  `GOVERNOR_PROFILE_DIGEST` change; consumers that pin any of them must re-pin.
 - **OWL 2 RL value identity with doubles is exact:** `dt-eq` and `dt-diff`
   compare an `xsd:integer`/`xsd:decimal` literal with an
   `xsd:float`/`xsd:double` one exactly, instead of rounding the exact value to
@@ -1033,6 +1267,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   subject, statement-table and scan probes on each carrier.
 
 ### Fixed
+
+- **JSON-LD writing of large ontology bundles:** the source carrier's
+  retained-text budget stayed at 256 MiB, so writing a bundle that retains
+  858,591,805 bytes of term text failed. The budget is now the 4 GiB document
+  ceiling, and the working-memory check runs before the reifier and annotation
+  indexes are sorted, so their sort-key copies are bounded by it.
+
+- **SHACL conformance across models:** shapes with equal declaration
+  identifiers could reuse a conformance answer from another original model or
+  a distinct inline body, giving incorrect results. Answers are now keyed by
+  original model and evaluated definition.
+
+- **SHACL validation requests through function calls:** registered built-in
+  and custom expression functions dropped the validation request, so a
+  warning-only inner shape could conform through a native call and fail through
+  a SPARQL call under the same severity policy. The complete request now
+  reaches bindings, expressions, targets and rule heads and conditions, and
+  each call reads the actual query's focus graph.
+
+- **Frozen entailment warrants bind their premise:** verifying a frozen
+  implication warrant accepted an empty or weakened replacement premise.
+  `FreezeWarrant` now retains the asserted premise in term-value order;
+  equivalent content with different dataset-local IDs or insertion order is
+  still accepted.
+
+- **Deep RDFC blank-node searches:** n-degree hash search grew the native call
+  stack for each child search, so deep blank-node chains could exhaust it.
+  Suspended parents now wait in heap frames; related-hash and permutation
+  order, pruning, ties, canonical bytes, work charging and stop checkpoints are
+  unchanged.
+
+- **OpenAPI schema references:** OpenAPI output holds its definitions under
+  `components/schemas` but kept `#/$defs/...` references. References now point
+  to `#/components/schemas/...`, preserving escaped suffixes and recursive
+  edges; JSON Schema output is unchanged. The schema policy salt adds
+  `openapi-3.1-local-refs-v1`, so `SchemaCompilation.key` changes.
 
 - **Large compiled schemas emit and read back:** the GraphQL, TypeScript,
   Pydantic and LinkML emitters and the JSON Schema importer refused a compiled
