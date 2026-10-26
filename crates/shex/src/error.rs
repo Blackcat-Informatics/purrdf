@@ -11,6 +11,10 @@ use core::fmt;
 
 mod language;
 pub use language::{LanguageMember, SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE};
+mod shape_map;
+pub use shape_map::{
+    MapExpectation, ShapeMapContext, ShapeMapLanguageRefusal, ShapeMapPosition, ShapeMapReason,
+};
 mod lexical;
 pub use lexical::{LexicalContext, LexicalReason, RepeatOperation};
 
@@ -40,6 +44,15 @@ pub enum ShexError {
         reason: String,
         /// Byte offset of the offending token.
         at: usize,
+    },
+    /// A shape-map grammar refusal with original scalar and UTF-8 byte positions.
+    ShapeMapSyntax {
+        /// The original native reason and lexical operands.
+        reason: ShapeMapReason,
+        /// The true UTF-8 byte position in the original input.
+        at: usize,
+        /// The original decoded-scalar cursor, retained independently.
+        scalar_offset: usize,
     },
     /// An IRI could not be resolved against the schema base (delegated to
     /// `purrdf-iri`).
@@ -96,6 +109,9 @@ impl purrdf_hash::error::StructuredError for ShexError {
         StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
         Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
+        ShapeMapSyntax { reason, at, scalar_offset } => "shex-shape-map-syntax" {
+            "reason" => Cause(reason), "at" => ByteCount(*at as u128), "scalar_offset" => Unsigned(*scalar_offset as u128)
+        },
         Iri { lexical, reason } => "shex-iri" { "lexical" => Text(lexical), "cause" => Cause(reason) },
         JsonRead(cause) => "shex-json-read" { "cause" => Cause(cause) },
         LanguageTag { member, value, cause } => "shex-json-language-tag" {
@@ -177,13 +193,16 @@ impl ShexError {
     }
 
     /// The byte offset the failure was reported at, for the position-bearing
-    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)). `None` for the
+    /// variants ([`Lex`](Self::Lex), [`Syntax`](Self::Syntax) and
+    /// [`ShapeMapSyntax`](Self::ShapeMapSyntax)). `None` for the
     /// others — in particular [`Import`](Self::Import), whose offset (if any)
     /// belongs to a *different* source document than the one being parsed.
     #[must_use]
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
-            Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
+            Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::ShapeMapSyntax { at, .. } => {
+                Some(*at)
+            }
             Self::Iri { .. }
             | Self::StackMargin { .. }
             | Self::JsonRead(_)
@@ -196,7 +215,7 @@ impl ShexError {
     }
 
     /// Resolve this error's byte offset to a 1-based source [`Position`] against
-    /// the original ShExC text.
+    /// the original input text.
     ///
     /// The lexer keeps a cheap byte offset on the happy path; the line/column
     /// table is built here, on the error path only. `None` for variants without
@@ -220,6 +239,9 @@ impl fmt::Display for ShexError {
                 )
             }
             Self::Lex { reason, at } => write!(f, "ShExC lex error at byte {at}: {reason}"),
+            Self::ShapeMapSyntax { reason, at, .. } => {
+                write!(f, "ShExC syntax error at byte {at}: {reason}")
+            }
             Self::Syntax { reason, at } => {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")
             }
@@ -262,6 +284,7 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::ShapeMapSyntax { reason, .. } => reason,
     Self::JsonRead(cause) => cause,
     Self::LanguageTag { cause, .. } => cause,
     Self::Lex { reason, .. } => reason,

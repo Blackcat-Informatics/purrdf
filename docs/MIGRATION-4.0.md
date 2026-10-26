@@ -28,6 +28,21 @@ remembered empty named graphs, model-only Datalog output, exact decimal
 division, the SPARQL pre-binding rewrite and specific SPARQL diagnostic codes.
 Each has its own section below.
 
+## Shape-map syntax refusals and Unicode positions
+
+Compact shape-map grammar errors now use `ShexError::ShapeMapSyntax`, with a
+native `ShapeMapReason` and the structured identity `shex-shape-map-syntax`.
+The original Unicode-escape and language-tag causes, owned lexical data and
+role/context fields are available through borrowed inspection and standard
+error sources. Schema-parser and exact-alignment `Syntax` reasons are separate.
+
+`byte_offset()` and `locate()` now use true UTF-8 positions for shape-map errors.
+For example, the missing association separator in `"é"!` is at byte four; the old
+scalar cursor incorrectly reported three. The original cursor remains available
+as `scalar_offset`. ASCII positions, grammar and human reason text are unchanged;
+Unicode position numbers are intentionally corrected. Byte positions are computed
+only on refusal from the existing characters, with no added success allocation.
+
 ## ShExJ language refusals
 
 All six ShExJ language-tag and stem positions now return

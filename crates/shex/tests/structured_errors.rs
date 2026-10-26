@@ -549,10 +549,427 @@ fn shexj_ingress_retains_original_json_causes_and_precedence() {
     assert!(purrdf_shex::resolve_imports(root, &|_| parse_shexj(valid_json, None)).is_ok());
 }
 
+fn shape_map_positions_are_bytes_after_unicode() {
+    let source = r#""é"!"#;
+    let error = parse_shape_map(source, None).unwrap_err();
+    assert_eq!(error.byte_offset(), Some(4));
+    let position = error.locate(source).unwrap();
+    assert_eq!((position.line, position.column), (1, 4));
+    assert!(parse_shape_map(r#""é" @START"#, None).is_ok());
+    let ascii = parse_shape_map(r#""x"!"#, None).unwrap_err();
+    assert_eq!(ascii.byte_offset(), Some(3));
+    let fields = inspect_without_allocation(&error);
+    assert!(matches!(
+        fields.field("scalar_offset"),
+        ErrorValue::Unsigned(3)
+    ));
+    let multiline = "\n\"é\"!";
+    let line_error = parse_shape_map(multiline, None).unwrap_err();
+    assert_eq!(line_error.byte_offset(), Some(5));
+    let position = line_error.locate(multiline).unwrap();
+    assert_eq!((position.line, position.column), (2, 4));
+    let schema = parse_shexc("<urn:S> .", None).unwrap();
+    let exact = purrdf_shex::ExactSchema::parse_shexc("<urn:S> .", None).unwrap();
+    let data = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+    let options = purrdf_shex::ValidationOptions::default();
+    assert_eq!(
+        purrdf_shex::validate_shape_map(&schema, &data, source, None, &options).unwrap_err(),
+        error
+    );
+    assert_eq!(
+        purrdf_shex::validate_shape_map_exact(&exact, &data, source, None, &options).unwrap_err(),
+        error
+    );
+}
+
+fn shape_map_refusals_keep_native_grammar_and_scalars() {
+    let cases = [
+        (
+            r#""é"!"#,
+            4,
+            "shape-map-expected",
+            Some("shape-map-expect-association"),
+            "expected '@' between node selector and shape",
+        ),
+        (
+            "{<urn:s> <urn:p> <urn:o>}@START",
+            17,
+            "shape-map-expected",
+            Some("shape-map-expect-focus"),
+            "expected FOCUS in triple pattern",
+        ),
+        (
+            "!",
+            0,
+            "shape-map-expected",
+            Some("shape-map-expect-term"),
+            "expected a term (<iri>, _:blank, \"literal\" or <<( s p o )>>)",
+        ),
+        (
+            "<<( <urn:s> <urn:p> <urn:o>)> @START",
+            27,
+            "shape-map-expected",
+            Some("shape-map-expect-triple-close"),
+            "expected ')>>' to close a triple term opened with '<<('",
+        ),
+        (
+            "{FOCUS ! _}@START",
+            7,
+            "shape-map-expected",
+            Some("shape-map-expect-predicate"),
+            "expected a predicate (<iri> or 'a')",
+        ),
+        (
+            r#""x" @!"#,
+            5,
+            "shape-map-expected",
+            Some("shape-map-expect-shape"),
+            "expected a shape label (START or <iri>)",
+        ),
+        (
+            r#""x"^^! @START"#,
+            5,
+            "shape-map-expected",
+            Some("shape-map-expect-iri"),
+            "expected an IRI in angle brackets",
+        ),
+        (
+            "_",
+            1,
+            "shape-map-expected",
+            Some("shape-map-expect-blank-colon"),
+            "expected ':' after '_' in blank node",
+        ),
+        (
+            "_:.",
+            2,
+            "shape-map-expected",
+            Some("shape-map-expect-blank-start"),
+            "a blank-node label must begin with PN_CHARS_U or a digit after `_:`",
+        ),
+        (
+            "{FOCUS <urn:p> _ @START",
+            17,
+            "shape-map-expected",
+            Some("shape-map-expect-character"),
+            "expected '}'",
+        ),
+        (
+            r#""x" @START !"#,
+            11,
+            "shape-map-trailing",
+            None,
+            "trailing input after shape map",
+        ),
+        (
+            "<< <urn:s> <urn:p> <urn:o> >> @START",
+            0,
+            "shape-map-reifier",
+            None,
+            "`<< s p o >>` is RDF 1.2 reifier syntax, not a triple term; write a triple term as `<<( s p o )>>`",
+        ),
+        (
+            "<urn:x",
+            6,
+            "shape-map-unterminated",
+            None,
+            "unterminated IRI",
+        ),
+        (
+            "<urn:x y>",
+            6,
+            "shape-map-unterminated",
+            None,
+            "unterminated IRI",
+        ),
+        (
+            "\"é\n",
+            3,
+            "shape-map-unterminated",
+            None,
+            "unterminated string literal",
+        ),
+        (
+            r"<\q>",
+            1,
+            "shape-map-unicode-escape",
+            None,
+            "a backslash in an IRI must open a \\u/\\U escape",
+        ),
+        (
+            r"<\u00zz>",
+            1,
+            "shape-map-unicode-escape",
+            None,
+            "bad \\u/\\U escape in IRI (expected hex digits)",
+        ),
+        (
+            r"<\uD800>",
+            1,
+            "shape-map-unicode-escape",
+            None,
+            "\\u/\\U escape in IRI is not a Unicode scalar value",
+        ),
+        (
+            r#""\u00zz" @START"#,
+            1,
+            "shape-map-unicode-escape",
+            None,
+            "bad \\u/\\U escape in string (expected hex digits)",
+        ),
+        (
+            "\"é\\",
+            4,
+            "shape-map-dangling-escape",
+            None,
+            "dangling escape",
+        ),
+        (
+            r#""x\q" @START"#,
+            3,
+            "shape-map-invalid-escape",
+            None,
+            "invalid string escape",
+        ),
+    ];
+    for (input, at, code, expectation, message) in cases {
+        let owned = input.to_owned();
+        let original = parse_shape_map(&owned, None).unwrap_err();
+        drop(owned);
+        let error = original.clone();
+        drop(original);
+        assert_eq!(error.byte_offset(), Some(at), "{input:?}");
+        let expected = format!("ShExC syntax error at byte {at}: {message}");
+        assert_eq!(error.to_string(), expected, "{input:?}");
+        assert_eq!(format!("{error:?}"), expected, "{input:?}");
+        let fields = inspect_without_allocation(&error);
+        assert_eq!(fields.code, "shex-shape-map-syntax");
+        assert!(
+            matches!(fields.field("at"), ErrorValue::ByteCount(actual) if actual == at as u128)
+        );
+        assert!(
+            matches!(fields.field("scalar_offset"), ErrorValue::Unsigned(actual) if actual == input[..at].chars().count() as u128)
+        );
+        let ErrorValue::Cause(reason) = fields.field("reason") else {
+            panic!("native map reason");
+        };
+        let reason = inspect_without_allocation(reason);
+        assert_eq!(reason.code, code, "{input:?}");
+        if let Some(expected) = expectation {
+            let observed = input[at..].chars().next();
+            assert_eq!(reason.child("expected").code, expected);
+            assert!(match (reason.field("found"), observed) {
+                (ErrorValue::Character(actual), Some(wanted)) => actual == wanted,
+                (ErrorValue::Absent, None) => true,
+                _ => false,
+            });
+            if expected == "shape-map-expect-triple-close" {
+                assert!(matches!(reason.field("found"), ErrorValue::Character(')')));
+                assert!(matches!(reason.field("next"), ErrorValue::Character('>')));
+                assert!(matches!(
+                    reason.field("after_next"),
+                    ErrorValue::Character(' ')
+                ));
+            }
+            if expected == "shape-map-expect-character" {
+                assert!(matches!(
+                    reason.child("expected").field("scalar"),
+                    ErrorValue::Character('}')
+                ));
+            }
+        }
+        if code == "shape-map-unicode-escape" {
+            let ErrorValue::Cause(cause) = reason.field("cause") else {
+                panic!("native UCHAR cause");
+            };
+            let native = inspect_without_allocation(cause);
+            let expected = if input.contains("D800") {
+                "uchar-not-a-scalar"
+            } else if input.contains("00zz") {
+                "uchar-bad-hex"
+            } else {
+                "uchar-not-an-escape"
+            };
+            assert_eq!(native.code, expected);
+            assert_eq!(
+                reason.child("context").code,
+                if input.starts_with('"') {
+                    "shape-map-context-string"
+                } else {
+                    "shape-map-context-iri"
+                }
+            );
+            assert!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .source()
+                    .unwrap()
+                    .is::<purrdf_iri::terminals::UcharError>()
+            );
+        } else {
+            assert!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .source()
+                    .is_none()
+            );
+        }
+        if code == "shape-map-invalid-escape" {
+            assert!(matches!(reason.field("found"), ErrorValue::Character('q')));
+        }
+        if code == "shape-map-trailing" {
+            assert!(matches!(reason.field("found"), ErrorValue::Character('!')));
+        }
+        if code == "shape-map-reifier" {
+            assert!(matches!(reason.field("found"), ErrorValue::Character(' ')));
+        }
+    }
+    for input in [
+        r#""é" @START"#,
+        "{FOCUS <urn:p> _}@START",
+        "{<urn:s> <urn:p> FOCUS}@START",
+        "_:a@START",
+        r#""x"^^<urn:t> @START"#,
+        "<<( <urn:s> <urn:p> <urn:o>)>> @START",
+        r"<urn:\u0041>@START",
+        r#""\n\u0041" @START"#,
+    ] {
+        assert!(parse_shape_map(input, None).is_ok(), "{input}");
+    }
+}
+
+fn shape_map_owned_names_and_language_causes_survive_input_disposal() {
+    for (input, name, role) in [
+        ("ex:n @START", "ex:n", "shape-map-position-node"),
+        (
+            "{FOCUS ex:p _}@START",
+            "ex:p",
+            "shape-map-position-predicate",
+        ),
+        ("<urn:s>@ex:S", "ex:S", "shape-map-position-shape"),
+        (r#""x"^^ex:t @START"#, "ex:t", "shape-map-position-iri"),
+    ] {
+        let input = input.to_owned();
+        let original = parse_shape_map(&input, None).unwrap_err();
+        drop(input);
+        let error = original.clone();
+        drop(original);
+        let fields = inspect_without_allocation(&error);
+        let ErrorValue::Cause(reason) = fields.field("reason") else {
+            panic!("native reason");
+        };
+        let reason = inspect_without_allocation(reason);
+        assert_eq!(reason.code, "shape-map-prefixed-name");
+        assert!(matches!(reason.field("name"), ErrorValue::Text(actual) if actual == name));
+        assert_eq!(reason.child("position").code, role);
+        assert!(
+            error
+                .to_string()
+                .contains("the ShapeMap grammar admits none")
+        );
+    }
+    // Only classifications reachable through this ASCII-alnum/hyphen scanner.
+    // String UCHAR NotAnEscape and RFC-only language failures are not fabricated.
+    for (input, raw, tag, direction, cause) in [
+        (
+            r#""x"@en---rtl @START"#,
+            "en---rtl",
+            "en-",
+            Some("rtl"),
+            "langtag-subtag-length-zero",
+        ),
+        (
+            r#""x"@en--bad @START"#,
+            "en--bad",
+            "en--bad",
+            None,
+            "langtag-subtag-length-zero",
+        ),
+        (
+            r#""x"@cantbethislong @START"#,
+            "cantbethislong",
+            "cantbethislong",
+            None,
+            "langtag-subtag-length-over-eight",
+        ),
+        (
+            r#""x"@9 @START"#,
+            "9",
+            "9",
+            None,
+            "langtag-terminal-primary-not-alpha",
+        ),
+    ] {
+        let input = input.to_owned();
+        let original = parse_shape_map(&input, None).unwrap_err();
+        drop(input);
+        let error = original.clone();
+        drop(original);
+        let fields = inspect_without_allocation(&error);
+        let ErrorValue::Cause(reason) = fields.field("reason") else {
+            panic!("native map reason");
+        };
+        let reason = inspect_without_allocation(reason);
+        let ErrorValue::Cause(language) = reason.field("cause") else {
+            panic!("native language payload");
+        };
+        let language = inspect_without_allocation(language);
+        assert_eq!(language.code, "shape-map-language");
+        assert!(matches!(language.field("raw"), ErrorValue::Text(actual) if actual == raw));
+        assert!(matches!(language.field("tag"), ErrorValue::Text(actual) if actual == tag));
+        assert!(
+            matches!(language.field("tag_bytes"), ErrorValue::ByteCount(actual) if actual == tag.len() as u128)
+        );
+        assert!(matches!(
+            language.field("profile"),
+            ErrorValue::Code("concrete-syntax-langtag-bounded")
+        ));
+        assert!(match (language.field("direction"), direction) {
+            (ErrorValue::Absent, None) => true,
+            (ErrorValue::Code(actual), Some(wanted)) => actual == wanted,
+            _ => false,
+        });
+        let ErrorValue::Cause(native) = language.field("cause") else {
+            panic!("native language cause");
+        };
+        assert_eq!(inspect_without_allocation(native).code, cause);
+        let payload = std::error::Error::source(&error)
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<purrdf_shex::ShapeMapLanguageRefusal>()
+            .unwrap();
+        assert_eq!(payload.raw(), raw);
+        assert_eq!(payload.tag(), tag);
+        assert_eq!(
+            payload
+                .direction()
+                .map(purrdf_core::RdfTextDirection::as_str),
+            direction
+        );
+        assert_eq!(payload.cause().diagnostic_code(), cause);
+        assert!(
+            std::error::Error::source(payload)
+                .unwrap()
+                .is::<purrdf_iri::langtag::LanguageTagError>()
+        );
+    }
+    for input in [
+        r#""x"@en--rtl @START"#,
+        r#""x"@abcdefgh @START"#,
+        r#""x"@x-cantbethislong @START"#,
+    ] {
+        assert!(parse_shape_map(input, None).is_ok(), "{input}");
+    }
+}
+
 purrdf_testkit::harness_main!(
     actual_shape_map_keeps_original_iri_cause_after_input_disposal,
     structural_refusals_keep_the_original_unresolved_label,
     lexical_refusals_keep_original_values_offsets_and_presentation,
     lexical_native_causes_survive_source_disposal_and_imports,
     shexj_ingress_retains_original_json_causes_and_precedence,
+    shape_map_positions_are_bytes_after_unicode,
+    shape_map_refusals_keep_native_grammar_and_scalars,
+    shape_map_owned_names_and_language_causes_survive_input_disposal,
 );
