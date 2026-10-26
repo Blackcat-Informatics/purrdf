@@ -74,12 +74,15 @@ pub(crate) fn decimal_to_f64(mantissa: i128, scale: u8) -> f64 {
     if scale == 0 {
         return mantissa as f64;
     }
-    let magnitude = mantissa.unsigned_abs();
-    if magnitude < 1 << 53 && usize::from(scale) < POW10_F64.len() {
-        // Both operands exact (`magnitude < 2^53`), so the division rounds once --
+    if let Ok(small) = i64::try_from(mantissa)
+        && small.unsigned_abs() < 1 << 53
+        && usize::from(scale) < POW10_F64.len()
+    {
+        // Both operands exact (`|small| < 2^53`), so the division rounds once --
         // on every target, the x87 included (`crate::ieee`).
-        return crate::ieee::f64_div(mantissa as f64, POW10_F64[usize::from(scale)]);
+        return crate::ieee::f64_div(small as f64, POW10_F64[usize::from(scale)]);
     }
+    let magnitude = mantissa.unsigned_abs();
     let Some(bits) = exact_bits(magnitude, scale, BINARY64) else {
         return parse_fallback::<f64>(mantissa, scale);
     };
