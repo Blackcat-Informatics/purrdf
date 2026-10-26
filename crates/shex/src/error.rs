@@ -9,6 +9,8 @@
 
 use core::fmt;
 
+mod grammar;
+pub use grammar::{GrammarExpectation, GrammarReason};
 mod language;
 pub use language::{LanguageMember, SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE};
 mod shape_map;
@@ -37,7 +39,15 @@ pub enum ShexError {
         /// Byte offset of the offending input.
         at: usize,
     },
-    /// The ShExC token stream violates the grammar. Carries a human reason
+    /// A token-stream grammar admission refusal with original native operands.
+    Grammar {
+        /// The grammar requirement and original encountered tokens.
+        reason: Box<GrammarReason>,
+        /// The historical parser byte coordinate.
+        at: usize,
+    },
+    /// A contextual, semantic, resource or exact-schema alignment refusal from
+    /// ShExC or ShExJ. Carries a human reason
     /// and the byte offset of the offending token (best-effort).
     Syntax {
         /// What the parser objected to.
@@ -108,6 +118,7 @@ impl purrdf_hash::error::StructuredError for ShexError {
     purrdf_hash::error_visit! {
         StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
+        Grammar { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
         Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
         ShapeMapSyntax { reason, at, scalar_offset } => "shex-shape-map-syntax" {
             "reason" => Cause(reason), "at" => ByteCount(*at as u128), "scalar_offset" => Unsigned(*scalar_offset as u128)
@@ -193,16 +204,18 @@ impl ShexError {
     }
 
     /// The byte offset the failure was reported at, for the position-bearing
-    /// variants ([`Lex`](Self::Lex), [`Syntax`](Self::Syntax) and
+    /// variants ([`Lex`](Self::Lex), [`Grammar`](Self::Grammar),
+    /// [`Syntax`](Self::Syntax) and
     /// [`ShapeMapSyntax`](Self::ShapeMapSyntax)). `None` for the
     /// others — in particular [`Import`](Self::Import), whose offset (if any)
     /// belongs to a *different* source document than the one being parsed.
     #[must_use]
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
-            Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::ShapeMapSyntax { at, .. } => {
-                Some(*at)
-            }
+            Self::Lex { at, .. }
+            | Self::Grammar { at, .. }
+            | Self::Syntax { at, .. }
+            | Self::ShapeMapSyntax { at, .. } => Some(*at),
             Self::Iri { .. }
             | Self::StackMargin { .. }
             | Self::JsonRead(_)
@@ -242,6 +255,7 @@ impl fmt::Display for ShexError {
             Self::ShapeMapSyntax { reason, at, .. } => {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")
             }
+            Self::Grammar { reason, at } => write!(f, "ShExC syntax error at byte {at}: {reason}"),
             Self::Syntax { reason, at } => {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")
             }
@@ -284,6 +298,7 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::Grammar { reason, .. } => &**reason,
     Self::ShapeMapSyntax { reason, .. } => reason,
     Self::JsonRead(cause) => cause,
     Self::LanguageTag { cause, .. } => cause,

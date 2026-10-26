@@ -656,3 +656,17 @@ OpenAPI output now references its definitions as `#/components/schemas/...`
 instead of `#/$defs/...`. Update tooling that rewrote or followed the old
 references. JSON Schema output is unchanged. The schema policy salt includes
 `openapi-3.1-local-refs-v1`, so `SchemaCompilation.key` changes.
+
+### ShExC grammar admission
+
+Token-stream grammar refusals now use `ShexError::Grammar` with a native
+`GrammarReason`, rather than a rendered `Syntax` reason. `GrammarExpectation`
+identifies the required production. Original encountered `Spanned` tokens retain
+their contents and half-open byte spans, including semantic action names and
+bodies, regex flags, repeat bounds and placement operands. These types implement
+the shared borrowed inspection protocol.
+
+The outer `shex-syntax` identity and `at` field remain unchanged; `reason` is now
+a nested native cause with a standard error source. Human messages, byte
+coordinates and refusal order remain unchanged. Contextual, semantic and resource
+refusals still use `Syntax`; this change does not replace that remaining family.
