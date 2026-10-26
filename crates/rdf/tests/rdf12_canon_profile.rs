@@ -136,7 +136,7 @@ fn run_case(case: &Case) -> Result<String, String> {
     match try_canonicalize_with(&dataset, CanonHash::Sha256) {
         Ok(canonicalized) => Ok(canonicalized.nquads),
         Err(CanonError::ReservedVocabulary(err)) => {
-            let position = match err.position {
+            let position = match err.position() {
                 TermPosition::Subject => "subject",
                 TermPosition::Predicate => "predicate",
                 TermPosition::Object => "object",
@@ -146,7 +146,7 @@ fn run_case(case: &Case) -> Result<String, String> {
                 // pins would be worse than failing here.
                 other => panic!("unspecified term position {other:?}"),
             };
-            Err(format!("reserved-vocabulary {position} {}", err.iri))
+            Err(format!("reserved-vocabulary {position} {}", err.iri()))
         }
         Err(CanonError::BudgetExceeded(_)) => Err("budget-exceeded".to_owned()),
         Err(other) => panic!("unspecified refusal {other:?}"),
@@ -326,8 +326,8 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
     match refusal_of("<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n")
     {
         CanonError::ReservedVocabulary(err) => {
-            assert_eq!(&*err.iri, "urn:purrdf:rdfc:reifies");
-            assert_eq!(err.position, TermPosition::Predicate);
+            assert_eq!(err.iri(), "urn:purrdf:rdfc:reifies");
+            assert_eq!(err.position(), TermPosition::Predicate);
         }
         other => panic!("refused for the wrong reason: {other}"),
     }
@@ -340,7 +340,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
          <urn:purrdf:rdfc:annotation> <http://example.org/o> )>> .\n",
     ) {
         CanonError::ReservedVocabulary(err) => {
-            assert_eq!(&*err.iri, "urn:purrdf:rdfc:annotation");
+            assert_eq!(err.iri(), "urn:purrdf:rdfc:annotation");
         }
         other => panic!("refused for the wrong reason: {other}"),
     }
@@ -422,8 +422,8 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     let near_miss = b.freeze().expect("valid");
     match try_canonicalize_flat_view(&*near_miss, CanonHash::Sha256) {
         Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
-            assert_eq!(&*err.iri, "urn:purrdf:rdfc:reifies");
-            assert_eq!(err.position, TermPosition::Predicate);
+            assert_eq!(err.iri(), "urn:purrdf:rdfc:reifies");
+            assert_eq!(err.position(), TermPosition::Predicate);
         }
         other => panic!("refused for the wrong reason: {other:?}"),
     }
