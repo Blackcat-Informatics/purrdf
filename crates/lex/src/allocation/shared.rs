@@ -91,6 +91,13 @@ pub struct SharedView<T, U> {
     value: NonNull<U>,
 }
 
+// SAFETY: the immutable descendant stays inside its retained Shared owner. Both
+// the owner's payload and the projected shared reference may cross threads.
+unsafe impl<T: Send + Sync, U: Sync> Send for SharedView<T, U> {}
+// SAFETY: projections provide shared access only; the original atomic owner
+// keeps the entire immutable descendant alive for every retained projection.
+unsafe impl<T: Send + Sync, U: Sync> Sync for SharedView<T, U> {}
+
 impl<T, U: fmt::Debug> fmt::Debug for SharedView<T, U> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, formatter)

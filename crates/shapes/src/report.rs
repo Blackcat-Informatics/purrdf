@@ -569,6 +569,7 @@ pub struct CompleteValidationReport {
     evidence: Box<[ResultEvidence]>,
     context: Arc<ReportSourceContext>,
     profile: crate::profile::ShaclProfile,
+    cycles: Vec<crate::recursion::RecursionCycle>,
 }
 
 impl CompleteValidationReport {
@@ -592,6 +593,7 @@ impl CompleteValidationReport {
         Self {
             legacy,
             evidence: evidence.into_boxed_slice(),
+            cycles: Vec::new(),
             context,
             profile,
         }
@@ -608,6 +610,23 @@ impl CompleteValidationReport {
     #[must_use]
     pub const fn legacy(&self) -> &ValidationReport {
         &self.legacy
+    }
+
+    /// Finite native cycle certificates under the explicitly selected recursive
+    /// law. These are separate from standard SHACL results and their severities;
+    /// the legacy RDF projection retains the same conformance verdict.
+    #[must_use]
+    pub fn cycles(&self) -> &[crate::recursion::RecursionCycle] {
+        &self.cycles
+    }
+
+    pub(crate) fn with_recursion(
+        mut self,
+        outcome: &crate::recursion::evidence::ReportOutcome,
+    ) -> Result<Self, ShapesError> {
+        self.legacy.conforms &= outcome.conforms();
+        self.cycles = outcome.take_cycles()?;
+        Ok(self)
     }
 
     /// Consume the complete report and retain its legacy projection.
@@ -656,6 +675,7 @@ impl CompleteValidationReport {
         let dataset = report.dataset_as_carried_with_evidence(Some(&evidence))?;
         Ok(CompleteReportGraph {
             dataset,
+            cycles: self.cycles.clone(),
             root: Term::BlankNode(format!("{mint}report")),
             labels,
             context: Arc::clone(&self.context),
@@ -739,9 +759,17 @@ pub struct CompleteReportGraph {
     root: Term,
     labels: CompleteBlankLabels,
     context: Arc<ReportSourceContext>,
+    cycles: Vec<crate::recursion::RecursionCycle>,
 }
 
 impl CompleteReportGraph {
+    /// Native cycle certificates retained beside the standard RDF projection.
+    /// SHACL leaf results and source blanks keep their existing RDF vocabulary.
+    #[must_use]
+    pub fn cycles(&self) -> &[crate::recursion::RecursionCycle] {
+        &self.cycles
+    }
+
     /// The emitted complete RDF graph.
     #[must_use]
     pub const fn dataset(&self) -> &Arc<RdfDataset> {
@@ -895,6 +923,7 @@ pub(crate) struct ReportCapture<'a> {
     /// The occurrence context admitted for this request, which may differ from
     /// an older law already occupying the shape's compatibility cache.
     pub(crate) sources: Option<&'a Arc<crate::shapes::ConstraintSources>>,
+    pub(crate) recursion: Option<&'a crate::recursion::evidence::ReportOutcome>,
     failure: std::sync::Mutex<CapturedFailures>,
 }
 
@@ -989,6 +1018,7 @@ impl<'a> ReportCapture<'a> {
             shapes,
             profile,
             sources,
+            recursion: None,
             failure: std::sync::Mutex::new(CapturedFailures {
                 first: None,
                 policy: None,
@@ -1000,6 +1030,14 @@ impl<'a> ReportCapture<'a> {
         let mut failures = self.failure.lock().expect("report failure lock");
         failures.policy = None;
         failures.first.take().and_then(|captured| captured.failure)
+    }
+
+    pub(crate) const fn with_recursion(
+        mut self,
+        outcome: Option<&'a crate::recursion::evidence::ReportOutcome>,
+    ) -> Self {
+        self.recursion = outcome;
+        self
     }
 
     /// A hard policy refusal retained independently of suppressible semantics.
@@ -1575,7 +1613,10 @@ fn dedup_roles(roles: &[NamedNode]) -> Vec<NamedNode> {
 pub struct ValidationReport {
     /// Whether the data graph conforms to the shapes graph: no result's severity
     /// is in [`Self::conformance_disallows`] (and no failure was reported, which
-    /// is an `Err` rather than a report).
+    /// is an `Err` rather than a report). Under an explicitly selected recursive
+    /// law the settled pair relation also determines conformance. A false LFP
+    /// cycle can have no finite leaf result; complete reports retain its separate
+    /// native cycle certificate in [`CompleteValidationReport::cycles`].
     pub conforms: bool,
     /// Individual violation/warning/info/debug/trace results.
     pub results: Vec<ValidationResult>,

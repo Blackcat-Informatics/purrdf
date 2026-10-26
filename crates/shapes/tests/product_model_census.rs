@@ -157,7 +157,7 @@ const UNREACHABLE_BY_DESIGN: [&str; 1] = ["SparqlCallForm"];
 ///
 /// Two builds that agree on every table but describe different profiles must not
 /// share a stage id.
-const PROFILE_ID: &str = "purrdf-shacl-core-v1";
+const PROFILE_ID: &str = "purrdf-shacl-core-v2-closed-recursion";
 
 /// The stage id this build SHIPS, as lowercase hex.
 ///

@@ -1319,6 +1319,7 @@ impl<'a> ShapesProductView<'a> {
                 &dataset,
                 &self.provenance,
                 options.shacl_profile,
+                options.recursion.as_ref().map(|request| request.semantics),
             )?)
         };
         let parts = ast::decode_ast(self.section(SECTION_AST)?)?;
@@ -1390,6 +1391,12 @@ impl<'a> ShapesProductView<'a> {
         let rules = parts.rules;
         let shapes = Shapes {
             owner: Arc::clone(&owner),
+            recursion_source: crate::shapes::restored_recursion_source(
+                &dataset,
+                &self.provenance,
+                &owner,
+                options,
+            )?,
             node_shapes,
             rules,
             box_role_vocab: parts.box_role_vocab,
@@ -1553,7 +1560,14 @@ impl<'a> ShapesProductView<'a> {
             options,
         )
         .map_err(|error| {
-            if options.shacl_profile != crate::profile::ShaclProfile::LEGACY {
+            if options.shacl_profile != crate::profile::ShaclProfile::LEGACY
+                || matches!(
+                    &error,
+                    crate::report::CompleteValidationError::Shapes(
+                        crate::error::ShapesError::Recursion(_)
+                    )
+                )
+            {
                 return error;
             }
             malformed(format!(

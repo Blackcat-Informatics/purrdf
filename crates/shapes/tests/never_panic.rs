@@ -95,9 +95,9 @@ fn recursion_failure_names_component_parameters_and_polarity() {
         let ShapesError::Recursion(refusal) = error else {
             panic!("{body}: expected a typed recursive-component refusal, got {error}");
         };
-        assert_eq!(refusal.members, ["<http://example.org/ns#S>"]);
-        assert_eq!(refusal.edges.len(), 1, "{body}: {refusal:?}");
-        assert_eq!(refusal.edges[0].polarity, expected, "{body}");
+        assert_eq!(refusal.members(), ["<http://example.org/ns#S>"]);
+        assert_eq!(refusal.edges().len(), 1, "{body}: {refusal:?}");
+        assert_eq!(refusal.edges()[0].polarity, expected, "{body}");
     }
 }
 
@@ -123,7 +123,7 @@ fn recursion_analysis_uses_all_shapes_including_parameter_declarations() {
     let purrdf_shapes::ShapesError::Recursion(refusal) = error else {
         panic!("expected the complete specification census to detect recursion: {error}");
     };
-    assert_eq!(refusal.members, ["<http://example.org/ns#P>"]);
+    assert_eq!(refusal.members(), ["<http://example.org/ns#P>"]);
 }
 
 #[test]
@@ -153,11 +153,11 @@ fn disjoint_qualified_siblings_contribute_the_opposite_count_polarity() {
             panic!("expected the implicit sibling dependency to close the cycle: {error}");
         };
         assert_eq!(
-            refusal.members,
+            refusal.members(),
             ["<http://example.org/ns#P>", "<http://example.org/ns#T>"]
         );
         let sibling = refusal
-            .edges
+            .edges()
             .iter()
             .find(|edge| edge.parameter == purrdf_iri::vocab::sh::QUALIFIED_VALUE_SHAPES_DISJOINT)
             .expect("the implicit edge must identify its disjoint-count origin");
@@ -187,8 +187,8 @@ fn long_recursive_catalog_is_analyzed_before_model_expansion() {
     let purrdf_shapes::ShapesError::Recursion(refusal) = error else {
         panic!("expected static SCC refusal rather than native stack exhaustion: {error}");
     };
-    assert_eq!(refusal.members.len(), 2000);
-    assert_eq!(refusal.edges.len(), 2000);
+    assert_eq!(refusal.members().len(), 2000);
+    assert_eq!(refusal.edges().len(), 2000);
 }
 
 #[test]
