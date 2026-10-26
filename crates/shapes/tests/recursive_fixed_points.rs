@@ -650,7 +650,9 @@ impl PaperCase {
     fn check_requests(&self, requests: impl IntoIterator<Item = ValidationOptions>) {
         let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} {}", self.data), None)
             .expect("original factual RDF");
-        let data = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
+        let projected = purrdf_shapes::engine::project_dataset(&dataset)
+            .expect("the production SHACL graph projection includes reifier bindings");
+        let data = ShaclData::new(projected, Arc::clone(&dataset), None);
         for request in requests {
             let reason = match (self.admission, request.recursion.as_ref()) {
                 (Admission::Acyclic, _) | (Admission::Positive, Some(_)) => None,
