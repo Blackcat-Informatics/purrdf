@@ -1121,6 +1121,15 @@ impl ModelOwner {
     }
 }
 
+impl ModelOwner {
+    pub(crate) fn admit_recursion(
+        self: &Arc<Self>,
+        semantics: Option<crate::recursion::RecursionSemantics>,
+    ) -> Result<(), ShapesError> {
+        crate::recursion::cache::admit(self, semantics)
+    }
+}
+
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
 #[allow(
     clippy::struct_field_names,
@@ -1128,6 +1137,8 @@ impl ModelOwner {
 )]
 #[derive(Debug, Clone)]
 pub struct Shapes {
+    pub(crate) recursion_source:
+        Option<purrdf_lex::allocation::Shared<crate::recursion::graph::Source>>,
     /// The original declarations retained even when the graph has no shape roots.
     pub owner: Arc<ModelOwner>,
     /// The TOP-LEVEL shapes of the shapes graph: every shape validation starts
@@ -1283,7 +1294,15 @@ impl Shapes {
         {
             return Ok(Arc::clone(sources));
         }
-        let sources = source_occurrences(&self.shapes_dataset, &self.parse_provenance, profile)?;
+        let sources = source_occurrences(
+            &self.shapes_dataset,
+            &self.parse_provenance,
+            profile,
+            self.validation_options
+                .recursion
+                .as_ref()
+                .map(|request| request.semantics),
+        )?;
         let _ = self.sparql_sources.set(Arc::clone(&sources));
         Ok(sources)
     }
@@ -1352,6 +1371,7 @@ impl Shapes {
 impl Default for Shapes {
     fn default() -> Self {
         Self {
+            recursion_source: None,
             owner: Arc::default(),
             node_shapes: Vec::new(),
             rules: crate::rules::RuleGraph::default(),
@@ -1511,6 +1531,7 @@ pub(crate) fn source_occurrences(
     dataset: &Arc<RdfDataset>,
     provenance: &ParseProvenance,
     profile: crate::profile::ShaclProfile,
+    recursion: Option<crate::recursion::RecursionSemantics>,
 ) -> Result<Arc<ConstraintSources>, crate::report::CompleteValidationError> {
     let mut parser = Parser::new(
         dataset.as_ref(),
@@ -1521,6 +1542,7 @@ pub(crate) fn source_occurrences(
         provenance.shapes_graph().map(ToOwned::to_owned),
         profile,
     );
+    parser.recursion = recursion;
     if let Err(message) = parser.prepare_with_expressions(&[], &[], Preparation::SourceOccurrences)
     {
         return Err(parser.load_complete_error(message));
@@ -1557,12 +1579,40 @@ pub(crate) fn from_resolved_dataset_with_options(
         shapes_graph,
         options.shacl_profile,
     );
+    parser.recursion = options.recursion.as_ref().map(|request| request.semantics);
     let mut shapes = parser
         .parse_with_expressions(&[], &[])
         .map(|(shapes, _)| shapes)
         .map_err(|message| parser.load_complete_error(message))?;
     shapes.validation_options = options.clone().into();
     Ok(shapes)
+}
+
+/// Re-admit declared edges from a product's authenticated dataset against its
+/// decoded original model. This does not rebuild its classes or expression links.
+pub(crate) fn restored_recursion_source(
+    dataset: &Arc<RdfDataset>,
+    provenance: &ParseProvenance,
+    owner: &Arc<ModelOwner>,
+    options: &crate::engine::ValidationOptions,
+) -> Result<Option<purrdf_lex::allocation::Shared<crate::recursion::graph::Source>>, ShapesError> {
+    if let Some(request) = &options.recursion {
+        owner.admit_recursion(Some(request.semantics))?;
+    }
+    if parser::recursion::source_rank_proves_acyclic(dataset, owner) {
+        return Ok(None);
+    }
+    let mut parser = Parser::new(
+        dataset.as_ref(),
+        provenance.base().map(ToOwned::to_owned),
+        provenance.doc_prefixes(),
+        provenance.box_role_vocab().cloned(),
+        Arc::clone(dataset),
+        provenance.shapes_graph().map(ToOwned::to_owned),
+        options.shacl_profile,
+    );
+    parser.recursion = options.recursion.as_ref().map(|request| request.semantics);
+    parser.check_shape_recursion(owner)
 }
 
 /// What the linker ([`crate::spec`]) made of a shapes graph's DECLARATIONS: the
@@ -1918,9 +1968,6 @@ pub(crate) fn from_dataset_with_scoped_node_expressions(
 enum Preparation {
     LinkedModel,
     SourceOccurrences,
-    /// The bundled path meta-schema recurses over the input RDF path structure.
-    /// Evaluation still refuses exhausted depth/stack; it assumes no fixed point.
-    StructuralMetaSchema,
 }
 
 /// A parse currently on the parser's stack.
@@ -1958,6 +2005,8 @@ pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
     /// One immutable policy and declaration applicability law for this parse.
     profile: crate::profile::ShaclProfile,
+    /// The explicit semantics supplied by this parse request, if any.
+    recursion: Option<crate::recursion::RecursionSemantics>,
     /// An actual dated refusal, never inferred from an error's display text.
     admission_refusal: std::cell::RefCell<Option<crate::profile::AdmissionRefusal>>,
     /// The first SHACL-JS refusal a check raised, so the parse's entry point can
@@ -2002,6 +2051,8 @@ pub(crate) struct Parser<'s> {
     in_flight: FastSet<InFlight>,
     /// Each definition is admitted once; dependencies remain native identity edges.
     catalog_seen: FastSet<Term>,
+    /// Immutable source shape membership, shared by rule and expression operands.
+    shape_census: std::cell::OnceCell<FastSet<Term>>,
     catalog_pending: purrdf_lex::walk::WorkList<Term, 16>,
     /// The variables the node expression being parsed can find bound by its context
     /// when it runs, beyond `$this` and the shape context: `value` inside an
@@ -2165,6 +2216,7 @@ impl<'s> Parser<'s> {
         Self {
             data,
             profile,
+            recursion: None,
             admission_refusal: std::cell::RefCell::default(),
             shacl_js: std::cell::RefCell::new(None),
             ill_formed: std::cell::RefCell::new(None),
@@ -2177,6 +2229,7 @@ impl<'s> Parser<'s> {
             unexecuted: std::cell::RefCell::new(Vec::new()),
             in_flight: FastSet::default(),
             catalog_seen: FastSet::default(),
+            shape_census: std::cell::OnceCell::new(),
             catalog_pending: purrdf_lex::walk::WorkList::new(),
             base,
             prefix_resolver: prefixes::PrefixResolver::new(doc_prefixes),
@@ -2201,14 +2254,6 @@ impl<'s> Parser<'s> {
 
     fn parse(&mut self) -> Result<Shapes, ShapesError> {
         self.parse_with_expressions(&[], &[])
-            .map(|(shapes, _)| shapes)
-            .map_err(|message| self.load_error(message))
-    }
-
-    /// Preserve the bundled structural meta-schema's existing bounded evaluation.
-    /// This is private to lint; caller-authored recursive schemas remain refused.
-    pub(crate) fn parse_structural_meta_schema(&mut self) -> Result<Shapes, ShapesError> {
-        self.prepare_with_expressions(&[], &[], Preparation::StructuralMetaSchema)
             .map(|(shapes, _)| shapes)
             .map_err(|message| self.load_error(message))
     }
@@ -2419,13 +2464,6 @@ impl<'s> Parser<'s> {
         // value, is a load error rather than a silent no-op.
         self.check_well_formed()?;
         self.refuse_rec_declarations()?;
-        if preparation != Preparation::StructuralMetaSchema
-            && let Err(refusal) = self.check_shape_recursion()
-        {
-            let message = refusal.to_string();
-            *self.recursion_refusal.borrow_mut() = Some(refusal);
-            return Err(message);
-        }
 
         // SHACL-AF parameterized target types are parsed up-front so that
         // `sh:target` blank nodes can be instantiated during shape target parsing.
@@ -2507,6 +2545,14 @@ impl<'s> Parser<'s> {
             ModelOwner::from_declarations(Arc::clone(&self.node_shape_index), declarations)
                 .map_err(|error| error.to_string())?
         };
+        let recursion_source = match self.check_shape_recursion(&owner) {
+            Ok(analysis) => analysis,
+            Err(refusal) => {
+                let message = refusal.to_string();
+                *self.recursion_refusal.borrow_mut() = Some(refusal);
+                return Err(message);
+            }
+        };
         let mut node_shapes = ids
             .iter()
             .map(|id| {
@@ -2544,6 +2590,7 @@ impl<'s> Parser<'s> {
         };
 
         let shapes = Shapes {
+            recursion_source,
             owner,
             node_shapes,
             rules,

@@ -640,7 +640,7 @@ impl Parser<'_> {
             // Record the shape IRIs this expression already NAMES, so they are
             // resolved at load rather than at the first value node that happens to
             // reach the constraint. See `Parser::node_by_expr_constants`.
-            self.record_node_by_expr_constants(id, &expr);
+            self.record_node_by_expr_constants(id, &expr)?;
 
             let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
@@ -1234,30 +1234,24 @@ impl Parser<'_> {
     ///
     /// It is deliberately a RECORDING pass and not a check: the index it resolves
     /// against is filled at the very end of the parse, after every shape exists.
-    fn record_node_by_expr_constants(&mut self, shape_id: &Term, expr: &NodeExpr) {
-        match expr {
-            NodeExpr::Constant(term @ Term::NamedNode(_)) => self
-                .node_by_expr_constants
-                .push((shape_id.clone(), term.clone())),
-            NodeExpr::List(members) => {
-                for member in members {
-                    if matches!(member, Term::NamedNode(_)) {
-                        self.node_by_expr_constants
-                            .push((shape_id.clone(), member.clone()));
-                    }
-                }
-            }
-            NodeExpr::Union(operands) | NodeExpr::Concat(operands) => {
-                for operand in operands {
-                    self.record_node_by_expr_constants(shape_id, operand);
-                }
-            }
-            NodeExpr::If { then, els, .. } => {
-                self.record_node_by_expr_constants(shape_id, then);
-                self.record_node_by_expr_constants(shape_id, els);
-            }
-            _ => {}
-        }
+    fn record_node_by_expr_constants(
+        &mut self,
+        shape_id: &Term,
+        expr: &NodeExpr,
+    ) -> Result<(), String> {
+        crate::expression::named_outputs::visit(expr, |term| {
+            purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident).push(
+                &mut self.node_by_expr_constants,
+                (shape_id.clone(), term.clone()),
+            )
+        })
+        .map(|_| ())
+        .map_err(|error| {
+            let refusal = crate::error::ShapesError::Storage(error);
+            let message = refusal.to_string();
+            *self.recursion_refusal.borrow_mut() = Some(refusal);
+            message
+        })
     }
 
     /// Parse a SHAPE-VALUED operand of a node expression, having first PROVED the
@@ -1282,8 +1276,8 @@ impl Parser<'_> {
     ///
     /// The test is [`Parser::node_is_a_shape`](super::Parser::node_is_a_shape), so
     /// an inline anonymous shape (`[ sh:property [ … ] ]`), a top-level
-    /// `sh:PropertyShape`, and an untyped node the shapes graph makes SHACL
-    /// statements about are all still accepted — only a node the shapes graph never
+    /// `sh:PropertyShape`, and an untyped node carrying constraint or target
+    /// declarations are all still accepted — only a node the shapes graph never
     /// described as a shape at all is refused.
     fn parse_shape_operand(
         &mut self,
@@ -1871,8 +1865,8 @@ impl Parser<'_> {
             // argument list has exactly two members — the node expression under
             // test and an expression producing the shape IRI. The spec constrains
             // that second argument to `sh:nodeKind sh:IRI` ("Must produce the IRI
-            // of a well-formed shape"), and this parser requires it to BE that IRI
-            // so the shape is resolved once, here, against the shapes graph.
+            // of a well-formed shape"). Named shapes resolve at load; computed
+            // arguments retain the original shape index for evaluation.
             ExprKind::ConformsToShape => {
                 let members = self.walk_rdf_list(&object, node)?;
                 let [node_arg, shape_arg] = members.as_slice() else {

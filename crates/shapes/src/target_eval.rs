@@ -110,7 +110,10 @@ pub(crate) fn where_targets(
     let lowered = crate::plan::lower_shapes_in_model(std::iter::once(shape), model)?;
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
     binding.set_validation_request(request);
-    let plan = lowered.untargeted_plan(shape, 0, &binding)?;
+    let mut plan = lowered.untargeted_plan(shape, 0, &binding)?;
+    if let Some(owner) = model {
+        plan = plan.with_origin(owner).with_model(owner);
+    }
     data.prepare_class_membership();
     let narrowed = narrowing(
         data,

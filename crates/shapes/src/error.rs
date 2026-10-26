@@ -467,6 +467,8 @@ impl std::error::Error for ShapesError {
 /// A preparation refusal, distinct from malformed shapes and nonconformance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreparationRefusal {
+    /// A selected recursive execution lacks a proved original dependency scope.
+    UnqualifiedRecursion(crate::recursion::ClosedRecursionRefusal),
     /// The original native workspace admission or allocation refusal.
     Storage(purrdf_lex::allocation::StorageError),
     /// A custom call has no declaration in its retained model domain.
@@ -514,6 +516,7 @@ impl PreparationRefusal {
 impl fmt::Display for PreparationRefusal {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnqualifiedRecursion(refusal) => refusal.fmt(out),
             Self::Storage(error) => error.fmt(out),
             Self::UnknownFunction(iri) => write!(out, "custom function {iri} has no declaration in the retained model; keep the exported model owner with its expression"),
             Self::DuplicateFunction(iri) => write!(out, "custom function {iri} has distinct declarations; retain one original declaration per function IRI"),
@@ -532,28 +535,31 @@ impl fmt::Display for PreparationRefusal {
     }
 }
 
-impl std::error::Error for PreparationRefusal {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(PreparationRefusal, Storage, UnqualifiedRecursion);
 
 purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
 
 /// How a shape reference affects the containing constraint's truth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RecursionPolarity {
     /// Growing the referenced conformance relation preserves satisfaction.
     Positive,
     /// Growing the referenced conformance relation can remove satisfaction.
     Negative,
-    /// The constraint is nonmonotone in the referenced conformance relation.
+    /// The dependency can have either sign, or its truth transfer is unproved.
     Both,
     /// A where-target dependency, separate from the conformance formula.
     Target,
+}
+
+impl RecursionPolarity {
+    pub(crate) const fn inverted(self) -> Self {
+        match self {
+            Self::Positive => Self::Negative,
+            Self::Negative => Self::Positive,
+            other => other,
+        }
+    }
 }
 
 /// One reference inside a recursive strongly connected component.
@@ -563,28 +569,174 @@ pub struct RecursionDependency {
     pub source: String,
     /// Referenced shape, in native RDF term spelling.
     pub target: String,
-    /// IRI of the shape-expecting parameter.
+    /// Original shape/query parameter IRI, or an explicit native operation.
     pub parameter: String,
     /// The reference's role in conformance or target selection.
     pub polarity: RecursionPolarity,
 }
 
-/// A recursive component refused before shapes are recursively expanded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecursionRefusal {
-    /// Every shape of the component, in canonical RDF term order.
-    pub members: Vec<String>,
-    /// Every internal reference, sorted and deduplicated.
-    pub edges: Vec<RecursionDependency>,
+/// Why an original recursive component cannot use the requested semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecursionRefusalReason {
+    /// The request supplied no fixed-point selection.
+    MissingSelection,
+    /// A negative or nonmonotone dependency lies inside a recursive component.
+    NonStratified {
+        /// The explicitly selected law, retained in the refusal.
+        semantics: crate::recursion::RecursionSemantics,
+    },
+    /// The run cannot admit another original focus/definition pair.
+    PairLimit {
+        /// Maximum pairs admitted by the request.
+        limit: u64,
+        /// Pairs already admitted when the next pair was refused.
+        consumed: u64,
+    },
+    /// The run cannot start another evaluation round.
+    IterationLimit {
+        /// Maximum rounds admitted by the request.
+        limit: u64,
+        /// Rounds already consumed before this refusal.
+        consumed: u64,
+    },
 }
 
+/// An exact original dependency, indexed into a refusal's scoped definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ScopedRecursionDependency {
+    /// Original source definition index, without lexical identity folding.
+    pub source: usize,
+    /// Original target definition index, without lexical identity folding.
+    pub target: usize,
+    /// Original parameter or native operation.
+    pub parameter: &'static str,
+    /// Original conformance/target polarity.
+    pub polarity: RecursionPolarity,
+}
+
+#[derive(Debug)]
+pub(crate) struct RecursionComponent {
+    pub(crate) identities: Vec<(usize, usize)>,
+    pub(crate) members: Vec<String>,
+    pub(crate) definitions: Vec<crate::recursion::RecursionDefinition>,
+    pub(crate) edges: Vec<RecursionDependency>,
+    pub(crate) scoped_edges: Vec<ScopedRecursionDependency>,
+}
+
+impl PartialEq for RecursionComponent {
+    fn eq(&self, other: &Self) -> bool {
+        self.members == other.members
+            && self.edges == other.edges
+            && self.scoped_edges == other.scoped_edges
+            && self.identities == other.identities
+            && self.definitions.len() == other.definitions.len()
+            && self
+                .definitions
+                .iter()
+                .zip(&other.definitions)
+                .all(|(a, b)| a.definition() == b.definition() && a.kind() == b.kind())
+    }
+}
+impl Eq for RecursionComponent {}
+
+/// A recursive component or an original-pair/round limit refusal.
+/// Component payloads are immutable; cloning retains their original allocation.
+#[derive(Clone)]
+pub struct RecursionRefusal {
+    /// The actionable distinction between absent selection, invalid strata and work.
+    pub reason: RecursionRefusalReason,
+    component: Option<purrdf_lex::allocation::Shared<RecursionComponent>>,
+}
+impl RecursionRefusal {
+    pub(crate) fn work(reason: RecursionRefusalReason) -> Self {
+        Self {
+            reason,
+            component: None,
+        }
+    }
+    pub(crate) fn component(
+        reason: RecursionRefusalReason,
+        component: RecursionComponent,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            reason,
+            component: Some(
+                purrdf_lex::allocation::Shared::try_new(component)
+                    .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?,
+            ),
+        })
+    }
+    /// Sorted distinct RDF spellings for presentation. Scoped identities are in
+    /// [`Self::definitions`], including distinct occurrences with equal names.
+    #[must_use]
+    pub fn members(&self) -> &[String] {
+        self.component.as_ref().map_or(&[], |value| &value.members)
+    }
+    /// Every original scoped definition, retained after its caller is dropped.
+    #[must_use]
+    pub fn definitions(&self) -> &[crate::recursion::RecursionDefinition] {
+        self.component
+            .as_ref()
+            .map_or(&[], |value| &value.definitions)
+    }
+    /// Sorted distinct rendered edges for presentation; [`Self::scoped_edges`]
+    /// preserves their exact original endpoints before lexical deduplication.
+    #[must_use]
+    pub fn edges(&self) -> &[RecursionDependency] {
+        self.component.as_ref().map_or(&[], |value| &value.edges)
+    }
+    /// Every original internal edge, indexed into [`Self::definitions`].
+    #[must_use]
+    pub fn scoped_edges(&self) -> &[ScopedRecursionDependency] {
+        self.component
+            .as_ref()
+            .map_or(&[], |value| &value.scoped_edges)
+    }
+}
+impl fmt::Debug for RecursionRefusal {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.debug_struct("RecursionRefusal")
+            .field("reason", &self.reason)
+            .field("component", &self.component)
+            .finish()
+    }
+}
+impl PartialEq for RecursionRefusal {
+    fn eq(&self, other: &Self) -> bool {
+        self.reason == other.reason && self.component.as_deref() == other.component.as_deref()
+    }
+}
+impl Eq for RecursionRefusal {}
 impl fmt::Display for RecursionRefusal {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            out,
-            "cyclic SHACL shape reference requires explicit recursion semantics: {}",
-            self.members.join(", ")
-        )
+        match self.reason {
+            RecursionRefusalReason::MissingSelection => out.write_str(
+                "cyclic SHACL shape reference requires explicit recursion semantics: ",
+            )?,
+            RecursionRefusalReason::NonStratified { semantics } => write!(
+                out,
+                "{semantics:?} requires stratified SHACL recursion; this component contains negative or nonmonotone conformance dependencies: "
+            )?,
+            RecursionRefusalReason::PairLimit { limit, consumed } => {
+                return write!(
+                    out,
+                    "recursive SHACL pair limit {limit} exhausted after {consumed} pairs; increase the request's max_pairs"
+                );
+            }
+            RecursionRefusalReason::IterationLimit { limit, consumed } => {
+                return write!(
+                    out,
+                    "recursive SHACL iteration limit {limit} exhausted after {consumed} rounds; increase the request's max_iterations"
+                );
+            }
+        }
+        for (index, member) in self.members().iter().enumerate() {
+            if index != 0 {
+                out.write_str(", ")?;
+            }
+            out.write_str(member)?;
+        }
+        Ok(())
     }
 }
 

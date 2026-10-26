@@ -147,6 +147,15 @@ pub const LEDGER: &[ThreadLocal] = &[
     },
     // ── purrdf-shapes: the SHACL engine's ambient scopes and caches ─────────────────
     ThreadLocal {
+        file: "crates/shapes/src/recursion/cache.rs",
+        name: "CACHE",
+        safety: Safety::PerCall,
+        reason: "Bounded immutable model-admission metadata keyed by retained weak owner identity. \
+                 Each borrow only looks up or updates inline slots and returns an owned analysis; \
+                 model analysis runs outside the borrow. No data, conformance answer, resolver \
+                 call or suspension crosses a borrow.",
+    },
+    ThreadLocal {
         file: "crates/shapes/src/sparql.rs",
         name: "CURRENT_FUNCTIONS",
         safety: Safety::Swapped,

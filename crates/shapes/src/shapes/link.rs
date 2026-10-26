@@ -533,6 +533,10 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn targets(&mut self, targets: &'model [Target]) -> Result<(), E> {
+        self.walk_targets(targets)
+    }
+
+    fn walk_targets(&mut self, targets: &'model [Target]) -> Result<(), E> {
         for target in targets {
             match target {
                 Target::Class(_)
@@ -554,6 +558,11 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn shape(&mut self, shape: &'model Shape) -> Result<(), E> {
+        self.walk_shape(shape)
+    }
+
+    /// Walk a shape's original operands through the visitor hooks.
+    fn walk_shape(&mut self, shape: &'model Shape) -> Result<(), E> {
         self.enter()?;
         if let Some(owner) = &shape.owner {
             self.model(owner)?;
@@ -579,6 +588,10 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn rule(&mut self, rule: &'model Rule) -> Result<(), E> {
+        self.walk_rule(rule)
+    }
+
+    fn walk_rule(&mut self, rule: &'model Rule) -> Result<(), E> {
         match &rule.body {
             RuleBody::Triple {
                 subject,
@@ -606,6 +619,10 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn property_shape(&mut self, shape: &'model PropertyShape) -> Result<(), E> {
+        self.walk_property_shape(shape)
+    }
+
+    fn walk_property_shape(&mut self, shape: &'model PropertyShape) -> Result<(), E> {
         self.enter()?;
         self.deactivations(&shape.deactivated_when, &shape.constraint_annotations)?;
         for expr in shape.values.iter().chain(&shape.default_value) {
@@ -630,6 +647,14 @@ where
         expressions: &'model [NodeExpr],
         annotations: &'model [crate::shapes::ConstraintAnnotation],
     ) -> Result<(), E> {
+        self.walk_deactivations(expressions, annotations)
+    }
+
+    fn walk_deactivations(
+        &mut self,
+        expressions: &'model [NodeExpr],
+        annotations: &'model [crate::shapes::ConstraintAnnotation],
+    ) -> Result<(), E> {
         for expression in expressions.iter().chain(
             annotations
                 .iter()
@@ -647,6 +672,11 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn constraint(&mut self, constraint: &'model Constraint) -> Result<(), E> {
+        self.walk_constraint(constraint)
+    }
+
+    /// Walk a constraint's original operands through the visitor hooks.
+    fn walk_constraint(&mut self, constraint: &'model Constraint) -> Result<(), E> {
         self.enter()?;
         match constraint {
             Constraint::PropertyReference(edge) => {
@@ -721,6 +751,11 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn shape_arg(&mut self, arg: &'model ShapeArg) -> Result<(), E> {
+        self.walk_shape_arg(arg)
+    }
+
+    /// Walk a conformance shape argument through the visitor hooks.
+    fn walk_shape_arg(&mut self, arg: &'model ShapeArg) -> Result<(), E> {
         match arg {
             ShapeArg::Named(shape) => self.shape(shape),
             ShapeArg::Computed { expr, shapes } => {
@@ -736,6 +771,12 @@ where
     ///
     /// A hook's refusal, or the depth ceiling.
     fn node_expr(&mut self, expr: &'model NodeExpr) -> Result<(), E> {
+        self.walk_node_expr(expr)
+    }
+
+    /// Walk an expression's operands through the visitor hooks. A collecting
+    /// pass can inspect an expression before delegating its structural walk.
+    fn walk_node_expr(&mut self, expr: &'model NodeExpr) -> Result<(), E> {
         self.enter()?;
         match expr {
             NodeExpr::Constant(_)

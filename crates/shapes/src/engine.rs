@@ -1029,6 +1029,12 @@ const _: () = assert!(size_of::<FocusNode>() == size_of::<Term>());
 const _: () = assert!(size_of::<Option<FocusNode>>() == size_of::<FocusNode>());
 
 impl FocusNode {
+    pub(crate) fn try_clone(&self) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match self {
+            Self::Interned(id) => Ok(Self::Interned(*id)),
+            Self::Foreign(term) => term.try_clone().map(Self::Foreign),
+        }
+    }
     /// Resolve `term` against `dataset` into the arm that describes it.
     pub(crate) fn resolve(dataset: &impl ShaclRead, term: &Term) -> Self {
         resolve_id(dataset, term).map_or_else(|| Self::Foreign(term.clone()), Self::Interned)
@@ -1259,9 +1265,9 @@ trait ShapeReporting: Copy + Sync {
 }
 
 #[derive(Clone, Copy)]
-struct LegacyReporting;
+struct LegacyReporting<'a>(Option<&'a crate::recursion::evidence::ReportOutcome>);
 
-impl ShapeReporting for LegacyReporting {
+impl ShapeReporting for LegacyReporting<'_> {
     type Result = crate::report::ValidationResult;
     fn validate(
         self,
@@ -1275,6 +1281,7 @@ impl ShapeReporting for LegacyReporting {
             focus,
             shapes.box_role_vocab.as_ref(),
             plan,
+            self.0,
         )
     }
 }
@@ -1416,6 +1423,7 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
 fn finish_report(
     mut results: Vec<crate::report::ValidationResult>,
     shapes: &Shapes,
+    outcome: Option<&crate::recursion::evidence::ReportOutcome>,
 ) -> ValidationReport {
     let disallows = &shapes.validation_options.conformance_disallows;
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
@@ -1433,9 +1441,13 @@ fn finish_report(
     //
     // The diagnostics ride beside the results, never among them: a clone of the shapes'
     // list, which allocates nothing for a graph with no empty list.
-    ValidationReport::from_results(results, disallows.clone())
+    let mut report = ValidationReport::from_results(results, disallows.clone())
         .with_shapes_graph_well_formed(true)
-        .with_diagnostics(shapes.mandatory_diagnostics.clone())
+        .with_diagnostics(shapes.mandatory_diagnostics.clone());
+    if let Some(outcome) = outcome {
+        report.conforms &= outcome.conforms();
+    }
+    report
 }
 
 fn validate_with_plan_and_focus_filter<F>(
@@ -1447,14 +1459,20 @@ fn validate_with_plan_and_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
+    let outcome = crate::recursion::evidence::ReportOutcome::default();
+    let capture = shapes
+        .validation_options
+        .recursion
+        .as_ref()
+        .map(|_| &outcome);
     let results = validate_results_with_plan_and_focus_filter(
-        LegacyReporting,
+        LegacyReporting(capture),
         data,
         shapes,
         bound,
         include_focus,
     )?;
-    Ok(finish_report(results, shapes))
+    Ok(finish_report(results, shapes, capture))
 }
 
 fn validate_results_with_plan_and_focus_filter<R: ShapeReporting, F>(
@@ -1591,14 +1609,26 @@ impl CompletePreparedValidator {
     ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
     {
         self.validator.run_request(|| {
-            let records = self.validator.collect_records(profile, evaluate)?;
+            let outcome = crate::recursion::evidence::ReportOutcome::default();
+            let recursion = self
+                .validator
+                .shapes
+                .validation_options
+                .recursion
+                .as_ref()
+                .map(|_| &outcome);
+            let records = self
+                .validator
+                .collect_records(profile, evaluate, recursion)?;
             self.context.admit_result_sources(&records)?;
-            Ok(crate::report::CompleteValidationReport::from_records(
+            crate::report::CompleteValidationReport::from_records(
                 records,
                 &self.validator.shapes,
                 Arc::clone(&self.context),
                 profile,
-            ))
+            )
+            .with_recursion(&outcome)
+            .map_err(crate::report::CompleteValidationError::Shapes)
         })
     }
 
@@ -1707,6 +1737,10 @@ pub fn validate_complete_dataset_with_governors(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ValidationOptions {
+    /// An explicit recursive law and finite work limits. No selection is made
+    /// for the default request. Shared so copying request configuration never
+    /// copies a recursive evaluation workspace.
+    pub recursion: Option<crate::recursion::RecursionOptions>,
     /// The exact SHACL law requested by this operation. Legacy is the default;
     /// dated selections also require their native XPath bundle.
     pub shacl_profile: crate::profile::ShaclProfile,
@@ -1781,6 +1815,13 @@ impl std::ops::Deref for ValidationRequest {
 }
 
 impl ValidationOptions {
+    /// Select recursive semantics and finite work for this request.
+    #[must_use]
+    pub fn with_recursion(mut self, options: crate::recursion::RecursionOptions) -> Self {
+        self.recursion = Some(options);
+        self
+    }
+
     /// Select one exact SHACL law, retaining other request options.
     #[must_use]
     pub const fn with_profile(mut self, profile: crate::profile::ShaclProfile) -> Self {
@@ -2461,6 +2502,7 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, ShapesError> {
         let shapes = Arc::clone(&prepared.shapes);
+        admit_native_shapes(&shapes)?;
         check_links(&data, &shapes)?;
         // The rules entailment regime applies to every validation this binding answers.
         let data = match entailed_for_validation(&data, &shapes)? {
@@ -2594,6 +2636,7 @@ impl PreparedValidator {
             Vec<crate::report::ResultRecord>,
             crate::report::CompleteValidationError,
         >,
+        recursion: Option<&crate::recursion::evidence::ReportOutcome>,
     ) -> Result<Vec<crate::report::ResultRecord>, crate::report::CompleteValidationError> {
         let sources = match self
             .request
@@ -2605,7 +2648,8 @@ impl PreparedValidator {
             None => self.shapes.report_sources_with_profile(profile)?,
         };
         let capture =
-            crate::report::ReportCapture::with_sources(&self.shapes, profile, Some(&sources));
+            crate::report::ReportCapture::with_sources(&self.shapes, profile, Some(&sources))
+                .with_recursion(recursion);
         let query_scope = crate::query_law::enter(profile, Some(&sources));
         let mut outcome = evaluate(&capture);
         if let Some(state) = crate::sparql::current_governors()
@@ -2661,20 +2705,59 @@ impl PreparedValidator {
         &self,
         include_focus: Option<F>,
     ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
+        self.validate_request_outcome(
+            include_focus,
+            &crate::recursion::evidence::ReportOutcome::default(),
+        )
+    }
+
+    /// Validate the prepared native model with its original cycle evidence.
+    /// Unlike complete RDF-source reporting, this also supports programmatically
+    /// constructed catalogs with no retained RDF shapes document.
+    /// # Errors
+    /// Returns the same admission and execution failures as ordinary validation;
+    /// a failed run never publishes a partial verdict or certificate.
+    pub fn validate_with_recursion_evidence(
+        &self,
+    ) -> Result<crate::recursion::RecursiveValidationReport, crate::report::CompleteValidationError>
+    {
+        let outcome = crate::recursion::evidence::ReportOutcome::default();
+        let report = self.validate_request_outcome(None::<fn(&Shape, &Term) -> bool>, &outcome)?;
+        Ok(crate::recursion::RecursiveValidationReport {
+            report,
+            cycles: outcome.take_cycles()?,
+        })
+    }
+
+    fn validate_request_outcome<F: FnMut(&Shape, &Term) -> bool>(
+        &self,
+        include_focus: Option<F>,
+        outcome: &crate::recursion::evidence::ReportOutcome,
+    ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
         self.run_request(|| {
+            let recursion = self
+                .shapes
+                .validation_options
+                .recursion
+                .as_ref()
+                .map(|_| outcome);
             let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
-                self.validate_results_using(LegacyReporting, include_focus)
+                self.validate_results_using(LegacyReporting(recursion), include_focus)
                     .map_err(crate::report::CompleteValidationError::execution)?
             } else {
-                self.collect_records(self.profile(), |capture| {
-                    self.validate_results_using(EvidenceReporting(capture), include_focus)
-                        .map_err(crate::report::CompleteValidationError::execution)
-                })?
+                self.collect_records(
+                    self.profile(),
+                    |capture| {
+                        self.validate_results_using(EvidenceReporting(capture), include_focus)
+                            .map_err(crate::report::CompleteValidationError::execution)
+                    },
+                    recursion,
+                )?
                 .into_iter()
                 .map(|record| record.value)
                 .collect()
             };
-            Ok(finish_report(results, &self.shapes))
+            Ok(finish_report(results, &self.shapes, recursion))
         })
     }
 
@@ -3284,19 +3367,30 @@ impl PreparedValidator {
         focus_nodes: &FocusSet,
     ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
         self.run_request(|| {
+            let outcome = crate::recursion::evidence::ReportOutcome::default();
+            let recursion = self
+                .shapes
+                .validation_options
+                .recursion
+                .as_ref()
+                .map(|_| &outcome);
             let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
-                self.validate_bounded_results(LegacyReporting, focus_nodes)
+                self.validate_bounded_results(LegacyReporting(recursion), focus_nodes)
                     .map_err(crate::report::CompleteValidationError::Shapes)?
             } else {
-                self.collect_records(self.profile(), |capture| {
-                    self.validate_bounded_results(EvidenceReporting(capture), focus_nodes)
-                        .map_err(crate::report::CompleteValidationError::Shapes)
-                })?
+                self.collect_records(
+                    self.profile(),
+                    |capture| {
+                        self.validate_bounded_results(EvidenceReporting(capture), focus_nodes)
+                            .map_err(crate::report::CompleteValidationError::Shapes)
+                    },
+                    recursion,
+                )?
                 .into_iter()
                 .map(|record| record.value)
                 .collect()
             };
-            Ok(finish_report(results, &self.shapes))
+            Ok(finish_report(results, &self.shapes, recursion))
         })
     }
 
@@ -3780,12 +3874,29 @@ fn validate_linked_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
+    admit_native_shapes(shapes)?;
     let entailed = entailed_for_validation(data, shapes)?;
     let data = entailed.as_ref().unwrap_or(data);
     match with_shapes_graph_subclasses(data, shapes)? {
         Some(supplemented) => validate_data_with_focus_filter(&supplemented, shapes, include_focus),
         None => validate_data_with_focus_filter(data, shapes, include_focus),
     }
+}
+
+fn admit_native_shapes(shapes: &Shapes) -> Result<(), ShapesError> {
+    let semantics = shapes
+        .validation_options
+        .recursion
+        .as_ref()
+        .map(|options| options.semantics);
+    if let Some(source) = &shapes.recursion_source {
+        source.admit(&shapes.owner, semantics)?;
+    }
+    shapes.owner.admit_recursion(semantics)?;
+    for shape in &shapes.node_shapes {
+        crate::recursion::model::admit_shape(shape, semantics)?;
+    }
+    Ok(())
 }
 
 /// Validate a DOCUMENT against a fixed oracle shapes graph, reading none of its
@@ -5007,11 +5118,17 @@ mod tests {
         let capacity = purrdf_datalog::id::TermId::from_index(u64::MAX)
             .expect_err("the terminal term slot cannot be minted");
         let error = validator
-            .collect_records(crate::profile::ShaclProfile::LEGACY, |capture| {
-                capture
-                    .semantic_failure(&Term::NamedNode(NamedNode::new_unchecked(TARGET_NS)), None);
-                Err(ShapesError::Storage(StorageError::Capacity(capacity)).into())
-            })
+            .collect_records(
+                crate::profile::ShaclProfile::LEGACY,
+                |capture| {
+                    capture.semantic_failure(
+                        &Term::NamedNode(NamedNode::new_unchecked(TARGET_NS)),
+                        None,
+                    );
+                    Err(ShapesError::Storage(StorageError::Capacity(capacity)).into())
+                },
+                None,
+            )
             .expect_err("storage refusal must stop report publication");
         assert!(matches!(
             error,

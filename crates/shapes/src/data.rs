@@ -107,7 +107,7 @@ impl GraphFilter {
 /// a counter can. The view is retained behind an `Arc` for the whole life of the
 /// holder, so the address is stable, and a token is only ever compared against
 /// tokens from LIVE holders, so a freed address can never alias a live one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub(crate) struct DatasetIdentity(usize);
 
 /// The concrete data-access holder threaded through the SHACL Core engine.

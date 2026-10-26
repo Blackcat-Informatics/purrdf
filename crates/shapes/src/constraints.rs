@@ -30,6 +30,8 @@ use crate::shapes::{
 };
 use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
 use purrdf_xsd::XsdDatatype;
+
+pub(crate) mod fixed_point;
 use purrdf_xsd::datatype::{
     XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DATE_TIME_STAMP, XSD_DECIMAL, XSD_DOUBLE,
     XSD_FLOAT, XSD_INT, XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
@@ -430,6 +432,7 @@ struct ValidationContext<'a, 'memo> {
     depth: u32,
     /// The `(value node, shape)` conformance answers this run already computed.
     memo: &'memo ConformanceMemo,
+    fixed: Option<&'memo fixed_point::FixedPoint<'a>>,
     capture: Option<&'a crate::report::ReportCapture<'a>>,
     report_run: Option<&'memo ReportRun<'memo>>,
 }
@@ -555,6 +558,14 @@ trait ResultSink {
     /// Whether recursive report details retain constraint-occurrence evidence.
     const RECORDS_EVIDENCE: bool;
 
+    /// Consume a referenced pair's truth during a fixed-point probe. Report
+    /// sinks must traverse the actual occurrence instead of inventing a result.
+    fn reference_truth(&mut self, _conforms: bool) -> Result<Flow, crate::ShapesError> {
+        Err(crate::ShapesError::internal(
+            "report sink received an approximation",
+        ))
+    }
+
     /// Record one violation of `severity`.
     ///
     /// `build` produces the result this violation would be REPORTED as, and the
@@ -570,6 +581,7 @@ trait ResultSink {
 /// accumulated sink type at the edge so recursive references instantiate only
 /// the three concrete reporting modes, while retaining each outer role layer.
 trait DynamicSink {
+    fn forward_truth(&mut self, conforms: bool) -> Result<Flow, crate::ShapesError>;
     fn forward_violation(
         &mut self,
         severity: &Severity,
@@ -578,6 +590,9 @@ trait DynamicSink {
 }
 
 impl<S: ResultSink> DynamicSink for S {
+    fn forward_truth(&mut self, conforms: bool) -> Result<Flow, crate::ShapesError> {
+        self.reference_truth(conforms)
+    }
     fn forward_violation(
         &mut self,
         severity: &Severity,
@@ -595,6 +610,10 @@ impl<const VALUES: bool, const EVIDENCE: bool> ResultSink for ReferenceSink<'_, 
     const RECORDS_RESULTS: bool = VALUES;
     const RECORDS_EVIDENCE: bool = EVIDENCE;
 
+    fn reference_truth(&mut self, conforms: bool) -> Result<Flow, crate::ShapesError> {
+        self.inner.forward_truth(conforms)
+    }
+
     fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
         let mut build = Some(build);
         self.inner.forward_violation(severity, &mut || {
@@ -610,6 +629,11 @@ fn walk_reference<S: ResultSink>(
     focus: &FocusNode,
     sink: &mut S,
 ) -> Result<Flow, crate::error::ShapesError> {
+    if !S::RECORDS_RESULTS
+        && let Some(fixed) = context.fixed
+    {
+        return sink.reference_truth(fixed.ask_shape(context.plan, focus)?);
+    }
     if S::RECORDS_EVIDENCE {
         walk_shape(
             context,
@@ -735,6 +759,15 @@ impl ResultSink for AnyViolation<'_> {
     const RECORDS_RESULTS: bool = false;
     const RECORDS_EVIDENCE: bool = false;
 
+    fn reference_truth(&mut self, conforms: bool) -> Result<Flow, crate::ShapesError> {
+        self.seen |= !conforms;
+        Ok(if self.seen && !self.exhaustive {
+            Flow::Stop
+        } else {
+            Flow::Continue
+        })
+    }
+
     #[inline]
     fn violation(&mut self, severity: &Severity, _build: impl FnOnce() -> ResultRecord) -> Flow {
         if self.disallows.contains(severity) {
@@ -765,6 +798,10 @@ struct NodeRoles<'a, S> {
 impl<S: ResultSink> ResultSink for NodeRoles<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
     const RECORDS_EVIDENCE: bool = S::RECORDS_EVIDENCE;
+
+    fn reference_truth(&mut self, conforms: bool) -> Result<Flow, crate::ShapesError> {
+        self.inner.reference_truth(conforms)
+    }
 
     #[inline]
     fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
@@ -869,6 +906,10 @@ struct Stamped<'a, S> {
 impl<S: ResultSink> ResultSink for Stamped<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
     const RECORDS_EVIDENCE: bool = S::RECORDS_EVIDENCE;
+
+    fn reference_truth(&mut self, conforms: bool) -> Result<Flow, crate::ShapesError> {
+        self.inner.reference_truth(conforms)
+    }
 
     #[inline]
     fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
@@ -1006,6 +1047,9 @@ fn conforms_memoized<'a>(
     plan: ShapePlan<'a>,
     focus: &FocusNode,
 ) -> Result<bool, crate::error::ShapesError> {
+    if let Some(fixed) = context.fixed {
+        return fixed.ask_shape(plan, focus);
+    }
     // Retain the existing admission policy: interned focuses and named shapes
     // participate; foreign focuses and anonymous shapes are recomputed. The
     // model and actual definition distinguish equal names with different bodies.
@@ -1090,12 +1134,61 @@ pub fn validate_shape_with(
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
+    validate_shape_with_request(
+        store,
+        focus,
+        shape,
+        box_role_vocab,
+        &crate::engine::ValidationOptions::default(),
+        None,
+    )
+}
+
+/// Validate an original focus/shape pair under an explicit recursive law and
+/// its finite work limits, using the ordinary single-shape validation policy.
+///
+/// # Errors
+/// Returns the original preparation, recursive work, storage or evaluation
+/// refusal instead of publishing a partial report.
+pub fn validate_shape_with_recursion(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+    box_role_vocab: Option<&BoxRoleVocab>,
+    recursion: &crate::recursion::RecursionOptions,
+) -> Result<crate::recursion::RecursiveValidationReport, crate::error::ShapesError> {
+    let outcome = crate::recursion::evidence::ReportOutcome::default();
+    let results = validate_shape_with_request(
+        store,
+        focus,
+        shape,
+        box_role_vocab,
+        &crate::engine::ValidationOptions::default().with_recursion(*recursion),
+        Some(&outcome),
+    )?;
+    let mut report =
+        crate::report::ValidationReport::from_results(results, ConformanceDisallows::default());
+    report.conforms &= outcome.conforms();
+    Ok(crate::recursion::RecursiveValidationReport {
+        report,
+        cycles: outcome.take_cycles()?,
+    })
+}
+
+fn validate_shape_with_request(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+    box_role_vocab: Option<&BoxRoleVocab>,
+    options: &crate::engine::ValidationOptions,
+    outcome: Option<&crate::recursion::evidence::ReportOutcome>,
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     // A caller holding only a parsed shape has no preparation to reuse, so the
     // lowering is derived here for this one call. A caller validating MANY focus
     // nodes should hold a `PreparedShapes`, which memoizes it.
-    let lowering = OneShotLowering::of(store, shape)?;
+    let lowering = OneShotLowering::of(store, shape, options)?;
     let focus = FocusNode::resolve(store.core_view(), focus);
-    validate_shape_with_plan_at(store, &focus, box_role_vocab, lowering.plan()?)
+    validate_shape_with_plan_at(store, &focus, box_role_vocab, lowering.plan()?, outcome)
 }
 
 pub(crate) fn validate_shape_with_plan_at(
@@ -1103,8 +1196,9 @@ pub(crate) fn validate_shape_with_plan_at(
     focus: &FocusNode,
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: ShapePlan<'_>,
+    outcome: Option<&crate::recursion::evidence::ReportOutcome>,
 ) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
-    validate_shape_with_depth(store, focus, box_role_vocab, plan, 0)
+    validate_shape_with_depth(store, focus, box_role_vocab, plan, 0, outcome)
 }
 
 /// A shape lowering built for ONE call, for the entry points that are handed a
@@ -1130,9 +1224,18 @@ impl<'a> OneShotLowering<'a> {
     /// shape names all run here, again, per call. Only the entry points that are
     /// handed a bare [`Shape`] and have nothing to memoize against should reach
     /// it.
-    fn of(store: &ShaclData, shape: &'a Shape) -> Result<Self, crate::error::ShapesError> {
+    fn of(
+        store: &ShaclData,
+        shape: &'a Shape,
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<Self, crate::error::ShapesError> {
+        crate::recursion::model::admit_shape(
+            shape,
+            options.recursion.as_ref().map(|options| options.semantics),
+        )?;
         let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
-        let binding = lowered.bind(store.core_view(), lowered.classes());
+        let mut binding = lowered.bind(store.core_view(), lowered.classes());
+        binding.set_validation_request(&options.clone().into());
         Ok(Self {
             lowered,
             binding,
@@ -1167,6 +1270,7 @@ fn validate_shape_with_depth(
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: ShapePlan<'_>,
     depth: u32,
+    outcome: Option<&crate::recursion::evidence::ReportOutcome>,
 ) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     let memo = ConformanceMemo::default();
     let context = ValidationContext {
@@ -1175,10 +1279,34 @@ fn validate_shape_with_depth(
         plan,
         depth,
         memo: &memo,
+        fixed: None,
         capture: None,
         report_run: None,
     };
-    collect_shape(context, focus)
+    let fixed = fixed_point::FixedPoint::for_plan(plan)?;
+    let conforms = fixed
+        .as_ref()
+        .map(|fixed| fixed.solve(context, focus))
+        .transpose()?;
+    let results = collect_shape(
+        ValidationContext {
+            fixed: fixed.as_ref(),
+            ..context
+        },
+        focus,
+    )?;
+    if let (Some(fixed), Some(conforms)) = (&fixed, conforms) {
+        fixed.publish_report(
+            outcome,
+            conforms,
+            results.iter().any(|result| {
+                plan.binding()
+                    .conformance_disallows()
+                    .contains(&result.severity)
+            }),
+        )?;
+    }
+    Ok(results)
 }
 
 /// [`walk_shape`] with the reporting sink: every result the focus node produces,
@@ -1219,11 +1347,27 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
         plan,
         depth: 0,
         memo: &memo,
+        fixed: None,
         capture: Some(&local_capture),
         report_run: Some(&run),
     };
+    let fixed = fixed_point::FixedPoint::for_plan(plan)?;
     let mut sink = CollectEvidence::default();
-    let mut outcome = walk_shape(context, focus, &mut sink);
+    let mut recursive_truth = None;
+    let mut outcome = match &fixed {
+        Some(fixed) => fixed.solve(context, focus).and_then(|conforms| {
+            recursive_truth = Some(conforms);
+            walk_shape(
+                ValidationContext {
+                    fixed: Some(fixed),
+                    ..context
+                },
+                focus,
+                &mut sink,
+            )
+        }),
+        None => walk_shape(context, focus, &mut sink),
+    };
     // Existential conformance may suppress a candidate's semantic failure,
     // but it cannot admit an invocation the selected query law refused.
     if let Some(refusal) = query_scope
@@ -1245,6 +1389,17 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
         capture.record_focus_failure(store.core_view(), focus, local_capture.take_failure());
     }
     outcome?;
+    if let (Some(fixed), Some(conforms)) = (&fixed, recursive_truth) {
+        fixed.publish_report(
+            capture.recursion,
+            conforms,
+            sink.results.iter().any(|result| {
+                plan.binding()
+                    .conformance_disallows()
+                    .contains(&result.value.severity)
+            }),
+        )?;
+    }
     Ok(sink.results)
 }
 
@@ -1286,6 +1441,33 @@ fn collect_details<S: ResultSink>(
 /// mutually recursive filter/exists cycle fails closed here rather than
 /// overflowing the native stack.
 fn walk_shape<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    sink: &mut S,
+) -> Result<Flow, crate::error::ShapesError> {
+    let context = if S::RECORDS_RESULTS && context.fixed.is_some() {
+        ValidationContext {
+            plan: fixed_point::original_plan(context.plan)?,
+            ..context
+        }
+    } else {
+        context
+    };
+    if S::RECORDS_RESULTS
+        && context.plan.model().is_some()
+        && let Some(fixed) = context.fixed
+    {
+        if !fixed.enter_report(context.store, context.plan, focus, None)? {
+            return Ok(Flow::Continue);
+        }
+        let outcome = walk_shape_body(context, focus, sink);
+        fixed.leave_report();
+        return outcome;
+    }
+    walk_shape_body(context, focus, sink)
+}
+
+fn walk_shape_body<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
     sink: &mut S,
@@ -1580,7 +1762,41 @@ pub fn conforms(
     focus: &Term,
     shape: &Shape,
 ) -> Result<bool, crate::error::ShapesError> {
-    let lowering = OneShotLowering::of(store, shape)?;
+    conforms_with_request(
+        store,
+        focus,
+        shape,
+        &crate::engine::ValidationOptions::default(),
+    )
+}
+
+/// Ask one original focus/shape pair under an explicit recursive law and its
+/// finite work limits, using the ordinary single-shape validation policy.
+///
+/// # Errors
+/// Returns the original preparation, recursive work, storage or evaluation
+/// refusal; a failed execution never becomes a conformance answer.
+pub fn conforms_with_recursion(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+    recursion: &crate::recursion::RecursionOptions,
+) -> Result<bool, crate::error::ShapesError> {
+    conforms_with_request(
+        store,
+        focus,
+        shape,
+        &crate::engine::ValidationOptions::default().with_recursion(*recursion),
+    )
+}
+
+fn conforms_with_request(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+    options: &crate::engine::ValidationOptions,
+) -> Result<bool, crate::error::ShapesError> {
+    let lowering = OneShotLowering::of(store, shape, options)?;
     conforms_with_id_depth(
         store,
         &FocusNode::resolve(store.core_view(), focus),
@@ -1625,6 +1841,7 @@ pub(crate) fn conforms_with_id_depth(
     plan: ShapePlan<'_>,
     depth: u32,
 ) -> Result<bool, crate::error::ShapesError> {
+    crate::recursion::model::admit_plan(plan)?;
     let memo = ConformanceMemo::default();
     let context = ValidationContext {
         store,
@@ -1632,9 +1849,13 @@ pub(crate) fn conforms_with_id_depth(
         plan,
         depth,
         memo: &memo,
+        fixed: None,
         capture: None,
         report_run: None,
     };
+    if let Some(fixed) = fixed_point::FixedPoint::for_plan(plan)? {
+        return fixed.solve(context, focus);
+    }
     let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows(), plan);
     walk_shape(context, focus, &mut probe)?;
     Ok(probe.conforms())
@@ -1726,7 +1947,77 @@ fn eval_property_reference<'a, S: ResultSink>(
     parent_roles: &[NamedNode],
     sink: &mut S,
 ) -> Result<Flow, crate::error::ShapesError> {
+    if !S::RECORDS_RESULTS
+        && let Some(fixed) = context.fixed
+    {
+        return sink.reference_truth(fixed.ask_property(
+            definition,
+            edge,
+            deactivated_when,
+            focus,
+        )?);
+    }
     let (property, plan) = PropertyPlan::from_reference(definition, edge, deactivated_when)?;
+    if S::RECORDS_RESULTS
+        && let Some(fixed) = context.fixed
+    {
+        if edge.deactivated {
+            return Ok(Flow::Continue);
+        }
+        let origin = context
+            .plan
+            .origin()
+            .or_else(|| context.plan.model())
+            .ok_or(crate::PreparationRefusal::UnboundModel)?;
+        let address = std::ptr::from_ref(edge).addr();
+        let key = if edge.deactivated_when.is_empty()
+            && edge.severity.is_none()
+            && edge.messages.is_empty()
+        {
+            0
+        } else {
+            address
+        };
+        if !fixed.enter_report(
+            context.store,
+            definition,
+            focus,
+            Some((origin, address, key)),
+        )? {
+            return Ok(Flow::Continue);
+        }
+        let result = eval_referenced_property(
+            context,
+            focus,
+            definition,
+            property,
+            plan,
+            parent_roles,
+            sink,
+        );
+        fixed.leave_report();
+        return result;
+    }
+    eval_referenced_property(
+        context,
+        focus,
+        definition,
+        property,
+        plan,
+        parent_roles,
+        sink,
+    )
+}
+
+fn eval_referenced_property<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus: &FocusNode,
+    definition: ShapePlan<'a>,
+    property: &'a PropertyShape,
+    plan: PropertyPlan<'a>,
+    parent_roles: &[NamedNode],
+    sink: &mut S,
+) -> Result<Flow, crate::error::ShapesError> {
     let context = ValidationContext {
         plan: definition,
         ..context
@@ -2316,13 +2607,17 @@ fn eval_reifier_shapes<S: ResultSink>(
                 // no term materialized to resolve back into one.
                 let reifier_focus = FocusNode::Interned(reifier);
                 if !S::RECORDS_RESULTS {
-                    // Conformance only: the inner results exist solely to supply
-                    // this result's message, and this sink keeps no message. Probe
-                    // for the first inner violation and stop there rather than
-                    // collecting the rest.
-                    let mut probe = AnyViolation::new(disallows, reifier_plan);
-                    walk_shape(reifier_context, &reifier_focus, &mut probe)?;
-                    if probe.conforms() {
+                    // Conformance only: register recursive pairs with their
+                    // execution. Ordinary validation needs only the first inner
+                    // violation because this sink keeps no message.
+                    let conforms = if let Some(fixed) = context.fixed {
+                        fixed.ask_shape(reifier_plan, &reifier_focus)?
+                    } else {
+                        let mut probe = AnyViolation::new(disallows, reifier_plan);
+                        walk_shape(reifier_context, &reifier_focus, &mut probe)?;
+                        probe.conforms()
+                    };
+                    if conforms {
                         continue;
                     }
                     let flow = sink.violation(source.severity, || {
@@ -3545,6 +3840,20 @@ fn eval_constraint<'a, S: ResultSink>(
         // each through the same conformance traversal, and the count is compared
         // against one afterwards.
         PlannedConstraint::Xone(members) => {
+            // Exclusive guards make xone an or on every realizable valuation.
+            // During fixed-point rounds, intermediate operand approximations
+            // need not yet satisfy those guards. Use the positive extension on
+            // those approximations; counting them with xone can oscillate even
+            // though the admitted original formula is monotone. The settled
+            // report still evaluates the original xone and emits its results.
+            let positive = !S::RECORDS_RESULTS
+                && context
+                    .plan
+                    .binding()
+                    .validation_request()
+                    .recursion
+                    .is_some()
+                && members.disjoint_guards(context.plan);
             for value in value_nodes {
                 // As `sh:and`: the recursion focus keeps the value node's own
                 // representation.
@@ -3555,7 +3864,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         count += 1;
                     }
                 }
-                if count != 1 {
+                if count == 0 || (!positive && count != 1) {
                     emit!(result!(
                         sh::XONE_CONSTRAINT_COMPONENT,
                         Some(value.to_term(ds))

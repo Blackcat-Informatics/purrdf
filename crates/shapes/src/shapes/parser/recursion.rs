@@ -1,29 +1,129 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! SHACL Core §6.6.3 refers graph, before recursive model expansion.
+//! Signed refers graph over original Core shape definitions.
 
-use purrdf_core::graph::{GraphError, tarjan_scc_with_memory};
-use purrdf_lex::allocation::{Memory, Resident};
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 use purrdf_rdf::FastMap;
+use std::sync::Arc;
 
-use crate::error::{RecursionDependency, RecursionPolarity, RecursionRefusal, ShapesError};
+use crate::error::{RecursionPolarity, ShapesError};
+use crate::expression::{CustomFunction, NodeExpr};
 use crate::model::sh;
-use crate::shapes::Parser;
+use crate::product::ShapesProductError;
+use crate::shapes::link::{ModelWalk, ShapeIndexRef};
+use crate::shapes::{Constraint, ModelOwner, Parser};
 use crate::spec::ValueRule;
 use crate::term::Term;
 
+/// A sufficient zero-allocation DAG proof for ordinary restored catalogs. Every
+/// source edge must move strictly in one direction through the dataset's finite
+/// term order. Lists, implicit sibling edges and expressions use the full graph.
+pub(crate) fn source_rank_proves_acyclic(
+    dataset: &purrdf_rdf::RdfDataset,
+    owner: &Arc<ModelOwner>,
+) -> bool {
+    if !owner.functions.is_empty() {
+        return false;
+    }
+    let mut expressions = ExpressionPresence::default();
+    for definition in owner.definitions() {
+        if expressions.walk_shape(definition).is_err() || expressions.found {
+            return false;
+        }
+    }
+    if dataset
+        .term_id_by_iri(sh::QUALIFIED_VALUE_SHAPES_DISJOINT)
+        .is_some()
+    {
+        return false;
+    }
+    let mut direction = None;
+    let mut ordered = |predicate, list| {
+        let Some(predicate) = dataset.term_id_by_iri(predicate) else {
+            return true;
+        };
+        for quad in dataset.quads().filter(|quad| quad.p == predicate) {
+            let order = quad.s.cmp(&quad.o);
+            if list || order.is_eq() || direction.is_some_and(|previous| previous != order) {
+                return false;
+            }
+            direction = Some(order);
+        }
+        true
+    };
+    for component in crate::spec::implemented().components() {
+        for parameter in component.params() {
+            if matches!(parameter.value, ValueRule::Shape | ValueRule::ShapeList)
+                && !ordered(
+                    parameter.path,
+                    matches!(parameter.value, ValueRule::ShapeList),
+                )
+            {
+                return false;
+            }
+        }
+    }
+    ordered(sh::TARGET_WHERE, false)
+}
+
+#[derive(Default)]
+struct ExpressionPresence {
+    depth: u32,
+    found: bool,
+}
+impl<'model> ModelWalk<'model> for ExpressionPresence {
+    fn depth(&mut self) -> &mut u32 {
+        &mut self.depth
+    }
+    fn first_owner(&mut self, _: &'model Arc<ModelOwner>) -> Result<bool, ShapesProductError> {
+        self.found = true;
+        Ok(false)
+    }
+    fn first_declaration(
+        &mut self,
+        _: &'model Arc<CustomFunction>,
+    ) -> Result<bool, ShapesProductError> {
+        self.found = true;
+        Ok(false)
+    }
+    fn shape_index(&mut self, _: &'model ShapeIndexRef) -> Result<(), ShapesProductError> {
+        self.found = true;
+        Ok(())
+    }
+    fn node_expr(&mut self, _: &'model NodeExpr) -> Result<(), ShapesProductError> {
+        self.found = true;
+        Ok(())
+    }
+}
+
 impl Parser<'_> {
-    /// Reject a recursive catalog without unfolding any of its simple paths.
-    pub(crate) fn check_shape_recursion(&self) -> Result<(), ShapesError> {
+    /// Admit a signed original catalog without unfolding any simple path.
+    pub(crate) fn check_shape_recursion(
+        &self,
+        owner: &Arc<ModelOwner>,
+    ) -> Result<Option<purrdf_lex::allocation::Shared<crate::recursion::graph::Source>>, ShapesError>
+    {
         // Refers is defined over every shape, not only shapes an explicit data
         // target can name (the latter intentionally excludes declarations).
-        let shapes = self.spec_shapes();
-        let index: FastMap<&Term, usize> = shapes
-            .iter()
-            .enumerate()
-            .map(|(index, shape)| (shape, index))
-            .collect();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut shapes = Vec::new();
+        for shape in owner.definitions() {
+            let id = shape.id.try_clone()?;
+            memory.push(&mut shapes, id)?;
+        }
+        crate::term::sort_terms_canonical(&mut shapes);
+        let mut index: FastMap<&Term, usize> = FastMap::default();
+        index
+            .try_reserve(shapes.len())
+            .map_err(|_| StorageError::AllocationFailed)?;
+        index.extend(
+            shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| (shape, index)),
+        );
         let destination = |target: &Term| {
             index.get(target).copied().ok_or_else(|| {
                 ShapesError::Invalid(format!(
@@ -31,7 +131,8 @@ impl Parser<'_> {
                 ))
             })
         };
-        let mut adjacency = vec![Vec::new(); shapes.len()];
+        let mut adjacency: Vec<Vec<usize>> =
+            memory.collect((0..shapes.len()).map(|_| Vec::new()))?;
         let mut dependencies = Vec::new();
         // The table is authoritative about shape-expecting parameters, including
         // memberShape, someValue and reifierShape. Qualified min/max share one
@@ -42,24 +143,46 @@ impl Parser<'_> {
                 if matches!(parameter.value, ValueRule::Shape | ValueRule::ShapeList)
                     && !parameters.iter().any(|&(path, _)| path == parameter.path)
                 {
-                    parameters.push((parameter.path, parameter.value));
+                    memory.push(&mut parameters, (parameter.path, parameter.value))?;
                 }
             }
         }
-        parameters.push((sh::TARGET_WHERE, ValueRule::Shape));
+        memory.push(&mut parameters, (sh::TARGET_WHERE, ValueRule::Shape))?;
         for (source, shape) in shapes.iter().enumerate() {
             for &(predicate, value_rule) in &parameters {
                 for object in self.objects_of(shape, predicate) {
                     let targets = if matches!(value_rule, ValueRule::ShapeList) {
                         self.walk_rdf_list(&object, shape)?
                     } else {
-                        vec![object]
+                        memory.collect(std::iter::once(object))?
                     };
-                    let polarity = self.shape_dependency_polarity(shape, predicate);
+                    let mut polarity = self.shape_dependency_polarity(shape, predicate);
+                    if predicate == sh::XONE {
+                        let source = owner.definition_required(shape)?;
+                        if source.constraints.iter().any(|constraint| {
+                            let Constraint::Xone(operands) = constraint else {
+                                return false;
+                            };
+                            operands
+                                .iter()
+                                .map(|operand| &operand.id)
+                                .eq(targets.iter())
+                                && crate::recursion::guards::xone_positive(
+                                    source,
+                                    operands,
+                                    Some(owner),
+                                )
+                        }) {
+                            polarity = RecursionPolarity::Positive;
+                        }
+                    }
                     for target in targets {
                         let target_index = destination(&target)?;
-                        adjacency[source].push(target_index);
-                        dependencies.push((source, target_index, predicate, polarity));
+                        memory.push(&mut adjacency[source], target_index)?;
+                        memory.push(
+                            &mut dependencies,
+                            (source, target_index, predicate, polarity),
+                        )?;
                         if predicate == sh::QUALIFIED_VALUE_SHAPE
                             && self
                                 .first_object_of(shape, sh::QUALIFIED_VALUE_SHAPES_DISJOINT)
@@ -72,59 +195,48 @@ impl Parser<'_> {
                             // Both bounds together are nonmonotone. These are
                             // implicit evaluation dependencies in addition to
                             // the explicit §6.6.3 refers edges.
-                            let sibling_polarity = match polarity {
-                                RecursionPolarity::Positive => RecursionPolarity::Negative,
-                                RecursionPolarity::Negative => RecursionPolarity::Positive,
-                                other => other,
-                            };
+                            let sibling_polarity = polarity.inverted();
                             for sibling in self.sibling_qualified_shape_nodes(shape, &target) {
                                 let sibling_index = destination(&sibling)?;
-                                adjacency[source].push(sibling_index);
-                                dependencies.push((
-                                    source,
-                                    sibling_index,
-                                    sh::QUALIFIED_VALUE_SHAPES_DISJOINT,
-                                    sibling_polarity,
-                                ));
+                                memory.push(&mut adjacency[source], sibling_index)?;
+                                memory.push(
+                                    &mut dependencies,
+                                    (
+                                        source,
+                                        sibling_index,
+                                        sh::QUALIFIED_VALUE_SHAPES_DISJOINT,
+                                        sibling_polarity,
+                                    ),
+                                )?;
                             }
                         }
                     }
                 }
             }
+        }
+        for (source, _) in shapes.iter().enumerate() {
             adjacency[source].sort_unstable();
             adjacency[source].dedup();
         }
-        let mut components = tarjan_scc_with_memory(&adjacency, &mut Memory::new(&mut Resident))
-            .map_err(|error| match error {
-                GraphError::Storage(error) => ShapesError::Storage(error),
-                error @ GraphError::InvalidEdge { .. } => ShapesError::Invalid(error.to_string()),
-            })?;
-        for component in &mut components {
-            component.sort_unstable();
-        }
-        components.sort();
-        for component in components {
-            if component.len() == 1 && !adjacency[component[0]].contains(&component[0]) {
-                continue;
-            }
-            let members = component.iter().map(|&i| shapes[i].to_string()).collect();
-            let mut edges: Vec<_> = dependencies
-                .iter()
-                .filter(|(from, to, _, _)| {
-                    component.binary_search(from).is_ok() && component.binary_search(to).is_ok()
-                })
-                .map(|&(from, to, predicate, polarity)| RecursionDependency {
-                    source: shapes[from].to_string(),
-                    target: shapes[to].to_string(),
-                    parameter: predicate.to_owned(),
-                    polarity,
-                })
-                .collect();
-            edges.sort();
-            edges.dedup();
-            return Err(ShapesError::Recursion(RecursionRefusal { members, edges }));
-        }
-        Ok(())
+        let analysis = crate::recursion::graph::analyze(
+            &adjacency,
+            &dependencies,
+            |node| Ok(shapes[node].try_spelling()?),
+            |_| true,
+            |node| {
+                Ok(crate::recursion::closed::WeakDefinition::new(
+                    &shapes[node],
+                    Some(owner),
+                    std::ptr::from_ref(owner.definition_required(&shapes[node])?).addr(),
+                    crate::recursion::closed::RecursionDefinitionKind::Shape,
+                )?)
+            },
+        )?;
+        analysis.admit(self.recursion)?;
+        // The native graph retains original model/occurrence identity and proves
+        // selected closed eligibility. Source-only structural arcs stay separate.
+        owner.admit_recursion(self.recursion)?;
+        crate::recursion::graph::Source::new(owner, analysis)
     }
 
     fn shape_dependency_polarity(&self, shape: &Term, predicate: &str) -> RecursionPolarity {

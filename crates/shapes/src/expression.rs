@@ -98,6 +98,8 @@
 //! comparator. The evaluator is wasm32-clean: no clocks, threads, RNG, or
 //! filesystem.
 
+pub(crate) mod named_outputs;
+
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
