@@ -1,0 +1,18 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: cc6e8ae27289d209f11f1a64fd93ded3b0bae470
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 770
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/770
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 3ac308f1f170b4ac093337f1f90d74371708c503
+GhpRsq-Head-Ref: paudley/769-retain-native-shexc-lexical-refusal
+GhpRsq-Head-OID: cc6e8ae27289d209f11f1a64fd93ded3b0bae470
+GhpRsq-Result-Tree: a664a43f331e2490d231c056cafa53a92358d79b
+GhpRsq-Result-Commit: 7b7db8a14254a9d5b90f42310fb164112e722370
+GhpRsq-Parent-Hashes: cc6e8ae27289d209f11f1a64fd93ded3b0bae470
+GhpRsq-Squash-Notes-SHA256: b3e3cc9d5c67666e3da5fab99666e1a084954c279964a9a8b7057c2e93499424
+GhpRsq-Stage-Evidence: none
