@@ -57,7 +57,7 @@ also builds for `wasm32-unknown-unknown`.
 [Try the browser playground](https://blackcat-informatics.github.io/purrdf/playground/)
 · [Read the book](https://blackcat-informatics.github.io/purrdf/)
 · [Rust API](https://docs.rs/purrdf)
-· [Migrating to 3.0](./docs/MIGRATION-3.0.md)
+· [Migrating to 4.0](./docs/MIGRATION-4.0.md)
 
 ## What you can build
 
@@ -351,6 +351,7 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-entail`](./crates/entail/) | Materialization, OWL-Direct and RIF-Core. |
 | [`purrdf-text`](./crates/text/) | Exact fixed-point full-text search. |
 | [`purrdf-geo`](./crates/geo/) | Exact GeoSPARQL geometry and relations. |
+| [`purrdf-geo-kernel`](./crates/geo-kernel/) | Deterministic geometry, geodesy and spatial indexes shared by PurRDF hosts. |
 | [`purrdf-hnsw`](./crates/hnsw/) | Deterministic approximate nearest-neighbour indexes. |
 | [`purrdf-retrieval`](./crates/retrieval/) | Typed planning, execution and ranked fusion with evidence. |
 | [`purrdf-columnar`](./crates/columnar/) | Canonical five-table Parquet codec. |
@@ -358,6 +359,7 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-markdown`](./crates/markdown/) | Structural Markdown codec. |
 | [`purrdf-json`](./crates/json/) | Ordered JSON byte-cover codec. |
 | [`purrdf-toml`](./crates/toml/) | Lossless TOML 1.1 model and verified RDF byte-cover codec. |
+| [`purrdf-mime`](./crates/mime/) | Lossless original-byte MIME codec with ordered occurrences and shared cover verification. |
 | [`purrdf-glob`](./crates/glob/) | Compiled Unicode glob matching with explicit surfaces and metered execution. |
 | [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema drafts 2020-12, 2019-09 and 07. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalogs, artifact ownership and dependencies. |
@@ -437,7 +439,7 @@ contracts and the implemented surfaces above are the basis for that growth.
   [Simplified Chinese](https://blackcat-informatics.github.io/purrdf/zh-Hans/).
 - [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
   parse, query, validate, serialize and compare graphs locally in the browser.
-- [Migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
+- [Migration to 4.0](./docs/MIGRATION-4.0.md), [migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
 - [GTS](./docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
   [RDF 1.2 canonicalization](./docs/RDF12-CANON-PROFILE.md),
   [storage contracts](./crates/rdf-core/STORAGE.md) and

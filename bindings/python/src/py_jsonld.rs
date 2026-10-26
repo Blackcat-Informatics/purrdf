@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// An immutable compiled JSON-LD 1.1 context reusable across datasets.
-#[pyclass(name = "CompiledJsonLdContext", frozen, skip_from_py_object)]
+#[pyclass(name = "CompiledJsonLdContext", frozen)]
 #[derive(Debug, Clone)]
 pub(crate) struct PyCompiledJsonLdContext {
     pub(crate) inner: Arc<EngineContext>,

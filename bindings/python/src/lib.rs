@@ -28,17 +28,15 @@
 
 pub use purrdf::*;
 
-/// `FromPyObject` for a `Copy` `#[pyclass]` declared `skip_from_py_object`: extract
-/// the class guard and copy the value out of it.
+/// `FromPyObject` for a `Copy` `#[pyclass]`: extract the class guard and copy the
+/// value out of it.
 ///
-/// `#[pyclass(from_py_object)]` generates this impl with `Clone::clone(&*guard)` as
-/// the body. For a `Copy` class that clone is a copy wearing a `.clone()` -- a real
-/// `clippy::clone_on_copy`, and one no `#[allow]` on the type can reach, because
-/// pyo3 emits the impl as a SIBLING item outside the type's attribute scope. So a
-/// `Copy` class opts out of the generated impl and gets this one, which
-/// dereferences through `Copy` instead. It is a transcription of the pyo3 0.29
-/// expansion, not a redesign: same `Error` type, same `PyClassGuard` extraction,
-/// same error path, so the Python-visible behaviour is the generated impl's. The
+/// pyo3 generates no by-value `FromPyObject` for a `#[pyclass]` unless the class
+/// opts in with `#[pyclass(from_py_object)]`, whose generated impl extracts through
+/// `Clone`. A `Copy` class does not opt in and gets this one, which dereferences
+/// through `Copy` instead. It keeps the generated impl's shape: same `Error` type,
+/// same `PyClassGuard` extraction, same error path, so the Python-visible behaviour
+/// is the generated impl's. The
 /// `INPUT_TYPE` associated const the pyo3 macro can also emit is gated on pyo3's
 /// `experimental-inspect` feature, which is off here, so there is nothing else to
 /// carry over.

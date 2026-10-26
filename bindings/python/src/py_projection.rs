@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// One immutable, structured runtime loss record.
-#[pyclass(name = "ProjectionLoss", frozen, skip_from_py_object)]
+#[pyclass(name = "ProjectionLoss", frozen)]
 #[derive(Debug, Clone)]
 pub struct PyProjectionLoss {
     code: String,
@@ -105,7 +105,7 @@ impl PyProjectionPackage {
 }
 
 /// Immutable progress snapshot from one scoped LPG projection.
-#[pyclass(name = "ProjectionProgress", frozen, skip_from_py_object)]
+#[pyclass(name = "ProjectionProgress", frozen)]
 #[derive(Debug, Clone)]
 pub struct PyProjectionProgress {
     phase: String,

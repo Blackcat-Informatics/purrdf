@@ -55,7 +55,7 @@ PurRDF 在查询、验证以及能够表示这些区分的载体中始终保留�
 [试用浏览器演练场](https://blackcat-informatics.github.io/purrdf/playground/)
 · [阅读《PurRDF 之书》](https://blackcat-informatics.github.io/purrdf/zh-Hans/)
 · [Rust API](https://docs.rs/purrdf)
-· [迁移到 3.0](./docs/MIGRATION-3.0.md)
+· [迁移到 4.0](./docs/MIGRATION-4.0.md)
 
 ## 你可以构建什么
 
@@ -307,12 +307,16 @@ RDF/JS 形态的 API 还暴露 SPARQL、SHACL、推理、投影与静态的 RDF 
 | [`purrdf-entail`](./crates/entail/) | 物化、OWL-Direct 与 RIF-Core。 |
 | [`purrdf-text`](./crates/text/) | 精确定点的全文检索。 |
 | [`purrdf-geo`](./crates/geo/) | 精确的 GeoSPARQL 几何与关系。 |
+| [`purrdf-geo-kernel`](./crates/geo-kernel/) | PurRDF 各宿主共享的确定性几何、大地测量与空间索引。 |
 | [`purrdf-hnsw`](./crates/hnsw/) | 确定性的近似最近邻索引。 |
 | [`purrdf-retrieval`](./crates/retrieval/) | 带类型的规划、执行以及附带证据的排名融合。 |
 | [`purrdf-columnar`](./crates/columnar/) | 规范的五表 Parquet 编解码器。 |
 | [`purrdf-gts`](./crates/gts/) | 容器、折叠、验证与密码学。 |
 | [`purrdf-markdown`](./crates/markdown/) | 结构化 Markdown 编解码器。 |
 | [`purrdf-json`](./crates/json/) | 有序 JSON 字节覆盖编解码器。 |
+| [`purrdf-toml`](./crates/toml/) | 无损的 TOML 1.1 模型与经验证的 RDF 字节覆盖编解码器。 |
+| [`purrdf-mime`](./crates/mime/) | 保留原始字节的无损 MIME 编解码器，带有序出现位置与共享覆盖验证。 |
+| [`purrdf-glob`](./crates/glob/) | 编译式 Unicode glob 匹配，带显式匹配面与计量执行。 |
 | [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema，支持 draft 2020-12、2019-09 与 07。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录、工件所有权与依赖。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的验证、governor 与诊断宿主边界。 |
@@ -381,7 +385,7 @@ PurRDF 正在成长为一个基础，供在各种部署规模下结合图推理�
   概念与引擎契约；另有[英文原版](https://blackcat-informatics.github.io/purrdf/)。
 - [浏览器演练场](https://blackcat-informatics.github.io/purrdf/playground/)：
   在浏览器中本地解析、查询、验证、序列化与比较图。
-- [迁移到 3.0](./docs/MIGRATION-3.0.md)与[变更日志](./CHANGELOG.md)。
+- [迁移到 4.0](./docs/MIGRATION-4.0.md)、[迁移到 3.0](./docs/MIGRATION-3.0.md)与[变更日志](./CHANGELOG.md)。
 - [GTS](./docs/GTS-SPEC.md)、[PURREMB](./docs/PURREMB.md)、
   [RDF 1.2 规范化](./docs/RDF12-CANON-PROFILE.md)、
   [存储契约](./crates/rdf-core/STORAGE.md)与

@@ -282,7 +282,7 @@ make wasm-pkg-test   # the above + TypeScript, Node, and packed-tarball gates
 ```
 
 Requires the `wasm32-unknown-unknown` Rust target and `wasm-bindgen-cli` (pinned to
-the crate's `wasm-bindgen` version, `0.2.125`).
+the crate's `wasm-bindgen` version, `0.2.129`).
 
 ## License
 

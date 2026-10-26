@@ -18,7 +18,7 @@ use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
 /// The graph canonicalization algorithms, exposed to Python as
 /// `CanonicalizationAlgorithm`.
-#[pyclass(name = "CanonicalizationAlgorithm", eq, eq_int, skip_from_py_object)]
+#[pyclass(name = "CanonicalizationAlgorithm", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 #[allow(

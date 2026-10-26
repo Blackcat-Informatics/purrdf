@@ -330,14 +330,14 @@ category = "transitive:rayon"
 reason = "work-stealing deques for rayon"
 distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
 holder = "rayon"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.crossbeam-epoch]
 category = "transitive:rayon"
 reason = "epoch-based reclamation for rayon"
 distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
 holder = "rayon"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.crossbeam-utils]
 category = "transitive:rayon"
@@ -391,7 +391,7 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, b
 category = "runtime"
 reason = "native OS entropy for SPARQL RAND()/UUID() seeds and GTS test keys"
 distinct = "operating-system entropy for SPARQL RAND()/UUID() seeds and GTS test keys; PurRDF has no entropy source of its own"
-metrics = { direct = true, exclusive_closure = 4, release = true, wasm = false, build_script = true, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 2, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.ghash]
 category = "transitive:aes-gcm"
@@ -520,7 +520,7 @@ category = "transitive:pyo3"
 reason = "pyo3 macro code generation"
 distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
 holder = "pyo3"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.quote]
 category = "transitive:syn"
@@ -648,13 +648,6 @@ reason = "emojihash and randomart key fingerprints for GTS"
 distinct = "emojihash and randomart key-fingerprint rendering for GTS; its BLAKE3 is private to those renderers, PurRDF calls only the renderers, and PurRDF has no fingerprint renderer of its own"
 metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.wasip2]
-category = "transitive:getrandom"
-reason = "WASI preview 2 bindings for getrandom"
-distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
-holder = "getrandom"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
-
 [packages.wasm-bindgen]
 category = "binding"
 reason = "JavaScript bindings for purrdf-wasm, SPARQL host clock and entropy, and the testkit wasm runner"
@@ -700,10 +693,3 @@ category = "runtime"
 reason = "GetCurrentThreadStackLimits declarations for purrdf-stack on Windows; also terminal detection through anstream"
 distinct = "platform declarations for thread stack limits on Windows; bindings to the operating system, not a job PurRDF implements"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
-
-[packages.wit-bindgen]
-category = "transitive:getrandom"
-reason = "WIT bindings for wasip2"
-distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
-holder = "getrandom"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
