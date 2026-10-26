@@ -1162,8 +1162,8 @@ mod tests {
         else {
             panic!("the product boundary must preserve the native recursion refusal");
         };
-        assert_eq!(cycle.members, ["<http://example.org/S>"]);
-        assert_eq!(cycle.edges.len(), 1);
+        assert_eq!(cycle.members(), ["<http://example.org/S>"]);
+        assert_eq!(cycle.edges().len(), 1);
     }
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\

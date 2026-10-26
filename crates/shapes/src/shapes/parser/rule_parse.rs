@@ -706,32 +706,17 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// Whether `node` is authored as a SHAPE in the shapes graph: typed `sh:NodeShape` /
-    /// `sh:PropertyShape`, or the subject of a SHACL-namespace triple. The distinction
+    /// Whether `node` belongs to the shapes graph's authoritative shape census.
+    /// A node-expression key alone does not declare a shape. The distinction
     /// matters because an undescribed node parses as an EMPTY shape, which conforms to
     /// everything.
     pub(super) fn node_is_a_shape(&self, node: &Term) -> bool {
-        if self.has_type(node, sh::NODE_SHAPE) || self.has_type(node, sh::PROPERTY_SHAPE) {
-            return true;
-        }
-        // A SHACL instance of `sh:NodeShape` or `sh:PropertyShape` through a subclass —
-        // `sh:ShapeClass` above all, which SHACL 1.2 Core makes "an rdfs:subClassOf of
-        // both sh:NodeShape and rdfs:Class" — is a shape however few constraints it has.
-        if let Some(id) = crate::data::resolve_id(self.data, node) {
-            let mut instances = ShaclInstances::new(self.data);
-            if instances.is_node_shape(id) || instances.is_property_shape(id) {
-                return true;
-            }
-        }
-        crate::data::native_quads(
-            self.data,
-            Some(node),
-            None,
-            None,
-            crate::data::GraphFilter::AnyGraph,
-        )
-        .iter()
-        .any(|(_, predicate, _)| predicate.as_str().starts_with(sh::NS))
+        // Expression keys such as sh:if and sh:path are not a shape declaration.
+        // Use the same complete membership rule as source admission, including
+        // subclass instances and otherwise-empty shape-valued operands.
+        self.shape_census
+            .get_or_init(|| self.spec_shapes().into_iter().collect())
+            .contains(node)
     }
 
     /// Parse a `sh:TripleRule`: "Each triple rule must have at most one value of the

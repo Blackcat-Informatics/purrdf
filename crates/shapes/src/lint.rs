@@ -772,16 +772,23 @@ fn shacl_shacl() -> Result<Shapes, String> {
         .map_err(|e| format!("shacl.ttl does not load as shacl-shacl.ttl's import: {e}"))?;
     let resolved = resolve_shapes_imports(&document.dataset, &document.prefixes, &[], &imports)
         .map_err(|e| format!("shacl-shacl.ttl imports do not resolve: {e}"))?;
-    crate::shapes::Parser::new(
+    // This recursive bundled schema uses the same explicit law and finite work
+    // limits as a caller-authored schema. Exhaustion remains a validation error.
+    let options = crate::engine::ValidationOptions::default().with_recursion(
+        crate::recursion::RecursionOptions {
+            semantics: crate::recursion::RecursionSemantics::Gfp,
+            max_pairs: 65_536,
+            max_iterations: 65_536,
+        },
+    );
+    crate::shapes::from_resolved_dataset_with_options(
         &resolved.dataset,
         None,
         &resolved.prefixes,
         None,
-        Arc::clone(&resolved.dataset),
         None,
-        crate::profile::ShaclProfile::LEGACY,
+        &options,
     )
-    .parse_structural_meta_schema()
     .map_err(|e| format!("shacl-shacl.ttl does not load as a shapes graph: {e}"))
 }
 

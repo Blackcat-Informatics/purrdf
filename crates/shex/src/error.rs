@@ -9,6 +9,9 @@
 
 use core::fmt;
 
+mod lexical;
+pub use lexical::{LexicalContext, LexicalReason, RepeatOperation};
+
 /// Why a ShExC or ShExJ document failed to parse into a
 /// [`crate::ast::Schema`].
 #[derive(Clone, PartialEq, Eq)]
@@ -20,11 +23,11 @@ pub enum ShexError {
         /// The recursive parser construct whose next frame was refused.
         construct: &'static str,
     },
-    /// The ShExC byte stream could not be tokenized. Carries a human reason
+    /// The ShExC byte stream could not be tokenized. Carries its native reason
     /// and the byte offset at which the lexer gave up.
     Lex {
         /// What the lexer objected to.
-        reason: String,
+        reason: LexicalReason,
         /// Byte offset of the offending input.
         at: usize,
     },
@@ -78,7 +81,7 @@ pub enum ShexError {
 impl purrdf_hash::error::StructuredError for ShexError {
     purrdf_hash::error_visit! {
         StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
-        Lex { reason, at } => "shex-lex" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
+        Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
         Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
         Iri { lexical, reason } => "shex-iri" { "lexical" => Text(lexical), "cause" => Cause(reason) },
         Shexj(reason) => "shex-json" { "reason" => Text(reason) },
@@ -90,9 +93,6 @@ impl purrdf_hash::error::StructuredError for ShexError {
 
 purrdf_lex::constructors! {
     impl ShexError {
-        /// Construct a [`ShexError::Lex`] at a byte offset.
-        pub fn lex(reason, at: usize) -> Self::Lex { .. };
-
         /// Construct a [`ShexError::Syntax`] at a byte offset.
         pub fn syntax(reason, at: usize) -> Self::Syntax { .. };
 
@@ -108,6 +108,12 @@ purrdf_lex::constructors! {
 }
 
 impl ShexError {
+    /// Construct a native lexical refusal at its original byte offset.
+    #[must_use]
+    pub fn lex(reason: LexicalReason, at: usize) -> Self {
+        Self::Lex { reason, at }
+    }
+
     /// Admit every recursive front-end at the workspace's one stack boundary.
     pub(crate) fn admit_stack(construct: &'static str) -> Result<()> {
         if purrdf_stack::is_low() {
@@ -226,6 +232,7 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::Lex { reason, .. } => reason,
     Self::Iri { reason, .. } => reason,
     Self::Import { cause, .. } => &**cause,
 });
@@ -279,7 +286,10 @@ mod tests {
 
     #[test]
     fn byte_offset_only_for_positional_variants() {
-        assert_eq!(ShexError::lex("x", 5).byte_offset(), Some(5));
+        assert_eq!(
+            ShexError::lex(LexicalReason::EmptyRegex, 5).byte_offset(),
+            Some(5)
+        );
         assert_eq!(ShexError::syntax("y", 9).byte_offset(), Some(9));
         assert_eq!(ShexError::shexj("bad").byte_offset(), None);
         assert_eq!(

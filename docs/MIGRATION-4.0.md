@@ -28,6 +28,14 @@ remembered empty named graphs, model-only Datalog output, exact decimal
 division, the SPARQL pre-binding rewrite and specific SPARQL diagnostic codes.
 Each has its own section below.
 
+## ShExC lexical refusals
+
+`ShexError::Lex.reason` and `ShexError::lex` now use `LexicalReason` instead of
+message strings. Match native reasons or inspect the existing `shex-lex` record:
+its `reason` field is a borrowed nested cause, and `at` retains the original byte
+offset. Native Unicode-escape and language-tag causes are also available through
+the standard error-source chain. Human messages and byte offsets are unchanged.
+
 ## Certified direct OWL answers
 
 Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`
@@ -220,6 +228,26 @@ counts and names the calling surface's control.
 The corresponding C entry points declare ABI 0.12.0 and add a nullable `const uint64_t *` immediately
 after `max_join_steps`. Rebuild C clients against the regenerated `purrdf.h`;
 pass `NULL` to retain the default. A refusal leaves result buffers untouched.
+
+## Closed recursive SHACL catalogs
+
+Native callers can select `RecursionSemantics::Lfp` or `Gfp` through
+`ValidationOptions::with_recursion`, with explicit original-pair and round
+limits. The same closed structural evaluator serves parse, prepare, bind, direct
+conformance, reports and restored products. No selection still refuses cycles;
+negative/nonmonotone recursive components refuse both selected laws.
+`PreparationRefusal::UnqualifiedRecursion` retains the original definition,
+parameter and model/index scope when an expression, query/computed target or
+overlay has no closed dependency proof. The broader dynamic-expression contract
+remains outside this closed catalog surface.
+
+Read `RecursiveValidationReport` for the settled answer and native finite cycle
+evidence alongside ordinary SHACL results. `RecursionPosition::focus()` returns
+a fallible native term copy; retained original shape/property projections and
+shared cycle positions survive dropping the source preparation. The derived
+product stage identity binds the new admission meaning while the serialized
+`purrdf-shacl-core-v1` profile stays stable. Rebuild older-stage products from
+their carried original inputs under the current request.
 
 ## SHACL processor recursion failures
 

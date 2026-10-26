@@ -62,6 +62,7 @@ pub mod profile;
 pub mod provenance;
 pub mod pydantic;
 mod query_law;
+pub mod recursion;
 pub mod report;
 pub(crate) mod result_annotations;
 pub mod rules;
@@ -86,7 +87,8 @@ pub mod xpath;
 pub use error::{
     FailureClass, IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation,
     PreparationRefusal, ProcessorFailure, RecursionDependency, RecursionPolarity, RecursionRefusal,
-    ShaclJsRefusal, ShapesError, SparqlTargetDisagreement, UnsupportedTargetRefusal,
+    RecursionRefusalReason, ScopedRecursionDependency, ShaclJsRefusal, ShapesError,
+    SparqlTargetDisagreement, UnsupportedTargetRefusal,
 };
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,

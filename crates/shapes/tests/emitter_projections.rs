@@ -3554,9 +3554,9 @@ mod observed {
         let purrdf_shapes::ShapesError::Recursion(refusal) = error else {
             panic!("expected typed recursion refusal: {error:?}");
         };
-        assert_eq!(refusal.members, ["<https://example.org/IntShape>"]);
-        assert_eq!(refusal.edges.len(), 1);
-        assert_eq!(refusal.edges[0].parameter, purrdf_shapes::model::sh::OR);
+        assert_eq!(refusal.members(), ["<https://example.org/IntShape>"]);
+        assert_eq!(refusal.edges().len(), 1);
+        assert_eq!(refusal.edges()[0].parameter, purrdf_shapes::model::sh::OR);
         let finite = shapes.replace(
             "sh:or ( ex:IntShape )",
             "sh:or ( [ sh:datatype xsd:integer ] )",

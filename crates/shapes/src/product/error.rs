@@ -258,6 +258,9 @@ impl From<crate::error::PreparationRefusal> for ShapesProductError {
         let dimension = match &error {
             crate::error::PreparationRefusal::Storage(_) => ProductDimension::Resource,
             crate::error::PreparationRefusal::StackMargin => ProductDimension::DepthLimit,
+            crate::error::PreparationRefusal::UnqualifiedRecursion(_) => {
+                ProductDimension::UnsupportedCapability
+            }
             crate::error::PreparationRefusal::DuplicateDefinition(_)
             | crate::error::PreparationRefusal::OwningDefinition(_)
             | crate::error::PreparationRefusal::UnknownFunction(_)

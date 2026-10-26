@@ -220,8 +220,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x53, 0xf5, 0x5a, 0x03, 0x04, 0x13, 0xd8, 0xfd, 0x8d, 0x72, 0x44, 0x99, 0x85, 0xdf, 0x0d, 0x70,
-    0x78, 0x44, 0xd7, 0xab, 0xd5, 0xe8, 0x87, 0xdc, 0x41, 0x58, 0x5f, 0x0c, 0xbc, 0xff, 0xc9, 0xcf,
+    0x8a, 0xf8, 0x6c, 0x61, 0xf3, 0xd8, 0x98, 0x82, 0x91, 0x53, 0xf2, 0x27, 0xed, 0x9b, 0x8a, 0x62,
+    0x5e, 0xa6, 0x74, 0x48, 0x9b, 0xa1, 0xe5, 0x1e, 0xa8, 0x35, 0x74, 0xbe, 0xd9, 0xaa, 0x67, 0xd5,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -1319,6 +1319,7 @@ impl<'a> ShapesProductView<'a> {
                 &dataset,
                 &self.provenance,
                 options.shacl_profile,
+                options.recursion.as_ref().map(|request| request.semantics),
             )?)
         };
         let parts = ast::decode_ast(self.section(SECTION_AST)?)?;
@@ -1390,6 +1391,12 @@ impl<'a> ShapesProductView<'a> {
         let rules = parts.rules;
         let shapes = Shapes {
             owner: Arc::clone(&owner),
+            recursion_source: crate::shapes::restored_recursion_source(
+                &dataset,
+                &self.provenance,
+                &owner,
+                options,
+            )?,
             node_shapes,
             rules,
             box_role_vocab: parts.box_role_vocab,
@@ -1553,7 +1560,15 @@ impl<'a> ShapesProductView<'a> {
             options,
         )
         .map_err(|error| {
-            if options.shacl_profile != crate::profile::ShaclProfile::LEGACY {
+            if options.recursion.is_some()
+                || options.shacl_profile != crate::profile::ShaclProfile::LEGACY
+                || matches!(
+                    &error,
+                    crate::report::CompleteValidationError::Shapes(
+                        crate::error::ShapesError::Recursion(_)
+                    )
+                )
+            {
                 return error;
             }
             malformed(format!(

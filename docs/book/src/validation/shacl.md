@@ -92,14 +92,30 @@ or a misspelled `sh:mesage`, is refused rather than ignored.
 
 ### Recursion and resource failures
 
-PurRDF rejects a cyclic shape reference when loading a shapes graph. This
-includes self-references, mutual references, logical shape lists and nested
-property shapes. A shared acyclic reference is accepted. The loader never
-replaces a recursive reference with an empty shape or skips its constraints.
-This is an explicit failure policy, permitted by
+A cyclic shape reference requires an explicit native selection through
+`ValidationOptions::with_recursion(RecursionOptions { semantics, max_pairs,
+max_iterations })`. `RecursionSemantics::Lfp` and `Gfp` select the least and
+greatest fixed points of the same evaluator. A shared acyclic reference needs
+no selection. Recursive requests without a selection retain a typed complete
+component refusal. This explicit policy is permitted by
 [SHACL Core §6.6.3](https://www.w3.org/TR/shacl12-core/#shapes-recursion).
-It does not assign least- or greatest-fixed-point semantics to recursive
-shapes. Ahmetaj et al.'s *sheval* study compares recursive-shape
+
+The selected evaluator admits proved closed structural shape catalogs: node,
+property, logical, member and qualified references keep their original model
+and occurrence identities. Negative or nonmonotone references within a recursive
+component refuse either selection; lower strata remain fixed. Expressions,
+query/computed targets and unbound overlays without a closed dependency proof
+return `PreparationRefusal::UnqualifiedRecursion`, retaining the original
+definition, parameter and model/index scope. Selecting a law does not authorize
+an unknown transfer or the old depth-bound approximation.
+
+`validate_with_recursion_evidence` and `validate_shape_with_recursion` retain the
+settled verdict, ordinary finite SHACL leaf results and native closed-pair cycle
+certificates separately. A false least fixed point may have a cycle certificate
+without an ordinary leaf violation. The certificate retains its original model,
+property edge, scoped data and fallibly copied focus; it invents no severity or
+RDF vocabulary. Pair and round exhaustion is a typed failure, never a partial
+report. Ahmetaj et al.'s *sheval* study compares recursive-shape
 implementations,[^sheval] and their *Common Foundations for Recursive Shape
 Languages* develops the semantics and LFP/GFP duality.[^recursive-foundations]
 

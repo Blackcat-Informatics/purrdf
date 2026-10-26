@@ -431,6 +431,7 @@ impl LoweredShapes {
         })?;
         Ok(ShapePlan {
             owner: shape.owner.as_ref(),
+            origin: shape.owner.as_ref(),
             shape,
             lowered,
             graph: self,
@@ -1000,6 +1001,9 @@ pub(crate) fn lowering_defect(
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShapePlan<'a> {
     owner: Option<&'a Arc<crate::shapes::ModelOwner>>,
+    /// The domain retaining the original occurrence. An incoming local handle
+    /// can own a different domain for its named references.
+    origin: Option<&'a Arc<crate::shapes::ModelOwner>>,
     /// The shape this plan lowered, paired with its lowering by construction.
     shape: &'a Shape,
     /// This shape's stage-0 lowering.
@@ -1021,11 +1025,23 @@ impl<'a> ShapePlan<'a> {
         self.owner
     }
 
+    pub(crate) const fn origin(&self) -> Option<&'a Arc<crate::shapes::ModelOwner>> {
+        self.origin
+    }
+
+    pub(crate) fn with_origin(mut self, origin: &'a Arc<crate::shapes::ModelOwner>) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
     pub(crate) fn with_model<'model>(
-        &'model self,
+        self,
         owner: &'model Arc<crate::shapes::ModelOwner>,
-    ) -> ShapePlan<'model> {
-        let mut plan: ShapePlan<'model> = *self;
+    ) -> ShapePlan<'model>
+    where
+        'a: 'model,
+    {
+        let mut plan: ShapePlan<'model> = self;
         plan.owner = Some(owner);
         plan
     }
@@ -1299,6 +1315,7 @@ impl<'a> ShapePlan<'a> {
     pub(crate) fn nested(&self, shape: &'a Shape, lowered: &'a LoweredShape) -> Self {
         Self {
             owner: shape.owner.as_ref().or(self.owner),
+            origin: self.origin,
             shape,
             lowered,
             graph: self.graph,
@@ -1569,6 +1586,14 @@ pub(crate) struct ShapeList<'a> {
 }
 
 impl<'a> ShapeList<'a> {
+    pub(crate) fn disjoint_guards(&self, plan: ShapePlan<'a>) -> bool {
+        crate::recursion::guards::xone_positive(
+            plan.shape(),
+            self.shapes,
+            plan.model().map(Arc::as_ref),
+        )
+    }
+
     /// The plan for each shape of the list, in declaration order.
     #[inline]
     pub(crate) fn iter(&self, plan: ShapePlan<'a>) -> impl Iterator<Item = ShapePlan<'a>> {
@@ -2880,6 +2905,7 @@ impl StandaloneLowering {
     pub(crate) fn plan<'a>(&'a self, binding: &'a DatasetBinding) -> ShapePlan<'a> {
         ShapePlan {
             owner: self.root.owner.as_ref(),
+            origin: self.root.owner.as_ref(),
             shape: &self.root,
             lowered: &self.root_lowered,
             graph: &self.graph,
@@ -3226,19 +3252,7 @@ fn lower_constraint(
         Constraint::Reference(target) => LoweredConstraint::Reference {
             catalog: lower_reference(target, false, walk)?,
         },
-        Constraint::PropertyReference(edge) => {
-            let catalog = lower_reference(&edge.target, true, walk)?;
-            let deactivated_when = edge
-                .deactivated_when
-                .iter()
-                .map(|expression| lower_expression(expression, walk))
-                .collect::<LoweringResult<_>>()?;
-            walk.deactivations += edge.deactivated_when.len();
-            LoweredConstraint::PropertyReference {
-                catalog,
-                deactivated_when,
-            }
-        }
+        Constraint::PropertyReference(edge) => lower_property_reference(edge, walk)?,
         Constraint::Class(classes) => LoweredConstraint::Class(walk.class_slots(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
         Constraint::NodeKind(_) => LoweredConstraint::NodeKind,
@@ -3425,6 +3439,23 @@ fn lower_constraint(
             LoweredConstraint::UniqueValuesFor(slot as UniqueSlot)
         }
         Constraint::Component { .. } => LoweredConstraint::Component,
+    })
+}
+
+fn lower_property_reference(
+    edge: &crate::shapes::PropertyReference,
+    walk: &mut ShapeWalk,
+) -> LoweringResult<LoweredConstraint> {
+    let catalog = lower_reference(&edge.target, true, walk)?;
+    let deactivated_when = edge
+        .deactivated_when
+        .iter()
+        .map(|expression| lower_expression(expression, walk))
+        .collect::<LoweringResult<_>>()?;
+    walk.deactivations += edge.deactivated_when.len();
+    Ok(LoweredConstraint::PropertyReference {
+        catalog,
+        deactivated_when,
     })
 }
 
