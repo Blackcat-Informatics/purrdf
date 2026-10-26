@@ -47,8 +47,10 @@ pub enum ShexError {
         /// The underlying resolution failure.
         reason: purrdf_iri::IriError,
     },
-    /// The ShExJ document is not valid JSON or does not match the ShExJ
-    /// object model.
+    /// The shared JSON reader's original ShExJ ingress refusal, including its
+    /// native kind, byte offset and nested lexical or storage fields.
+    JsonRead(purrdf_lex::json::Error),
+    /// A parsed JSON value does not match the ShExJ object model.
     Shexj(String),
     /// An `IMPORT`ed schema could not be resolved by the caller-supplied
     /// import resolver (no ambient I/O — resolution is injected). Carries the
@@ -84,6 +86,7 @@ impl purrdf_hash::error::StructuredError for ShexError {
         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
         Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
         Iri { lexical, reason } => "shex-iri" { "lexical" => Text(lexical), "cause" => Cause(reason) },
+        JsonRead(cause) => "shex-json-read" { "cause" => Cause(cause) },
         Shexj(reason) => "shex-json" { "reason" => Text(reason) },
         Import { iri, cause } => "shex-import" { "iri" => Iri(iri), "cause" => Cause(&**cause) },
         ImportConflict(label) => "shex-import-conflict" { "label" => Text(label) },
@@ -168,6 +171,7 @@ impl ShexError {
             Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
             Self::Iri { .. }
             | Self::StackMargin { .. }
+            | Self::JsonRead(_)
             | Self::Shexj(_)
             | Self::Import { .. }
             | Self::ImportConflict(_)
@@ -210,6 +214,7 @@ impl fmt::Display for ShexError {
                     reason.diagnostic_code()
                 )
             }
+            Self::JsonRead(cause) => write!(f, "ShExJ error: invalid JSON: {cause}"),
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
             Self::Import { iri, cause } => write!(f, "unresolved IMPORT <{iri}>: {cause}"),
             Self::ImportConflict(label) => {
@@ -232,6 +237,7 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::JsonRead(cause) => cause,
     Self::Lex { reason, .. } => reason,
     Self::Iri { reason, .. } => reason,
     Self::Import { cause, .. } => &**cause,

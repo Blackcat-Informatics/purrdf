@@ -130,8 +130,7 @@ pub(crate) fn parse_shexj_exact(
     saturate: bool,
 ) -> Result<(Schema, crate::exact::ExactTable)> {
     ShexError::admit_stack("ShExJ document")?;
-    let value = json::read_with(input, SHEXJ_LIMITS)
-        .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
+    let value = json::read_with(input, SHEXJ_LIMITS).map_err(ShexError::JsonRead)?;
     // A numeric facet's value is compared with every datum validated against it: its
     // lexeme becomes a binary64 inside a binary64 scope so the x87 rounds it once, like
     // every other unit.

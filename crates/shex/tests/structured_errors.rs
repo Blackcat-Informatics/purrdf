@@ -404,9 +404,155 @@ fn lexical_native_causes_survive_source_disposal_and_imports() {
     );
 }
 
+fn shexj_ingress_retains_original_json_causes_and_precedence() {
+    use purrdf_lex::json::{self, Limits};
+    use purrdf_shex::{ExactSchema, parse_shexj};
+
+    let limits = Limits {
+        unique_members: true,
+        ..Limits::with_depth(128)
+    };
+    // The array would also be an invalid ShExJ root, but JSON depth refusal
+    // precedes schema interpretation. The existing 128-container ShExJ control
+    // supplies its valid boundary neighbour without another schema generator.
+    let deep = format!("{}null{}", "[".repeat(129), "]".repeat(129));
+    let cases = [
+        ("{", "json-expected", None),
+        ("\"raw\ncontrol\"", "json-raw-control", None),
+        ("\"\\", "json-invalid-escape", Some("json-escape-truncated")),
+        (
+            r#""\q""#,
+            "json-invalid-escape",
+            Some("json-escape-invalid"),
+        ),
+        (
+            r#""\u0z00""#,
+            "json-invalid-escape",
+            Some("json-escape-bad-hex"),
+        ),
+        (
+            r#""\uD800""#,
+            "json-invalid-escape",
+            Some("json-escape-unpaired-high"),
+        ),
+        (
+            r#""\uDC00""#,
+            "json-invalid-escape",
+            Some("json-escape-unpaired-low"),
+        ),
+        ("null true", "json-trailing-data", None),
+        (
+            r#"{"type":"Schema","type":"Schema"}"#,
+            "json-duplicate-member",
+            None,
+        ),
+        (deep.as_str(), "json-depth-limit", None),
+    ];
+    for (input, kind_code, escape_code) in cases {
+        let original = json::read_with(input, limits).unwrap_err();
+        let owned = input.to_owned();
+        let first = parse_shexj(&owned, None).unwrap_err();
+        drop(owned);
+        let error = first.clone();
+        drop(first);
+        assert_eq!(ExactSchema::parse_shexj(input, None).unwrap_err(), error);
+        assert_eq!(
+            parse_shexj(input, Some("not an absolute base")).unwrap_err(),
+            error,
+            "the original JSON fault precedes base resolution"
+        );
+        let expected = format!("ShExJ error: invalid JSON: {original}");
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(format!("{error:?}"), expected);
+        assert_eq!(error.byte_offset(), None);
+        assert_eq!(error.locate(input), None);
+        let source = std::error::Error::source(&error).unwrap();
+        assert_eq!(source.downcast_ref::<json::Error>().unwrap(), &original);
+        assert!(
+            source.source().is_none(),
+            "native JSON source semantics are unchanged"
+        );
+        let fields = inspect_without_allocation(&error);
+        assert_eq!(fields.code, "shex-json-read");
+        let ErrorValue::Cause(cause) = fields.field("cause") else {
+            panic!("original JSON cause");
+        };
+        let json_fields = inspect_without_allocation(cause);
+        assert_eq!(json_fields.code, "json-document");
+        assert!(
+            matches!(json_fields.field("offset"), ErrorValue::ByteCount(offset) if offset == original.offset() as u128)
+        );
+        let ErrorValue::Cause(kind) = json_fields.field("kind") else {
+            panic!("original JSON kind");
+        };
+        let kind_fields = inspect_without_allocation(kind);
+        assert_eq!(kind_fields.code, kind_code);
+        if kind_code == "json-expected" {
+            assert!(matches!(
+                kind_fields.field("expected"),
+                ErrorValue::Text("a `\"`-quoted member name")
+            ));
+        }
+        if kind_code == "json-depth-limit" {
+            assert!(matches!(
+                kind_fields.field("limit"),
+                ErrorValue::Unsigned(128)
+            ));
+        }
+        if let Some(code) = escape_code {
+            let ErrorValue::Cause(escape) = kind_fields.field("cause") else {
+                panic!("original escape kind");
+            };
+            assert_eq!(inspect_without_allocation(escape).code, code);
+        }
+    }
+    for valid in [
+        r#"{"type":"Schema"}"#,
+        r#"{"type":"Schema","shapes":[{"type":"NodeConstraint","id":"https://example.org/S","pattern":"a\nb"}]}"#,
+        r#"{"type":"Schema","shapes":[{"type":"NodeConstraint","id":"https://example.org/S","pattern":"\uD834\uDD1E"}]}"#,
+    ] {
+        assert!(parse_shexj(valid, None).is_ok(), "{valid}");
+        assert!(ExactSchema::parse_shexj(valid, None).is_ok(), "{valid}");
+    }
+    let valid_json = r#"{"type":"Schema"}"#;
+    let base_fault = parse_shexj(valid_json, Some("not an absolute base")).unwrap_err();
+    assert_eq!(Capture::read(&base_fault).code, "shex-iri");
+    let schema_fault = parse_shexj("[]", None).unwrap_err();
+    assert_eq!(Capture::read(&schema_fault).code, "shex-json");
+    assert!(std::error::Error::source(&schema_fault).is_none());
+    let root = parse_shexj(
+        r#"{"type":"Schema","imports":["https://example.org/import"]}"#,
+        None,
+    )
+    .unwrap();
+    let malformed = String::from("{");
+    let first = purrdf_shex::resolve_imports(root, &|_| parse_shexj(&malformed, None)).unwrap_err();
+    drop(malformed);
+    let imported = first.clone();
+    drop(first);
+    let fields = Capture::read(&imported);
+    assert_eq!(fields.code, "shex-import");
+    assert!(matches!(
+        fields.field("iri"),
+        ErrorValue::Iri("https://example.org/import")
+    ));
+    assert_eq!(fields.child("cause").code, "shex-json-read");
+    assert_eq!(
+        fields.child("cause").child("cause").child("kind").code,
+        "json-expected"
+    );
+    let root = parse_shexj(
+        r#"{"type":"Schema","imports":["https://example.org/import"]}"#,
+        None,
+    )
+    .unwrap();
+    assert!(purrdf_shex::resolve_imports(root, &|_| parse_shexj(valid_json, None)).is_ok());
+}
+
 purrdf_testkit::harness_main!(
     actual_shape_map_keeps_original_iri_cause_after_input_disposal,
     structural_refusals_keep_the_original_unresolved_label,
     lexical_refusals_keep_original_values_offsets_and_presentation,
     lexical_native_causes_survive_source_disposal_and_imports,
+    shexj_ingress_retains_original_json_causes_and_precedence,
 );

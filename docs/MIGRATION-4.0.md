@@ -6,6 +6,15 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## ShExJ JSON reader refusals
+
+ShExJ ingress now returns `ShexError::JsonRead` with the original native JSON
+error. Its structured identity is `shex-json-read`, and its borrowed `cause`
+retains the JSON kind, byte offset and nested fields. Standard `source()` lends
+that same native error. Human `Display`/`Debug` and outer `byte_offset()`/`locate()`
+behavior are unchanged. ShExJ schema and value-grammar reasons remain separate
+`ShexError::Shexj` values with the existing `shex-json` identity.
+
 ## ShExC lexical refusals
 
 `ShexError::Lex.reason` and `ShexError::lex` now use `LexicalReason` instead of
