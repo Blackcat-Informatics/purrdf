@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Query-only bottom properties:** native axiom refutations install the same
+  empty-role law as ontology parsing. Querying an unmentioned bottom object
+  property now preserves its empty extension and native proof origin.
+
 - **Certified direct OWL answers (breaking Rust API and incomplete outcomes):**
   direct class subsumptions and most-specific types are read from the certified
   result and require a fully decided supplied ontology. Typed refusals retain
