@@ -46,6 +46,13 @@ pub(crate) struct ExactBound {
 }
 
 impl ExactBound {
+    pub(crate) fn lexical(&self) -> &str {
+        &self.lexical
+    }
+    pub(crate) fn datatype(&self) -> XsdDatatype {
+        self.datatype
+    }
+
     /// A ShExC `INTEGER` / `DECIMAL` / `DOUBLE` token, or a ShExJ number's lexeme
     /// (an exponent makes it a double, a point a decimal, neither an integer).
     pub(crate) fn from_lexical(lexical: &str) -> Self {
@@ -558,4 +565,12 @@ pub fn validate_shape_map_exact_with_xpath(
         profile,
         limits,
     )
+}
+
+impl purrdf_hash::error::StructuredError for ExactBound {
+    purrdf_hash::error_visit! {
+        @record self { lexical, datatype } => "shex-exact-bound" {
+            "lexical" => Text(&self.lexical), "datatype" => Iri(self.datatype.iri())
+        }
+    }
 }

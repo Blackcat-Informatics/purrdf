@@ -34,7 +34,10 @@ use crate::ast::{
     ValueSetValue,
 };
 use crate::ast::{IriExclusion, LanguageExclusion, LiteralExclusion, StemValue};
-use crate::error::{GrammarExpectation, GrammarReason, Result, ShexError};
+use crate::error::{
+    AdmittedNumericFacet, FacetKind, FacetReason, GrammarExpectation, GrammarReason,
+    NumericFacetOperand, Result, ShexError, UnsignedFacetOperand,
+};
 use crate::lexer::{CodeName, Spanned, Token, tokenize};
 
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
@@ -541,13 +544,15 @@ impl Parser<'_> {
             }
             // litNodeConstraint: datatype + facets.
             Some(Token::Iri(_) | Token::PName(..)) => {
+                let datatype_pos = self.pos;
                 let datatype = self.parse_iri(GrammarExpectation::Datatype)?;
                 let mut nc = NodeConstraint {
                     datatype: Some(datatype),
                     ..NodeConstraint::default()
                 };
-                self.parse_facets(&mut nc, true)?;
-                self.check_numeric_facet_datatype(&nc)?;
+                let exact_index = self.exact.len();
+                let first = self.parse_facets(&mut nc, true)?;
+                self.check_numeric_facet_datatype(&mut nc, datatype_pos, &first, exact_index)?;
                 Ok(Conjunct::single(ShapeExpr::Node(nc)))
             }
             // litNodeConstraint: value set + facets.
@@ -660,14 +665,27 @@ impl Parser<'_> {
 
     /// `xsFacet*` — string facets always; numeric facets only when
     /// `allow_numeric`. Duplicate facets are a syntax error (spec §6).
-    fn parse_facets(&mut self, nc: &mut NodeConstraint, allow_numeric: bool) -> Result<()> {
+    fn parse_facets(
+        &mut self,
+        nc: &mut NodeConstraint,
+        allow_numeric: bool,
+    ) -> Result<[Option<usize>; 10]> {
         let mut exact = crate::exact::ExactBounds::default();
+        // Original occurrence indices are retained by the parser that admits
+        // the facets. No second token walk reconstructs a discarded occurrence.
+        let mut first: [Option<usize>; 10] = [None; 10];
         loop {
             match self.peek().cloned() {
                 Some(Token::Regex { pattern, flags }) => {
                     if nc.pattern.is_some() {
-                        return Err(self.err("duplicate pattern facet"));
+                        let previous = first[FacetKind::Pattern.index()]
+                            .expect("an admitted pattern has an original occurrence");
+                        return Err(self.facet(FacetReason::Pattern {
+                            previous: self.tokens[previous].clone(),
+                            incoming: self.tokens[self.pos].clone(),
+                        }));
                     }
+                    first[FacetKind::Pattern.index()] = Some(self.pos);
                     self.pos += 1;
                     nc.pattern = Some(pattern);
                     if !flags.is_empty() {
@@ -677,20 +695,24 @@ impl Parser<'_> {
                 Some(Token::Word(w)) if is_string_length_kw(&w) => {
                     let facet_pos = self.pos;
                     self.pos += 1;
-                    let n = self.parse_unsigned(
-                        "string facet value",
-                        GrammarExpectation::StringFacet,
-                        facet_pos,
-                    )?;
-                    let slot = match w.to_ascii_lowercase().as_str() {
-                        "length" => &mut nc.length,
-                        "minlength" => &mut nc.minlength,
-                        _ => &mut nc.maxlength,
+                    let (slot, kind) = match w.to_ascii_lowercase().as_str() {
+                        "length" => (&mut nc.length, FacetKind::Length),
+                        "minlength" => (&mut nc.minlength, FacetKind::MinLength),
+                        _ => (&mut nc.maxlength, FacetKind::MaxLength),
                     };
-                    if slot.is_some() {
-                        return Err(self.err(format!("duplicate {} facet", w.to_lowercase())));
+                    let n =
+                        self.parse_unsigned(GrammarExpectation::StringFacet, facet_pos, kind)?;
+                    if let Some(previous) = *slot {
+                        let previous_pos = first[kind.index()]
+                            .expect("an admitted length has an original occurrence");
+                        return Err(self.facet(FacetReason::UnsignedDuplicate {
+                            kind,
+                            previous: self.unsigned_operand(previous_pos, previous),
+                            incoming: self.unsigned_operand(facet_pos, n),
+                        }));
                     }
                     *slot = Some(n);
+                    first[kind.index()] = Some(facet_pos);
                 }
                 Some(Token::Word(w)) if allow_numeric && is_numeric_range_kw(&w) => {
                     let facet_pos = self.pos;
@@ -702,29 +724,43 @@ impl Parser<'_> {
                         "maxinclusive" => (&mut nc.maxinclusive, 2),
                         _ => (&mut nc.maxexclusive, 3),
                     };
-                    if slot.is_some() {
-                        return Err(self.err(format!("duplicate {} facet", w.to_lowercase())));
+                    let kind = FacetKind::RANGE[index];
+                    if let Some(previous) = *slot {
+                        let previous_pos = first[kind.index()]
+                            .expect("an admitted bound has an original occurrence");
+                        let previous_bound = exact.slots[index]
+                            .take()
+                            .expect("an admitted range owns its exact bound");
+                        return Err(self.facet(FacetReason::NumericDuplicate {
+                            kind,
+                            previous: self.numeric_operand(previous_pos, previous, previous_bound),
+                            incoming: self.numeric_operand(facet_pos, value, bound),
+                        }));
                     }
                     *slot = Some(value);
                     exact.slots[index] = Some(bound);
+                    first[kind.index()] = Some(facet_pos);
                 }
                 Some(Token::Word(w)) if allow_numeric && is_numeric_length_kw(&w) => {
                     let facet_pos = self.pos;
                     self.pos += 1;
-                    let n = self.parse_unsigned(
-                        "digit-count facet value",
-                        GrammarExpectation::DigitFacet,
-                        facet_pos,
-                    )?;
-                    let slot = if w.eq_ignore_ascii_case("totaldigits") {
-                        &mut nc.totaldigits
+                    let (slot, kind) = if w.eq_ignore_ascii_case("totaldigits") {
+                        (&mut nc.totaldigits, FacetKind::TotalDigits)
                     } else {
-                        &mut nc.fractiondigits
+                        (&mut nc.fractiondigits, FacetKind::FractionDigits)
                     };
-                    if slot.is_some() {
-                        return Err(self.err(format!("duplicate {} facet", w.to_lowercase())));
+                    let n = self.parse_unsigned(GrammarExpectation::DigitFacet, facet_pos, kind)?;
+                    if let Some(previous) = *slot {
+                        let previous_pos = first[kind.index()]
+                            .expect("an admitted digit count has an original occurrence");
+                        return Err(self.facet(FacetReason::UnsignedDuplicate {
+                            kind,
+                            previous: self.unsigned_operand(previous_pos, previous),
+                            incoming: self.unsigned_operand(facet_pos, n),
+                        }));
                     }
                     *slot = Some(n);
+                    first[kind.index()] = Some(facet_pos);
                 }
                 _ => break,
             }
@@ -732,14 +768,43 @@ impl Parser<'_> {
         if !exact.is_empty() {
             self.exact.push(exact);
         }
-        Ok(())
+        Ok(first)
+    }
+
+    fn facet(&self, reason: FacetReason) -> ShexError {
+        ShexError::Facet {
+            reason: Box::new(reason),
+            at: self.span(),
+        }
+    }
+
+    fn unsigned_operand(&self, pos: usize, value: u64) -> UnsignedFacetOperand {
+        UnsignedFacetOperand::new(
+            self.tokens[pos].clone(),
+            self.tokens[pos + 1].clone(),
+            value,
+        )
+    }
+
+    fn numeric_operand(
+        &self,
+        pos: usize,
+        value: NumericLiteral,
+        bound: crate::exact::ExactBound,
+    ) -> NumericFacetOperand {
+        NumericFacetOperand::new(
+            self.tokens[pos].clone(),
+            self.tokens[pos + 1].clone(),
+            value,
+            bound,
+        )
     }
 
     fn parse_unsigned(
         &mut self,
-        what: &str,
         expected: GrammarExpectation,
         facet_pos: usize,
+        kind: FacetKind,
     ) -> Result<u64> {
         let Some(Token::Integer(lexical)) = self.peek().cloned() else {
             return Err(self.grammar(GrammarReason::FacetValue {
@@ -748,9 +813,14 @@ impl Parser<'_> {
                 encountered: self.tokens.get(self.pos).cloned(),
             }));
         };
-        let n = lexical
-            .parse::<u64>()
-            .map_err(|_| self.err(format!("{what} must be a non-negative integer")))?;
+        let n = lexical.parse::<u64>().map_err(|cause| {
+            self.facet(FacetReason::Unsigned {
+                kind,
+                keyword: self.tokens[facet_pos].clone(),
+                token: self.tokens[self.pos].clone(),
+                cause,
+            })
+        })?;
         self.pos += 1;
         Ok(n)
     }
@@ -780,21 +850,70 @@ impl Parser<'_> {
 
     /// Numeric facets demand a numeric datatype when one is given (the
     /// `1unknowndatatypeMaxInclusive` conformance rule).
-    fn check_numeric_facet_datatype(&self, nc: &NodeConstraint) -> Result<()> {
-        let has_numeric_facet = nc.mininclusive.is_some()
-            || nc.minexclusive.is_some()
-            || nc.maxinclusive.is_some()
-            || nc.maxexclusive.is_some()
-            || nc.totaldigits.is_some()
-            || nc.fractiondigits.is_some();
-        if !has_numeric_facet {
+    fn check_numeric_facet_datatype(
+        &mut self,
+        nc: &mut NodeConstraint,
+        datatype_pos: usize,
+        first: &[Option<usize>; 10],
+        exact_index: usize,
+    ) -> Result<()> {
+        let ranges = [
+            nc.mininclusive,
+            nc.minexclusive,
+            nc.maxinclusive,
+            nc.maxexclusive,
+        ];
+        let digits = [nc.totaldigits, nc.fractiondigits];
+        if ranges.iter().all(Option::is_none) && digits.iter().all(Option::is_none) {
             return Ok(());
         }
-        if let Some(dt) = &nc.datatype
-            && !purrdf_xsd::XsdDatatype::from_iri(dt)
-                .is_some_and(purrdf_xsd::XsdDatatype::is_numeric)
-        {
-            return Err(self.err(format!("numeric facet on non-numeric datatype <{dt}>")));
+        if let Some(dt) = &nc.datatype {
+            let recognized = purrdf_xsd::XsdDatatype::from_iri(dt);
+            if recognized.is_some_and(purrdf_xsd::XsdDatatype::is_numeric) {
+                return Ok(());
+            }
+            // The current parse_facets call appended exactly one exact record
+            // iff it admitted a range. Digit-only constraints have none.
+            let mut exact = if ranges.iter().any(Option::is_some) {
+                core::mem::take(&mut self.exact[exact_index])
+            } else {
+                crate::exact::ExactBounds::default()
+            };
+            let mut facets = Vec::new();
+            for (index, value) in ranges.into_iter().enumerate() {
+                if let Some(value) = value {
+                    let kind = FacetKind::RANGE[index];
+                    let pos =
+                        first[kind.index()].expect("an admitted range has an original occurrence");
+                    let bound = exact.slots[index]
+                        .take()
+                        .expect("an admitted range owns its exact bound");
+                    facets.push(AdmittedNumericFacet::Range {
+                        kind,
+                        operand: self.numeric_operand(pos, value, bound),
+                    });
+                }
+            }
+            for (kind, value) in [FacetKind::TotalDigits, FacetKind::FractionDigits]
+                .into_iter()
+                .zip(digits)
+            {
+                if let Some(value) = value {
+                    let pos = first[kind.index()]
+                        .expect("an admitted digit count has an original occurrence");
+                    facets.push(AdmittedNumericFacet::Digits {
+                        kind,
+                        operand: self.unsigned_operand(pos, value),
+                    });
+                }
+            }
+            facets.sort_by_key(AdmittedNumericFacet::start);
+            return Err(self.facet(FacetReason::Datatype {
+                token: self.tokens[datatype_pos].clone(),
+                resolved: nc.datatype.take().expect("the checked datatype is present"),
+                recognized,
+                facets,
+            }));
         }
         Ok(())
     }

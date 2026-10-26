@@ -393,3 +393,10 @@ pub struct Annotation {
     /// The annotation object (IRI or literal).
     pub object: ObjectValue,
 }
+
+impl purrdf_hash::error::StructuredError for NumericLiteral {
+    purrdf_hash::error_visit! {
+        Integer(value) => "shex-numeric-integer" { "value" => Signed(i128::from(*value)) },
+        Fractional(value) => "shex-numeric-fractional" { "value" => Float64Bits(value.to_bits()) },
+    }
+}

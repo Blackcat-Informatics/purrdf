@@ -9,6 +9,10 @@
 
 use core::fmt;
 
+mod facet;
+pub use facet::{
+    AdmittedNumericFacet, FacetKind, FacetReason, NumericFacetOperand, UnsignedFacetOperand,
+};
 mod grammar;
 pub use grammar::{GrammarExpectation, GrammarReason};
 mod language;
@@ -43,6 +47,13 @@ pub enum ShexError {
     Grammar {
         /// The grammar requirement and original encountered tokens.
         reason: Box<GrammarReason>,
+        /// The historical parser byte coordinate.
+        at: usize,
+    },
+    /// A facet conflict or integer/datatype admission refusal.
+    Facet {
+        /// The original native evidence and cause.
+        reason: Box<FacetReason>,
         /// The historical parser byte coordinate.
         at: usize,
     },
@@ -118,6 +129,7 @@ impl purrdf_hash::error::StructuredError for ShexError {
     purrdf_hash::error_visit! {
         StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
+        Facet { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
         Grammar { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
         Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
         ShapeMapSyntax { reason, at, scalar_offset } => "shex-shape-map-syntax" {
@@ -205,7 +217,7 @@ impl ShexError {
 
     /// The byte offset the failure was reported at, for the position-bearing
     /// variants ([`Lex`](Self::Lex), [`Grammar`](Self::Grammar),
-    /// [`Syntax`](Self::Syntax) and
+    /// [`Facet`](Self::Facet), [`Syntax`](Self::Syntax) and
     /// [`ShapeMapSyntax`](Self::ShapeMapSyntax)). `None` for the
     /// others — in particular [`Import`](Self::Import), whose offset (if any)
     /// belongs to a *different* source document than the one being parsed.
@@ -214,6 +226,7 @@ impl ShexError {
         match self {
             Self::Lex { at, .. }
             | Self::Grammar { at, .. }
+            | Self::Facet { at, .. }
             | Self::Syntax { at, .. }
             | Self::ShapeMapSyntax { at, .. } => Some(*at),
             Self::Iri { .. }
@@ -255,6 +268,7 @@ impl fmt::Display for ShexError {
             Self::ShapeMapSyntax { reason, at, .. } => {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")
             }
+            Self::Facet { reason, at } => write!(f, "ShExC syntax error at byte {at}: {reason}"),
             Self::Grammar { reason, at } => write!(f, "ShExC syntax error at byte {at}: {reason}"),
             Self::Syntax { reason, at } => {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")
@@ -298,6 +312,7 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::Facet { reason, .. } => &**reason,
     Self::Grammar { reason, .. } => &**reason,
     Self::ShapeMapSyntax { reason, .. } => reason,
     Self::JsonRead(cause) => cause,
