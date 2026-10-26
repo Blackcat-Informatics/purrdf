@@ -1345,7 +1345,422 @@ fn schema_grammar_placement_and_rich_operands_survive_input_disposal() {
     );
 }
 
+fn facet_conflicts_keep_both_original_occurrences_and_exact_values() {
+    use purrdf_shex::{ExactSchema, FacetKind as K, FacetReason, NumericLiteral, ShexError};
+    for (input, message, kind, old, new) in [
+        (
+            "<urn:S> /old/i /new/m",
+            "duplicate pattern facet",
+            K::Pattern,
+            0,
+            0,
+        ),
+        (
+            "<urn:S> LENGTH 1 length 2",
+            "duplicate length facet",
+            K::Length,
+            1,
+            2,
+        ),
+        (
+            "<urn:S> mInLeNgTh 3 MINLENGTH 4",
+            "duplicate minlength facet",
+            K::MinLength,
+            3,
+            4,
+        ),
+        (
+            "<urn:S> MAXLENGTH 5 MAXLENGTH 6",
+            "duplicate maxlength facet",
+            K::MaxLength,
+            5,
+            6,
+        ),
+        (
+            "<urn:S> TOTALDIGITS 7 TOTALDIGITS 8",
+            "duplicate totaldigits facet",
+            K::TotalDigits,
+            7,
+            8,
+        ),
+        (
+            "<urn:S> FRACTIONDIGITS 9 FRACTIONDIGITS 10",
+            "duplicate fractiondigits facet",
+            K::FractionDigits,
+            9,
+            10,
+        ),
+    ] {
+        let owned = input.to_owned();
+        let original = parse_shexc(&owned, None).unwrap_err();
+        assert_eq!(
+            ExactSchema::parse_shexc(&owned, None).unwrap_err(),
+            original
+        );
+        let ShexError::Facet { reason, at } = &original else {
+            panic!("{original}");
+        };
+        assert_eq!(
+            original.to_string(),
+            format!("ShExC syntax error at byte {at}: {message}")
+        );
+        assert_eq!(original.byte_offset(), Some(*at));
+        assert_eq!(format!("{original:?}"), original.to_string());
+        match reason.as_ref() {
+            FacetReason::Pattern { previous, incoming } => {
+                assert_eq!(&owned[previous.start..previous.end], "/old/i");
+                assert_eq!(&owned[incoming.start..incoming.end], "/new/m");
+                assert_eq!(*at, incoming.start);
+                let fields = inspect_without_allocation(reason.as_ref());
+                assert!(matches!(
+                    fields.child("previous").child("token").field("flags"),
+                    ErrorValue::Text("i")
+                ));
+                assert!(matches!(
+                    fields.child("incoming").child("token").field("pattern"),
+                    ErrorValue::Text("new")
+                ));
+            }
+            FacetReason::UnsignedDuplicate {
+                kind: actual,
+                previous,
+                incoming,
+            } => {
+                assert_eq!(*actual, kind);
+                assert_eq!((previous.value(), incoming.value()), (old, new));
+                assert_eq!(
+                    &owned[previous.token().start..previous.token().end],
+                    old.to_string()
+                );
+                assert_eq!(
+                    &owned[incoming.token().start..incoming.token().end],
+                    new.to_string()
+                );
+                assert!(previous.keyword().start < incoming.keyword().start);
+                assert_eq!(*at, owned.len());
+                let fields = inspect_without_allocation(previous);
+                assert!(
+                    matches!(fields.field("value"), ErrorValue::Unsigned(value) if value == u128::from(old))
+                );
+            }
+            _ => panic!("{original}"),
+        }
+        drop(owned);
+        let error = original.clone();
+        drop(original);
+        let fields = inspect_without_allocation(&error);
+        assert_eq!(fields.code, "shex-syntax");
+        let ErrorValue::Cause(reason) = fields.field("reason") else {
+            panic!("native cause");
+        };
+        let _ = inspect_without_allocation(reason);
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .is::<FacetReason>()
+        );
+    }
+    for (keyword, kind, first, second, datatype) in [
+        (
+            "mInInClUsIvE",
+            K::MinInclusive,
+            "5",
+            "5.0000000000000000001",
+            purrdf_xsd::XsdDatatype::Decimal,
+        ),
+        (
+            "MINEXCLUSIVE",
+            K::MinExclusive,
+            "1E999",
+            "2E999",
+            purrdf_xsd::XsdDatatype::Double,
+        ),
+        (
+            "MAXINCLUSIVE",
+            K::MaxInclusive,
+            "1.5",
+            "1.50",
+            purrdf_xsd::XsdDatatype::Decimal,
+        ),
+        (
+            "MAXEXCLUSIVE",
+            K::MaxExclusive,
+            "-0.0",
+            "0E0",
+            purrdf_xsd::XsdDatatype::Double,
+        ),
+    ] {
+        let input = format!("<urn:S> {keyword} {first} {keyword} {second}");
+        let original = parse_shexc(&input, None).unwrap_err();
+        assert_eq!(
+            ExactSchema::parse_shexc(&input, None).unwrap_err(),
+            original
+        );
+        let ShexError::Facet { reason, at } = &original else {
+            panic!("{original}");
+        };
+        let FacetReason::NumericDuplicate {
+            kind: actual,
+            previous,
+            incoming,
+        } = reason.as_ref()
+        else {
+            panic!("{original}");
+        };
+        assert_eq!(*actual, kind);
+        assert_eq!(previous.exact_lexical(), first);
+        assert_eq!(incoming.exact_lexical(), second);
+        assert_eq!(incoming.exact_datatype(), datatype);
+        assert_eq!(
+            &input[previous.keyword().start..previous.keyword().end],
+            keyword
+        );
+        assert_eq!(&input[incoming.token().start..incoming.token().end], second);
+        assert_eq!(*at, input.len());
+        let fields = inspect_without_allocation(previous);
+        assert!(
+            matches!(fields.child("exact").field("lexical"), ErrorValue::Text(value) if value == first)
+        );
+        let _ = inspect_without_allocation(previous.value());
+        let _ = inspect_without_allocation(incoming);
+        if kind == K::MinInclusive {
+            assert_eq!(*previous.value(), NumericLiteral::Integer(5));
+            assert_eq!(*incoming.value(), NumericLiteral::Integer(5));
+            assert_ne!(previous.exact_lexical(), incoming.exact_lexical());
+        }
+        if kind == K::MinExclusive {
+            assert!(
+                matches!(previous.value(), NumericLiteral::Fractional(value) if value.is_infinite())
+            );
+        }
+        drop(input);
+        let error = original.clone();
+        drop(original);
+        let fields = inspect_without_allocation(&error);
+        let ErrorValue::Cause(reason) = fields.field("reason") else {
+            panic!("native numeric evidence");
+        };
+        let _ = inspect_without_allocation(reason);
+    }
+    // Healthy neighbors admit distinct facets and preserve ordinary/exact paths.
+    for input in [
+        "<urn:S> /old/i",
+        "<urn:S> LENGTH 1 MINLENGTH 0 MAXLENGTH 2",
+        "<urn:S> TOTALDIGITS 3 FRACTIONDIGITS 2",
+        "<urn:S> MININCLUSIVE 5 MAXINCLUSIVE 5.0000000000000000001",
+    ] {
+        assert!(parse_shexc(input, None).is_ok(), "{input}");
+        assert!(ExactSchema::parse_shexc(input, None).is_ok(), "{input}");
+    }
+}
+
+fn facet_admission_keeps_native_causes_datatypes_and_first_fault() {
+    use purrdf_shex::{AdmittedNumericFacet, ExactSchema, FacetReason, NumericLiteral, ShexError};
+    use purrdf_xsd::XsdDatatype;
+    for (keyword, lexical, cause_name, message) in [
+        (
+            "mInLeNgTh",
+            "-1",
+            "invalid-digit",
+            "string facet value must be a non-negative integer",
+        ),
+        (
+            "FRACTIONDIGITS",
+            "18446744073709551616",
+            "positive-overflow",
+            "digit-count facet value must be a non-negative integer",
+        ),
+    ] {
+        let input = format!("<urn:S> {keyword} {lexical}");
+        let original = parse_shexc(&input, None).unwrap_err();
+        assert_eq!(
+            ExactSchema::parse_shexc(&input, None).unwrap_err(),
+            original
+        );
+        let ShexError::Facet { reason, at } = &original else {
+            panic!("{original}");
+        };
+        let FacetReason::Unsigned {
+            keyword: word,
+            token,
+            cause,
+            ..
+        } = reason.as_ref()
+        else {
+            panic!("{original}");
+        };
+        assert_eq!(&input[word.start..word.end], keyword);
+        assert_eq!(&input[token.start..token.end], lexical);
+        assert_eq!(*at, token.start);
+        assert_eq!(
+            original.to_string(),
+            format!("ShExC syntax error at byte {at}: {message}")
+        );
+        assert_eq!(&lexical.parse::<u64>().unwrap_err(), cause);
+        let fields = inspect_without_allocation(reason.as_ref());
+        assert!(matches!(fields.field("minimum"), ErrorValue::Unsigned(0)));
+        assert!(
+            matches!(fields.field("maximum"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(
+            matches!(fields.child("cause").child("kind").field("name"), ErrorValue::Code(value) if value == cause_name)
+        );
+        drop(input);
+        let error = original.clone();
+        drop(original);
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .source()
+                .unwrap()
+                .is::<core::num::ParseIntError>()
+        );
+        let _ = inspect_without_allocation(&error);
+    }
+    for (datatype, recognized) in [
+        (
+            "http://www.w3.org/2001/XMLSchema#string",
+            Some(XsdDatatype::String),
+        ),
+        ("urn:unknown", None),
+    ] {
+        let input = format!(
+            "PREFIX dt: <{datatype}> <urn:é> dt: FRACTIONDIGITS 2 MAXEXCLUSIVE 5.0000000000000000001 MININCLUSIVE 0 TOTALDIGITS 7 MINEXCLUSIVE -1 MAXINCLUSIVE 9"
+        );
+        let original = parse_shexc(&input, None).unwrap_err();
+        assert_eq!(
+            ExactSchema::parse_shexc(&input, None).unwrap_err(),
+            original
+        );
+        let ShexError::Facet { reason, at } = &original else {
+            panic!("{original}");
+        };
+        let FacetReason::Datatype {
+            token,
+            resolved,
+            recognized: actual,
+            facets,
+        } = reason.as_ref()
+        else {
+            panic!("{original}");
+        };
+        assert_eq!(&input[token.start..token.end], "dt:");
+        assert_eq!(resolved, datatype);
+        assert_eq!(*actual, recognized);
+        assert_eq!(facets.len(), 6);
+        assert_eq!(*at, input.len());
+        let mut previous_end = token.end;
+        for (index, facet) in facets.iter().enumerate() {
+            let fields = inspect_without_allocation(facet);
+            assert!(fields.code.starts_with("shex-facet-admitted-"));
+            match facet {
+                AdmittedNumericFacet::Range { operand, .. } => {
+                    assert!(operand.keyword().start > previous_end);
+                    previous_end = operand.token().end;
+                    if index == 1 {
+                        assert_eq!(operand.exact_lexical(), "5.0000000000000000001");
+                    }
+                    let _ = inspect_without_allocation(operand);
+                }
+                AdmittedNumericFacet::Digits { operand, .. } => {
+                    assert!(operand.keyword().start > previous_end);
+                    previous_end = operand.token().end;
+                    assert_eq!(operand.value(), if index == 0 { 2 } else { 7 });
+                }
+            }
+        }
+        assert_eq!(
+            original.to_string(),
+            format!(
+                "ShExC syntax error at byte {at}: numeric facet on non-numeric datatype <{datatype}>"
+            )
+        );
+        assert_eq!(
+            original.locate(&input).unwrap(),
+            purrdf_iri::LineIndex::new(&input).locate(&input, *at)
+        );
+        drop(input);
+        let error = original.clone();
+        drop(original);
+        let fields = inspect_without_allocation(&error);
+        let ErrorValue::Cause(reason) = fields.field("reason") else {
+            panic!("native datatype evidence");
+        };
+        let _ = inspect_without_allocation(reason);
+    }
+    // A digit-only refusal must not capture the previous constraint's exact
+    // range record: no exact bound belongs to this datatype occurrence.
+    let input = "<urn:Earlier> MININCLUSIVE 4 <urn:S> <urn:unknown> TOTALDIGITS 2";
+    let error = ExactSchema::parse_shexc(input, None).unwrap_err();
+    let ShexError::Facet { reason, .. } = &error else {
+        panic!("{error}");
+    };
+    let FacetReason::Datatype { facets, .. } = reason.as_ref() else {
+        panic!("{error}");
+    };
+    assert_eq!(facets.len(), 1);
+    assert!(
+        matches!(&facets[0], AdmittedNumericFacet::Digits { operand, .. } if operand.value() == 2)
+    );
+    // Incoming conversion precedes duplicate detection; suitability comes last.
+    for input in [
+        "<urn:S> LENGTH 1 LENGTH -1",
+        "<urn:S> <urn:unknown> TOTALDIGITS 1 TOTALDIGITS -1",
+    ] {
+        let error = parse_shexc(input, None).unwrap_err();
+        assert!(
+            matches!(error, ShexError::Facet { reason, .. } if matches!(reason.as_ref(), FacetReason::Unsigned { .. }))
+        );
+    }
+    assert!(matches!(
+        parse_shexc("<urn:S> LENGTH 1 LENGTH .", None),
+        Err(ShexError::Grammar { .. })
+    ));
+    // Ordinary range refusal stays separate; exact parsing still saturates its
+    // AST stand-in and retains the original huge bound before a duplicate.
+    let huge = "9".repeat(400);
+    let input = format!("<urn:S> MININCLUSIVE {huge} MININCLUSIVE 1");
+    assert!(matches!(
+        parse_shexc(&input, None),
+        Err(ShexError::Syntax { .. })
+    ));
+    let error = ExactSchema::parse_shexc(&input, None).unwrap_err();
+    let ShexError::Facet { reason, .. } = &error else {
+        panic!("{error}");
+    };
+    let FacetReason::NumericDuplicate { previous, .. } = reason.as_ref() else {
+        panic!("{error}");
+    };
+    assert_eq!(previous.exact_lexical(), huge);
+    assert!(matches!(previous.value(), NumericLiteral::Fractional(value) if *value == f64::MAX));
+    for input in [
+        "<urn:S> MINLENGTH 0 MAXLENGTH 18446744073709551615",
+        "<urn:S> <http://www.w3.org/2001/XMLSchema#decimal> MININCLUSIVE 0 TOTALDIGITS 2",
+        "<urn:S> <urn:unknown> LENGTH 1",
+        "<urn:S> <http://www.w3.org/2001/XMLSchema#string> /x/",
+    ] {
+        assert!(parse_shexc(input, None).is_ok(), "{input}");
+        assert!(ExactSchema::parse_shexc(input, None).is_ok(), "{input}");
+    }
+    let root = parse_shexc("IMPORT <urn:import>", None).unwrap();
+    let imported = purrdf_shex::resolve_imports(root, &|_| parse_shexc("<urn:S> LENGTH -1", None))
+        .unwrap_err();
+    let fields = inspect_without_allocation(&imported);
+    assert_eq!(fields.child("cause").code, "shex-syntax");
+    assert!(
+        std::error::Error::source(&imported)
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<core::num::ParseIntError>()
+    );
+}
+
 purrdf_testkit::harness_main!(
+    facet_conflicts_keep_both_original_occurrences_and_exact_values,
+    facet_admission_keeps_native_causes_datatypes_and_first_fault,
     schema_grammar_refusals_keep_original_tokens_and_positions,
     schema_grammar_placement_and_rich_operands_survive_input_disposal,
     actual_shape_map_keeps_original_iri_cause_after_input_disposal,

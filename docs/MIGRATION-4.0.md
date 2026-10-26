@@ -670,3 +670,18 @@ The outer `shex-syntax` identity and `at` field remain unchanged; `reason` is no
 a nested native cause with a standard error source. Human messages, byte
 coordinates and refusal order remain unchanged. Contextual, semantic and resource
 refusals still use `Syntax`; this change does not replace that remaining family.
+
+### ShExC facet conflicts and admission
+
+Duplicate facets, unsigned facet conversion and numeric datatype suitability now
+use `ShexError::Facet` with a boxed native `FacetReason`. Evidence retains both
+original occurrences and their spans, admitted values and exact numeric bound
+spellings and datatypes. Integer conversion retains its original `ParseIntError`.
+Datatype refusal carries every admitted numeric facet in original source order.
+`NumericLiteral` participates in borrowed inspection without changing AST equality;
+immutable numeric refusal operands compare floating values by their exact bits.
+
+The outer `shex-syntax` identity, unsigned `at` field, human messages and byte
+coordinates remain unchanged. Its `reason` is a nested native cause and supports
+the standard error chain. Other contextual, resource and numeric range refusals
+continue to use `Syntax`.

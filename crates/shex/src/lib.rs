@@ -124,9 +124,10 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{
-    GrammarExpectation, GrammarReason, LanguageMember, LexicalContext, LexicalReason,
-    MapExpectation, RepeatOperation, Result, SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE,
-    ShapeMapContext, ShapeMapLanguageRefusal, ShapeMapPosition, ShapeMapReason, ShexError,
+    AdmittedNumericFacet, FacetKind, FacetReason, GrammarExpectation, GrammarReason,
+    LanguageMember, LexicalContext, LexicalReason, MapExpectation, NumericFacetOperand,
+    RepeatOperation, Result, SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE, ShapeMapContext,
+    ShapeMapLanguageRefusal, ShapeMapPosition, ShapeMapReason, ShexError, UnsignedFacetOperand,
     XPathValidationError,
 };
 pub use exact::{
