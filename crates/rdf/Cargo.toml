@@ -36,6 +36,10 @@ path = "src/lib.rs"
 name = "turtle_chains"
 harness = false
 
+[[test]]
+name = "fno_reader"
+harness = false
+
 [[bench]]
 name = "turtle_chains"
 harness = false

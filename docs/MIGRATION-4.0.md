@@ -27,6 +27,24 @@ Fully decided answer, certificate and proof bytes remain unchanged. The shared
 host methods accept no stop input; native refusals retain native cancellation
 evidence without adding a new host protocol claim.
 
+## Canonical reserved-vocabulary refusals
+
+`ReservedVocabulary` now lends its original IRI and position through `iri()` and
+`position()`. Cloning shares the immutable payload and its original admission
+owner. The refusal remains readable after its source is destroyed.
+
+Sources must provide `DatasetView::reserve_owned_workspace` when an offending
+IRI requires ownership. A missing capability returns
+`CanonError::OwnedWorkspaceUnavailable`; an unknown live ceiling does not grant
+permission. Original admission and source failures remain native causes.
+Verified resident carriers explicitly provide unbounded admission.
+`check_admissible` and `check_admissible_view` now return `CanonError`, including
+physical allocation refusal. Flat boundaries retain native causes through
+`ViewCanonError::Refused(CanonError<E>)`.
+
+This admission covers the retained refusal and its publication control. It does
+not certify canonicalization scratch or successful canonical result ownership.
+
 ## Canonical Function Ontology catalogs
 
 Build `FnoCatalogInput` and pass it to `FnoCatalog::try_new`. The admitted
@@ -47,6 +65,22 @@ facts while canonical order and collision-free list identities intentionally
 change output bytes. Distinct mapping labels and function IRIs no longer merge
 through sanitization. Slice's `list_functions_catalog` and `emit_list_functions`
 now return admission results and retain their explicit language retagging.
+
+Read a catalog with `FnoCatalog::from_dataset(&view, ontology_iri)`. The ontology
+IRI is explicit; the document is the unique subject whose `dcterms:isPartOf`
+names it. The reader uses the same admission path as caller-built catalogs and
+returns boxed `FnoReadError` values carrying original field operands, strict list
+causes or source-read failures. A source failure discards the entire result.
+
+The strict profile covers the complete default graph. Every statement must be
+represented by the admitted model or its RDF lists. Named graphs, reifiers,
+annotations, disconnected outputs or child mappings, unknown properties and
+extra list-cell facts are refused. Parameters and implementations may stand
+alone. Lists have disjoint blank cells; shared `rdf:nil` represents empty lists.
+Labels and descriptions preserve literal facets. Implementation formats and
+binding names are plain strings; required flags use the exact boolean spellings
+`true` and `false`. These boundaries preserve both catalog equality after a
+write/read and graph isomorphism after a read/write.
 
 ## Caller-owned loss profiles
 

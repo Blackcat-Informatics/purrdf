@@ -191,6 +191,27 @@ The binary64 conversion row includes the inline coefficient/scale and range
 gates; ratio conversion has a separate cold frame. Both routes retain
 the original correctly rounded kernels and exact bit-pattern oracles.
 
+Inline decimal normalization tests divisibility by ten with an inverse multiply,
+rotation and bound instead of remainders. A native arithmetic-source comparison
+holds current hash/lex foundations constant and retains all 1,024 results outside
+each acknowledged instruction window. Ten fresh-process samples per row, fixed
+seeds and unchanged release/bench profiles give these median instructions/value:
+
+| Production route | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Exact decimal addition | 178.9902 | 172.1465 | -3.82% |
+| Exact decimal multiplication | 194.7314 | 187.4795 | -3.72% |
+| Public decimal multiplication | 282.2129 | 274.9600 | -2.57% |
+| Exact decimal division, scale eighteen/toward-zero | 374.5312 | 367.6816 | -1.83% |
+
+Every returned answer is checked after measurement. The other original small
+rows show no material instruction regression; all measured allocation quantities
+are unchanged. Multiplication still exceeds the frozen historical bounded source's
+170.4062 instructions/value by 10.02%. These retained-output arithmetic figures
+include a common indirect call and exclude setup, validation and destruction;
+they establish neither complete-query speed nor full bounded parity. General
+semantics execute natively; portable release builds are a separate obligation.
+
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
 running the query.

@@ -1823,6 +1823,13 @@ impl DatasetView for CompositeDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(crate::NoopReservation::owned()))
+    }
     /// The widest bound any retained source vouches for.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
         crate::dataset_view::widest_nesting_bound(

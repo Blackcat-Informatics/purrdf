@@ -145,6 +145,8 @@ use std::convert::Infallible;
 
 mod state;
 pub use state::{DatasetStateDigest, DatasetStateError};
+mod refusal;
+pub use refusal::ReservedVocabulary;
 
 use purrdf_lex::walk::WorkList;
 use sha2::{Digest, Sha256, Sha384};
@@ -514,7 +516,6 @@ pub fn try_canonicalize_view<D: DatasetView>(
         CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
     })
     .map_err(CanonError::Read)?
-    .map_err(CanonError::with_read_error)
 }
 
 /// Canonicalize a view with a caller-owned stop signal throughout preparation,
@@ -537,7 +538,6 @@ pub fn try_canonicalize_view_with_stop<D: DatasetView>(
             .run_fallible()
     })
     .map_err(CanonError::Read)?
-    .map_err(CanonError::with_read_error)
 }
 
 fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), CanonError> {
@@ -589,7 +589,6 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
         None => Ok(empty_canonicalized(CanonPresentation::Overlay)),
     })
     .map_err(CanonError::Read)?
-    .map_err(CanonError::with_read_error)
 }
 
 /// The SHA-256 [`ContentDigest`] of one named graph's canonical form, returning a
@@ -748,10 +747,11 @@ pub fn check_admissible_flat_view<D: FallibleDatasetView>(
     match checkpointed_drain(view, |v| {
         reserved_vocabulary(v, CanonScope::Dataset, CanonPresentation::FlatAssertion)
     }) {
-        Ok(None) => Ok(()),
-        Ok(Some(violation)) => Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(
+        Ok(Ok(None)) => Ok(()),
+        Ok(Ok(Some(violation))) => Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(
             violation,
         ))),
+        Ok(Err(cause)) => Err(ViewCanonError::Refused(cause)),
         Err(failure) => Err(failure.into()),
     }
 }
@@ -1037,8 +1037,9 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
 /// that out at write time is strictly better than at read time.
 ///
 /// # Errors
-/// [`ReservedVocabulary`] naming the least offending `(position, iri)`.
-pub fn check_admissible(ds: &RdfDataset) -> Result<(), ReservedVocabulary> {
+/// [`CanonError::ReservedVocabulary`] names the least offending `(position, iri)`.
+/// Owned admission or physical refusal construction can also fail.
+pub fn check_admissible(ds: &RdfDataset) -> Result<(), CanonError> {
     check_admissible_view(ds)
 }
 
@@ -1050,11 +1051,13 @@ pub fn check_admissible(ds: &RdfDataset) -> Result<(), ReservedVocabulary> {
 /// before anyone decides whether to materialize it.
 ///
 /// # Errors
-/// [`ReservedVocabulary`] naming the least offending `(position, iri)`.
+/// [`CanonError::ReservedVocabulary`] names the least offending `(position, iri)`.
+/// Owned admission or physical refusal construction can also fail.
 pub fn check_admissible_view<D: DatasetView<ReadError = Infallible>>(
     view: &D,
-) -> Result<(), ReservedVocabulary> {
-    reserved_vocabulary(view, CanonScope::Dataset, CanonPresentation::Overlay).map_or(Ok(()), Err)
+) -> Result<(), CanonError> {
+    reserved_vocabulary(view, CanonScope::Dataset, CanonPresentation::Overlay)?
+        .map_or(Ok(()), |cause| Err(CanonError::ReservedVocabulary(cause)))
 }
 
 /// The count of distinct blank nodes in `ds` (incl. blanks nested inside triple
@@ -1091,7 +1094,7 @@ pub fn try_blank_count_view<D: DatasetView>(view: &D) -> Result<u64, D::ReadErro
 
 fn blank_count_unchecked<D: DatasetView>(view: &D) -> usize {
     let mut set: BTreeSet<D::Id> = BTreeSet::new();
-    collect_components(
+    collect_components::<_, Infallible>(
         view,
         CanonScope::Dataset,
         CanonPresentation::Overlay,
@@ -1637,19 +1640,19 @@ fn lower_folded_row<D: DatasetView>(
 /// points, the per-graph scope, the admissibility sweep and the blank sweep all read
 /// the dataset through this one function, so none of them can disagree about what the
 /// input contains.
-fn collect_components<D: DatasetView>(
+fn collect_components<D: DatasetView, E>(
     ds: &D,
     scope: CanonScope<D::Id>,
     presentation: CanonPresentation,
     stop: Option<&dyn crate::StopSignal>,
-    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError>,
-) -> Result<(), CanonError> {
-    check_stop(stop)?;
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError<E>>,
+) -> Result<(), CanonError<E>> {
+    check_stop(stop).map_err(CanonError::with_read_error)?;
     let sentinels = Sentinels::of(ds);
     match scope {
         CanonScope::Dataset => {
             for q in ds.quads() {
-                check_stop(stop)?;
+                check_stop(stop).map_err(CanonError::with_read_error)?;
                 let graph_probe = graph_match_of(q.g);
                 if let Some(comp) =
                     base_quad_component(ds, scope, presentation, graph_probe, sentinels, q)
@@ -1658,17 +1661,17 @@ fn collect_components<D: DatasetView>(
                 }
             }
             for q in ds.reifier_quads() {
-                check_stop(stop)?;
+                check_stop(stop).map_err(CanonError::with_read_error)?;
                 emit_reifier_row(ds, presentation, graph_match_of(q.g), q, q.g, f)?;
             }
             for q in ds.annotation_quads() {
-                check_stop(stop)?;
+                check_stop(stop).map_err(CanonError::with_read_error)?;
                 emit_annotation_row(ds, presentation, graph_match_of(q.g), q, q.g, f)?;
             }
         }
         CanonScope::Graph(graph) => {
             for q in ds.quads_for_pattern(None, None, None, GraphMatch::Named(graph)) {
-                check_stop(stop)?;
+                check_stop(stop).map_err(CanonError::with_read_error)?;
                 // The graph slot is erased FIRST, so the fold reads the quad as this
                 // scope will emit it (see [`fold_sentinel_row`]) — but the dedup probe
                 // still needs the scope's ACTUAL graph, so it is passed separately
@@ -1687,16 +1690,16 @@ fn collect_components<D: DatasetView>(
                 }
             }
             for q in ds.reifier_quads().filter(|q| q.g == Some(graph)) {
-                check_stop(stop)?;
+                check_stop(stop).map_err(CanonError::with_read_error)?;
                 emit_reifier_row(ds, presentation, GraphMatch::Named(graph), q, None, f)?;
             }
             for q in ds.annotation_quads().filter(|q| q.g == Some(graph)) {
-                check_stop(stop)?;
+                check_stop(stop).map_err(CanonError::with_read_error)?;
                 emit_annotation_row(ds, presentation, GraphMatch::Named(graph), q, None, f)?;
             }
         }
     }
-    check_stop(stop)
+    check_stop(stop).map_err(CanonError::with_read_error)
 }
 
 /// The [`GraphMatch`] naming exactly the quads whose graph slot is `g` — [`Default`]
@@ -1745,14 +1748,14 @@ fn already_asserted<D: DatasetView>(
 /// emitted_g)` — `q.p` is already the row's real `rdf:reifies` id, so nothing is
 /// resolved or minted here. Dropped instead when [`already_asserted`] finds a base
 /// quad already spelling it (the flat dedup law).
-fn emit_reifier_row<D: DatasetView>(
+fn emit_reifier_row<D: DatasetView, E>(
     ds: &D,
     presentation: CanonPresentation,
     graph_probe: GraphMatch<D::Id>,
     q: QuadIds<D::Id>,
     emitted_g: Option<D::Id>,
-    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError>,
-) -> Result<(), CanonError> {
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError<E>>,
+) -> Result<(), CanonError<E>> {
     match presentation {
         CanonPresentation::Overlay => f(Component::Reifier {
             r: q.s,
@@ -1779,14 +1782,14 @@ fn emit_reifier_row<D: DatasetView>(
 /// [`CanonPresentation::FlatAssertion`] the ordinary quad `(q.s, q.p, q.o,
 /// emitted_g)` the row's own real predicate id already names. Dropped instead when
 /// [`already_asserted`] finds a base quad already spelling it (the flat dedup law).
-fn emit_annotation_row<D: DatasetView>(
+fn emit_annotation_row<D: DatasetView, E>(
     ds: &D,
     presentation: CanonPresentation,
     graph_probe: GraphMatch<D::Id>,
     q: QuadIds<D::Id>,
     emitted_g: Option<D::Id>,
-    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError>,
-) -> Result<(), CanonError> {
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError<E>>,
+) -> Result<(), CanonError<E>> {
     match presentation {
         CanonPresentation::Overlay => f(Component::Annotation {
             r: q.s,
@@ -2007,51 +2010,6 @@ impl std::fmt::Display for TermPosition {
     }
 }
 
-/// The input dataset carries an IRI in the profile's [`RESERVED_NAMESPACE`] somewhere
-/// other than in one of the overlay's own lowered shapes, which canonicalization
-/// refuses rather than lower alongside its own sentinels.
-///
-/// Accepting such a dataset would let a structure with DIFFERENT content canonicalize
-/// to a genuine reifier/annotation structure's bytes — an identity collision, and for
-/// a content-addressed store an identity-forgery primitive. The two exact shapes the
-/// lowering emits are the one case where the content is not different: those are
-/// folded back into the statement layer instead of refused, which is what makes
-/// canonicalization idempotent over its own output. See the module documentation for
-/// both halves of that argument, and for why the rule is refusal at the namespace
-/// rather than escaping at the two sentinel spellings.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ReservedVocabulary {
-    /// The offending IRI, in full.
-    pub iri: Box<str>,
-    /// The quad position it was found in.
-    pub position: TermPosition,
-}
-
-impl purrdf_hash::error::StructuredError for ReservedVocabulary {
-    purrdf_hash::error_visit! {
-        @record self { iri, position } => "canonical-reserved-vocabulary" {
-            "iri" => Iri(&self.iri),
-            "position" => Record(&self.position),
-        }
-    }
-}
-
-impl std::fmt::Display for ReservedVocabulary {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "the dataset carries the reserved IRI <{}> in the {} position; \
-             <{RESERVED_NAMESPACE}…> is reserved by canonicalization profile \
-             {CANON_PROFILE_ID} v{CANON_PROFILE_VERSION} for the RDF 1.2 overlay and \
-             cannot appear in an input dataset",
-            self.iri, self.position
-        )
-    }
-}
-
-impl std::error::Error for ReservedVocabulary {}
-
 /// Why canonicalization refused.
 ///
 /// Both variants are refusals of ADVERSARIAL input, and they are separate variants
@@ -2076,8 +2034,12 @@ pub enum CanonError<E = Infallible> {
     ReservedVocabulary(ReservedVocabulary),
     /// The backing dataset could not be read completely. No canonical result is returned.
     Read(E),
+    /// Original refusal from the source's owned payload admission capability.
+    OwnedAdmission(E),
     /// The caller stopped canonicalization. No canonical identity was published.
     Stopped,
+    /// The source cannot retain an owned reserved-vocabulary refusal.
+    OwnedWorkspaceUnavailable,
 }
 
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for CanonError<E> {
@@ -2087,7 +2049,9 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause) },
         ReservedVocabulary(cause) => "canonical-reserved" { "cause" => Cause(cause) },
         Read(cause) => "canonical-read" { "cause" => Cause(cause) },
+        OwnedAdmission(cause) => "canonical-owned-admission" { "cause" => Cause(cause) },
         Stopped => "canonical-stopped" {},
+        OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
     }
 }
 
@@ -2099,7 +2063,13 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::BudgetExceeded(err) => err.fmt(f),
             Self::ReservedVocabulary(err) => err.fmt(f),
             Self::Read(error) => write!(f, "dataset read failed: {error}"),
+            Self::OwnedAdmission(error) => {
+                write!(f, "canonical reserved-vocabulary admission failed: {error}")
+            }
             Self::Stopped => f.write_str("canonicalization was stopped by the caller"),
+            Self::OwnedWorkspaceUnavailable => f.write_str(
+                "canonical reserved-vocabulary refusal requires source-owned workspace admission",
+            ),
         }
     }
 }
@@ -2111,8 +2081,8 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::Storage(error) => Some(error),
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
-            Self::Read(error) => Some(error),
-            Self::Stopped => None,
+            Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
+            Self::Stopped | Self::OwnedWorkspaceUnavailable => None,
         }
     }
 }
@@ -2134,8 +2104,9 @@ impl CanonError {
             Self::Storage(error) => CanonError::Storage(error),
             Self::BudgetExceeded(error) => CanonError::BudgetExceeded(error),
             Self::ReservedVocabulary(error) => CanonError::ReservedVocabulary(error),
-            Self::Read(error) => match error {},
+            Self::Read(error) | Self::OwnedAdmission(error) => match error {},
             Self::Stopped => CanonError::Stopped,
+            Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
         }
     }
 }
@@ -2144,18 +2115,13 @@ impl CanonError {
 /// [`try_canonicalize_flat_view`], [`try_canonicalize_flat_graph_view`],
 /// [`check_admissible_flat_view`] and [`try_flat_digest_view`].
 ///
-/// Two DIFFERENT kinds of refusal, and a caller must be able to tell them apart
-/// without parsing a message. [`Refused`](Self::Refused) is exactly [`CanonError`] —
-/// the input itself is inadmissible (reserved vocabulary) or the n-degree search
-/// exhausted its budget, the same two refusals [`try_canonicalize_view`] already
-/// returns for an infallible view. [`NotReady`](Self::NotReady) is the OTHER kind
-/// entirely: [`checkpointed_drain`]'s two-checkpoint completeness law observed the
-/// view's OWN backing data at fault, either already broken before a single row was
-/// read or faulted somewhere over the run — so nothing about the DATASET was ever
-/// judged, because the view could not even be read to completion. Collapsing the two
-/// into one opaque error would make that distinction a string a caller has to parse
-/// back out of a message; keeping them apart means one obliges the caller to fix
-/// their INPUT and the other to retry or repair their VIEW.
+/// [`Refused`](Self::Refused) retains the original [`CanonError`] from a ready
+/// operation: reserved vocabulary, search exhaustion, direct owned-admission or
+/// storage failure, or missing retention capability. [`NotReady`](Self::NotReady)
+/// reports a failed source checkpoint, before or after the operation. A failed
+/// checkpoint takes precedence over an inner refusal, so no result over an
+/// incomplete read is published. These categories remain typed independently of
+/// how their native causes are rendered.
 ///
 /// [`NotReady`](Self::NotReady) carries the fault TYPED, not erased to a `String`:
 /// `error`/`evidence` are exactly [`FallibleDatasetView::Error`] /
@@ -2165,10 +2131,8 @@ impl CanonError {
 /// instead of re-deriving it from rendered text, so the audit record stays
 /// machine-readable end to end.
 ///
-/// Deliberately exhaustive (NOT `#[non_exhaustive]`), matching [`CanonError`]: a
-/// consumer that had to prepare for a hidden third variant could never write an
-/// exhaustive match, and every refusal this module's flat-presentation entry points
-/// can produce is named above.
+/// The outer checkpoint distinction is exhaustive. Inner operation refusals
+/// retain the native, non-exhaustive [`CanonError`] family.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewCanonError<E, Ev> {
     /// [`checkpointed_drain`] observed the view's backing data at fault — see
@@ -2181,9 +2145,9 @@ pub enum ViewCanonError<E, Ev> {
         /// The view's own deterministic evidence at the failure boundary.
         evidence: Ev,
     },
-    /// Canonicalization refused the input itself: reserved vocabulary, or n-degree
-    /// budget exhaustion. Exactly [`try_canonicalize_view`]'s refusals.
-    Refused(CanonError),
+    /// A ready operation returned its original algorithm, admission, storage or
+    /// capability refusal. Exactly [`try_canonicalize_view`]'s native error family.
+    Refused(CanonError<E>),
 }
 
 impl<E: std::fmt::Display, Ev: std::fmt::Debug> std::fmt::Display for ViewCanonError<E, Ev> {
@@ -2253,18 +2217,19 @@ fn reserved_in_term<D: DatasetView>(
     ds: &D,
     id: D::Id,
     stop: Option<&dyn crate::StopSignal>,
-) -> Result<Option<Box<str>>, CanonError> {
+    found: &mut impl FnMut(&str) -> Result<(), CanonError<D::ReadError>>,
+) -> Result<(), CanonError<D::ReadError>> {
     let mut held: Vec<D::Id> = Vec::new();
     let mut next = Some(id);
     while let Some(id) = next.take().or_else(|| held.pop()) {
-        check_stop(stop)?;
+        check_stop(stop).map_err(CanonError::with_read_error)?;
         let Some(guard) = ds.resolve_if_ready(id) else {
-            return Ok(None);
+            return Ok(());
         };
         match guard.term() {
             TermRef::Iri(iri) => {
                 if iri.starts_with(RESERVED_NAMESPACE) {
-                    return Ok(Some(Box::from(iri)));
+                    return found(iri);
                 }
             }
             TermRef::Literal { datatype, .. } => next = Some(datatype),
@@ -2275,7 +2240,7 @@ fn reserved_in_term<D: DatasetView>(
             TermRef::Blank { .. } => {}
         }
     }
-    Ok(None)
+    Ok(())
 }
 
 /// The view's reserved-namespace violation within `scope`, or `None` if it is
@@ -2292,9 +2257,8 @@ fn reserved_vocabulary<D: DatasetView>(
     ds: &D,
     scope: CanonScope<D::Id>,
     presentation: CanonPresentation,
-) -> Option<ReservedVocabulary> {
+) -> Result<Option<ReservedVocabulary>, CanonError<D::ReadError>> {
     reserved_vocabulary_with_stop(ds, scope, presentation, None)
-        .expect("an uncontrolled reserved-vocabulary sweep cannot stop")
 }
 
 fn reserved_vocabulary_with_stop<D: DatasetView>(
@@ -2302,9 +2266,9 @@ fn reserved_vocabulary_with_stop<D: DatasetView>(
     scope: CanonScope<D::Id>,
     presentation: CanonPresentation,
     stop: Option<&dyn crate::StopSignal>,
-) -> Result<Option<ReservedVocabulary>, CanonError> {
-    let mut worst: Option<ReservedVocabulary> = None;
-    collect_components(ds, scope, presentation, stop, &mut |comp| {
+) -> Result<Option<ReservedVocabulary>, CanonError<D::ReadError>> {
+    let mut worst: Option<refusal::RefusalBuilder<D::ReadError>> = None;
+    collect_components::<_, D::ReadError>(ds, scope, presentation, stop, &mut |comp| {
         let (s, p, o, g) = comp.slots();
         for (slot, position) in [
             (Some(s), TermPosition::Subject),
@@ -2321,20 +2285,17 @@ fn reserved_vocabulary_with_stop<D: DatasetView>(
             let Some(Slot::Term(id) | Slot::AnnotationGraph(Some(id))) = slot else {
                 continue;
             };
-            let Some(iri) = reserved_in_term(ds, id, stop)? else {
-                continue;
-            };
-            let found = ReservedVocabulary { iri, position };
-            if worst
-                .as_ref()
-                .is_none_or(|w| (found.position, &found.iri) < (w.position, &w.iri))
-            {
-                worst = Some(found);
-            }
+            reserved_in_term(ds, id, stop, &mut |iri| match &mut worst {
+                Some(builder) => builder.consider(iri, position),
+                None => {
+                    worst = Some(refusal::RefusalBuilder::new(ds, iri, position)?);
+                    Ok(())
+                }
+            })?;
         }
         Ok(())
     })?;
-    Ok(worst)
+    worst.map(refusal::RefusalBuilder::finish).transpose()
 }
 
 impl<'a, D: DatasetView> CanonState<'a, D> {
@@ -2368,7 +2329,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn collect_incidence(&mut self) -> Result<(), CanonError> {
         let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
         let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
-        collect_components(
+        collect_components::<_, Infallible>(
             self.ds,
             self.scope,
             self.presentation,
@@ -2409,9 +2370,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// is deliberate: a dataset that is both inadmissible and pathologically
     /// symmetric must be refused for the reason that makes it dangerous, and it
     /// must be refused without spending the poison budget deciding so.
-    fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError> {
+    fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
         let canonical = self.issue_labels()?;
-        let nquads = canonical.serialize_canonical()?;
+        let nquads = canonical
+            .serialize_canonical()
+            .map_err(CanonError::with_read_error)?;
         let presentation = canonical.presentation;
         let labels = canonical.canonical.issued;
         Ok(Canonicalized {
@@ -2422,15 +2385,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
-    fn issue_labels(mut self) -> Result<Self, CanonError> {
-        self.check_stop()?;
+    fn issue_labels(mut self) -> Result<Self, CanonError<D::ReadError>> {
+        self.check_stop().map_err(CanonError::with_read_error)?;
         if let Some(violation) =
             reserved_vocabulary_with_stop(self.ds, self.scope, self.presentation, self.stop)?
         {
             return Err(CanonError::ReservedVocabulary(violation));
         }
-        self.collect_incidence()?;
-        self.run_inner()?;
+        self.collect_incidence()
+            .map_err(CanonError::with_read_error)?;
+        self.run_inner().map_err(CanonError::with_read_error)?;
         Ok(self)
     }
 
@@ -2799,7 +2763,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             issuer: &self.canonical,
         };
         let mut lines: BTreeSet<String> = BTreeSet::new();
-        collect_components(
+        collect_components::<_, Infallible>(
             self.ds,
             self.scope,
             self.presentation,
@@ -3233,8 +3197,12 @@ mod tests {
             let ds = b.freeze().expect("valid");
             match try_canonicalize(&ds) {
                 Err(CanonError::ReservedVocabulary(err)) => {
-                    assert_eq!(err.position, position, "position must be reported exactly");
-                    assert_eq!(&*err.iri, probe);
+                    assert_eq!(
+                        err.position(),
+                        position,
+                        "position must be reported exactly"
+                    );
+                    assert_eq!(err.iri(), probe);
                 }
                 other => panic!("{position:?} must be refused; got {other:?}"),
             }
@@ -3249,8 +3217,8 @@ mod tests {
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
-                assert_eq!(err.position, TermPosition::Object);
-                assert_eq!(&*err.iri, sentinel);
+                assert_eq!(err.position(), TermPosition::Object);
+                assert_eq!(err.iri(), sentinel);
             }
             other => panic!("a nested reserved IRI must be refused; got {other:?}"),
         }
@@ -3304,8 +3272,8 @@ mod tests {
             // its IRI ("zzz") sorts after the object's ("aaa") — position is the
             // primary key, which is what makes the answer independent of both orders.
             CanonError::ReservedVocabulary(err) => {
-                assert_eq!(err.position, TermPosition::Subject);
-                assert_eq!(&*err.iri, "urn:purrdf:rdfc:zzz");
+                assert_eq!(err.position(), TermPosition::Subject);
+                assert_eq!(err.iri(), "urn:purrdf:rdfc:zzz");
             }
             other => panic!("expected a reserved-vocabulary refusal; got {other:?}"),
         }
@@ -3359,7 +3327,8 @@ mod tests {
         let screened = check_admissible(&dirty).expect_err("inadmissible");
         match try_canonicalize(&dirty) {
             Err(CanonError::ReservedVocabulary(err)) => assert_eq!(
-                err, screened,
+                CanonError::ReservedVocabulary(err),
+                screened,
                 "screening and canonicalization must name the same violation"
             ),
             other => panic!("expected a refusal; got {other:?}"),
@@ -3668,8 +3637,8 @@ mod tests {
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
-                assert_eq!(&*err.iri, SENTINEL_REIFIES);
-                assert_eq!(err.position, TermPosition::Predicate);
+                assert_eq!(err.iri(), SENTINEL_REIFIES);
+                assert_eq!(err.position(), TermPosition::Predicate);
             }
             other => panic!("a non-triple object must still be refused; got {other:?}"),
         }
@@ -3698,7 +3667,7 @@ mod tests {
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
-                assert_eq!(err.position, TermPosition::Object);
+                assert_eq!(err.position(), TermPosition::Object);
             }
             other => panic!("the sentinel in object position must refuse; got {other:?}"),
         }
@@ -3728,8 +3697,8 @@ mod tests {
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
-                assert_eq!(&*err.iri, "urn:purrdf:rdfc:hidden");
-                assert_eq!(err.position, TermPosition::Object);
+                assert_eq!(err.iri(), "urn:purrdf:rdfc:hidden");
+                assert_eq!(err.position(), TermPosition::Object);
             }
             other => panic!("a reserved IRI inside a folded row must refuse; got {other:?}"),
         }
@@ -3743,8 +3712,8 @@ mod tests {
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
-                assert_eq!(&*err.iri, "urn:purrdf:rdfc:hidden");
-                assert_eq!(err.position, TermPosition::Predicate);
+                assert_eq!(err.iri(), "urn:purrdf:rdfc:hidden");
+                assert_eq!(err.position(), TermPosition::Predicate);
             }
             other => panic!("a reserved annotation predicate must refuse; got {other:?}"),
         }
@@ -4442,7 +4411,7 @@ mod tests {
         /// invocation rather than rendering and deduplicating text.
         fn component_count(ds: &RdfDataset) -> usize {
             let mut n = 0;
-            collect_components(
+            collect_components::<_, Infallible>(
                 ds,
                 CanonScope::Dataset,
                 CanonPresentation::FlatAssertion,
@@ -4935,7 +4904,7 @@ mod tests {
         /// function.
         fn component_count(ds: &RdfDataset) -> usize {
             let mut n = 0;
-            collect_components(
+            collect_components::<_, Infallible>(
                 ds,
                 CanonScope::Dataset,
                 CanonPresentation::FlatAssertion,
@@ -5044,7 +5013,7 @@ mod tests {
 
         match try_canonicalize_flat_view(&*ds, CanonHash::Sha256) {
             Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
-                assert_eq!(&*err.iri, SENTINEL_REIFIES);
+                assert_eq!(err.iri(), SENTINEL_REIFIES);
             }
             other => panic!("expected a typed reserved-vocabulary refusal; got {other:?}"),
         }
