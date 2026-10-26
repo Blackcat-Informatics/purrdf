@@ -524,6 +524,30 @@ fn inline_decimal_normalization_preserves_boundary_products() {
             assert_eq!(constructed.scale(), product.scale());
         }
     }
+
+    // Exact products cross the signed-word fast path, checked i128 path and
+    // spilled product path without changing canonical coefficient or scale.
+    let min_word = i128::from(i64::MIN);
+    let max_word = i128::from(i64::MAX);
+    for (left, right, scale) in [
+        (min_word, min_word, 0),
+        (min_word, max_word, 1),
+        (max_word, max_word, 20),
+        (min_word - 1, max_word, 38),
+        (max_word + 1, min_word, 2),
+        (i128::MAX, 10, 1),
+    ] {
+        let left = Decimal::new(Integer::from_i128(left), scale);
+        let right = Decimal::from_integer(Integer::from_i128(right));
+        let expected = oracle(&left.canonical_lexical()).mul(&oracle(&right.canonical_lexical()));
+        let product = left.try_mul(&right).expect("representable product scale");
+        assert_same(
+            &product.canonical_lexical(),
+            &expected,
+            "word-width product",
+        )
+        .expect("exact product across the machine-word boundary");
+    }
 }
 
 #[test]

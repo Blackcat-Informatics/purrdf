@@ -1016,7 +1016,7 @@ impl Decimal {
         if value == 0 {
             return Self::ZERO;
         }
-        let has_trailing_zero = divisible_by_ten(value.unsigned_abs());
+        let has_trailing_zero = divide_by_ten_exact(value.unsigned_abs()).is_some();
         if scale == 0 || !has_trailing_zero {
             return Self {
                 unscaled: Integer::from_i128(value),
@@ -1687,10 +1687,16 @@ fn mul_parts_admitted_using(
     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<Decimal, super::ExactOperationError> {
     let scale = ls.checked_add(rs).ok_or(ExactError::ScaleOverflow)?;
-    if let (Some(a), Some(b)) = (left.as_i128(), right.as_i128())
-        && let Some(product) = a.checked_mul(b)
-    {
-        return Ok(Decimal::from_small(product, scale));
+    if let (Some(a), Some(b)) = (left.as_i128(), right.as_i128()) {
+        let product = if let (Ok(a), Ok(b)) = (i64::try_from(a), i64::try_from(b)) {
+            // Widen before multiplication: every signed 64-bit product fits i128.
+            Some(i128::from(a) * i128::from(b))
+        } else {
+            a.checked_mul(b)
+        };
+        if let Some(product) = product {
+            return Ok(Decimal::from_small(product, scale));
+        }
     }
     admit(left.operation_layout(right, cost::IntegerOperation::Multiply)?)?;
     let product = left.mul_using(right, storage)?;
@@ -2126,13 +2132,18 @@ const POW10: [u128; 39] = {
     table
 };
 
-/// Divisibility by ten over the full coefficient without division. Multiplying
+/// Exact division by ten over the full coefficient. Multiplying
 /// by the inverse of five modulo `2^128` maps every multiple of ten to an even
 /// value `2*k`. Rotation rejects odd values (their high bit exceeds the bound)
 /// and halves even ones. The bound ensures `10*k` fits, excluding modular wraps.
-const fn divisible_by_ten(x: u128) -> bool {
+const fn divide_by_ten_exact(x: u128) -> Option<u128> {
     const INVERSE_FIVE: u128 = 0xcccc_cccc_cccc_cccc_cccc_cccc_cccc_cccd;
-    x.wrapping_mul(INVERSE_FIVE).rotate_right(1) <= u128::MAX / 10
+    let quotient = x.wrapping_mul(INVERSE_FIVE).rotate_right(1);
+    if quotient <= u128::MAX / 10 {
+        Some(quotient)
+    } else {
+        None
+    }
 }
 
 /// `magnitude` with up to `limit` trailing decimal zeros removed, and how many
@@ -2160,14 +2171,12 @@ fn strip_zeros(magnitude: u128, limit: u32) -> (u128, u32) {
         return (u128::from(small), removed);
     }
     let mut value = magnitude;
-    while removed < limit && value != 0 && divisible_by_ten(value) {
-        value /= 10;
+    while removed < limit && value != 0 {
+        let Some(quotient) = divide_by_ten_exact(value) else {
+            break;
+        };
+        value = quotient;
         removed += 1;
-    }
-    if removed > 0 {
-        // Back in u64 range, the rest strips cheaply.
-        let (value, more) = strip_zeros(value, limit - removed);
-        return (value, removed + more);
     }
     (value, removed)
 }
