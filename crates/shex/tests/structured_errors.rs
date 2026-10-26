@@ -1758,7 +1758,382 @@ fn facet_admission_keeps_native_causes_datatypes_and_first_fault() {
     );
 }
 
+fn shexj_materialization_retains_native_members_and_grammar() {
+    use purrdf_shex::{ExactSchema, JsonMemberReason, ShexError};
+    // Materialization admission and grammar use the public JSON ingress,
+    // without cursor or malformed native Number fabrication.
+    for (input, code, message) in [
+        ("[]", "shexj-object", "Schema: expected a JSON object"),
+        (
+            r#"{"type":"Other"}"#,
+            "shexj-type",
+            "Schema: expected type \"Schema\", found \"Other\"",
+        ),
+        (
+            r#"{"type":"Schema","startActs":[{"type":"SemAct"}]}"#,
+            "shexj-missing",
+            "SemAct: missing \"name\"",
+        ),
+        (
+            r#"{"type":"Schema","startActs":[{"type":"SemAct","name":"urn:a","code":7}]}"#,
+            "shexj-member",
+            "SemAct: \"code\" must be a string",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","length":-0}}"#,
+            "shexj-member",
+            "NodeConstraint: \"length\" must be a non-negative integer",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","minlength":false}}"#,
+            "shexj-member",
+            "NodeConstraint: \"minlength\" must be a number",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","expression":{"type":"EachOf","max":1.0,"expressions":[]}}}"#,
+            "shexj-member",
+            "EachOf/OneOf: \"max\" must be an integer",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","expression":{"type":"TripleConstraint","predicate":"urn:p","min":null}}}"#,
+            "shexj-member",
+            "TripleConstraint: \"min\" must be a number",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","closed":null}}"#,
+            "shexj-member",
+            "Shape: \"closed\" must be a boolean",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","mininclusive":"NaN"}}"#,
+            "shexj-member",
+            "NodeConstraint: \"mininclusive\" must be a number",
+        ),
+        (
+            r#"{"type":"Schema","shapes":null}"#,
+            "shexj-member",
+            "Schema: \"shapes\" must be an array",
+        ),
+        (
+            r#"{"type":"Schema","z":{"b":[1.50,true],"a":null},"a":0}"#,
+            "shexj-unknown-member",
+            "Schema: unknown key \"z\"",
+        ),
+        (
+            r#"{"type":"Schema","imports":["urn:i",{"x":true}]}"#,
+            "shexj-entry",
+            "Schema: imports entries must be strings",
+        ),
+        (
+            r#"{"type":"Schema","shapes":[false]}"#,
+            "shexj-object",
+            "shapes entry: expected a JSON object",
+        ),
+        (
+            r#"{"type":"Schema","shapes":[{"id":7,"type":"Shape"}]}"#,
+            "shexj-identifier",
+            "shapes entry: missing string \"id\"",
+        ),
+        (
+            r#"{"type":"Schema","start":null}"#,
+            "shexj-discriminator",
+            "shapeExpr: missing \"type\" discriminator",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"ShapeAnd"}}"#,
+            "shexj-missing",
+            "ShapeAnd: missing \"shapeExprs\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"ShapeNot"}}"#,
+            "shexj-missing",
+            "ShapeNot: missing \"shapeExpr\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Other"}}"#,
+            "shexj-unknown-type",
+            "shapeExpr: unknown type \"Other\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"type":"IriStemRange","stem":3}]}}"#,
+            "shexj-stem",
+            "IriStemRange: stem must be a string or Wildcard",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"type":"IriStemRange"}]}}"#,
+            "shexj-missing",
+            "IriStemRange: missing \"stem\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"type":"LiteralStemRange"}]}}"#,
+            "shexj-missing",
+            "LiteralStemRange: missing \"stem\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"type":"LanguageStemRange"}]}}"#,
+            "shexj-missing",
+            "LanguageStemRange: missing \"stem\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","extra":["urn:p",false]}}"#,
+            "shexj-entry",
+            "Shape: extra entries must be strings",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","expression":false}}"#,
+            "shexj-discriminator",
+            "tripleExpr: missing \"type\" discriminator",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","expression":{"type":"OneOf"}}}"#,
+            "shexj-missing",
+            "OneOf: missing \"expressions\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","expression":{"type":"Other"}}}"#,
+            "shexj-unknown-type",
+            "tripleExpr: unknown type \"Other\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"Shape","annotations":[{"type":"Annotation","predicate":"urn:p"}]}}"#,
+            "shexj-missing",
+            "Annotation: missing \"object\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","nodeKind":"other"}}"#,
+            "shexj-node-kind",
+            "NodeConstraint: unknown nodeKind \"other\"",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"type":"LiteralStemRange","stem":false}]}}"#,
+            "shexj-stem",
+            "LiteralStemRange: stem must be a string or Wildcard",
+        ),
+        (
+            r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"type":"LanguageStemRange","stem":{"type":"Other"}}]}}"#,
+            "shexj-type",
+            "LanguageStemRange: expected type \"Wildcard\", found \"Other\"",
+        ),
+    ] {
+        let owned = input.to_owned();
+        let original = purrdf_shex::parse_shexj(&owned, None).unwrap_err();
+        assert_eq!(
+            ExactSchema::parse_shexj(&owned, None).unwrap_err(),
+            original
+        );
+        assert_eq!(original.to_string(), format!("ShExJ error: {message}"));
+        assert_eq!(format!("{original:?}"), original.to_string());
+        assert_eq!(original.byte_offset(), None);
+        assert_eq!(original.locate(&owned), None);
+        drop(owned);
+        let error = original.clone();
+        drop(original);
+        let fields = inspect_without_allocation(&error);
+        assert_eq!(fields.code, "shex-json");
+        let ErrorValue::Cause(native) = fields.field("reason") else {
+            panic!("native materialization reason");
+        };
+        let fields = inspect_without_allocation(native);
+        assert_eq!(fields.code, code, "{input}");
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .is::<JsonMemberReason>()
+        );
+        let ShexError::JsonMember(reason) = &error else {
+            panic!("native member variant");
+        };
+        match reason.as_ref() {
+            JsonMemberReason::Member {
+                member,
+                expected,
+                offered,
+                ..
+            } => {
+                let _ = inspect_without_allocation(member);
+                let _ = inspect_without_allocation(expected);
+                let offered_fields = inspect_without_allocation(offered);
+                assert_eq!(
+                    offered_fields.child("value").code,
+                    match offered.value() {
+                        purrdf_lex::json::Value::Null => "json-null",
+                        purrdf_lex::json::Value::Bool(_) => "json-boolean",
+                        purrdf_lex::json::Value::Number(_) => "json-number",
+                        _ => "json-string",
+                    }
+                );
+            }
+            JsonMemberReason::Entry { index, .. } => assert_eq!(*index, 1),
+            JsonMemberReason::Type { expected, .. } => {
+                let _ = inspect_without_allocation(expected);
+            }
+            JsonMemberReason::Discriminator { offered, .. } => {
+                let _ = inspect_without_allocation(offered.value());
+            }
+            _ => {}
+        }
+    }
+    // Healthy counterparts span the same object/member/type and value paths.
+    for input in [
+        r#"{"type":"Schema","@context":null}"#,
+        r#"{"type":"Schema","imports":["urn:i"],"startActs":[{"type":"SemAct","name":"urn:a","code":"7"}]}"#,
+        r#"{"type":"Schema","shapes":[{"id":"urn:S","type":"Shape","closed":false,"extra":["urn:p"]}]}"#,
+        r#"{"type":"Schema","start":{"type":"ShapeAnd","shapeExprs":[{"type":"ShapeOr","shapeExprs":[{"type":"ShapeExternal"}]}]}}"#,
+        r#"{"type":"Schema","start":{"type":"ShapeNot","shapeExpr":{"type":"ShapeExternal"}}}"#,
+        r#"{"type":"Schema","start":{"type":"NodeConstraint","nodeKind":"literal","length":0,"minlength":0,"maxlength":18446744073709551615,"mininclusive":1e999,"maxinclusive":1.5,"values":[{"type":"IriStemRange","stem":{"type":"Wildcard"},"exclusions":["urn:x"]},{"type":"LiteralStemRange","stem":"x"},{"type":"LanguageStemRange","stem":""},{"value":"v","type":"urn:custom-datatype"}]}}"#,
+        r#"{"type":"Schema","start":{"type":"Shape","expression":{"type":"EachOf","min":-0,"max":-1,"expressions":[{"type":"OneOf","expressions":[{"type":"TripleConstraint","predicate":"urn:p","min":-2,"max":9223372036854775807}]}]},"annotations":[{"type":"Annotation","predicate":"urn:a","object":"urn:b"}]}}"#,
+    ] {
+        assert!(purrdf_shex::parse_shexj(input, None).is_ok(), "{input}");
+        assert!(ExactSchema::parse_shexj(input, None).is_ok(), "{input}");
+    }
+}
+
+fn shexj_rejected_values_keep_depth_spelling_priority_and_numeric_profiles() {
+    use purrdf_lex::json::{self, Value};
+    use purrdf_shex::{
+        ExactSchema, JsonContext, JsonMember, JsonMemberReason, JsonType, NumericLiteral, ShexError,
+    };
+    let input = format!(
+        r#"{{"type":"Schema","start":{{"type":"NodeConstraint","mininclusive":{}}}}}"#,
+        "9".repeat(400)
+    );
+    let error = purrdf_shex::parse_shexj(&input, None).unwrap_err();
+    let ShexError::JsonMember(reason) = &error else {
+        panic!("{error}");
+    };
+    let JsonMemberReason::NumericRange {
+        context,
+        member,
+        offered,
+        converted,
+    } = reason.as_ref()
+    else {
+        panic!("numeric range");
+    };
+    assert_eq!(*context, JsonContext::Type(JsonType::NodeConstraint));
+    assert_eq!(*member, JsonMember::Mininclusive);
+    assert_eq!(*converted, f64::INFINITY.to_bits());
+    assert_eq!(
+        offered.value().as_number().unwrap().lexeme(),
+        "9".repeat(400)
+    );
+    assert_eq!(
+        error.to_string(),
+        "ShExJ error: NodeConstraint: \"mininclusive\" out of range"
+    );
+    let _ = inspect_without_allocation(reason.as_ref());
+    let exact = ExactSchema::parse_shexj(&input, None).unwrap();
+    let purrdf_shex::ShapeExpr::Node(node) = exact.schema().start.as_deref().unwrap() else {
+        panic!("exact node");
+    };
+    assert!(
+        matches!(node.mininclusive, Some(NumericLiteral::Fractional(value)) if value == f64::MAX)
+    );
+    drop(exact);
+    drop(input);
+    let cloned = error.clone();
+    drop(error);
+    let fields = inspect_without_allocation(&cloned);
+    let ErrorValue::Cause(reason) = fields.field("reason") else {
+        panic!("owned numeric cause");
+    };
+    assert_eq!(
+        inspect_without_allocation(reason).code,
+        "shexj-numeric-range"
+    );
+
+    // The unknown member's whole native payload survives source and DOM drop.
+    // Its original member order and number spelling remain observable.
+    let value = format!(
+        r#"{{"b":1.50,"a":{}true{}}}"#,
+        "[".repeat(60),
+        "]".repeat(60)
+    );
+    let input = format!(r#"{{"type":"Schema","first":{value},"second":0}}"#);
+    let original = purrdf_shex::parse_shexj(&input, None).unwrap_err();
+    let expected = json::read(&value).unwrap();
+    drop(input);
+    drop(value);
+    let error = original.clone();
+    drop(original);
+    let ShexError::JsonMember(reason) = &error else {
+        panic!("owned member");
+    };
+    let JsonMemberReason::Unknown { name, offered, .. } = reason.as_ref() else {
+        panic!("unknown member");
+    };
+    assert_eq!(name, "first");
+    assert!(offered.value().same_text(&expected));
+    let Value::Object(object) = offered.value() else {
+        panic!("original object");
+    };
+    let fields = inspect_without_allocation(offered.value());
+    assert_eq!(fields.code, "json-object");
+    assert_eq!(
+        object.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["b", "a"]
+    );
+    assert_eq!(
+        object.get("b").unwrap().as_number().unwrap().lexeme(),
+        "1.50"
+    );
+    let mut nested = object.get("a").unwrap();
+    for _ in 0..60 {
+        let _ = inspect_without_allocation(nested);
+        nested = &nested.as_array().unwrap()[0];
+    }
+    assert_eq!(nested, &Value::Bool(true));
+    drop(expected);
+    drop(error);
+
+    // Read-before-base-before-schema priority and the existing typed families.
+    assert!(matches!(
+        purrdf_shex::parse_shexj("{", Some("bad base")),
+        Err(ShexError::JsonRead(_))
+    ));
+    assert!(matches!(
+        purrdf_shex::parse_shexj("[]", Some("bad base")),
+        Err(ShexError::Iri { .. })
+    ));
+    let id_first = r#"{"type":"Schema","shapes":[{"id":"relative","type":"Other"}]}"#;
+    assert!(matches!(
+        purrdf_shex::parse_shexj(id_first, None),
+        Err(ShexError::Iri { .. })
+    ));
+    let language_first = r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"value":"v","language":"en-","unknown":true}]}}"#;
+    assert!(matches!(
+        purrdf_shex::parse_shexj(language_first, None),
+        Err(ShexError::LanguageTag { .. })
+    ));
+    let child_first =
+        r#"{"type":"Schema","start":{"type":"ShapeNot","shapeExpr":null,"unknown":true}}"#;
+    let error = purrdf_shex::parse_shexj(child_first, None).unwrap_err();
+    assert!(
+        matches!(error, ShexError::JsonMember(reason) if matches!(reason.as_ref(), JsonMemberReason::Discriminator { .. }))
+    );
+    // Unknown value-set types are literal datatype IRIs, not unknown tags.
+    assert!(purrdf_shex::parse_shexj(r#"{"type":"Schema","start":{"type":"NodeConstraint","values":[{"value":"v","type":"urn:datatype"}]}}"#, None).is_ok());
+    let root = parse_shexc("IMPORT <urn:import>", None).unwrap();
+    let imported = purrdf_shex::resolve_imports(root, &|_| {
+        purrdf_shex::parse_shexj(r#"{"type":"Schema","shapes":null}"#, None)
+    })
+    .unwrap_err();
+    assert_eq!(
+        inspect_without_allocation(&imported).child("cause").code,
+        "shex-json"
+    );
+    assert!(
+        std::error::Error::source(&imported)
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<JsonMemberReason>()
+    );
+}
+
 purrdf_testkit::harness_main!(
+    shexj_materialization_retains_native_members_and_grammar,
+    shexj_rejected_values_keep_depth_spelling_priority_and_numeric_profiles,
     facet_conflicts_keep_both_original_occurrences_and_exact_values,
     facet_admission_keeps_native_causes_datatypes_and_first_fault,
     schema_grammar_refusals_keep_original_tokens_and_positions,

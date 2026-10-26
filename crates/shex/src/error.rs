@@ -9,6 +9,10 @@
 
 use core::fmt;
 
+mod member;
+pub use member::{
+    JsonContext, JsonExpectation, JsonMember, JsonMemberReason, JsonOffered, JsonType,
+};
 mod facet;
 pub use facet::{
     AdmittedNumericFacet, FacetKind, FacetReason, NumericFacetOperand, UnsignedFacetOperand,
@@ -83,6 +87,8 @@ pub enum ShexError {
         /// The underlying resolution failure.
         reason: purrdf_iri::IriError,
     },
+    /// A native refusal from ShExJ schema materialization.
+    JsonMember(Box<JsonMemberReason>),
     /// The shared JSON reader's original ShExJ ingress refusal, including its
     /// native kind, byte offset and nested lexical or storage fields.
     JsonRead(purrdf_lex::json::Error),
@@ -141,6 +147,7 @@ impl purrdf_hash::error::StructuredError for ShexError {
             "member" => Record(member), "value" => Text(value),
             "profile" => Code(SHEXJ_LANGUAGE_POLICY), "cause" => Cause(cause)
         },
+        JsonMember(reason) => "shex-json" { "reason" => Cause(&**reason) },
         Shexj(reason) => "shex-json" { "reason" => Text(reason) },
         Import { iri, cause } => "shex-import" { "iri" => Iri(iri), "cause" => Cause(&**cause) },
         ImportConflict(label) => "shex-import-conflict" { "label" => Text(label) },
@@ -231,6 +238,7 @@ impl ShexError {
             | Self::ShapeMapSyntax { at, .. } => Some(*at),
             Self::Iri { .. }
             | Self::StackMargin { .. }
+            | Self::JsonMember(_)
             | Self::JsonRead(_)
             | Self::LanguageTag { .. }
             | Self::Shexj(_)
@@ -290,6 +298,7 @@ impl fmt::Display for ShexError {
                 "ShExJ error: {member}: malformed language tag {value:?}: {cause} [{}]",
                 cause.diagnostic_code()
             ),
+            Self::JsonMember(reason) => write!(f, "ShExJ error: {reason}"),
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
             Self::Import { iri, cause } => write!(f, "unresolved IMPORT <{iri}>: {cause}"),
             Self::ImportConflict(label) => {
@@ -315,6 +324,7 @@ purrdf_lex::error_source!(ShexError => {
     Self::Facet { reason, .. } => &**reason,
     Self::Grammar { reason, .. } => &**reason,
     Self::ShapeMapSyntax { reason, .. } => reason,
+    Self::JsonMember(reason) => &**reason,
     Self::JsonRead(cause) => cause,
     Self::LanguageTag { cause, .. } => cause,
     Self::Lex { reason, .. } => reason,
