@@ -16,7 +16,7 @@
 //!   `IriStem`/`IriStemRange`/`LiteralStem`/…/`Language`/`Wildcard` family.
 //!
 //! Deserialization is strict: unknown keys, malformed discriminators and
-//! type-mismatched values are typed [`ShexError::Shexj`] failures, never
+//! type-mismatched values are typed [`ShexError::JsonMember`] failures, never
 //! silently ignored — this is what lets the conformance harness catch
 //! ShEx 2.next constructs in a 2.1 corpus.
 //!
@@ -74,7 +74,11 @@ use crate::ast::{
     NumericLiteral, ObjectLiteral, ObjectValue, Schema, SemAct, Shape, ShapeDecl, ShapeExpr,
     StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
-use crate::error::{LanguageMember, Result, ShexError};
+use crate::error::{
+    JsonContext as C, JsonExpectation as E, JsonMember as M, JsonMemberReason, JsonOffered,
+    JsonType as T, LanguageMember, Result, ShexError,
+};
+use purrdf_lex::json::record::Record;
 
 /// The canonical `@context` IRI emitted on serialized schemas.
 pub const SHEX_CONTEXT: &str = "http://www.w3.org/ns/shex.jsonld";
@@ -511,145 +515,159 @@ fn annotation_to_value(annotation: &Annotation) -> Value {
 
 // ── deserialization (Value → AST) ────────────────────────────────────────────
 
-/// A strict object reader: every key must be consumed, or the read fails.
+fn refusal(reason: JsonMemberReason) -> ShexError {
+    ShexError::JsonMember(Box::new(reason))
+}
+
+fn missing(context: C, member: M) -> ShexError {
+    refusal(JsonMemberReason::Missing { context, member })
+}
+
+fn wrong_member(context: C, member: M, expected: E, value: &Value) -> ShexError {
+    refusal(JsonMemberReason::Member {
+        context,
+        member,
+        expected,
+        offered: JsonOffered::capture(value),
+    })
+}
+
+/// ShExJ's member profile over the shared strict record law. Explicit null
+/// remains a present value: optional fields use raw(), never optional().
 struct Obj<'a> {
     map: &'a Object,
-    taken: Vec<&'a str>,
-    what: &'static str,
+    record: Record<'a>,
+    what: C,
 }
 
 impl<'a> Obj<'a> {
-    fn new(value: &'a Value, what: &'static str) -> Result<Self> {
+    fn new(value: &'a Value, what: C) -> Result<Self> {
+        let record = Record::new(value, "ShExJ object").map_err(|cause| {
+            refusal(JsonMemberReason::Object {
+                context: what,
+                offered: JsonOffered::capture(value),
+                cause,
+            })
+        })?;
+        // The shared record constructor has already validated the object kind.
         let map = value
             .as_object()
-            .ok_or_else(|| ShexError::shexj(format!("{what}: expected a JSON object")))?;
-        Ok(Self {
-            map,
-            taken: Vec::new(),
-            what,
-        })
+            .expect("Record::new validated the object kind");
+        Ok(Self { map, record, what })
     }
 
-    fn typed(value: &'a Value, expected: &str, what: &'static str) -> Result<Self> {
+    fn typed(value: &'a Value, expected: T, what: C) -> Result<Self> {
         let mut obj = Self::new(value, what)?;
-        let ty = obj.take_str("type")?;
-        if ty != expected {
-            return Err(ShexError::shexj(format!(
-                "{what}: expected type {expected:?}, found {ty:?}"
-            )));
+        let ty = obj.take_str(M::Type)?;
+        if ty != expected.name() {
+            return Err(refusal(JsonMemberReason::Type {
+                context: what,
+                expected,
+                found: ty,
+            }));
         }
         Ok(obj)
     }
 
-    fn take(&mut self, key: &'static str) -> Option<&'a Value> {
-        let v = self.map.get(key)?;
-        self.taken.push(key);
-        Some(v)
+    fn take(&mut self, key: M) -> Result<Option<&'a Value>> {
+        // Keep absent optional fields out of the bookkeeping buffer, as the
+        // original ShExJ reader did. Explicit null is still a present value.
+        if self.map.get(key.name()).is_none() {
+            return Ok(None);
+        }
+        // Public ingress enforces unique members. Forward any native record
+        // refusal intact rather than hiding an unexpected bookkeeping failure.
+        self.record.raw(key.name()).map_err(|cause| {
+            refusal(JsonMemberReason::Record {
+                context: self.what,
+                cause,
+            })
+        })
     }
 
-    fn take_str(&mut self, key: &'static str) -> Result<String> {
+    fn take_str(&mut self, key: M) -> Result<String> {
         self.take_str_opt(key)?
-            .ok_or_else(|| ShexError::shexj(format!("{}: missing {key:?}", self.what)))
+            .ok_or_else(|| missing(self.what, key))
     }
 
-    fn take_str_opt(&mut self, key: &'static str) -> Result<Option<String>> {
-        match self.take(key) {
+    fn take_str_opt(&mut self, key: M) -> Result<Option<String>> {
+        match self.take(key)? {
             None => Ok(None),
             Some(Value::String(s)) => Ok(Some(s.clone())),
-            Some(_) => Err(ShexError::shexj(format!(
-                "{}: {key:?} must be a string",
-                self.what
-            ))),
+            Some(value) => Err(wrong_member(self.what, key, E::String, value)),
         }
     }
 
-    fn take_u64_opt(&mut self, key: &'static str) -> Result<Option<u64>> {
-        match self.take(key) {
+    fn take_u64_opt(&mut self, key: M) -> Result<Option<u64>> {
+        match self.take(key)? {
             None => Ok(None),
-            Some(Value::Number(n)) => n.as_u64().map(Some).ok_or_else(|| {
-                ShexError::shexj(format!(
-                    "{}: {key:?} must be a non-negative integer",
-                    self.what
-                ))
-            }),
-            Some(_) => Err(ShexError::shexj(format!(
-                "{}: {key:?} must be a number",
-                self.what
-            ))),
+            Some(value @ Value::Number(n)) => n
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| wrong_member(self.what, key, E::UnsignedInteger, value)),
+            Some(value) => Err(wrong_member(self.what, key, E::Number, value)),
         }
     }
 
-    fn take_i64_opt(&mut self, key: &'static str) -> Result<Option<i64>> {
-        match self.take(key) {
+    fn take_i64_opt(&mut self, key: M) -> Result<Option<i64>> {
+        match self.take(key)? {
             None => Ok(None),
-            Some(Value::Number(n)) => n.as_i64().map(Some).ok_or_else(|| {
-                ShexError::shexj(format!("{}: {key:?} must be an integer", self.what))
-            }),
-            Some(_) => Err(ShexError::shexj(format!(
-                "{}: {key:?} must be a number",
-                self.what
-            ))),
+            Some(value @ Value::Number(n)) => n
+                .as_i64()
+                .map(Some)
+                .ok_or_else(|| wrong_member(self.what, key, E::SignedInteger, value)),
+            Some(value) => Err(wrong_member(self.what, key, E::Number, value)),
         }
     }
 
-    fn take_bool_opt(&mut self, key: &'static str) -> Result<Option<bool>> {
-        match self.take(key) {
+    fn take_bool_opt(&mut self, key: M) -> Result<Option<bool>> {
+        match self.take(key)? {
             None => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
-            Some(_) => Err(ShexError::shexj(format!(
-                "{}: {key:?} must be a boolean",
-                self.what
-            ))),
+            Some(value) => Err(wrong_member(self.what, key, E::Boolean, value)),
         }
     }
 
-    fn take_numeric_opt(&mut self, key: &'static str) -> Result<Option<NumericLiteral>> {
-        match self.take(key) {
+    fn take_numeric_opt(&mut self, key: M) -> Result<Option<NumericLiteral>> {
+        match self.take(key)? {
             None => Ok(None),
-            Some(Value::Number(n)) => {
+            Some(value @ Value::Number(n)) => {
                 if let Some(i) = n.as_i64() {
-                    Ok(Some(NumericLiteral::Integer(i)))
-                } else if let Some(f) = Some(n.as_f64())
-                    // A double past the double range is the infinity of its sign, as
-                    // the same lexical form is in the data; an integer or decimal
-                    // lexeme past it has no double.
-                    .filter(|f| f.is_finite() || n.lexeme().contains(['e', 'E']))
-                {
+                    return Ok(Some(NumericLiteral::Integer(i)));
+                }
+                let f = n.as_f64();
+                // Exponent-form doubles keep their signed infinity; integers and
+                // decimals need a finite stand-in in the ordinary AST profile.
+                if f.is_finite() || n.lexeme().contains(['e', 'E']) {
                     Ok(Some(NumericLiteral::Fractional(f)))
                 } else {
-                    Err(ShexError::shexj(format!(
-                        "{}: {key:?} out of range",
-                        self.what
-                    )))
+                    Err(refusal(JsonMemberReason::NumericRange {
+                        context: self.what,
+                        member: key,
+                        offered: JsonOffered::capture(value),
+                        converted: f.to_bits(),
+                    }))
                 }
             }
-            Some(_) => Err(ShexError::shexj(format!(
-                "{}: {key:?} must be a number",
-                self.what
-            ))),
+            Some(value) => Err(wrong_member(self.what, key, E::Number, value)),
         }
     }
 
-    fn take_array(&mut self, key: &'static str) -> Result<Option<&'a [Value]>> {
-        match self.take(key) {
+    fn take_array(&mut self, key: M) -> Result<Option<&'a [Value]>> {
+        match self.take(key)? {
             None => Ok(None),
             Some(Value::Array(items)) => Ok(Some(items)),
-            Some(_) => Err(ShexError::shexj(format!(
-                "{}: {key:?} must be an array",
-                self.what
-            ))),
+            Some(value) => Err(wrong_member(self.what, key, E::Array, value)),
         }
     }
 
-    /// Fail on any key that was never consumed (strict ShExJ 2.1 reading).
     fn finish(self) -> Result<()> {
-        for key in self.map.keys() {
-            if !self.taken.contains(&key.as_str()) {
-                return Err(ShexError::shexj(format!(
-                    "{}: unknown key {key:?}",
-                    self.what
-                )));
-            }
+        if let Some((name, value)) = self.record.first_unknown() {
+            return Err(refusal(JsonMemberReason::Unknown {
+                context: self.what,
+                name: name.to_owned(),
+                offered: JsonOffered::capture(value),
+            }));
         }
         Ok(())
     }
@@ -717,30 +735,35 @@ impl Reader {
     }
 
     fn schema(&self, value: &Value) -> Result<Schema> {
-        let mut obj = Obj::typed(value, "Schema", "Schema")?;
-        let _context = obj.take("@context");
+        let mut obj = Obj::typed(value, T::Schema, C::Type(T::Schema))?;
+        let _context = obj.take(M::Context)?;
         let mut schema = Schema::default();
-        if let Some(items) = obj.take_array("imports")? {
+        if let Some(items) = obj.take_array(M::Imports)? {
             schema.imports.reserve(items.len());
-            for item in items {
+            for (index, item) in items.iter().enumerate() {
                 let Value::String(iri) = item else {
-                    return Err(ShexError::shexj("Schema: imports entries must be strings"));
+                    return Err(refusal(JsonMemberReason::Entry {
+                        context: C::Type(T::Schema),
+                        member: M::Imports,
+                        index,
+                        offered: JsonOffered::capture(item),
+                    }));
                 };
                 schema.imports.push(self.iri(iri)?);
             }
         }
-        if let Some(items) = obj.take_array("startActs")? {
+        if let Some(items) = obj.take_array(M::StartActs)? {
             schema.start_acts.reserve(items.len());
             for item in items {
                 schema.start_acts.push(self.sem_act(item)?);
             }
         }
-        if let Some(start) = obj.take("start") {
+        if let Some(start) = obj.take(M::Start)? {
             let mark = self.exact.borrow().len();
             schema.start = Some(Box::new(self.shape_expr(start)?));
             self.table.borrow_mut().start = self.exact.borrow_mut().split_off(mark);
         }
-        if let Some(items) = obj.take_array("shapes")? {
+        if let Some(items) = obj.take_array(M::Shapes)? {
             schema.shapes.reserve(items.len());
             for item in items {
                 let mark = self.exact.borrow().len();
@@ -756,11 +779,11 @@ impl Reader {
     fn shape_decl(&self, value: &Value) -> Result<ShapeDecl> {
         // A `shapes` entry is a shape-expression object with an inlined `id`;
         // strip the id and re-read the remainder as a plain shape expression.
-        let map = value
-            .as_object()
-            .ok_or_else(|| ShexError::shexj("shapes entry: expected a JSON object"))?;
+        let map = Obj::new(value, C::ShapeEntry)?.map;
         let Some(Value::String(id)) = map.get("id") else {
-            return Err(ShexError::shexj("shapes entry: missing string \"id\""));
+            return Err(refusal(JsonMemberReason::Identifier {
+                offered: map.get("id").map(JsonOffered::capture),
+            }));
         };
         let id = self.label(id)?;
         let mut rest = map.clone();
@@ -774,16 +797,33 @@ impl Reader {
         if let Value::String(label) = value {
             return Ok(ShapeExpr::Ref(self.label(label)?));
         }
-        let ty = value
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ShexError::shexj("shapeExpr: missing \"type\" discriminator"))?;
+        let ty = value.get("type").and_then(Value::as_str).ok_or_else(|| {
+            refusal(JsonMemberReason::Discriminator {
+                context: C::ShapeExpr,
+                offered: JsonOffered::capture(value),
+            })
+        })?;
         match ty {
             "ShapeAnd" | "ShapeOr" => {
-                let mut obj = Obj::typed(value, ty, "ShapeAnd/ShapeOr")?;
-                let items = obj
-                    .take_array("shapeExprs")?
-                    .ok_or_else(|| ShexError::shexj(format!("{ty}: missing \"shapeExprs\"")))?;
+                let mut obj = Obj::typed(
+                    value,
+                    if ty == "ShapeAnd" {
+                        T::ShapeAnd
+                    } else {
+                        T::ShapeOr
+                    },
+                    C::ShapeAndOr,
+                )?;
+                let items = obj.take_array(M::ShapeExprs)?.ok_or_else(|| {
+                    missing(
+                        C::Type(if ty == "ShapeAnd" {
+                            T::ShapeAnd
+                        } else {
+                            T::ShapeOr
+                        }),
+                        M::ShapeExprs,
+                    )
+                })?;
                 let parts = items
                     .iter()
                     .map(|item| self.shape_expr(item))
@@ -796,24 +836,25 @@ impl Reader {
                 }
             }
             "ShapeNot" => {
-                let mut obj = Obj::typed(value, "ShapeNot", "ShapeNot")?;
+                let mut obj = Obj::typed(value, T::ShapeNot, C::Type(T::ShapeNot))?;
                 let inner = obj
-                    .take("shapeExpr")
-                    .ok_or_else(|| ShexError::shexj("ShapeNot: missing \"shapeExpr\""))?;
+                    .take(M::ShapeExpr)?
+                    .ok_or_else(|| missing(C::Type(T::ShapeNot), M::ShapeExpr))?;
                 let inner = self.shape_expr(inner)?;
                 obj.finish()?;
                 Ok(ShapeExpr::Not(Box::new(inner)))
             }
             "ShapeExternal" => {
-                let obj = Obj::typed(value, "ShapeExternal", "ShapeExternal")?;
+                let obj = Obj::typed(value, T::ShapeExternal, C::Type(T::ShapeExternal))?;
                 obj.finish()?;
                 Ok(ShapeExpr::External)
             }
             "NodeConstraint" => Ok(ShapeExpr::Node(self.node_constraint(value)?)),
             "Shape" => Ok(ShapeExpr::Shape(self.shape(value)?)),
-            other => Err(ShexError::shexj(format!(
-                "shapeExpr: unknown type {other:?}"
-            ))),
+            other => Err(refusal(JsonMemberReason::UnknownType {
+                context: C::ShapeExpr,
+                found: other.to_owned(),
+            })),
         }
     }
 
@@ -822,11 +863,11 @@ impl Reader {
     /// [`crate::ExactSchema`]).
     fn numeric_facet(
         obj: &mut Obj<'_>,
-        key: &'static str,
+        key: M,
         exact: &mut Option<crate::exact::ExactBound>,
         saturate: bool,
     ) -> Result<Option<NumericLiteral>> {
-        let lexeme = match obj.map.get(key) {
+        let lexeme = match obj.map.get(key.name()) {
             Some(Value::Number(number)) => Some(number.lexeme().to_owned()),
             _ => None,
         };
@@ -836,7 +877,7 @@ impl Reader {
         });
         let bound = match &lexeme {
             Some(lexeme) if saturate && past_f64 => {
-                obj.take(key);
+                let _ = obj.take(key)?;
                 Some(crate::exact::saturated(lexeme))
             }
             _ => obj.take_numeric_opt(key)?,
@@ -850,30 +891,30 @@ impl Reader {
     fn node_constraint(&self, value: &Value) -> Result<NodeConstraint> {
         let mut exact = crate::exact::ExactBounds::default();
         let [min_in, min_ex, max_in, max_ex] = &mut exact.slots;
-        let mut obj = Obj::typed(value, "NodeConstraint", "NodeConstraint")?;
+        let mut obj = Obj::typed(value, T::NodeConstraint, C::Type(T::NodeConstraint))?;
         let mut nc = NodeConstraint {
             node_kind: obj
-                .take_str_opt("nodeKind")?
+                .take_str_opt(M::NodeKind)?
                 .map(|s| node_kind_from_str(&s))
                 .transpose()?,
             datatype: obj
-                .take_str_opt("datatype")?
+                .take_str_opt(M::Datatype)?
                 .map(|dt| self.iri(&dt))
                 .transpose()?,
-            length: obj.take_u64_opt("length")?,
-            minlength: obj.take_u64_opt("minlength")?,
-            maxlength: obj.take_u64_opt("maxlength")?,
-            pattern: obj.take_str_opt("pattern")?,
-            flags: obj.take_str_opt("flags")?,
-            mininclusive: Self::numeric_facet(&mut obj, "mininclusive", min_in, self.saturate)?,
-            minexclusive: Self::numeric_facet(&mut obj, "minexclusive", min_ex, self.saturate)?,
-            maxinclusive: Self::numeric_facet(&mut obj, "maxinclusive", max_in, self.saturate)?,
-            maxexclusive: Self::numeric_facet(&mut obj, "maxexclusive", max_ex, self.saturate)?,
-            totaldigits: obj.take_u64_opt("totaldigits")?,
-            fractiondigits: obj.take_u64_opt("fractiondigits")?,
+            length: obj.take_u64_opt(M::Length)?,
+            minlength: obj.take_u64_opt(M::Minlength)?,
+            maxlength: obj.take_u64_opt(M::Maxlength)?,
+            pattern: obj.take_str_opt(M::Pattern)?,
+            flags: obj.take_str_opt(M::Flags)?,
+            mininclusive: Self::numeric_facet(&mut obj, M::Mininclusive, min_in, self.saturate)?,
+            minexclusive: Self::numeric_facet(&mut obj, M::Minexclusive, min_ex, self.saturate)?,
+            maxinclusive: Self::numeric_facet(&mut obj, M::Maxinclusive, max_in, self.saturate)?,
+            maxexclusive: Self::numeric_facet(&mut obj, M::Maxexclusive, max_ex, self.saturate)?,
+            totaldigits: obj.take_u64_opt(M::Totaldigits)?,
+            fractiondigits: obj.take_u64_opt(M::Fractiondigits)?,
             values: None,
         };
-        if let Some(items) = obj.take_array("values")? {
+        if let Some(items) = obj.take_array(M::Values)? {
             let values = items
                 .iter()
                 .map(|item| self.value_set_value(item))
@@ -888,13 +929,14 @@ impl Reader {
     }
 
     /// An `IriStemRange` stem: an IRI reference, or the `Wildcard` object.
-    fn iri_stem(&self, value: &Value, what: &'static str) -> Result<StemValue> {
+    fn iri_stem(&self, value: &Value, what: C) -> Result<StemValue> {
         match value {
             Value::String(s) => Ok(StemValue::Str(self.iri(s)?)),
             Value::Object(_) => wildcard_stem(value, what),
-            _ => Err(ShexError::shexj(format!(
-                "{what}: stem must be a string or Wildcard"
-            ))),
+            _ => Err(refusal(JsonMemberReason::Stem {
+                context: what,
+                offered: JsonOffered::capture(value),
+            })),
         }
     }
 
@@ -908,28 +950,28 @@ impl Reader {
         match ty {
             None => Ok(ValueSetValue::Literal(self.object_literal(value)?)),
             Some("IriStem") => {
-                let mut obj = Obj::typed(value, "IriStem", "IriStem")?;
-                let stem = self.iri(&obj.take_str("stem")?)?;
+                let mut obj = Obj::typed(value, T::IriStem, C::Type(T::IriStem))?;
+                let stem = self.iri(&obj.take_str(M::Stem)?)?;
                 obj.finish()?;
                 Ok(ValueSetValue::IriStem { stem })
             }
             Some("LiteralStem") => {
-                let mut obj = Obj::typed(value, "LiteralStem", "LiteralStem")?;
-                let stem = obj.take_str("stem")?;
+                let mut obj = Obj::typed(value, T::LiteralStem, C::Type(T::LiteralStem))?;
+                let stem = obj.take_str(M::Stem)?;
                 obj.finish()?;
                 Ok(ValueSetValue::LiteralStem { stem })
             }
             Some("LanguageStem") => {
-                let mut obj = Obj::typed(value, "LanguageStem", "LanguageStem")?;
+                let mut obj = Obj::typed(value, T::LanguageStem, C::Type(T::LanguageStem))?;
                 let stem =
-                    check_language_stem(obj.take_str("stem")?, LanguageMember::LanguageStem)?;
+                    check_language_stem(obj.take_str(M::Stem)?, LanguageMember::LanguageStem)?;
                 obj.finish()?;
                 Ok(ValueSetValue::LanguageStem { stem })
             }
             Some("Language") => {
-                let mut obj = Obj::typed(value, "Language", "Language")?;
+                let mut obj = Obj::typed(value, T::Language, C::Type(T::Language))?;
                 let language_tag =
-                    check_language_tag(obj.take_str("languageTag")?, LanguageMember::LanguageTag)?;
+                    check_language_tag(obj.take_str(M::LanguageTag)?, LanguageMember::LanguageTag)?;
                 obj.finish()?;
                 Ok(ValueSetValue::Language { language_tag })
             }
@@ -941,20 +983,20 @@ impl Reader {
     }
 
     fn iri_stem_range(&self, value: &Value) -> Result<ValueSetValue> {
-        let mut obj = Obj::typed(value, "IriStemRange", "IriStemRange")?;
+        let mut obj = Obj::typed(value, T::IriStemRange, C::Type(T::IriStemRange))?;
         let stem = obj
-            .take("stem")
-            .ok_or_else(|| ShexError::shexj("IriStemRange: missing \"stem\""))
-            .and_then(|v| self.iri_stem(v, "IriStemRange"))?;
+            .take(M::Stem)?
+            .ok_or_else(|| missing(C::Type(T::IriStemRange), M::Stem))
+            .and_then(|v| self.iri_stem(v, C::Type(T::IriStemRange)))?;
         let exclusions = obj
-            .take_array("exclusions")?
+            .take_array(M::Exclusions)?
             .unwrap_or_default()
             .iter()
             .map(|e| match e {
                 Value::String(iri) => Ok(IriExclusion::Iri(self.iri(iri)?)),
                 other => {
-                    let mut obj = Obj::typed(other, "IriStem", "IriStemRange exclusion")?;
-                    let stem = self.iri(&obj.take_str("stem")?)?;
+                    let mut obj = Obj::typed(other, T::IriStem, C::IriExclusion)?;
+                    let stem = self.iri(&obj.take_str(M::Stem)?)?;
                     obj.finish()?;
                     Ok(IriExclusion::Stem(stem))
                 }
@@ -965,20 +1007,20 @@ impl Reader {
     }
 
     fn literal_stem_range(&self, value: &Value) -> Result<ValueSetValue> {
-        let mut obj = Obj::typed(value, "LiteralStemRange", "LiteralStemRange")?;
+        let mut obj = Obj::typed(value, T::LiteralStemRange, C::Type(T::LiteralStemRange))?;
         let stem = obj
-            .take("stem")
-            .ok_or_else(|| ShexError::shexj("LiteralStemRange: missing \"stem\""))
-            .and_then(|v| plain_stem(v, "LiteralStemRange"))?;
+            .take(M::Stem)?
+            .ok_or_else(|| missing(C::Type(T::LiteralStemRange), M::Stem))
+            .and_then(|v| plain_stem(v, C::Type(T::LiteralStemRange)))?;
         let exclusions = obj
-            .take_array("exclusions")?
+            .take_array(M::Exclusions)?
             .unwrap_or_default()
             .iter()
             .map(|e| match e {
                 Value::String(v) => Ok(LiteralExclusion::Literal(v.clone())),
                 other => {
-                    let mut obj = Obj::typed(other, "LiteralStem", "LiteralStemRange exclusion")?;
-                    let stem = obj.take_str("stem")?;
+                    let mut obj = Obj::typed(other, T::LiteralStem, C::LiteralExclusion)?;
+                    let stem = obj.take_str(M::Stem)?;
                     obj.finish()?;
                     Ok(LiteralExclusion::Stem(stem))
                 }
@@ -989,11 +1031,11 @@ impl Reader {
     }
 
     fn language_stem_range(&self, value: &Value) -> Result<ValueSetValue> {
-        let mut obj = Obj::typed(value, "LanguageStemRange", "LanguageStemRange")?;
+        let mut obj = Obj::typed(value, T::LanguageStemRange, C::Type(T::LanguageStemRange))?;
         let stem = obj
-            .take("stem")
-            .ok_or_else(|| ShexError::shexj("LanguageStemRange: missing \"stem\""))
-            .and_then(|v| plain_stem(v, "LanguageStemRange"))?;
+            .take(M::Stem)?
+            .ok_or_else(|| missing(C::Type(T::LanguageStemRange), M::Stem))
+            .and_then(|v| plain_stem(v, C::Type(T::LanguageStemRange)))?;
         let stem = match stem {
             StemValue::Str(stem) => {
                 StemValue::Str(check_language_stem(stem, LanguageMember::RangeStem)?)
@@ -1001,7 +1043,7 @@ impl Reader {
             StemValue::Wildcard => StemValue::Wildcard,
         };
         let exclusions = obj
-            .take_array("exclusions")?
+            .take_array(M::Exclusions)?
             .unwrap_or_default()
             .iter()
             .map(|e| match e {
@@ -1010,9 +1052,9 @@ impl Reader {
                         .map(LanguageExclusion::Language)
                 }
                 other => {
-                    let mut obj = Obj::typed(other, "LanguageStem", "LanguageStemRange exclusion")?;
+                    let mut obj = Obj::typed(other, T::LanguageStem, C::LanguageExclusion)?;
                     let stem = check_language_stem(
-                        obj.take_str("stem")?,
+                        obj.take_str(M::Stem)?,
                         LanguageMember::RangeStemExclusion,
                     )?;
                     obj.finish()?;
@@ -1025,15 +1067,15 @@ impl Reader {
     }
 
     fn object_literal(&self, value: &Value) -> Result<ObjectLiteral> {
-        let mut obj = Obj::new(value, "ObjectLiteral")?;
+        let mut obj = Obj::new(value, C::ObjectLiteral)?;
         let lit = ObjectLiteral {
-            value: obj.take_str("value")?,
+            value: obj.take_str(M::Value)?,
             language: obj
-                .take_str_opt("language")?
+                .take_str_opt(M::Language)?
                 .map(|tag| check_language_tag(tag, LanguageMember::ObjectLiteralLanguage))
                 .transpose()?,
             datatype: obj
-                .take_str_opt("type")?
+                .take_str_opt(M::Type)?
                 .map(|dt| self.iri(&dt))
                 .transpose()?,
         };
@@ -1042,21 +1084,26 @@ impl Reader {
     }
 
     fn shape(&self, value: &Value) -> Result<Shape> {
-        let mut obj = Obj::typed(value, "Shape", "Shape")?;
+        let mut obj = Obj::typed(value, T::Shape, C::Type(T::Shape))?;
         let mut shape = Shape {
-            closed: obj.take_bool_opt("closed")?,
+            closed: obj.take_bool_opt(M::Closed)?,
             ..Shape::default()
         };
-        if let Some(items) = obj.take_array("extra")? {
+        if let Some(items) = obj.take_array(M::Extra)? {
             shape.extra.reserve(items.len());
-            for item in items {
+            for (index, item) in items.iter().enumerate() {
                 let Value::String(iri) = item else {
-                    return Err(ShexError::shexj("Shape: extra entries must be strings"));
+                    return Err(refusal(JsonMemberReason::Entry {
+                        context: C::Type(T::Shape),
+                        member: M::Extra,
+                        index,
+                        offered: JsonOffered::capture(item),
+                    }));
                 };
                 shape.extra.push(self.iri(iri)?);
             }
         }
-        if let Some(expr) = obj.take("expression") {
+        if let Some(expr) = obj.take(M::Expression)? {
             shape.expression = Some(self.triple_expr(expr)?);
         }
         shape.sem_acts = self.take_sem_acts(&mut obj)?;
@@ -1066,7 +1113,7 @@ impl Reader {
     }
 
     fn take_sem_acts(&self, obj: &mut Obj<'_>) -> Result<Vec<SemAct>> {
-        obj.take_array("semActs")?
+        obj.take_array(M::SemActs)?
             .unwrap_or_default()
             .iter()
             .map(|item| self.sem_act(item))
@@ -1074,7 +1121,7 @@ impl Reader {
     }
 
     fn take_annotations(&self, obj: &mut Obj<'_>) -> Result<Vec<Annotation>> {
-        obj.take_array("annotations")?
+        obj.take_array(M::Annotations)?
             .unwrap_or_default()
             .iter()
             .map(|item| self.annotation(item))
@@ -1086,25 +1133,34 @@ impl Reader {
         if let Value::String(label) = value {
             return Ok(TripleExpr::Ref(self.label(label)?));
         }
-        let ty = value
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ShexError::shexj("tripleExpr: missing \"type\" discriminator"))?;
+        let ty = value.get("type").and_then(Value::as_str).ok_or_else(|| {
+            refusal(JsonMemberReason::Discriminator {
+                context: C::TripleExpr,
+                offered: JsonOffered::capture(value),
+            })
+        })?;
         match ty {
             "EachOf" | "OneOf" => {
-                let mut obj = Obj::typed(value, ty, "EachOf/OneOf")?;
+                let mut obj = Obj::typed(
+                    value,
+                    if ty == "EachOf" { T::EachOf } else { T::OneOf },
+                    C::EachOfOneOf,
+                )?;
                 let mut group = TripleExprGroup {
                     id: obj
-                        .take_str_opt("id")?
+                        .take_str_opt(M::Id)?
                         .map(|id| self.label(&id))
                         .transpose()?,
-                    min: obj.take_i64_opt("min")?,
-                    max: obj.take_i64_opt("max")?,
+                    min: obj.take_i64_opt(M::Min)?,
+                    max: obj.take_i64_opt(M::Max)?,
                     ..TripleExprGroup::default()
                 };
-                let items = obj
-                    .take_array("expressions")?
-                    .ok_or_else(|| ShexError::shexj(format!("{ty}: missing \"expressions\"")))?;
+                let items = obj.take_array(M::Expressions)?.ok_or_else(|| {
+                    missing(
+                        C::Type(if ty == "EachOf" { T::EachOf } else { T::OneOf }),
+                        M::Expressions,
+                    )
+                })?;
                 group.expressions = items
                     .iter()
                     .map(|item| self.triple_expr(item))
@@ -1119,19 +1175,19 @@ impl Reader {
                 }
             }
             "TripleConstraint" => {
-                let mut obj = Obj::typed(value, "TripleConstraint", "TripleConstraint")?;
+                let mut obj = Obj::typed(value, T::TripleConstraint, C::Type(T::TripleConstraint))?;
                 let mut tc = TripleConstraint {
                     id: obj
-                        .take_str_opt("id")?
+                        .take_str_opt(M::Id)?
                         .map(|id| self.label(&id))
                         .transpose()?,
-                    inverse: obj.take_bool_opt("inverse")?,
-                    predicate: self.iri(&obj.take_str("predicate")?)?,
-                    min: obj.take_i64_opt("min")?,
-                    max: obj.take_i64_opt("max")?,
+                    inverse: obj.take_bool_opt(M::Inverse)?,
+                    predicate: self.iri(&obj.take_str(M::Predicate)?)?,
+                    min: obj.take_i64_opt(M::Min)?,
+                    max: obj.take_i64_opt(M::Max)?,
                     ..TripleConstraint::default()
                 };
-                if let Some(ve) = obj.take("valueExpr") {
+                if let Some(ve) = obj.take(M::ValueExpr)? {
                     tc.value_expr = Some(Box::new(self.shape_expr(ve)?));
                 }
                 tc.sem_acts = self.take_sem_acts(&mut obj)?;
@@ -1139,28 +1195,29 @@ impl Reader {
                 obj.finish()?;
                 Ok(TripleExpr::TripleConstraint(tc))
             }
-            other => Err(ShexError::shexj(format!(
-                "tripleExpr: unknown type {other:?}"
-            ))),
+            other => Err(refusal(JsonMemberReason::UnknownType {
+                context: C::TripleExpr,
+                found: other.to_owned(),
+            })),
         }
     }
 
     fn sem_act(&self, value: &Value) -> Result<SemAct> {
-        let mut obj = Obj::typed(value, "SemAct", "SemAct")?;
+        let mut obj = Obj::typed(value, T::SemAct, C::Type(T::SemAct))?;
         let act = SemAct {
-            name: self.iri(&obj.take_str("name")?)?,
-            code: obj.take_str_opt("code")?,
+            name: self.iri(&obj.take_str(M::Name)?)?,
+            code: obj.take_str_opt(M::Code)?,
         };
         obj.finish()?;
         Ok(act)
     }
 
     fn annotation(&self, value: &Value) -> Result<Annotation> {
-        let mut obj = Obj::typed(value, "Annotation", "Annotation")?;
-        let predicate = self.iri(&obj.take_str("predicate")?)?;
+        let mut obj = Obj::typed(value, T::Annotation, C::Type(T::Annotation))?;
+        let predicate = self.iri(&obj.take_str(M::Predicate)?)?;
         let object = obj
-            .take("object")
-            .ok_or_else(|| ShexError::shexj("Annotation: missing \"object\""))?;
+            .take(M::Object)?
+            .ok_or_else(|| missing(C::Type(T::Annotation), M::Object))?;
         let object = match object {
             Value::String(iri) => ObjectValue::Iri(self.iri(iri)?),
             other => ObjectValue::Literal(self.object_literal(other)?),
@@ -1176,21 +1233,22 @@ fn node_kind_from_str(s: &str) -> Result<NodeKind> {
         "bnode" => Ok(NodeKind::BNode),
         "nonliteral" => Ok(NodeKind::NonLiteral),
         "literal" => Ok(NodeKind::Literal),
-        other => Err(ShexError::shexj(format!(
-            "NodeConstraint: unknown nodeKind {other:?}"
-        ))),
+        other => Err(refusal(JsonMemberReason::NodeKind {
+            found: other.to_owned(),
+        })),
     }
 }
 
 /// A `LiteralStemRange` / `LanguageStemRange` stem: a plain string (a literal
 /// prefix or a language-tag prefix — neither is an IRI), or `Wildcard`.
-fn plain_stem(value: &Value, what: &'static str) -> Result<StemValue> {
+fn plain_stem(value: &Value, what: C) -> Result<StemValue> {
     match value {
         Value::String(s) => Ok(StemValue::Str(s.clone())),
         Value::Object(_) => wildcard_stem(value, what),
-        _ => Err(ShexError::shexj(format!(
-            "{what}: stem must be a string or Wildcard"
-        ))),
+        _ => Err(refusal(JsonMemberReason::Stem {
+            context: what,
+            offered: JsonOffered::capture(value),
+        })),
     }
 }
 
@@ -1267,8 +1325,8 @@ fn check_language_stem(stem: String, member: LanguageMember) -> Result<String> {
 }
 
 /// Read the `{"type": "Wildcard"}` stem object.
-fn wildcard_stem(value: &Value, what: &'static str) -> Result<StemValue> {
-    let obj = Obj::typed(value, "Wildcard", what)?;
+fn wildcard_stem(value: &Value, what: C) -> Result<StemValue> {
+    let obj = Obj::typed(value, T::Wildcard, what)?;
     obj.finish()?;
     Ok(StemValue::Wildcard)
 }
