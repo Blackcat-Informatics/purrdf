@@ -464,10 +464,19 @@ release that changes SHACL behavior. Starting with 4.0.0, this is the first
 step after the release lanes finish.
 
 1. Download `purrdf-shacl-earl.ttl` (SHACL 2017) and `purrdf-shacl12-earl.ttl`
-   (SHACL 1.2) from the published GitHub Release. Verify their attestation as
-   described under [Verification](#verification). Submit those exact bytes and
-   do not regenerate them: they were produced on the tagged commit by
-   `make w3c-earl`.
+   (SHACL 1.2) from the published GitHub Release and verify the build-provenance
+   attestation of each one:
+
+   ```sh
+   VERSION=4.0.0
+   gh release download "rust-v${VERSION}" --repo Blackcat-Informatics/purrdf \
+     --pattern 'purrdf-shacl*-earl.ttl'
+   gh attestation verify purrdf-shacl-earl.ttl --repo Blackcat-Informatics/purrdf
+   gh attestation verify purrdf-shacl12-earl.ttl --repo Blackcat-Informatics/purrdf
+   ```
+
+   Submit those exact bytes and do not regenerate them: they were produced on
+   the tagged commit by `make w3c-earl`.
 2. Check that each report names the released version and tag, and that its
    pass counts agree with the [conformance scoreboard](./CONFORMANCE.md) at
    that tag.
