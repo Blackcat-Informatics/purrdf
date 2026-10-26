@@ -363,7 +363,7 @@ programs cannot admit an incompatible current request. Source reconstruction
 reuses the authenticated dataset and original import/base/prefix/graph context;
 it does not rebuild carried shared class analysis during memo admission.
 
-There is one profile, `purrdf-shacl-core-v2-closed-recursion`, and it is selected by name. It is
+There is one profile, `purrdf-shacl-core-v1`, and it is selected by name. It is
 not a default, and there is no fallback: a caller names `ShapesProfile::CORE` and
 cannot mint a profile of its own, because a profile a caller can spell is a claim
 about a product rather than a fact about it. A product prepared under any other

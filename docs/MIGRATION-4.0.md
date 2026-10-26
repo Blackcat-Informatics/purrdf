@@ -214,9 +214,10 @@ remains outside this closed catalog surface.
 Read `RecursiveValidationReport` for the settled answer and native finite cycle
 evidence alongside ordinary SHACL results. `RecursionPosition::focus()` returns
 a fallible native term copy; retained original shape/property projections and
-shared cycle positions survive dropping the source preparation. Product profile
-`purrdf-shacl-core-v2-closed-recursion` binds the new admission meaning: rebuild
-products written under the prior profile from their original inputs.
+shared cycle positions survive dropping the source preparation. The derived
+product stage identity binds the new admission meaning while the serialized
+`purrdf-shacl-core-v1` profile stays stable. Rebuild older-stage products from
+their carried original inputs under the current request.
 
 ## SHACL processor recursion failures
 

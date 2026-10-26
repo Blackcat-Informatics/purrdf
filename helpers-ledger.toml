@@ -3148,13 +3148,6 @@ criterion = "a"
 anchor = "purrdf_datalog::seminaive::probe::ProbeError"
 reason = "Required std::error::Error implementations expose each public enum's original EvalError cause. State and coordinate refusals have no nested cause. These typed trait adapters neither copy an error nor implement another evaluator or error-inspection protocol."
 
-[[distinct]]
-members = ["purrdf_datalog::store::index::RowIndexError::source", "purrdf_shapes::error::PreparationRefusal::source"]
-kind = "body"
-criterion = "a"
-anchor = "purrdf_shapes::error::PreparationRefusal"
-reason = "Required std::error::Error adapters borrow the original StorageError in distinct public refusal enums. Their other variants have no nested cause; these concrete trait dispatches neither render or copy an error nor implement a second storage-admission protocol."
-
 [[job]]
 id = "logical-capacity-panic"
 summary = "Logical table, text, scope and ID capacity refuses through the original typed storage error"

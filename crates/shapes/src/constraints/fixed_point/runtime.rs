@@ -219,7 +219,7 @@ impl<'a> Execution<'a> {
         'graph: loop {
             let mut resident = Resident;
             let mut memory = Memory::new(&mut resident);
-            let mut adjacency = Vec::new();
+            let mut adjacency: Vec<Vec<usize>> = Vec::new();
             let generation = {
                 let mut state = self.state.borrow_mut();
                 for pair in &mut state.pairs {

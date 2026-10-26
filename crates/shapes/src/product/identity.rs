@@ -271,7 +271,7 @@ use super::error::{ProductDimension, ShapesProductError};
 /// declarations are necessarily separate; they name one profile and must be changed
 /// together. `stage_id_matches_shipped_constant` fails the moment the census's copy moves, so
 /// a divergence is loud rather than silent.
-pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v2-closed-recursion";
+pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 
 /// Every identity component, in the fixed order of the table in the
 /// [module docs](self): its label and the [`ProductDimension`] a disagreement at

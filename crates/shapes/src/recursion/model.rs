@@ -246,21 +246,9 @@ enum WalkError {
     Shape(ShapesError),
     Product(ShapesProductError),
 }
-impl From<ShapesProductError> for WalkError {
-    fn from(error: ShapesProductError) -> Self {
-        Self::Product(error)
-    }
-}
-impl From<PreparationRefusal> for WalkError {
-    fn from(error: PreparationRefusal) -> Self {
-        Self::Shape(error.into())
-    }
-}
-impl From<StorageError> for WalkError {
-    fn from(error: StorageError) -> Self {
-        Self::Shape(ShapesError::Storage(error))
-    }
-}
+purrdf_lex::variant_from!(WalkError { Product(ShapesProductError) });
+purrdf_lex::variant_from!(WalkError { Shape(PreparationRefusal) via ShapesError::from });
+purrdf_lex::variant_from!(WalkError { Shape(StorageError) via ShapesError::Storage });
 impl WalkError {
     fn into_shape(self) -> ShapesError {
         match self {
@@ -840,32 +828,6 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
             NodeExpr::Owned { owner, .. } => {
                 self.owner = Some(owner);
                 self.model(owner)?;
-            }
-            NodeExpr::Select {
-                query,
-                variable,
-                key,
-            } => {
-                let owner = self.owner;
-                super::query::visit(query, variable, self.context.polarity, |dependency, polarity| {
-                    let (kind, owner) = match dependency {
-                        super::query::Dependency::Shape(iri) => {
-                            let owner = owner.ok_or(PreparationRefusal::UnboundModel)?;
-                            let definition = owner.definitions().find(|shape| {
-                                matches!(&shape.id, crate::term::Term::NamedNode(name) if name.as_str() == iri)
-                            }).ok_or_else(|| ShapesError::Preparation(PreparationRefusal::UnknownReference(Arc::new(
-                                crate::term::Term::NamedNode(crate::term::NamedNode::from(iri))
-                            ))))?;
-                            (Kind::Shape(definition), owner)
-                        }
-                        super::query::Dependency::Function(iri) => {
-                            let Some(owner) = owner else { return Ok(()) };
-                            let Some(function) = owner.functions.iter().find(|function| function.iri.as_str() == iri) else { return Ok(()) };
-                            (Kind::Function(function), owner)
-                        }
-                    };
-                    self.edge(Node { kind, owner: Some(owner) }, key, polarity).map_err(WalkError::into_shape)
-                }).map_err(WalkError::Shape)?;
             }
             _ if self.context.polarity != RecursionPolarity::Target => {
                 self.context.polarity = RecursionPolarity::Both;

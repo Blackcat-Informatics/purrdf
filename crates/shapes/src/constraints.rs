@@ -1961,6 +1961,9 @@ fn eval_property_reference<'a, S: ResultSink>(
     if S::RECORDS_RESULTS
         && let Some(fixed) = context.fixed
     {
+        if edge.deactivated {
+            return Ok(Flow::Continue);
+        }
         let origin = context
             .plan
             .origin()
@@ -2604,13 +2607,17 @@ fn eval_reifier_shapes<S: ResultSink>(
                 // no term materialized to resolve back into one.
                 let reifier_focus = FocusNode::Interned(reifier);
                 if !S::RECORDS_RESULTS {
-                    // Conformance only: the inner results exist solely to supply
-                    // this result's message, and this sink keeps no message. Probe
-                    // for the first inner violation and stop there rather than
-                    // collecting the rest.
-                    let mut probe = AnyViolation::new(disallows, reifier_plan);
-                    walk_shape(reifier_context, &reifier_focus, &mut probe)?;
-                    if probe.conforms() {
+                    // Conformance only: register recursive pairs with their
+                    // execution. Ordinary validation needs only the first inner
+                    // violation because this sink keeps no message.
+                    let conforms = if let Some(fixed) = context.fixed {
+                        fixed.ask_shape(reifier_plan, &reifier_focus)?
+                    } else {
+                        let mut probe = AnyViolation::new(disallows, reifier_plan);
+                        walk_shape(reifier_context, &reifier_focus, &mut probe)?;
+                        probe.conforms()
+                    };
+                    if conforms {
                         continue;
                     }
                     let flow = sink.violation(source.severity, || {

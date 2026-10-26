@@ -535,15 +535,7 @@ impl fmt::Display for PreparationRefusal {
     }
 }
 
-impl std::error::Error for PreparationRefusal {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            Self::UnqualifiedRecursion(refusal) => Some(refusal),
-            _ => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(PreparationRefusal, Storage, UnqualifiedRecursion);
 
 purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
 

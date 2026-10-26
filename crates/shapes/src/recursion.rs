@@ -11,7 +11,6 @@ pub use evidence::{RecursionCycle, RecursionPosition, RecursiveValidationReport}
 pub(crate) mod graph;
 pub(crate) mod guards;
 pub(crate) mod model;
-pub(crate) mod query;
 
 /// The fixed point selected for a stratified recursive shapes graph.
 ///

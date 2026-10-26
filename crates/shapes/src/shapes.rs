@@ -1596,6 +1596,9 @@ pub(crate) fn restored_recursion_source(
     owner: &Arc<ModelOwner>,
     options: &crate::engine::ValidationOptions,
 ) -> Result<Option<purrdf_lex::allocation::Shared<crate::recursion::graph::Source>>, ShapesError> {
+    if let Some(request) = &options.recursion {
+        owner.admit_recursion(Some(request.semantics))?;
+    }
     if parser::recursion::source_rank_proves_acyclic(dataset, owner) {
         return Ok(None);
     }

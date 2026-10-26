@@ -1069,6 +1069,24 @@ fn recursive_property_identity_edges_have_finite_reports() {
         pairs: &[("a", "S", false, true)],
     }
     .check();
+    PaperCase {
+        data: ":a :p :a . :r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( :a :p :a )>> .",
+        shapes: ":S a sh:NodeShape ; sh:property :P .
+                 :P sh:path :p ; sh:reifierShape :R .
+                 :R a sh:NodeShape ; sh:node :R .",
+        admission: Admission::Positive,
+        pairs: &[("a", "S", false, true)],
+    }
+    .check();
+    PaperCase {
+        data: "",
+        shapes: ":S a sh:NodeShape ; sh:property :P {| sh:deactivated true ; sh:message \"disabled\" |} .
+                 :T a sh:NodeShape ; sh:property :P .
+                 :P sh:path :p ; sh:minCount 1 .",
+        admission: Admission::Acyclic,
+        pairs: &[("a", "S", true, true), ("a", "T", false, false)],
+    }
+    .check();
 }
 
 #[test]
@@ -1201,6 +1219,7 @@ fn selected_entries_refuse_unproved_original_scopes() {
     use purrdf_shapes::PreparationRefusal;
     use purrdf_shapes::constraints::{conforms_with_recursion, validate_shape_with_recursion};
     use purrdf_shapes::engine::PreparedShapes;
+    use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
     use purrdf_shapes::term::NamedNode;
 
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
@@ -1263,7 +1282,47 @@ fn selected_entries_refuse_unproved_original_scopes() {
             let direct = conforms_with_recursion(&data, &focus, &root, recursion).unwrap_err();
             let report =
                 validate_shape_with_recursion(&data, &focus, &root, None, recursion).unwrap_err();
-            let prepared = PreparedShapes::new(Arc::new(shapes)).with_validation_options(request);
+            let prepared = PreparedShapes::new(Arc::new(shapes));
+            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            for rebuild in [false, true] {
+                let product = ShapesProduct::open(&bytes).unwrap();
+                let restored = if rebuild {
+                    product.rebuild_with_options(
+                        &ShapesProfile::CORE,
+                        &HostBindings::empty(),
+                        &request,
+                    )
+                } else {
+                    product.admit_with_options(
+                        &ShapesProfile::CORE,
+                        &HostBindings::empty(),
+                        &request,
+                    )
+                };
+                let Err(CompleteValidationError::Shapes(ShapesError::Preparation(
+                    PreparationRefusal::UnqualifiedRecursion(refusal),
+                ))) = restored
+                else {
+                    panic!("restoration lost the typed original scope, rebuild={rebuild}")
+                };
+                assert_eq!(refusal.definition(), &id);
+                assert_eq!(refusal.parameter(), parameter);
+                assert_eq!(refusal.index().is_some(), indexed);
+                assert!(refusal.model().unwrap().definition(&id).is_some());
+                let classified = purrdf_shapes::product::ShapesProductError::from(
+                    PreparationRefusal::UnqualifiedRecursion(refusal),
+                );
+                assert_eq!(
+                    classified.dimension(),
+                    purrdf_shapes::product::ProductDimension::UnsupportedCapability
+                );
+                assert!(matches!(
+                    classified.preparation_refusal(),
+                    Some(PreparationRefusal::UnqualifiedRecursion(original))
+                        if original.definition() == &id && original.parameter() == parameter
+                ));
+            }
+            let prepared = prepared.with_validation_options(request);
             let Err(bound) = prepared.bind_dataset(&dataset) else {
                 panic!("unproved scope was bound")
             };
