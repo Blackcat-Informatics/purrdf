@@ -819,8 +819,8 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     let inadmissible_ds = b.freeze().expect("valid dataset");
     match try_canonicalize_flat_view(&*inadmissible_ds, CanonHash::Sha256) {
         Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(violation))) => {
-            assert_eq!(violation.iri.as_ref(), reserved.as_str());
-            assert_eq!(violation.position, TermPosition::Predicate);
+            assert_eq!(violation.iri(), reserved.as_str());
+            assert_eq!(violation.position(), TermPosition::Predicate);
         }
         other => panic!("expected a typed ReservedVocabulary refusal; got {other:?}"),
     }

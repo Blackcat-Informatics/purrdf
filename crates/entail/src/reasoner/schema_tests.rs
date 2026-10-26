@@ -675,6 +675,23 @@ fn refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_s
             ServiceProof::decode(&proof.encode()).unwrap().receipt(),
             proof.receipt()
         );
+        let classified = reasoner.classify().expect("preparation obstruction");
+        let realized = reasoner.realize().expect("preparation obstruction");
+        for (refusal, original) in [
+            (
+                classified
+                    .direct_subsumptions()
+                    .expect_err("unprepared schema"),
+                classified.certificate(),
+            ),
+            (
+                realized.direct_types().expect_err("unprepared schema"),
+                realized.certificate(),
+            ),
+        ] {
+            assert!(original.schema_obstruction().is_some());
+            assert!(std::ptr::eq(refusal.certificate(), original));
+        }
         reasoner
             .retry_schema_preparation(SchemaPreparationBudget::default())
             .unwrap();

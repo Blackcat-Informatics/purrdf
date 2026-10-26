@@ -414,6 +414,15 @@ entry points are removed; callers use the fallible family directly.
 
 ## 7. Versioning
 
+Reserved-vocabulary refusals retain their original source admission with their
+immutable IRI and position. Borrow them through `iri()` and `position()`; cloning
+shares the same payload and grant. If the source cannot provide owned admission,
+refusal construction returns `CanonError::OwnedWorkspaceUnavailable`. Admission
+and physical publication failures are typed errors. This lifetime guarantee does
+not assert that canonicalization scratch or successful results are contained by
+the refusal's grant. Canonical bytes, vocabulary selection and search charges
+are unchanged.
+
 `CANON_PROFILE_VERSION` is incremented by any change that could move a consumer's
 minted identity:
 

@@ -2459,6 +2459,14 @@ fn service_error(service: &str, error: &EntailError) -> String {
     }
 }
 
+/// Carry the original certificate through the shared host refusal protocol.
+fn directness_error(service: &str, refusal: purrdf_entail::DirectnessRefusal<'_>) -> String {
+    format!(
+        "{refusal}\n{}",
+        render_dl_certificate(service, refusal.certificate())
+    )
+}
+
 /// The services, as methods on a session.
 ///
 /// Each one carries the doc comment of its free-function form rather than repeating it;
@@ -2487,13 +2495,17 @@ impl ReasonerSession {
     ///
     /// # Errors
     ///
-    /// A knowledge base that cannot be built, or an ontology with no model.
+    /// A knowledge base that cannot be built, an ontology with no model, or an
+    /// incomplete certificate that cannot establish exact direct subsumptions.
     pub fn classify(&mut self) -> Result<ReasoningAnswer, String> {
-        let (hierarchy, certificate, proof) = self
+        let certified = self
             .kb()?
             .classify()
-            .map_err(|error| service_error("classify", &error))?
-            .into_certified_parts();
+            .map_err(|error| service_error("classify", &error))?;
+        let direct = certified
+            .direct_subsumptions()
+            .map_err(|refusal| directness_error("classify", refusal))?;
+        let hierarchy = certified.answer();
         let mut answer = String::new();
         for (left, right) in hierarchy.equivalences() {
             let _ = writeln!(answer, "equivalent {} {}", emit(left), emit(right));
@@ -2501,12 +2513,13 @@ impl ReasonerSession {
         for (sub, sup) in hierarchy.subsumptions() {
             let _ = writeln!(answer, "subclass {} {}", emit(sub), emit(sup));
         }
-        for (sub, sup) in hierarchy.direct_subsumptions() {
+        for (sub, sup) in direct {
             let _ = writeln!(answer, "direct {} {}", emit(sub), emit(sup));
         }
         for class in hierarchy.unsatisfiable() {
             let _ = writeln!(answer, "unsatisfiable {}", emit(class));
         }
+        let (_, certificate, proof) = certified.into_certified_parts();
         Ok(ReasoningAnswer {
             answer,
             certificate: render_dl_certificate("classify", &certificate),
@@ -2518,20 +2531,25 @@ impl ReasonerSession {
     ///
     /// # Errors
     ///
-    /// A knowledge base that cannot be built, or an ontology with no model.
+    /// A knowledge base that cannot be built, an ontology with no model, or an
+    /// incomplete certificate that cannot establish exact most-specific types.
     pub fn realize(&mut self) -> Result<ReasoningAnswer, String> {
-        let (realization, certificate, proof) = self
+        let certified = self
             .kb()?
             .realize()
-            .map_err(|error| service_error("realize", &error))?
-            .into_certified_parts();
+            .map_err(|error| service_error("realize", &error))?;
+        let direct = certified
+            .direct_types()
+            .map_err(|refusal| directness_error("realize", refusal))?;
+        let realization = certified.answer();
         let mut answer = String::new();
         for (individual, class) in realization.types() {
             let _ = writeln!(answer, "type {} {}", emit(individual), emit(class));
         }
-        for (individual, class) in realization.direct_types() {
+        for (individual, class) in direct {
             let _ = writeln!(answer, "direct-type {} {}", emit(individual), emit(class));
         }
+        let (_, certificate, proof) = certified.into_certified_parts();
         Ok(ReasoningAnswer {
             answer,
             certificate: render_dl_certificate("realize", &certificate),
@@ -2741,15 +2759,17 @@ pub fn consistency_to_string(
 /// unsatisfiable <C>       (0..n, the classes established equivalent to owl:Nothing)
 /// ```
 ///
-/// `subclass` and `direct` are both emitted because they are different facts:
-/// `direct` is "direct as far as this run decided", which weakens under a
-/// `budget-exhausted` certificate while every listed pair stays a genuine
-/// subsumption. Dropping either would make the other's meaning ambiguous.
+/// `subclass` is the full relation and `direct` is its exact reduction. Both are
+/// emitted only for a fully decided supplied ontology. An incomplete search or
+/// omitted axiom can hide an intermediate class, so it refuses the service
+/// before any answer rows, retaining the original rendered certificate.
 ///
 /// # Errors
 ///
 /// A malformed document, or an ontology with no model — every class then subsumes
-/// every other and the hierarchy would be a complete graph.
+/// every other and the hierarchy would be a complete graph. Any incomplete
+/// certificate refuses exact directness with `owl-directness-unavailable` and
+/// the complete original certificate block.
 pub fn classify_to_string(
     document: &str,
     step_cap: u32,
@@ -2768,13 +2788,15 @@ pub fn classify_to_string(
 /// direct-type <a> <C>     (0..n, the most specific of them)
 /// ```
 ///
-/// Both blocks are emitted for the reason [`classify_to_string`] emits both of its
-/// subsumption blocks: `direct-type` is a statement about the hierarchy as this run
-/// decided it, and `type` is the answer set.
+/// Both blocks require a fully decided supplied ontology, as in
+/// [`classify_to_string`]. An incomplete type search or omitted axiom can hide a
+/// more-specific type and refuses the service before any answer rows.
 ///
 /// # Errors
 ///
-/// A malformed document, or an ontology with no model.
+/// A malformed document, an ontology with no model, or incomplete directness.
+/// The latter carries `owl-directness-unavailable` and the complete original
+/// certificate block.
 pub fn realize_to_string(
     document: &str,
     step_cap: u32,
@@ -6534,6 +6556,66 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
                 .answer()
                 .starts_with("entails true\n")
         );
+    }
+
+    /// Directness never crosses the host boundary as a weakened successful
+    /// answer. Cap and omitted-axiom refusals retain every certificate byte.
+    #[test]
+    fn incomplete_direct_services_refuse_with_the_original_certificate() {
+        let omitted = r#"
+<http://example.org/C> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://example.org/C> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:restriction .
+_:restriction <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Restriction> .
+_:restriction <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+_:restriction <http://www.w3.org/2002/07/owl#someValuesFrom> _:range .
+_:range <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+_:range <http://www.w3.org/2002/07/owl#onDatatype> <http://www.w3.org/2001/XMLSchema#integer> .
+_:range <http://www.w3.org/2002/07/owl#withRestrictions> _:cell .
+_:cell <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> _:facet .
+_:cell <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+_:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/2001/XMLSchema#string> .
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#DatatypeProperty> .
+<http://example.org/a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .
+"#;
+        for (document, steps, work) in [(TAXONOMY, 1, 0), (TAXONOMY, 0, 1), (omitted, 0, 0)] {
+            for service in ["classify", "realize"] {
+                let mut session = ReasonerSession::open(document, steps, work).expect("parses");
+                let native = session.kb().expect("knowledge base");
+                let original = match service {
+                    "classify" => {
+                        native
+                            .classify()
+                            .expect("partial classification")
+                            .into_parts()
+                            .1
+                    }
+                    _ => {
+                        native
+                            .realize()
+                            .expect("partial realization")
+                            .into_parts()
+                            .1
+                    }
+                };
+                assert_ne!(original.completeness(), DlCompleteness::Decided);
+                let expected = render_dl_certificate(service, &original);
+                let error = match service {
+                    "classify" => session.classify(),
+                    _ => session.realize(),
+                }
+                .expect_err("unproved directness is a refusal");
+                let (refusal, certificate) = error.split_once('\n').expect("certificate follows");
+                assert!(refusal.starts_with("owl-directness-unavailable:"));
+                assert_eq!(certificate, expected);
+                let one_shot = match service {
+                    "classify" => classify_to_string(document, steps, work),
+                    _ => realize_to_string(document, steps, work),
+                };
+                assert_eq!(one_shot.expect_err("same refusal"), error);
+                let proved = prove_to_string(document, service, "", steps, work);
+                assert_eq!(proved.expect_err("proof mode preserves refusal"), error);
+            }
+        }
     }
 
     /// An ontology with no model is REFUSED by every service but the one that

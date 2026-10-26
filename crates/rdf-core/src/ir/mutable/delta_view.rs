@@ -601,6 +601,13 @@ impl DatasetView for DeltaDatasetView {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(crate::NoopReservation::owned()))
+    }
+
     /// The wider bound of the base and the delta.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
         crate::dataset_view::widest_nesting_bound([
