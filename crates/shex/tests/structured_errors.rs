@@ -406,7 +406,7 @@ fn lexical_native_causes_survive_source_disposal_and_imports() {
 
 fn shexj_ingress_retains_original_json_causes_and_precedence() {
     use purrdf_lex::json::{self, Limits};
-    use purrdf_shex::{ExactSchema, parse_shexj};
+    use purrdf_shex::{ExactSchema, JsonMemberReason, parse_shexj};
 
     let limits = Limits {
         unique_members: true,
@@ -519,7 +519,14 @@ fn shexj_ingress_retains_original_json_causes_and_precedence() {
     assert_eq!(Capture::read(&base_fault).code, "shex-iri");
     let schema_fault = parse_shexj("[]", None).unwrap_err();
     assert_eq!(Capture::read(&schema_fault).code, "shex-json");
-    assert!(std::error::Error::source(&schema_fault).is_none());
+    let schema_cause = std::error::Error::source(&schema_fault).unwrap();
+    assert!(schema_cause.is::<JsonMemberReason>());
+    assert!(
+        schema_cause
+            .source()
+            .unwrap()
+            .is::<json::record::DecodeError>()
+    );
     let root = parse_shexj(
         r#"{"type":"Schema","imports":["https://example.org/import"]}"#,
         None,
