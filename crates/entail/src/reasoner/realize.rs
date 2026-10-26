@@ -18,7 +18,7 @@
 
 use purrdf_core::TermValue;
 
-use super::certificate::{Session, Verdict};
+use super::certificate::{Certified, DirectnessRefusal, Session, Verdict};
 use super::classify::Subsumptions;
 use super::proof::{Claim, ClaimSubject, refutation_claim};
 use crate::owl_dl::graph::Assumptions;
@@ -36,12 +36,17 @@ pub(crate) fn is_instance(session: &mut Session<'_>, individual: u32, concept: u
 }
 
 /// The realized types of an ontology's named individuals.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct Realization {
     /// Every established `a : C`, sorted.
     types: Vec<(TermValue, TermValue)>,
     /// The subset of [`Self::types`] that is most specific, sorted.
     direct: Vec<(TermValue, TermValue)>,
+}
+
+purrdf_hash::debug_non_exhaustive! {
+    /// Unproved direct candidates remain private, including in debug output.
+    Realization { types }
 }
 
 impl Realization {
@@ -54,18 +59,6 @@ impl Realization {
     #[must_use]
     pub fn types(&self) -> &[(TermValue, TermValue)] {
         &self.types
-    }
-
-    /// The MOST SPECIFIC entailed types: those `a : C` for which no entailed `a : D` has
-    /// `D` strictly subsumed by `C`. Sorted.
-    ///
-    /// Two equivalent classes that are both types are BOTH listed. Collapsing them to a
-    /// representative would answer a question about the hierarchy inside an answer about
-    /// an individual, and a caller who wants the collapse has
-    /// [`ClassHierarchy::equivalences`](super::ClassHierarchy::equivalences) to do it with.
-    #[must_use]
-    pub fn direct_types(&self) -> &[(TermValue, TermValue)] {
-        &self.direct
     }
 
     /// Realize `individuals` against `classes`, reusing the classifier's matrix for the
@@ -149,5 +142,19 @@ impl Realization {
         types.sort();
         direct.sort();
         (Self { types, direct }, claims)
+    }
+}
+
+impl Certified<Realization> {
+    /// Exact most-specific types, sorted, including every equivalent class that
+    /// is a type. No strictly more specific entailed type exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original certificate in [`DirectnessRefusal`] unless the
+    /// complete supplied ontology was decided. Positive types remain available
+    /// through [`Self::answer`].
+    pub fn direct_types(&self) -> Result<&[(TermValue, TermValue)], DirectnessRefusal<'_>> {
+        Ok(&self.direct_answer()?.direct)
     }
 }

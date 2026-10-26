@@ -472,10 +472,9 @@ pub(crate) fn classify_impl(
 ///
 /// The answer carries `equivalent`, `subclass` (the full transitively-closed
 /// relation), `direct` (its transitive reduction) and `unsatisfiable` lines, in
-/// that block order. Both subsumption blocks are emitted because they are different
-/// facts: `direct` is "direct as far as this run decided", which weakens under a
-/// `budget-exhausted` certificate while every listed pair stays a genuine
-/// subsumption.
+/// that block order. Directness requires the complete supplied ontology to be
+/// decided; incomplete runs throw `owl-directness-unavailable` with the full
+/// original certificate in the message before emitting any answer rows.
 ///
 /// Throws on a malformed document, or on an ontology with no model — every class
 /// then subsumes every other and the hierarchy would be a complete graph.
@@ -500,7 +499,8 @@ pub(crate) fn realize_impl(
 /// `entailRealize(document, stepCap, workCap)` → the entailed types of the ontology's named
 /// individuals, and the most specific of them (`type` then `direct-type` lines).
 ///
-/// Throws on a malformed document or an ontology with no model.
+/// Throws on a malformed document, an ontology with no model, or incomplete
+/// directness. The latter retains the complete original certificate in the message.
 #[wasm_bindgen(js_name = entailRealize)]
 pub fn entail_realize(
     document: &str,

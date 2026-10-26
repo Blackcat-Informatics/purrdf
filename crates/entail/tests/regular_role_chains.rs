@@ -930,8 +930,8 @@ fn chain_derived_types_reach_all_query_services_and_materialization() {
     );
     assert!(
         realized
-            .answer()
             .direct_types()
+            .expect("fully decided realization")
             .contains(&(iri("c"), iri("C")))
     );
     let classified = reasoner.classify().expect("classification");

@@ -535,6 +535,42 @@ pub struct Certified<T> {
     proof: Option<ServiceProof>,
 }
 
+/// Directness is unproved unless the complete supplied ontology was decided.
+///
+/// The original certificate retains omitted axioms, resource outcomes and
+/// cancellation. A decided fragment is insufficient: omitted axioms can add an
+/// intermediate class or a more specific type.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectnessRefusal<'a> {
+    certificate: &'a DlCertificate,
+}
+
+impl DirectnessRefusal<'_> {
+    /// The original certificate that prevents an exact direct answer.
+    #[must_use]
+    pub const fn certificate(&self) -> &DlCertificate {
+        self.certificate
+    }
+}
+
+impl core::fmt::Display for DirectnessRefusal<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(
+            "owl-directness-unavailable: direct OWL answers require a fully decided ontology; inspect the retained certificate for boundaries, resource refusal or cancellation",
+        )
+    }
+}
+
+impl std::error::Error for DirectnessRefusal<'_> {}
+
+impl purrdf_hash::error::StructuredError for DirectnessRefusal<'_> {
+    purrdf_hash::error_visit! {
+        @record self { certificate } => "owl-directness-unavailable" {
+            "certificate" => Record(self.certificate),
+        }
+    }
+}
+
 impl<T> Certified<T> {
     /// Pair an answer with its certificate and, when one was recorded, its proof term.
     pub(crate) const fn new(
@@ -557,6 +593,17 @@ impl<T> Certified<T> {
     /// The certificate of the run that produced it.
     pub const fn certificate(&self) -> &DlCertificate {
         &self.certificate
+    }
+
+    /// Direct relations need every relevant absence, not just positive facts.
+    pub(super) fn direct_answer(&self) -> Result<&T, DirectnessRefusal<'_>> {
+        if matches!(self.certificate.completeness(), DlCompleteness::Decided) {
+            Ok(&self.answer)
+        } else {
+            Err(DirectnessRefusal {
+                certificate: &self.certificate,
+            })
+        }
     }
 
     /// The PROOF TERM of the run that produced it, when one was recorded.
