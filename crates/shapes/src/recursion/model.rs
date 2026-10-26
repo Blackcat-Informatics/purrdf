@@ -555,12 +555,14 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
                 owner: Some(owner),
             })?;
         }
-        if self.closed {
-            for function in &owner.functions {
+        for function in &owner.functions {
+            if self.closed {
                 self.intern(Node {
                     kind: Kind::Function(function),
                     owner: Some(owner),
                 })?;
+            } else if function.body.get().is_none() {
+                return Err(PreparationRefusal::MissingFunctionBody(function.iri.clone()).into());
             }
         }
         Ok(())
