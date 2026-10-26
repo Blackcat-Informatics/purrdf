@@ -186,10 +186,12 @@ complete prepared length. The public allocation control
 `canonical_decimal_reserves_one_exact_output_destination` in
 `crates/xsd/tests/exact_governance.rs` checks one exact-sized output allocation,
 including zero, normalized fractions, the minimum signed coefficient and long
-fractional padding, on native and WebAssembly targets.
-The binary64 conversion row includes the inline coefficient/scale and range
-gates; ratio conversion has a separate cold frame. Both routes retain
-the original correctly rounded kernels and exact bit-pattern oracles.
+fractional padding, in native execution.
+The conversion to `f64` narrows proven small coefficients to signed 64-bit
+integers before the existing exact-operand division. Zero, whole coefficients
+and wider values retain their original routes; ratio conversion has a separate
+cold frame. The correctly rounded kernels, `f32` path and bit-pattern oracles
+are unchanged.
 
 Inline decimal normalization tests divisibility by ten with an inverse multiply,
 rotation and bound instead of remainders. Wide zero stripping retains the exact
@@ -207,11 +209,14 @@ seeds and unchanged release/bench profiles give these median instructions/value:
 | Exact decimal multiplication | 187.4795 | 159.2354 | -15.07% |
 | Public decimal multiplication | 274.9604 | 248.7158 | -9.54% |
 | Exact decimal division, scale eighteen/toward-zero | 367.6816 | 363.1680 | -1.23% |
+| Exact decimal conversion to `f64` | 144.3599 | 102.8242 | -28.77% |
+| Public decimal conversion to `f64` | 146.3594 | 104.8242 | -28.38% |
 
 Every returned answer is checked after measurement. The other original small
 rows show no material instruction regression; all measured allocation quantities
 are unchanged. Exact multiplication is 6.56% below the frozen historical bounded
-source's 170.40625 instructions/value. These retained-output arithmetic figures
+source's 170.40625 instructions/value. Exact conversion to `f64` is 21.35% below
+its original 130.734375 instructions/value reference. These retained-output figures
 include a common indirect call and exclude setup, validation and destruction;
 they establish neither complete-query speed nor full bounded parity. General
 semantics execute natively; portable release builds are a separate obligation.
