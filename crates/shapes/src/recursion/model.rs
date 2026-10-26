@@ -194,7 +194,7 @@ pub(crate) fn analyze(owner: &Arc<ModelOwner>) -> Result<graph::Analysis, Shapes
     builder.analysis()
 }
 
-fn flat_terminals(owner: &ModelOwner) -> bool {
+pub(super) fn flat_terminals(owner: &ModelOwner) -> bool {
     let Some(definitions) = owner.index.get() else {
         return false;
     };
@@ -555,15 +555,20 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
                 owner: Some(owner),
             })?;
         }
-        for function in &owner.functions {
-            self.intern(Node {
-                kind: Kind::Function(function),
-                owner: Some(owner),
-            })?;
+        if self.closed {
+            for function in &owner.functions {
+                self.intern(Node {
+                    kind: Kind::Function(function),
+                    owner: Some(owner),
+                })?;
+            }
         }
         Ok(())
     }
     fn first_declaration(&mut self, function: &'a Arc<CustomFunction>) -> Result<bool, WalkError> {
+        if !self.closed {
+            return Ok(false);
+        }
         self.edge(
             Node {
                 kind: Kind::Function(function),
@@ -735,16 +740,7 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
                 ));
             }
             Constraint::Expression { .. } => self.context.parameter = sh::EXPRESSION,
-            Constraint::NodeByExpression { expr, shapes, .. } => {
-                self.indexed_targets(
-                    expr,
-                    shapes,
-                    sh::NODE_BY_EXPRESSION,
-                    RecursionPolarity::Positive,
-                )?;
-                self.context.parameter = sh::NODE_BY_EXPRESSION;
-                self.context.polarity = RecursionPolarity::Both;
-            }
+            Constraint::NodeByExpression { .. } => {}
             Constraint::UniqueValuesFor { .. } => {
                 self.context.parameter = sh::UNIQUE_VALUES_FOR;
                 self.context.polarity = RecursionPolarity::Both;
@@ -784,6 +780,9 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
         result
     }
     fn shape_arg(&mut self, arg: &'a ShapeArg) -> Result<(), WalkError> {
+        if !self.closed {
+            return Ok(());
+        }
         let previous = self.context;
         if matches!(arg, ShapeArg::Named(_)) {
             self.context.polarity = self.context.shape_polarity;
@@ -800,7 +799,10 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
         result
     }
     fn node_expr(&mut self, expression: &'a NodeExpr) -> Result<(), WalkError> {
-        if self.closed && !matches!(expression, NodeExpr::Constant(_) | NodeExpr::Empty) {
+        if !self.closed {
+            return Ok(());
+        }
+        if !matches!(expression, NodeExpr::Constant(_) | NodeExpr::Empty) {
             return self.unqualified(self.context.parameter, None);
         }
         let previous = (self.context, self.owner);

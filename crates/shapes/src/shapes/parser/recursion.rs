@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Signed refers graph over original Core and named expression definitions.
+//! Signed refers graph over original Core shape definitions.
 
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
-use purrdf_rdf::{FastMap, FastSet};
+use purrdf_rdf::FastMap;
 use std::sync::Arc;
 
 use crate::error::{RecursionPolarity, ShapesError};
-use crate::expression::{CustomFunction, FnCall, NodeExpr, ShapeArg};
-use crate::model::{sh, shnex, sparql_ns};
+use crate::expression::{CustomFunction, NodeExpr};
+use crate::model::sh;
 use crate::product::ShapesProductError;
 use crate::shapes::link::{ModelWalk, ShapeIndexRef};
-use crate::shapes::{Constraint, ModelOwner, Parser, Shape};
+use crate::shapes::{Constraint, ModelOwner, Parser};
 use crate::spec::ValueRule;
 use crate::term::Term;
 
@@ -214,26 +214,7 @@ impl Parser<'_> {
                 }
             }
         }
-        for (source, shape) in shapes.iter().enumerate() {
-            let mut expressions = ExpressionDependencies {
-                owner,
-                depth: 0,
-                declarations: FastSet::default(),
-                polarity: RecursionPolarity::Both,
-                shape_polarity: RecursionPolarity::Both,
-                parameter: sh::EXPRESSION,
-                in_expression: false,
-                edges: Vec::new(),
-                live: 0,
-            };
-            expressions
-                .walk_shape(owner.definition_required(shape)?)
-                .map_err(|error| ShapesError::Invalid(error.to_string()))?;
-            for (target, predicate, polarity) in expressions.edges {
-                let target = destination(target)?;
-                memory.push(&mut adjacency[source], target)?;
-                memory.push(&mut dependencies, (source, target, predicate, polarity))?;
-            }
+        for (source, _) in shapes.iter().enumerate() {
             adjacency[source].sort_unstable();
             adjacency[source].dedup();
         }
@@ -252,9 +233,8 @@ impl Parser<'_> {
             },
         )?;
         analysis.admit(self.recursion)?;
-        // The native graph also includes expression-computed target edges and
-        // original declaration/model scopes that are not plain RDF refers arcs.
-        // Retain source-only arcs separately; neither projection replaces the other.
+        // The native graph retains original model/occurrence identity and proves
+        // selected closed eligibility. Source-only structural arcs stay separate.
         owner.admit_recursion(self.recursion)?;
         crate::recursion::graph::Source::new(owner, analysis)
     }
@@ -282,120 +262,5 @@ impl Parser<'_> {
             }
             _ => RecursionPolarity::Positive,
         }
-    }
-}
-
-/// Collect named native-expression dependencies from original model positions.
-/// Structural operand traversal stays in ModelWalk, shared with model linking
-/// and product admission. Value transformations are conservatively nonmonotone;
-/// a direct conformance predicate retains its enclosing truth polarity.
-struct ExpressionDependencies<'model> {
-    owner: &'model Arc<ModelOwner>,
-    depth: u32,
-    declarations: FastSet<(usize, RecursionPolarity)>,
-    polarity: RecursionPolarity,
-    shape_polarity: RecursionPolarity,
-    parameter: &'static str,
-    in_expression: bool,
-    live: usize,
-    edges: Vec<(&'model Term, &'static str, RecursionPolarity)>,
-}
-
-impl<'model> ModelWalk<'model> for ExpressionDependencies<'model> {
-    fn depth(&mut self) -> &mut u32 {
-        &mut self.depth
-    }
-
-    fn first_owner(&mut self, _: &'model Arc<ModelOwner>) -> Result<bool, ShapesProductError> {
-        Ok(false)
-    }
-
-    fn first_declaration(
-        &mut self,
-        function: &'model Arc<CustomFunction>,
-    ) -> Result<bool, ShapesProductError> {
-        self.declarations
-            .try_reserve(1)
-            .map_err(|_| crate::PreparationRefusal::Storage(StorageError::AllocationFailed))?;
-        Ok(self
-            .declarations
-            .insert((Arc::as_ptr(function).addr(), self.polarity)))
-    }
-
-    fn shape_index(&mut self, _: &'model ShapeIndexRef) -> Result<(), ShapesProductError> {
-        Ok(())
-    }
-
-    fn shape_arg(&mut self, arg: &'model ShapeArg) -> Result<(), ShapesProductError> {
-        let previous = self.polarity;
-        if matches!(arg, ShapeArg::Named(_)) {
-            self.polarity = self.shape_polarity;
-        }
-        let result = self.walk_shape_arg(arg);
-        self.polarity = previous;
-        result
-    }
-
-    fn shape(&mut self, shape: &'model Shape) -> Result<(), ShapesProductError> {
-        if self.in_expression {
-            let mut resident = Resident;
-            let mut memory = Memory::resume(&mut resident, self.live);
-            let result = memory.push(&mut self.edges, (&shape.id, self.parameter, self.polarity));
-            self.live = memory.admitted_bytes();
-            result.map_err(crate::PreparationRefusal::Storage)?;
-        }
-        Ok(())
-    }
-
-    fn constraint(&mut self, constraint: &'model Constraint) -> Result<(), ShapesProductError> {
-        let previous = self.polarity;
-        self.polarity = if matches!(constraint, Constraint::Expression { .. }) {
-            RecursionPolarity::Positive
-        } else {
-            RecursionPolarity::Both
-        };
-        let result = self.walk_constraint(constraint);
-        self.polarity = previous;
-        result
-    }
-
-    fn node_expr(&mut self, expression: &'model NodeExpr) -> Result<(), ShapesProductError> {
-        let previous = (
-            self.in_expression,
-            self.polarity,
-            self.shape_polarity,
-            self.parameter,
-        );
-        self.in_expression = true;
-        match expression {
-            NodeExpr::ConformsToShape { .. } => {
-                self.parameter = shnex::CONFORMS_TO_SHAPE;
-                self.shape_polarity = self.polarity;
-                // Changing which node is judged can change its answer in either
-                // direction, independently of the named shape's truth law.
-                self.polarity = RecursionPolarity::Both;
-            }
-            NodeExpr::Call(FnCall::Sparql { iri, .. })
-                if iri.as_str().strip_prefix(sparql_ns::NS) == Some("logical-not") =>
-            {
-                self.polarity = self.polarity.inverted();
-            }
-            NodeExpr::CustomCall { func, .. } => {
-                if let Some(function) = self.owner.function(func) {
-                    self.declare(function)?;
-                }
-                self.polarity = RecursionPolarity::Both;
-            }
-            NodeExpr::Owned { .. } => {}
-            _ => self.polarity = RecursionPolarity::Both,
-        }
-        let result = self.walk_node_expr(expression);
-        (
-            self.in_expression,
-            self.polarity,
-            self.shape_polarity,
-            self.parameter,
-        ) = previous;
-        result
     }
 }

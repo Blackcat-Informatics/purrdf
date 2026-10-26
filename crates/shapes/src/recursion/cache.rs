@@ -45,6 +45,9 @@ pub(crate) fn admit(
     owner: &Arc<ModelOwner>,
     semantics: Option<RecursionSemantics>,
 ) -> Result<(), ShapesError> {
+    if semantics.is_none() && super::model::flat_terminals(owner) {
+        return Ok(());
+    }
     if semantics.is_some() {
         prove(owner)?;
     }
