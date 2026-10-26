@@ -30,11 +30,11 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/aes-gcm-0.11.1/LICENSE-APACHE
 Notice: dependencies/aes-gcm-0.11.1/LICENSE-MIT
 
-aho-corasick-1.1.4: Unlicense OR MIT
+aho-corasick-1.1.5: Unlicense OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/aho-corasick-1.1.4/COPYING
-Notice: dependencies/aho-corasick-1.1.4/LICENSE-MIT
+Notice: dependencies/aho-corasick-1.1.5/COPYING
+Notice: dependencies/aho-corasick-1.1.5/LICENSE-MIT
 
 block-buffer-0.12.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -48,11 +48,11 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/bumpalo-3.20.3/LICENSE-APACHE
 Notice: dependencies/bumpalo-3.20.3/LICENSE-MIT
 
-cfg-if-1.0.4: MIT OR Apache-2.0
+cfg-if-1.0.5: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/cfg-if-1.0.4/LICENSE-APACHE
-Notice: dependencies/cfg-if-1.0.4/LICENSE-MIT
+Notice: dependencies/cfg-if-1.0.5/LICENSE-APACHE
+Notice: dependencies/cfg-if-1.0.5/LICENSE-MIT
 
 cipher-0.5.2: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -78,29 +78,29 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/cpubits-0.1.1/LICENSE-APACHE
 Notice: dependencies/cpubits-0.1.1/LICENSE-MIT
 
-cpufeatures-0.3.0: MIT OR Apache-2.0
+cpufeatures-0.3.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/cpufeatures-0.3.0/LICENSE-APACHE
-Notice: dependencies/cpufeatures-0.3.0/LICENSE-MIT
+Notice: dependencies/cpufeatures-0.3.1/LICENSE-APACHE
+Notice: dependencies/cpufeatures-0.3.1/LICENSE-MIT
 
-crossbeam-deque-0.8.6: MIT OR Apache-2.0
+crossbeam-deque-0.8.8: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/crossbeam-deque-0.8.6/LICENSE-APACHE
-Notice: dependencies/crossbeam-deque-0.8.6/LICENSE-MIT
+Notice: dependencies/crossbeam-deque-0.8.8/LICENSE-APACHE
+Notice: dependencies/crossbeam-deque-0.8.8/LICENSE-MIT
 
-crossbeam-epoch-0.9.18: MIT OR Apache-2.0
+crossbeam-epoch-0.9.21: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/crossbeam-epoch-0.9.18/LICENSE-APACHE
-Notice: dependencies/crossbeam-epoch-0.9.18/LICENSE-MIT
+Notice: dependencies/crossbeam-epoch-0.9.21/LICENSE-APACHE
+Notice: dependencies/crossbeam-epoch-0.9.21/LICENSE-MIT
 
-crossbeam-utils-0.8.21: MIT OR Apache-2.0
+crossbeam-utils-0.8.23: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/crossbeam-utils-0.8.21/LICENSE-APACHE
-Notice: dependencies/crossbeam-utils-0.8.21/LICENSE-MIT
+Notice: dependencies/crossbeam-utils-0.8.23/LICENSE-APACHE
+Notice: dependencies/crossbeam-utils-0.8.23/LICENSE-MIT
 
 crypto-common-0.2.2: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -121,11 +121,11 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/ctr-0.10.1/LICENSE-APACHE
 Notice: dependencies/ctr-0.10.1/LICENSE-MIT
 
-ctutils-0.4.2: Apache-2.0 OR MIT
+ctutils-0.4.6: Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/ctutils-0.4.2/LICENSE-APACHE
-Notice: dependencies/ctutils-0.4.2/LICENSE-MIT
+Notice: dependencies/ctutils-0.4.6/LICENSE-APACHE
+Notice: dependencies/ctutils-0.4.6/LICENSE-MIT
 
 digest-0.11.3: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -133,23 +133,23 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/digest-0.11.3/LICENSE-APACHE
 Notice: dependencies/digest-0.11.3/LICENSE-MIT
 
-either-1.16.0: MIT OR Apache-2.0
+either-1.19.0: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/either-1.16.0/LICENSE-APACHE
-Notice: dependencies/either-1.16.0/LICENSE-MIT
+Notice: dependencies/either-1.19.0/LICENSE-APACHE
+Notice: dependencies/either-1.19.0/LICENSE-MIT
 
-fastrand-2.4.1: Apache-2.0 OR MIT
+fastrand-2.5.0: Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/fastrand-2.4.1/LICENSE-APACHE
-Notice: dependencies/fastrand-2.4.1/LICENSE-MIT
+Notice: dependencies/fastrand-2.5.0/LICENSE-APACHE
+Notice: dependencies/fastrand-2.5.0/LICENSE-MIT
 
-getrandom-0.3.4: MIT OR Apache-2.0
+getrandom-0.4.3: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/getrandom-0.3.4/LICENSE-APACHE
-Notice: dependencies/getrandom-0.3.4/LICENSE-MIT
+Notice: dependencies/getrandom-0.4.3/LICENSE-APACHE
+Notice: dependencies/getrandom-0.4.3/LICENSE-MIT
 
 ghash-0.6.0: Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
@@ -169,11 +169,11 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/hybrid-array-0.4.15/LICENSE-APACHE
 Notice: dependencies/hybrid-array-0.4.15/LICENSE-MIT
 
-inout-0.2.2: MIT OR Apache-2.0
+inout-0.2.5: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/inout-0.2.2/LICENSE-APACHE
-Notice: dependencies/inout-0.2.2/LICENSE-MIT
+Notice: dependencies/inout-0.2.5/LICENSE-APACHE
+Notice: dependencies/inout-0.2.5/LICENSE-MIT
 
 jsonld-w3c: LicenseRef-W3C-Test-Suite
 Scope: source-only conformance data; original notices remain authoritative
@@ -185,11 +185,11 @@ Notice: third-party/jsonld-w3c/2-W3C-test-suite-license.html
 Notice: third-party/jsonld-w3c/3-W3C-test-suite-BSD.html
 Notice: third-party/jsonld-w3c/4-LICENSE.md
 
-libc-0.2.186: MIT OR Apache-2.0
+libc-0.2.191: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/libc-0.2.186/LICENSE-APACHE
-Notice: dependencies/libc-0.2.186/LICENSE-MIT
+Notice: dependencies/libc-0.2.191/LICENSE-APACHE
+Notice: dependencies/libc-0.2.191/LICENSE-MIT
 
 libyaml-emitter: MIT
 Scope: emitter style/layout decisions reproduced from unsafe-libyaml 0.2.11; retained MIT permission notice
@@ -198,11 +198,11 @@ Evidence: crates/lex/PROVENANCE.md
 Notice: third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt
 Notice: third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt
 
-memchr-2.8.2: Unlicense OR MIT
+memchr-2.8.3: Unlicense OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/memchr-2.8.2/COPYING
-Notice: dependencies/memchr-2.8.2/LICENSE-MIT
+Notice: dependencies/memchr-2.8.3/COPYING
+Notice: dependencies/memchr-2.8.3/LICENSE-MIT
 
 obographs: BSD-3-Clause
 Scope: source-only conformance data; original notices remain authoritative
@@ -222,22 +222,22 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/polyval-0.7.3/LICENSE-APACHE
 Notice: dependencies/polyval-0.7.3/LICENSE-MIT
 
-proc-macro2-1.0.106: MIT OR Apache-2.0
+proc-macro2-1.0.107: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/proc-macro2-1.0.106/LICENSE-APACHE
-Notice: dependencies/proc-macro2-1.0.106/LICENSE-MIT
+Notice: dependencies/proc-macro2-1.0.107/LICENSE-APACHE
+Notice: dependencies/proc-macro2-1.0.107/LICENSE-MIT
 
-quote-1.0.46: MIT OR Apache-2.0
+quote-1.0.47: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/quote-1.0.46/LICENSE-APACHE
-Notice: dependencies/quote-1.0.46/LICENSE-MIT
+Notice: dependencies/quote-1.0.47/LICENSE-APACHE
+Notice: dependencies/quote-1.0.47/LICENSE-MIT
 
-r-efi-5.3.0: MIT OR Apache-2.0 OR LGPL-2.1-or-later
+r-efi-6.0.0: MIT OR Apache-2.0 OR LGPL-2.1-or-later
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/r-efi-5.3.0/AUTHORS
+Notice: dependencies/r-efi-6.0.0/AUTHORS
 
 rayon-1.12.0: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -268,17 +268,17 @@ Evidence: LICENSING.md
 Notice: third-party/rdfc/0-W3C-software-document-2015.html
 Notice: third-party/rdfc/1-LICENSE.md
 
-regex-1.12.4: MIT OR Apache-2.0
+regex-1.13.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/regex-1.12.4/LICENSE-APACHE
-Notice: dependencies/regex-1.12.4/LICENSE-MIT
+Notice: dependencies/regex-1.13.1/LICENSE-APACHE
+Notice: dependencies/regex-1.13.1/LICENSE-MIT
 
-regex-automata-0.4.14: MIT OR Apache-2.0
+regex-automata-0.4.18: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/regex-automata-0.4.14/LICENSE-APACHE
-Notice: dependencies/regex-automata-0.4.14/LICENSE-MIT
+Notice: dependencies/regex-automata-0.4.18/LICENSE-APACHE
+Notice: dependencies/regex-automata-0.4.18/LICENSE-MIT
 
 regex-syntax-0.8.11: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -287,17 +287,17 @@ Notice: dependencies/regex-syntax-0.8.11/LICENSE-APACHE
 Notice: dependencies/regex-syntax-0.8.11/LICENSE-MIT
 Notice: dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE
 
-rustversion-1.0.22: MIT OR Apache-2.0
+rustversion-1.0.23: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/rustversion-1.0.22/LICENSE-APACHE
-Notice: dependencies/rustversion-1.0.22/LICENSE-MIT
+Notice: dependencies/rustversion-1.0.23/LICENSE-APACHE
+Notice: dependencies/rustversion-1.0.23/LICENSE-MIT
 
-sha2-0.11.0: MIT OR Apache-2.0
+sha2-0.11.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/sha2-0.11.0/LICENSE-APACHE
-Notice: dependencies/sha2-0.11.0/LICENSE-MIT
+Notice: dependencies/sha2-0.11.1/LICENSE-APACHE
+Notice: dependencies/sha2-0.11.1/LICENSE-MIT
 
 shacl: W3C-20150513
 Scope: source-only conformance data; original notices remain authoritative
@@ -317,11 +317,11 @@ Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/structured-zstd-0.0.49/LICENSE
 
-syn-2.0.118: MIT OR Apache-2.0
+syn-3.0.9: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/syn-2.0.118/LICENSE-APACHE
-Notice: dependencies/syn-2.0.118/LICENSE-MIT
+Notice: dependencies/syn-3.0.9/LICENSE-APACHE
+Notice: dependencies/syn-3.0.9/LICENSE-MIT
 
 toml-test: MIT
 Scope: source-only frozen TOML 1.1 grammar and typed-value conformance data; no parser implementation
@@ -329,10 +329,10 @@ Source: https://github.com/toml-lang/toml-test/tree/ff49d109861c1ad25af53f687f2a
 Evidence: crates/toml/PROVENANCE.md
 Notice: third-party/toml-test/0-MIT.txt
 
-twox-hash-2.1.2: MIT
+twox-hash-2.1.5: MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/twox-hash-2.1.2/LICENSE.txt
+Notice: dependencies/twox-hash-2.1.5/LICENSE.txt
 
 typenum-1.20.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -348,12 +348,12 @@ Evidence: crates/iri/unicode/PROVENANCE.md
 Evidence: LICENSING.md
 Notice: third-party/unicode/0-Unicode-3.0.txt
 
-unicode-ident-1.0.24: (MIT OR Apache-2.0) AND Unicode-3.0
+unicode-ident-1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/unicode-ident-1.0.24/LICENSE-APACHE
-Notice: dependencies/unicode-ident-1.0.24/LICENSE-MIT
-Notice: dependencies/unicode-ident-1.0.24/LICENSE-UNICODE
+Notice: dependencies/unicode-ident-1.0.27/LICENSE-APACHE
+Notice: dependencies/unicode-ident-1.0.27/LICENSE-MIT
+Notice: dependencies/unicode-ident-1.0.27/LICENSE-UNICODE
 
 universal-hash-0.6.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -368,36 +368,29 @@ Notice: dependencies/visual-hashing-1.0.0/LICENSE-APACHE
 Notice: dependencies/visual-hashing-1.0.0/LICENSE-MIT
 Notice: dependencies/visual-hashing-1.0.0/LICENSE-MULAN
 
-wasip2-1.0.4+wasi-0.2.12: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+wasm-bindgen-0.2.129: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-APACHE
-Notice: dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception
-Notice: dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-0.2.129/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-0.2.129/LICENSE-MIT
 
-wasm-bindgen-0.2.125: MIT OR Apache-2.0
+wasm-bindgen-macro-0.2.129: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-0.2.125/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-0.2.125/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-macro-0.2.129/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-macro-0.2.129/LICENSE-MIT
 
-wasm-bindgen-macro-0.2.125: MIT OR Apache-2.0
+wasm-bindgen-macro-support-0.2.129: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-macro-0.2.125/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-macro-0.2.125/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-macro-support-0.2.129/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-macro-support-0.2.129/LICENSE-MIT
 
-wasm-bindgen-macro-support-0.2.125: MIT OR Apache-2.0
+wasm-bindgen-shared-0.2.129: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-MIT
-
-wasm-bindgen-shared-0.2.125: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-shared-0.2.125/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-shared-0.2.125/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-shared-0.2.129/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-shared-0.2.129/LICENSE-MIT
 
 whatwg-html-references: BSD-3-Clause
 Scope: named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant
@@ -417,10 +410,3 @@ Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/windows-sys-0.61.2/license-apache-2.0
 Notice: dependencies/windows-sys-0.61.2/license-mit
-
-wit-bindgen-0.57.1: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wit-bindgen-0.57.1/LICENSE-APACHE
-Notice: dependencies/wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception
-Notice: dependencies/wit-bindgen-0.57.1/LICENSE-MIT

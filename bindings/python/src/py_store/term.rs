@@ -54,7 +54,7 @@ fn parse_direction(direction: Option<&str>) -> PyResult<Option<RdfTextDirection>
 }
 
 /// An IRI node (`NamedNode`).
-#[pyclass(name = "NamedNode", frozen, skip_from_py_object)]
+#[pyclass(name = "NamedNode", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyNamedNode {
     pub(crate) inner: String,
@@ -93,7 +93,7 @@ impl PyNamedNode {
 }
 
 /// A blank node (`BlankNode`).
-#[pyclass(name = "BlankNode", frozen, skip_from_py_object)]
+#[pyclass(name = "BlankNode", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyBlankNode {
     pub(crate) inner: String,
@@ -135,7 +135,7 @@ impl PyBlankNode {
 }
 
 /// An RDF literal (`Literal`).
-#[pyclass(name = "Literal", frozen, skip_from_py_object)]
+#[pyclass(name = "Literal", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyLiteral {
     pub(crate) inner: RdfLiteral,
@@ -293,7 +293,7 @@ fn framed_key(parts: &[&str]) -> String {
 }
 
 /// A quoted triple term (RDF 1.2 / RDF-star) (`Triple`).
-#[pyclass(name = "Triple", frozen, skip_from_py_object)]
+#[pyclass(name = "Triple", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyTriple {
     pub(crate) inner: RdfTriple,
@@ -351,7 +351,7 @@ impl PyTriple {
 }
 
 /// An RDF quad (`Quad`).
-#[pyclass(name = "Quad", frozen, skip_from_py_object)]
+#[pyclass(name = "Quad", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyQuad {
     pub(crate) inner: RdfQuad,
@@ -414,7 +414,7 @@ impl PyQuad {
 }
 
 /// A default-graph marker term (`DefaultGraph`).
-#[pyclass(name = "DefaultGraph", frozen, skip_from_py_object)]
+#[pyclass(name = "DefaultGraph", frozen)]
 #[derive(Clone, Debug, Default)]
 pub struct PyDefaultGraph;
 
@@ -439,7 +439,7 @@ impl PyDefaultGraph {
 }
 
 /// A SPARQL variable, used to key query substitutions (`Variable`).
-#[pyclass(name = "Variable", frozen, skip_from_py_object)]
+#[pyclass(name = "Variable", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyVariable {
     pub(crate) inner: String,

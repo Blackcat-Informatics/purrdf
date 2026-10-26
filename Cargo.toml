@@ -132,7 +132,7 @@ purrdf-xsd = { path = "crates/xsd", version = "3.0.1" }
 # `span-locations` gives the helper census line numbers and the byte ranges it
 # re-lexes function bodies from; it changes nothing inside a real proc macro.
 proc-macro2 = { version = "1", features = ["span-locations"] }
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
@@ -142,7 +142,7 @@ aes-gcm = { version = "0.11", default-features = false, features = ["aes", "allo
 clap = { version = "4", features = ["derive"] }
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
-getrandom = "0.3"
+getrandom = "0.4"
 # Only the raw `HashTable` is used; every caller supplies its own fixed-key hash
 # (`purrdf_hash::fixed::FixedHasher`),
 # so the default hasher (foldhash) and allocator-api2 stay OFF.
@@ -155,7 +155,7 @@ hashbrown = { version = "0.17", default-features = false }
 libc = "0.2"
 # purrdf-stack also uses these target-gated declarations to measure the current
 # native thread stack; wasm32 uses its own shadow-stack floor and no libc.
-pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
+pyo3 = { version = "0.30", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 # Built without `perf-literal`: its literal prefilter is aho-corasick and memchr,
 # a second byte-search implementation beside `purrdf_lex::scan`. Every other
@@ -183,11 +183,11 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg`, the
 # wasm32 test runner (scripts/wasm-test-runner.sh, which reads this line and
 # refuses any other CLI version) and the CI Node lane use
-# `wasm-bindgen-cli@0.2.125` to match this.
-wasm-bindgen = "=0.2.125"
+# `wasm-bindgen-cli@0.2.129` to match this.
+wasm-bindgen = "=0.2.129"
 # Encoding support for the private host linker. Native byte-preserving reads
 # and the existing Binaryen validator avoid wasmparser and its banned closure.
-wasm-encoder = { version = "0.259", default-features = false }
+wasm-encoder = { version = "0.262", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"

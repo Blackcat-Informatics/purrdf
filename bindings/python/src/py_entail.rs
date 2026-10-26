@@ -86,7 +86,7 @@ use crate::py_gts_dataset::PyRdfDataset;
 /// total map onto [`Regime`]. Every entry point in this module also accepts the
 /// regime's CLI spelling as a plain `str` (`"owl-rl"`), so one spelling works from
 /// the command line, through the C ABI, through WASM and from Python.
-#[pyclass(name = "Regime", eq, eq_int, skip_from_py_object)]
+#[pyclass(name = "Regime", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 #[allow(

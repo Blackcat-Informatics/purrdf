@@ -386,7 +386,7 @@ fn render_type(ty: &syn::Type, out: &mut String, mentions: &mut Vec<String>) {
             render_expr(&array.len, out);
             out.push(')');
         }
-        syn::Type::BareFn(bare) => {
+        syn::Type::FnPtr(bare) => {
             out.push_str("fn(");
             for input in &bare.inputs {
                 render_type(&input.ty, out, mentions);
@@ -424,11 +424,13 @@ fn render_type(ty: &syn::Type, out: &mut String, mentions: &mut Vec<String>) {
             out.push(')');
         }
         syn::Type::Ptr(ptr) => {
-            out.push_str(if ptr.mutability.is_some() {
-                "ptrmut("
-            } else {
-                "ptr("
-            });
+            out.push_str(
+                if matches!(ptr.mutability, syn::PointerMutability::Mut(_)) {
+                    "ptrmut("
+                } else {
+                    "ptr("
+                },
+            );
             render_type(&ptr.elem, out, mentions);
             out.push(')');
         }
@@ -545,7 +547,7 @@ fn render_path(path: &syn::Path, out: &mut String, mentions: &mut Vec<String>) {
             syn::PathArguments::Parenthesized(args) => {
                 out.push('(');
                 for input in &args.inputs {
-                    render_type(input, out, mentions);
+                    render_type(&input.ty, out, mentions);
                     out.push(',');
                 }
                 if let syn::ReturnType::Type(_, ret) = &args.output {

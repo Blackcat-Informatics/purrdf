@@ -32,7 +32,7 @@ use crate::{
 ///
 /// Exposed to Python as `RdfFormat`; the members keep the SCREAMING_SNAKE Python
 /// spelling (`RdfFormat.TURTLE`).
-#[pyclass(name = "RdfFormat", eq, eq_int, skip_from_py_object)]
+#[pyclass(name = "RdfFormat", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 #[allow(
@@ -124,7 +124,7 @@ impl PyRdfFormat {
 /// `SerializeOutcome` field the C ABI's `out_statement_rows_dropped` and the wasm
 /// `statementRowsDropped` read, so a caller comparing hosts is comparing one number,
 /// and a future statement-layer ingress on this lane needs no new surface.
-#[pyclass(name = "SerializeLoss", frozen, skip_from_py_object)]
+#[pyclass(name = "SerializeLoss", frozen)]
 #[derive(Debug)]
 pub(crate) struct PySerializeLoss {
     bytes: Vec<u8>,
