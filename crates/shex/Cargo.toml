@@ -41,6 +41,7 @@ purrdf-stack = { workspace = true }
 purrdf-xsd = { workspace = true }
 
 [dev-dependencies]
+purrdf-alloc-probe.workspace = true
 # Byte-exact golden files for the scanner boundary sweep. Path-only and
 # unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
