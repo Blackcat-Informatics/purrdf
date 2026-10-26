@@ -124,11 +124,11 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{
-    AdmittedNumericFacet, FacetKind, FacetReason, GrammarExpectation, GrammarReason,
-    LanguageMember, LexicalContext, LexicalReason, MapExpectation, NumericFacetOperand,
-    RepeatOperation, Result, SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE, ShapeMapContext,
-    ShapeMapLanguageRefusal, ShapeMapPosition, ShapeMapReason, ShexError, UnsignedFacetOperand,
-    XPathValidationError,
+    AdmittedNumericFacet, FacetKind, FacetReason, GrammarExpectation, GrammarReason, JsonContext,
+    JsonExpectation, JsonMember, JsonMemberReason, JsonOffered, JsonType, LanguageMember,
+    LexicalContext, LexicalReason, MapExpectation, NumericFacetOperand, RepeatOperation, Result,
+    SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE, ShapeMapContext, ShapeMapLanguageRefusal,
+    ShapeMapPosition, ShapeMapReason, ShexError, UnsignedFacetOperand, XPathValidationError,
 };
 pub use exact::{
     ExactSchema, validate_exact, validate_exact_with_xpath, validate_shape_map_exact,

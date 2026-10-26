@@ -883,18 +883,23 @@ impl<'a> Record<'a> {
     /// Returns `unknown field` for the first undeclared member, naming the
     /// members the record declared.
     pub fn deny_unknown(self) -> Result<(), DecodeError> {
-        match self
-            .object
-            .keys()
-            .find(|name| !self.taken.contains(&name.as_str()))
-        {
-            Some(name) => Err(DecodeError::unknown_field_native(
+        match self.first_unknown() {
+            Some((name, _)) => Err(DecodeError::unknown_field_native(
                 name,
                 &self.taken,
                 self.allocation,
             )),
             None => Ok(()),
         }
+    }
+
+    /// The first undeclared member in original object order, with its native value.
+    /// This borrows the original input without rendering or decoding it again.
+    pub fn first_unknown(&self) -> Option<(&'a str, &'a Value)> {
+        self.object
+            .iter()
+            .find(|(name, _)| !self.taken.contains(&name.as_str()))
+            .map(|(name, value)| (name.as_str(), value))
     }
 }
 

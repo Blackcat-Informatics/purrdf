@@ -685,3 +685,20 @@ The outer `shex-syntax` identity, unsigned `at` field, human messages and byte
 coordinates remain unchanged. Its `reason` is a nested native cause and supports
 the standard error chain. Other contextual, resource and numeric range refusals
 continue to use `Syntax`.
+
+### Native ShExJ materialization refusals
+
+Library ShExJ object/member and schema/value refusals now use
+`ShexError::JsonMember` with a boxed `JsonMemberReason`. Typed contexts, members,
+expectations, collection indices and refused JSON values are available through
+borrowed inspection. `JsonOffered` retains native number spellings and member
+order, using the JSON home's iterative clone and drop operations. Numeric range
+refusals retain the actual `f64` conversion bits; they introduce no standard
+integer or floating parsing cause.
+
+The outer `shex-json` identity, human messages and absent byte offsets remain
+unchanged. Its `reason` is a native cause with a standard error chain. JSON ingress,
+IRI and language failures keep their existing native variants. `Shexj` remains for
+caller-provided diagnostics such as CLI import lookup; it is no longer the library
+materializer's fallback. This change adds no success-path DOM copy or whole-parser
+allocation guarantee.
