@@ -9,6 +9,8 @@
 
 use core::fmt;
 
+mod language;
+pub use language::{LanguageMember, SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE};
 mod lexical;
 pub use lexical::{LexicalContext, LexicalReason, RepeatOperation};
 
@@ -47,8 +49,19 @@ pub enum ShexError {
         /// The underlying resolution failure.
         reason: purrdf_iri::IriError,
     },
-    /// The ShExJ document is not valid JSON or does not match the ShExJ
-    /// object model.
+    /// The shared JSON reader's original ShExJ ingress refusal, including its
+    /// native kind, byte offset and nested lexical or storage fields.
+    JsonRead(purrdf_lex::json::Error),
+    /// A language tag or stem failed the shared concrete-syntax profile.
+    LanguageTag {
+        /// The original member position, distinguishing tags from stems.
+        member: LanguageMember,
+        /// The owned original value, without normalization or case folding.
+        value: String,
+        /// The shared language parser's original cause.
+        cause: purrdf_iri::langtag::LanguageTagError,
+    },
+    /// A parsed JSON value does not match the ShExJ object model.
     Shexj(String),
     /// An `IMPORT`ed schema could not be resolved by the caller-supplied
     /// import resolver (no ambient I/O — resolution is injected). Carries the
@@ -84,6 +97,11 @@ impl purrdf_hash::error::StructuredError for ShexError {
         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
         Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
         Iri { lexical, reason } => "shex-iri" { "lexical" => Text(lexical), "cause" => Cause(reason) },
+        JsonRead(cause) => "shex-json-read" { "cause" => Cause(cause) },
+        LanguageTag { member, value, cause } => "shex-json-language-tag" {
+            "member" => Record(member), "value" => Text(value),
+            "profile" => Code(SHEXJ_LANGUAGE_POLICY), "cause" => Cause(cause)
+        },
         Shexj(reason) => "shex-json" { "reason" => Text(reason) },
         Import { iri, cause } => "shex-import" { "iri" => Iri(iri), "cause" => Cause(&**cause) },
         ImportConflict(label) => "shex-import-conflict" { "label" => Text(label) },
@@ -168,6 +186,8 @@ impl ShexError {
             Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
             Self::Iri { .. }
             | Self::StackMargin { .. }
+            | Self::JsonRead(_)
+            | Self::LanguageTag { .. }
             | Self::Shexj(_)
             | Self::Import { .. }
             | Self::ImportConflict(_)
@@ -210,6 +230,16 @@ impl fmt::Display for ShexError {
                     reason.diagnostic_code()
                 )
             }
+            Self::JsonRead(cause) => write!(f, "ShExJ error: invalid JSON: {cause}"),
+            Self::LanguageTag {
+                member,
+                value,
+                cause,
+            } => write!(
+                f,
+                "ShExJ error: {member}: malformed language tag {value:?}: {cause} [{}]",
+                cause.diagnostic_code()
+            ),
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
             Self::Import { iri, cause } => write!(f, "unresolved IMPORT <{iri}>: {cause}"),
             Self::ImportConflict(label) => {
@@ -232,6 +262,8 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::JsonRead(cause) => cause,
+    Self::LanguageTag { cause, .. } => cause,
     Self::Lex { reason, .. } => reason,
     Self::Iri { reason, .. } => reason,
     Self::Import { cause, .. } => &**cause,

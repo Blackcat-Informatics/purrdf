@@ -28,6 +28,28 @@ remembered empty named graphs, model-only Datalog output, exact decimal
 division, the SPARQL pre-binding rewrite and specific SPARQL diagnostic codes.
 Each has its own section below.
 
+## ShExJ language refusals
+
+All six ShExJ language-tag and stem positions now return
+`ShexError::LanguageTag` with a native `LanguageMember`, original owned value and
+`LanguageTagError`. The structured identity is `shex-json-language-tag`; its
+borrowed fields retain the member, value, fixed profile policy and native cause.
+`SHEXJ_LANGUAGE_PROFILE` exposes the shared native profile, and its policy name
+is bound to that profile at compilation. Standard `source()` lends the original
+language error. Human messages and outer offset behavior are unchanged.
+
+Empty stems remain admitted, including the existing empty exclusion stem. Its
+ShExC conversion remains outside the current round-trip coverage.
+
+## ShExJ JSON reader refusals
+
+ShExJ ingress now returns `ShexError::JsonRead` with the original native JSON
+error. Its structured identity is `shex-json-read`, and its borrowed `cause`
+retains the JSON kind, byte offset and nested fields. Standard `source()` lends
+that same native error. Human `Display`/`Debug` and outer `byte_offset()`/`locate()`
+behavior are unchanged. ShExJ schema and value-grammar reasons remain separate
+`ShexError::Shexj` values with the existing `shex-json` identity.
+
 ## ShExC lexical refusals
 
 `ShexError::Lex.reason` and `ShexError::lex` now use `LexicalReason` instead of
