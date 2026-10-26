@@ -963,7 +963,391 @@ fn shape_map_owned_names_and_language_causes_survive_input_disposal() {
     }
 }
 
+fn schema_grammar_refusals_keep_original_tokens_and_positions() {
+    use purrdf_shex::{ExactSchema, GrammarExpectation as E, GrammarReason, ShexError};
+    // The keyword fallback and guarded expect calls are defensive paths, not
+    // fabricated scanner inputs. These cases reach the public production seam.
+    for (input, expected, token, reason) in [
+        (
+            "START .",
+            E::StartEquals,
+            Some("."),
+            "expected '=' after start, found Some(Dot)",
+        ),
+        (
+            "<urn:S> { true . }",
+            E::Predicate,
+            Some("true"),
+            "expected predicate, found Some(Word(\"true\"))",
+        ),
+        (
+            "PREFIX true",
+            E::PrefixName,
+            Some("true"),
+            "expected prefix name after PREFIX",
+        ),
+        (
+            "BASE true",
+            E::BaseIri,
+            Some("true"),
+            "expected IRI after BASE",
+        ),
+        ("IMPORT", E::ImportIri, None, "expected IRI after IMPORT"),
+        (
+            "<urn:S> +",
+            E::ShapeExpression,
+            Some("+"),
+            "expected shape expression, found Some(Plus)",
+        ),
+        (
+            "<urn:S> LENGTH .",
+            E::StringFacet,
+            Some("."),
+            "expected non-negative INTEGER as string facet value",
+        ),
+        (
+            "<urn:S> TOTALDIGITS .",
+            E::DigitFacet,
+            Some("."),
+            "expected non-negative INTEGER as digit-count facet value",
+        ),
+        (
+            "<urn:S> MININCLUSIVE .",
+            E::NumericFacet,
+            Some("."),
+            "expected numeric literal as facet value, found Some(Dot)",
+        ),
+        (
+            "<urn:S> [ . ]",
+            E::WildcardExclusion,
+            Some("]"),
+            "expected '-' exclusion after '.' in a value set",
+        ),
+        (
+            "<urn:S> [ . - true ]",
+            E::Exclusion,
+            Some("true"),
+            "expected IRI, literal or language tag exclusion, found Some(Word(\"true\"))",
+        ),
+        (
+            "<urn:S> [ @en~ - 1 ]",
+            E::LanguageExclusion,
+            Some("1"),
+            "expected language tag exclusion",
+        ),
+        (
+            "<urn:S> [ \"x\"~ - @en ]",
+            E::Literal,
+            Some("@en"),
+            "expected literal, found Some(LangTag(\"en\"))",
+        ),
+        (
+            "<urn:é> ( .",
+            E::RightParen,
+            None,
+            "expected ')', found None",
+        ),
+    ] {
+        let owned = input.to_owned();
+        let error = parse_shexc(&owned, None).unwrap_err();
+        let exact = ExactSchema::parse_shexc(&owned, None).unwrap_err();
+        assert_eq!(error, exact, "{input}");
+        let ShexError::Grammar { reason: native, at } = &error else {
+            panic!("{input}: {error}");
+        };
+        let (GrammarReason::Expected {
+            expected: actual,
+            encountered,
+        }
+        | GrammarReason::FacetValue {
+            expected: actual,
+            encountered,
+            ..
+        }) = native.as_ref()
+        else {
+            panic!("{input}: {error}");
+        };
+        assert_eq!(*actual, expected, "{input}");
+        if let GrammarReason::FacetValue { facet, .. } = native.as_ref() {
+            let keyword = owned.split_whitespace().nth(1).unwrap();
+            assert_eq!(&owned[facet.start..facet.end], keyword);
+            assert_eq!(
+                facet.token,
+                purrdf_shex::lexer::Token::Word(keyword.to_owned())
+            );
+            let _ = inspect_without_allocation(facet);
+            let fields = inspect_without_allocation(native.as_ref());
+            let facet_fields = fields.child("facet");
+            assert!(
+                matches!(facet_fields.child("token").field("value"), ErrorValue::Text(value) if value == keyword)
+            );
+        }
+
+        if let Some(text) = token {
+            let operand = encountered.as_ref().unwrap();
+            assert_eq!(&owned[operand.start..operand.end], text, "{input}");
+            let fields = inspect_without_allocation(operand);
+            assert!(
+                matches!(fields.field("start"), ErrorValue::ByteCount(value) if value == operand.start as u128)
+            );
+            assert!(
+                matches!(fields.field("end"), ErrorValue::ByteCount(value) if value == operand.end as u128)
+            );
+            let _ = inspect_without_allocation(&operand.token);
+            // Wildcard dispatch probes beyond '-' while historical at stays '-'.
+            if expected == E::Exclusion {
+                assert_eq!(&owned[*at..=*at], "-");
+            }
+        } else {
+            assert!(encountered.is_none());
+            assert_eq!(*at, owned.len());
+        }
+        let at = *at;
+        assert_eq!(
+            error.to_string(),
+            format!("ShExC syntax error at byte {at}: {reason}")
+        );
+        assert_eq!(format!("{error:?}"), error.to_string());
+        assert_eq!(error.byte_offset(), Some(at));
+        assert_eq!(
+            error.locate(&owned).unwrap(),
+            purrdf_iri::LineIndex::new(&owned).locate(&owned, at)
+        );
+        drop(owned);
+        let cloned = error.clone();
+        drop(error);
+        let fields = inspect_without_allocation(&cloned);
+        assert_eq!(fields.code, "shex-syntax");
+        assert!(matches!(fields.field("at"), ErrorValue::Unsigned(value) if value == at as u128));
+        let ErrorValue::Cause(native) = fields.field("reason") else {
+            panic!("native grammar cause");
+        };
+        let _ = inspect_without_allocation(native);
+        assert!(
+            std::error::Error::source(&cloned)
+                .unwrap()
+                .is::<GrammarReason>()
+        );
+    }
+    for (input, keyword) in [
+        ("<urn:S> mAxLeNgTh .", "mAxLeNgTh"),
+        ("<urn:S> FRACTIONDIGITS .", "FRACTIONDIGITS"),
+        ("<urn:S> MAXEXCLUSIVE .", "MAXEXCLUSIVE"),
+    ] {
+        let error = parse_shexc(input, None).unwrap_err();
+        let ShexError::Grammar { reason, .. } = &error else {
+            panic!("{error}");
+        };
+        let GrammarReason::FacetValue { facet, .. } = reason.as_ref() else {
+            panic!("{error}");
+        };
+        assert_eq!(&input[facet.start..facet.end], keyword);
+        assert_eq!(
+            facet.token,
+            purrdf_shex::lexer::Token::Word(keyword.to_owned())
+        );
+    }
+    // Successful neighbors use the same parsing paths, including exact facets.
+    for input in [
+        "PREFIX ex: <urn:> BASE <urn:base> IMPORT <urn:other> START = @ex:S ex:S {}",
+        "<urn:S> { <urn:p> . }",
+        "<urn:S> LENGTH 1",
+        "<urn:S> TOTALDIGITS 1",
+        "<urn:S> MININCLUSIVE 1",
+        "<urn:S> [ . - <urn:x> ]",
+        "<urn:S> [ @en~ - @fr ]",
+        "<urn:S> [ \"x\"~ - \"y\" ]",
+        "<urn:é> ( . )",
+    ] {
+        assert!(parse_shexc(input, None).is_ok(), "{input}");
+        assert!(ExactSchema::parse_shexc(input, None).is_ok(), "{input}");
+    }
+    // The full source is tokenized before grammar admission, preserving priority.
+    assert!(matches!(
+        parse_shexc("START . <\\q>", None),
+        Err(ShexError::Lex { .. })
+    ));
+}
+
+fn schema_grammar_placement_and_rich_operands_survive_input_disposal() {
+    use purrdf_shex::lexer::{CodeName, Token};
+    use purrdf_shex::{GrammarReason, ShexError};
+    for (source, expected_text) in [
+        ("PREFIX ex:local <urn:>", "PREFIX name must end with ':'"),
+        ("PREFIX ex: true", "expected IRI after PREFIX name"),
+        (
+            "<urn:S> [ \"é\"@EN^^<urn:t> ]",
+            "literal cannot carry both language tag and datatype",
+        ),
+        (
+            "<urn:S> { $<urn:label> (&<urn:reference>) }",
+            "'$' label cannot name an inclusion",
+        ),
+        (
+            "<urn:S> { $_:label (&_:reference) }",
+            "'$' label cannot name an inclusion",
+        ),
+    ] {
+        let input = source.to_owned();
+        let original = parse_shexc(&input, None).unwrap_err();
+        let error = original.clone();
+        drop(original);
+        let ShexError::Grammar { reason, at } = &error else {
+            panic!("{source}: {error}");
+        };
+        assert_eq!(reason.to_string(), expected_text);
+        match reason.as_ref() {
+            GrammarReason::PrefixLocal { encountered } => {
+                assert_eq!(encountered.token, Token::PName("ex".into(), "local".into()));
+            }
+            GrammarReason::PrefixIri {
+                prefix,
+                encountered,
+            } => {
+                assert_eq!(&input[prefix.start..prefix.end], "ex:");
+                assert_eq!(prefix.token, Token::PName("ex".into(), String::new()));
+                assert_eq!(
+                    encountered.as_ref().unwrap().token,
+                    Token::Word("true".into())
+                );
+            }
+            GrammarReason::LiteralSuffix {
+                literal,
+                language,
+                marker,
+            } => {
+                assert_eq!(&input[literal.start..literal.end], "\"é\"");
+                assert_eq!(language.token, Token::LangTag("EN".into()));
+                assert_eq!(&input[marker.start..marker.end], "^^");
+                assert_eq!(*at, marker.start);
+            }
+            GrammarReason::LabelledInclusion {
+                label,
+                reference,
+                label_tokens,
+                reference_tokens,
+            } => {
+                let (expected_label, expected_reference) = if source.contains("_:") {
+                    ("_:label", "_:reference")
+                } else {
+                    ("urn:label", "urn:reference")
+                };
+                assert_eq!(label, expected_label);
+                assert_eq!(reference, expected_reference);
+                assert_eq!(label_tokens[0].token, Token::Dollar);
+                assert_eq!(reference_tokens[0].token, Token::LParen);
+                assert_eq!(reference_tokens.last().unwrap().token, Token::RParen);
+                for operand in label_tokens.iter().chain(reference_tokens) {
+                    assert_ne!(&input[operand.start..operand.end], "");
+                    let _ = inspect_without_allocation(operand);
+                }
+                assert_eq!(&input[*at..=*at], "}");
+            }
+            _ => panic!("placement refusal: {error}"),
+        }
+        drop(input);
+        let fields = inspect_without_allocation(&error);
+        let ErrorValue::Cause(native) = fields.field("reason") else {
+            panic!("native reason");
+        };
+        let fields = inspect_without_allocation(native);
+        if matches!(reason.as_ref(), GrammarReason::LabelledInclusion { .. }) {
+            assert!(matches!(fields.field("label"), ErrorValue::Text(_)));
+            assert!(matches!(fields.field("reference"), ErrorValue::Text(_)));
+        }
+    }
+    for input in [
+        "PREFIX ex: <urn:> ex:S {}",
+        "<urn:S> [ \"é\"@EN ]",
+        "<urn:S> { $<urn:label> (<urn:p> .) }",
+        "<urn:S> { $_:label (<urn:p> .) }",
+    ] {
+        assert!(parse_shexc(input, None).is_ok(), "{input}");
+    }
+    // Real unexpected tokens retain every payload, not a diagnostic rendering.
+    for input in ["+", "/α/i", "{2,4}", "<urn:S> [ ? ]"] {
+        let owned = input.to_owned();
+        let original = parse_shexc(&owned, None).unwrap_err();
+        drop(owned);
+        let error = original.clone();
+        drop(original);
+        let ShexError::Grammar { reason, .. } = &error else {
+            panic!("{input}: {error}");
+        };
+        let token = match reason.as_ref() {
+            GrammarReason::Declaration { encountered } => &encountered.token,
+            GrammarReason::Expected {
+                encountered: Some(operand),
+                ..
+            }
+            | GrammarReason::ValueSet {
+                encountered: Some(operand),
+            } => &operand.token,
+            _ => panic!("unexpected refusal: {error}"),
+        };
+        let fields = inspect_without_allocation(token);
+        match token {
+            Token::Regex { pattern, flags } => {
+                assert_eq!(pattern, "α");
+                assert_eq!(flags, "i");
+                assert!(matches!(fields.field("flags"), ErrorValue::Text("i")));
+            }
+            Token::Repeat { min, max } => {
+                assert_eq!((*min, *max), (2, 4));
+                assert!(matches!(fields.field("max"), ErrorValue::Signed(4)));
+            }
+            Token::Plus | Token::Question => {}
+            _ => panic!("{input}: {token:?}"),
+        }
+    }
+    // Code is itself accepted at document scope, so expose it at a shape cursor.
+    for input in ["<urn:S> %ex:action{ body %}", "<urn:S> %<urn:action>%"] {
+        let owned = input.to_owned();
+        let original = parse_shexc(&owned, None).unwrap_err();
+        drop(owned);
+        let error = original.clone();
+        drop(original);
+        let ShexError::Grammar { reason, .. } = &error else {
+            panic!("{input}: {error}");
+        };
+        let GrammarReason::Expected {
+            encountered: Some(operand),
+            ..
+        } = reason.as_ref()
+        else {
+            panic!("{input}: {error}");
+        };
+        let Token::Code { name, code } = &operand.token else {
+            panic!("code token");
+        };
+        let fields = inspect_without_allocation(&operand.token);
+        let _ = inspect_without_allocation(name);
+        assert_eq!(
+            fields.child("name").code,
+            match name {
+                CodeName::PName(_, _) => "shexc-code-pname",
+                CodeName::Iri(_) => "shexc-code-iri",
+            }
+        );
+        assert_eq!(code.as_deref(), input.contains("body").then_some(" body "));
+    }
+    let root = parse_shexc("IMPORT <urn:import>", None).unwrap();
+    let imported =
+        purrdf_shex::resolve_imports(root, &|_| parse_shexc("<urn:S> [ ? ]", None)).unwrap_err();
+    let fields = inspect_without_allocation(&imported);
+    assert_eq!(fields.child("cause").code, "shex-syntax");
+    assert!(
+        std::error::Error::source(&imported)
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<GrammarReason>()
+    );
+}
+
 purrdf_testkit::harness_main!(
+    schema_grammar_refusals_keep_original_tokens_and_positions,
+    schema_grammar_placement_and_rich_operands_survive_input_disposal,
     actual_shape_map_keeps_original_iri_cause_after_input_disposal,
     structural_refusals_keep_the_original_unresolved_label,
     lexical_refusals_keep_original_values_offsets_and_presentation,

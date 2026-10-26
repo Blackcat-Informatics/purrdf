@@ -24,7 +24,7 @@
 //!   because the code block is raw text up to an unescaped `%}`.
 //!
 //! Every token carries its source byte span so the parser can report
-//! [`ShexError::Syntax`] at a precise offset. The lexer never panics: all
+//! [`ShexError::Grammar`] at a precise offset. The lexer never panics: all
 //! malformed input is a typed [`ShexError::Lex`].
 //!
 //! # Where the character classes come from
@@ -1020,6 +1020,59 @@ impl<'a> Lexer<'a> {
             self.pos -= trailing_dots;
         }
         out
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Token {
+    purrdf_hash::error_visit! {
+        Iri(value) => "shexc-token-iri" { "value" => Text(value),  },
+        PName(prefix, local) => "shexc-token-p-name" { "prefix" => Text(prefix), "local" => Text(local),  },
+        BNode(value) => "shexc-token-b-node" { "value" => Text(value),  },
+        LangTag(value) => "shexc-token-lang-tag" { "value" => Text(value),  },
+        StringLit(value) => "shexc-token-string-lit" { "value" => Text(value),  },
+        Integer(value) => "shexc-token-integer" { "value" => Text(value),  },
+        Decimal(value) => "shexc-token-decimal" { "value" => Text(value),  },
+        Double(value) => "shexc-token-double" { "value" => Text(value),  },
+        Regex { pattern, flags } => "shexc-token-regex" { "pattern" => Text(pattern), "flags" => Text(flags),  },
+        Code { name, code } => "shexc-token-code" { "name" => Record(name), "code" => Value(code.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),  },
+        Repeat { min, max } => "shexc-token-repeat" { "min" => Signed(i128::from(*min)), "max" => Signed(i128::from(*max)),  },
+        Word(value) => "shexc-token-word" { "value" => Text(value),  },
+        At => "shexc-token-at" {  },
+        Eq => "shexc-token-eq" {  },
+        LBrace => "shexc-token-l-brace" {  },
+        RBrace => "shexc-token-r-brace" {  },
+        LParen => "shexc-token-l-paren" {  },
+        RParen => "shexc-token-r-paren" {  },
+        LBracket => "shexc-token-l-bracket" {  },
+        RBracket => "shexc-token-r-bracket" {  },
+        Dot => "shexc-token-dot" {  },
+        Semi => "shexc-token-semi" {  },
+        Pipe => "shexc-token-pipe" {  },
+        Star => "shexc-token-star" {  },
+        Plus => "shexc-token-plus" {  },
+        Question => "shexc-token-question" {  },
+        Caret => "shexc-token-caret" {  },
+        HatHat => "shexc-token-hat-hat" {  },
+        Tilde => "shexc-token-tilde" {  },
+        Minus => "shexc-token-minus" {  },
+        Dollar => "shexc-token-dollar" {  },
+        Amp => "shexc-token-amp" {  },
+        AnnotMarker => "shexc-token-annot-marker" {  },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CodeName {
+    purrdf_hash::error_visit! {
+        Iri(value) => "shexc-code-iri" { "value" => Text(value) },
+        PName(prefix, local) => "shexc-code-pname" { "prefix" => Text(prefix), "local" => Text(local) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Spanned {
+    purrdf_hash::error_visit! {
+        @record self { token, start, end } => "shexc-spanned-token" {
+            "token" => Record(&self.token), "start" => ByteCount(self.start as u128), "end" => ByteCount(self.end as u128)
+        }
     }
 }
 

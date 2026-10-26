@@ -34,7 +34,7 @@ use crate::ast::{
     ValueSetValue,
 };
 use crate::ast::{IriExclusion, LanguageExclusion, LiteralExclusion, StemValue};
-use crate::error::{Result, ShexError};
+use crate::error::{GrammarExpectation, GrammarReason, Result, ShexError};
 use crate::lexer::{CodeName, Spanned, Token, tokenize};
 
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
@@ -188,16 +188,30 @@ impl Parser<'_> {
         }
     }
 
-    fn expect(&mut self, t: &Token, what: &str) -> Result<()> {
+    fn expect(&mut self, t: &Token, what: GrammarExpectation) -> Result<()> {
         if self.eat(t) {
             Ok(())
         } else {
-            Err(self.err(format!("expected {what}, found {:?}", self.peek())))
+            Err(self.expected(what, self.pos))
         }
     }
 
     fn err(&self, reason: impl Into<String>) -> ShexError {
         ShexError::syntax(reason, self.span())
+    }
+
+    fn grammar(&self, reason: GrammarReason) -> ShexError {
+        ShexError::Grammar {
+            reason: Box::new(reason),
+            at: self.span(),
+        }
+    }
+
+    fn expected(&self, expected: GrammarExpectation, pos: usize) -> ShexError {
+        self.grammar(GrammarReason::Expected {
+            expected,
+            encountered: self.tokens.get(pos).cloned(),
+        })
     }
 
     /// Is the current token the keyword `kw` (case-insensitive [`Token::Word`])?
@@ -270,7 +284,7 @@ impl Parser<'_> {
     }
 
     /// An `iri` production: IRIREF or prefixed name (never `a`).
-    fn parse_iri(&mut self, what: &str) -> Result<String> {
+    fn parse_iri(&mut self, what: GrammarExpectation) -> Result<String> {
         match self.peek().cloned() {
             Some(Token::Iri(iri)) => {
                 self.pos += 1;
@@ -280,7 +294,7 @@ impl Parser<'_> {
                 self.pos += 1;
                 self.expand(&p, &l)
             }
-            other => Err(self.err(format!("expected {what}, found {other:?}"))),
+            _ => Err(self.expected(what, self.pos)),
         }
     }
 
@@ -290,7 +304,7 @@ impl Parser<'_> {
             self.pos += 1;
             return Ok(RDF_TYPE.to_owned());
         }
-        self.parse_iri("predicate")
+        self.parse_iri(GrammarExpectation::Predicate)
     }
 
     fn at_predicate(&self) -> bool {
@@ -304,7 +318,7 @@ impl Parser<'_> {
             self.pos += 1;
             return Ok(format!("_:{b}"));
         }
-        self.parse_iri("shape label")
+        self.parse_iri(GrammarExpectation::ShapeLabel)
     }
 
     // ── document structure ──────────────────────────────────────────────────
@@ -317,14 +331,20 @@ impl Parser<'_> {
                 Some(Token::Word(w)) if w.eq_ignore_ascii_case("prefix") => {
                     self.pos += 1;
                     let Some(Token::PName(p, l)) = self.peek().cloned() else {
-                        return Err(self.err("expected prefix name after PREFIX"));
+                        return Err(self.expected(GrammarExpectation::PrefixName, self.pos));
                     };
                     if !l.is_empty() {
-                        return Err(self.err("PREFIX name must end with ':'"));
+                        return Err(self.grammar(GrammarReason::PrefixLocal {
+                            encountered: self.tokens[self.pos].clone(),
+                        }));
                     }
+                    let prefix_pos = self.pos;
                     self.pos += 1;
                     let Some(Token::Iri(ns)) = self.peek().cloned() else {
-                        return Err(self.err("expected IRI after PREFIX name"));
+                        return Err(self.grammar(GrammarReason::PrefixIri {
+                            prefix: self.tokens[prefix_pos].clone(),
+                            encountered: self.tokens.get(self.pos).cloned(),
+                        }));
                     };
                     self.pos += 1;
                     let ns = self.resolve(&ns)?;
@@ -333,7 +353,7 @@ impl Parser<'_> {
                 Some(Token::Word(w)) if w.eq_ignore_ascii_case("base") => {
                     self.pos += 1;
                     let Some(Token::Iri(iri)) = self.peek().cloned() else {
-                        return Err(self.err("expected IRI after BASE"));
+                        return Err(self.expected(GrammarExpectation::BaseIri, self.pos));
                     };
                     // A `BASE` directive may itself be RELATIVE, in which case it
                     // resolves against the base already in force (RFC-3986 §5.1.1),
@@ -348,7 +368,7 @@ impl Parser<'_> {
                 Some(Token::Word(w)) if w.eq_ignore_ascii_case("import") => {
                     self.pos += 1;
                     let Some(Token::Iri(iri)) = self.peek().cloned() else {
-                        return Err(self.err("expected IRI after IMPORT"));
+                        return Err(self.expected(GrammarExpectation::ImportIri, self.pos));
                     };
                     self.pos += 1;
                     let resolved = self.resolve(&iri)?;
@@ -356,7 +376,7 @@ impl Parser<'_> {
                 }
                 Some(Token::Word(w)) if w.eq_ignore_ascii_case("start") => {
                     self.pos += 1;
-                    self.expect(&Token::Eq, "'=' after start")?;
+                    self.expect(&Token::Eq, GrammarExpectation::StartEquals)?;
                     let mark = self.exact.len();
                     let expr = self.parse_shape_expression(true)?;
                     schema.start = Some(Box::new(expr));
@@ -373,10 +393,10 @@ impl Parser<'_> {
                     schema.shapes.push(decl);
                     self.table.shapes.push(self.exact.split_off(mark));
                 }
-                Some(other) => {
-                    return Err(self.err(format!(
-                        "expected directive or shape declaration, found {other:?}"
-                    )));
+                Some(_) => {
+                    return Err(self.grammar(GrammarReason::Declaration {
+                        encountered: self.tokens[self.pos].clone(),
+                    }));
                 }
             }
         }
@@ -507,16 +527,21 @@ impl Parser<'_> {
             }
             // litNodeConstraint: numericFacet+.
             Some(Token::Word(w)) if is_numeric_facet_kw(&w) => {
+                let keyword_pos = self.pos;
                 let mut nc = NodeConstraint::default();
                 self.parse_facets(&mut nc, true)?;
                 if nc == NodeConstraint::default() {
-                    return Err(self.err(format!("unexpected keyword {w}")));
+                    return Err(self.grammar(GrammarReason::Keyword {
+                        word: w,
+                        start: self.tokens[keyword_pos].start,
+                        end: self.tokens[keyword_pos].end,
+                    }));
                 }
                 Ok(Conjunct::single(ShapeExpr::Node(nc)))
             }
             // litNodeConstraint: datatype + facets.
             Some(Token::Iri(_) | Token::PName(..)) => {
-                let datatype = self.parse_iri("datatype IRI")?;
+                let datatype = self.parse_iri(GrammarExpectation::Datatype)?;
                 let mut nc = NodeConstraint {
                     datatype: Some(datatype),
                     ..NodeConstraint::default()
@@ -554,7 +579,7 @@ impl Parser<'_> {
             Some(Token::LParen) => {
                 self.pos += 1;
                 let expr = self.parse_shape_expression(false)?;
-                self.expect(&Token::RParen, "')'")?;
+                self.expect(&Token::RParen, GrammarExpectation::RightParen)?;
                 Ok(Conjunct::single(expr))
             }
             // `.` — the "anything" atom: an empty Shape in ShExJ terms.
@@ -562,7 +587,7 @@ impl Parser<'_> {
                 self.pos += 1;
                 Ok(Conjunct::single(ShapeExpr::Shape(Shape::default())))
             }
-            other => Err(self.err(format!("expected shape expression, found {other:?}"))),
+            _ => Err(self.expected(GrammarExpectation::ShapeExpression, self.pos)),
         }
     }
 
@@ -650,8 +675,13 @@ impl Parser<'_> {
                     }
                 }
                 Some(Token::Word(w)) if is_string_length_kw(&w) => {
+                    let facet_pos = self.pos;
                     self.pos += 1;
-                    let n = self.parse_unsigned("string facet value")?;
+                    let n = self.parse_unsigned(
+                        "string facet value",
+                        GrammarExpectation::StringFacet,
+                        facet_pos,
+                    )?;
                     let slot = match w.to_ascii_lowercase().as_str() {
                         "length" => &mut nc.length,
                         "minlength" => &mut nc.minlength,
@@ -663,8 +693,9 @@ impl Parser<'_> {
                     *slot = Some(n);
                 }
                 Some(Token::Word(w)) if allow_numeric && is_numeric_range_kw(&w) => {
+                    let facet_pos = self.pos;
                     self.pos += 1;
-                    let (value, bound) = self.parse_numeric_literal()?;
+                    let (value, bound) = self.parse_numeric_literal(facet_pos)?;
                     let (slot, index) = match w.to_ascii_lowercase().as_str() {
                         "mininclusive" => (&mut nc.mininclusive, 0),
                         "minexclusive" => (&mut nc.minexclusive, 1),
@@ -678,8 +709,13 @@ impl Parser<'_> {
                     exact.slots[index] = Some(bound);
                 }
                 Some(Token::Word(w)) if allow_numeric && is_numeric_length_kw(&w) => {
+                    let facet_pos = self.pos;
                     self.pos += 1;
-                    let n = self.parse_unsigned("digit-count facet value")?;
+                    let n = self.parse_unsigned(
+                        "digit-count facet value",
+                        GrammarExpectation::DigitFacet,
+                        facet_pos,
+                    )?;
                     let slot = if w.eq_ignore_ascii_case("totaldigits") {
                         &mut nc.totaldigits
                     } else {
@@ -699,9 +735,18 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn parse_unsigned(&mut self, what: &str) -> Result<u64> {
+    fn parse_unsigned(
+        &mut self,
+        what: &str,
+        expected: GrammarExpectation,
+        facet_pos: usize,
+    ) -> Result<u64> {
         let Some(Token::Integer(lexical)) = self.peek().cloned() else {
-            return Err(self.err(format!("expected non-negative INTEGER as {what}")));
+            return Err(self.grammar(GrammarReason::FacetValue {
+                expected,
+                facet: self.tokens[facet_pos].clone(),
+                encountered: self.tokens.get(self.pos).cloned(),
+            }));
         };
         let n = lexical
             .parse::<u64>()
@@ -710,14 +755,18 @@ impl Parser<'_> {
         Ok(n)
     }
 
-    fn parse_numeric_literal(&mut self) -> Result<(NumericLiteral, crate::exact::ExactBound)> {
-        let lexical = match self.peek().cloned() {
-            Some(Token::Integer(s) | Token::Decimal(s) | Token::Double(s)) => s,
-            other => {
-                return Err(self.err(format!(
-                    "expected numeric literal as facet value, found {other:?}"
-                )));
-            }
+    fn parse_numeric_literal(
+        &mut self,
+        facet_pos: usize,
+    ) -> Result<(NumericLiteral, crate::exact::ExactBound)> {
+        let Some(Token::Integer(lexical) | Token::Decimal(lexical) | Token::Double(lexical)) =
+            self.peek().cloned()
+        else {
+            return Err(self.grammar(GrammarReason::FacetValue {
+                expected: GrammarExpectation::NumericFacet,
+                facet: self.tokens[facet_pos].clone(),
+                encountered: self.tokens.get(self.pos).cloned(),
+            }));
         };
         let exact_syntax = matches!(self.peek(), Some(Token::Integer(_) | Token::Decimal(_)));
         let value = match numeric_from_lexical(&lexical) {
@@ -753,7 +802,7 @@ impl Parser<'_> {
     // ── value sets ──────────────────────────────────────────────────────────
 
     fn parse_value_set(&mut self) -> Result<Vec<ValueSetValue>> {
-        self.expect(&Token::LBracket, "'['")?;
+        self.expect(&Token::LBracket, GrammarExpectation::LeftBracket)?;
         let mut values = Vec::new();
         while !self.eat(&Token::RBracket) {
             values.push(self.parse_value_set_value()?);
@@ -764,7 +813,7 @@ impl Parser<'_> {
     fn parse_value_set_value(&mut self) -> Result<ValueSetValue> {
         match self.peek().cloned() {
             Some(Token::Iri(_) | Token::PName(..)) => {
-                let iri = self.parse_iri("value-set IRI")?;
+                let iri = self.parse_iri(GrammarExpectation::ValueIri)?;
                 if self.eat(&Token::Tilde) {
                     let exclusions = self.parse_iri_exclusions()?;
                     if exclusions.is_empty() {
@@ -822,7 +871,7 @@ impl Parser<'_> {
             // `@~` — the empty language stem.
             Some(Token::At) => {
                 self.pos += 1;
-                self.expect(&Token::Tilde, "'~' after '@' in a value set")?;
+                self.expect(&Token::Tilde, GrammarExpectation::LanguageTilde)?;
                 let exclusions = self.parse_language_exclusions()?;
                 if exclusions.is_empty() {
                     Ok(ValueSetValue::LanguageStem {
@@ -840,7 +889,7 @@ impl Parser<'_> {
             Some(Token::Dot) => {
                 self.pos += 1;
                 if self.peek() != Some(&Token::Minus) {
-                    return Err(self.err("expected '-' exclusion after '.' in a value set"));
+                    return Err(self.expected(GrammarExpectation::WildcardExclusion, self.pos));
                 }
                 match self.peek2().cloned() {
                     Some(Token::Iri(_) | Token::PName(..)) => {
@@ -869,19 +918,19 @@ impl Parser<'_> {
                             exclusions,
                         })
                     }
-                    other => Err(self.err(format!(
-                        "expected IRI, literal or language tag exclusion, found {other:?}"
-                    ))),
+                    _ => Err(self.expected(GrammarExpectation::Exclusion, self.pos + 1)),
                 }
             }
-            other => Err(self.err(format!("unexpected {other:?} in value set"))),
+            _ => Err(self.grammar(GrammarReason::ValueSet {
+                encountered: self.tokens.get(self.pos).cloned(),
+            })),
         }
     }
 
     fn parse_iri_exclusions(&mut self) -> Result<Vec<IriExclusion>> {
         let mut out = Vec::new();
         while self.eat(&Token::Minus) {
-            let iri = self.parse_iri("IRI exclusion")?;
+            let iri = self.parse_iri(GrammarExpectation::IriExclusion)?;
             if self.eat(&Token::Tilde) {
                 out.push(IriExclusion::Stem(iri));
             } else {
@@ -908,7 +957,7 @@ impl Parser<'_> {
         let mut out = Vec::new();
         while self.eat(&Token::Minus) {
             let Some(Token::LangTag(tag)) = self.peek().cloned() else {
-                return Err(self.err("expected language tag exclusion"));
+                return Err(self.expected(GrammarExpectation::LanguageExclusion, self.pos));
             };
             self.pos += 1;
             if self.eat(&Token::Tilde) {
@@ -922,6 +971,7 @@ impl Parser<'_> {
 
     /// An `rdfLiteral | numericLiteral | booleanLiteral`.
     fn parse_literal(&mut self) -> Result<ObjectLiteral> {
+        let literal_pos = self.pos;
         match self.peek().cloned() {
             Some(Token::StringLit(value)) => {
                 self.pos += 1;
@@ -929,9 +979,11 @@ impl Parser<'_> {
                     Some(Token::LangTag(tag)) => {
                         self.pos += 1;
                         if self.peek() == Some(&Token::HatHat) {
-                            return Err(
-                                self.err("literal cannot carry both language tag and datatype")
-                            );
+                            return Err(self.grammar(GrammarReason::LiteralSuffix {
+                                literal: self.tokens[literal_pos].clone(),
+                                language: self.tokens[literal_pos + 1].clone(),
+                                marker: self.tokens[self.pos].clone(),
+                            }));
                         }
                         Ok(ObjectLiteral {
                             value,
@@ -944,7 +996,7 @@ impl Parser<'_> {
                     }
                     Some(Token::HatHat) => {
                         self.pos += 1;
-                        let dt = self.parse_iri("datatype IRI")?;
+                        let dt = self.parse_iri(GrammarExpectation::Datatype)?;
                         Ok(ObjectLiteral {
                             value,
                             language: None,
@@ -974,7 +1026,7 @@ impl Parser<'_> {
                 self.pos += 1;
                 Ok(typed_literal(w, purrdf_xsd::datatype::XSD_BOOLEAN))
             }
-            other => Err(self.err(format!("expected literal, found {other:?}"))),
+            _ => Err(self.expected(GrammarExpectation::Literal, self.pos)),
         }
     }
 
@@ -995,10 +1047,10 @@ impl Parser<'_> {
                 break;
             }
         }
-        self.expect(&Token::LBrace, "'{'")?;
+        self.expect(&Token::LBrace, GrammarExpectation::LeftBrace)?;
         if !self.eat(&Token::RBrace) {
             let expr = self.parse_triple_expression()?;
-            self.expect(&Token::RBrace, "'}'")?;
+            self.expect(&Token::RBrace, GrammarExpectation::RightBrace)?;
             shape.expression = Some(expr);
         }
         if !inline {
@@ -1080,11 +1132,13 @@ impl Parser<'_> {
             let label = self.parse_label()?;
             return Ok(TripleExpr::Ref(label));
         }
+        let label_start = self.pos;
         let id = if self.eat(&Token::Dollar) {
             Some(self.parse_label()?)
         } else {
             None
         };
+        let reference_start = self.pos;
         let mut expr = if self.peek() == Some(&Token::LParen) {
             self.parse_bracketed()?
         } else {
@@ -1098,8 +1152,13 @@ impl Parser<'_> {
                 TripleExpr::TripleConstraint(tc) => {
                     tc.id = Some(id);
                 }
-                TripleExpr::Ref(_) => {
-                    return Err(self.err("'$' label cannot name an inclusion"));
+                TripleExpr::Ref(reference) => {
+                    return Err(self.grammar(GrammarReason::LabelledInclusion {
+                        label: id,
+                        reference: core::mem::take(reference),
+                        label_tokens: self.tokens[label_start..reference_start].to_vec(),
+                        reference_tokens: self.tokens[reference_start..self.pos].to_vec(),
+                    }));
                 }
             }
         }
@@ -1108,9 +1167,9 @@ impl Parser<'_> {
 
     /// `'(' tripleExpression ')' cardinality? annotation* semanticActions`
     fn parse_bracketed(&mut self) -> Result<TripleExpr> {
-        self.expect(&Token::LParen, "'('")?;
+        self.expect(&Token::LParen, GrammarExpectation::LeftParen)?;
         let inner = self.parse_triple_expression()?;
-        self.expect(&Token::RParen, "')'")?;
+        self.expect(&Token::RParen, GrammarExpectation::RightParen)?;
         let cardinality = self.parse_cardinality();
         let annotations = self.parse_annotations()?;
         let sem_acts = self.parse_sem_acts()?;
@@ -1190,7 +1249,7 @@ impl Parser<'_> {
             let predicate = self.parse_predicate()?;
             let object = match self.peek() {
                 Some(Token::Iri(_) | Token::PName(..)) => {
-                    ObjectValue::Iri(self.parse_iri("annotation object")?)
+                    ObjectValue::Iri(self.parse_iri(GrammarExpectation::AnnotationObject)?)
                 }
                 _ => ObjectValue::Literal(self.parse_literal()?),
             };
