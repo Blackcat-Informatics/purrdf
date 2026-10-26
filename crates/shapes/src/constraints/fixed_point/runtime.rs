@@ -229,15 +229,14 @@ impl<'a> Execution<'a> {
                 }
                 state.generation
             };
-            let components =
-                scc_component_index_with_memory(&adjacency, &mut memory).map_err(|error| {
-                    match error {
-                        GraphError::Storage(error) => ShapesError::Storage(error),
-                        error @ GraphError::InvalidEdge { .. } => {
-                            ShapesError::internal(error.to_string())
-                        }
-                    }
-                })?;
+            let components = scc_component_index_with_memory::<Vec<usize>, _>(
+                &adjacency,
+                &mut memory,
+            )
+            .map_err(|error| match error {
+                GraphError::Storage(error) => ShapesError::Storage(error),
+                error @ GraphError::InvalidEdge { .. } => ShapesError::internal(error.to_string()),
+            })?;
             for component in 0..components.iter().max().map_or(0, |last| last + 1) {
                 let members = memory.collect(
                     components
