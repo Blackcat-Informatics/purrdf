@@ -429,6 +429,37 @@ fn an_undecidable_facet_is_reported_within_boundaries_rather_than_guessed() {
         certificate.boundaries()[0].reason().contains("xsd:pattern"),
         "the reason must name the facet that was not decided"
     );
+
+    // A completely searched fragment can still hide an intermediate class or
+    // a more-specific type from an omitted axiom.
+    let classified = reasoner.classify().expect("partial classification");
+    let realized = reasoner.realize().expect("partial realization");
+    assert_ne!(classified.answer().subsumptions(), []);
+    for (refusal, original) in [
+        (
+            classified.direct_subsumptions().expect_err("omitted axiom"),
+            classified.certificate(),
+        ),
+        (
+            realized.direct_types().expect_err("omitted axiom"),
+            realized.certificate(),
+        ),
+    ] {
+        assert_eq!(
+            original.completeness(),
+            DlCompleteness::DecidedWithinBoundaries
+        );
+        assert!(std::ptr::eq(refusal.certificate(), original));
+        let captured = purrdf_testkit::error_capture::Capture::read(&refusal);
+        assert_eq!(captured.code, "owl-directness-unavailable");
+        let purrdf_hash::error::ErrorValue::Record(record) = captured.field("certificate") else {
+            panic!("the original certificate must remain a structured record");
+        };
+        assert!(std::ptr::addr_eq(
+            record,
+            original as &dyn purrdf_hash::error::StructuredError,
+        ));
+    }
 }
 
 #[test]
@@ -450,7 +481,11 @@ fn classification_computes_the_transitive_relation_and_its_reduction() {
     assert!(subsumptions.contains(&(NOTHING.to_owned(), ex("Cat"))));
 
     // The reduction drops the transitive edge.
-    let direct = pairs(hierarchy.direct_subsumptions());
+    let direct = pairs(
+        answer
+            .direct_subsumptions()
+            .expect("fully decided hierarchy"),
+    );
     assert!(direct.contains(&(ex("Kitten"), ex("Cat"))));
     assert!(direct.contains(&(ex("Cat"), ex("Animal"))));
     assert!(
@@ -514,7 +549,7 @@ fn realization_reports_every_entailed_type_and_the_most_specific_ones() {
         "everything is an owl:Thing, and an entailed answer is not omitted for being obvious"
     );
 
-    let direct = pairs(realization.direct_types());
+    let direct = pairs(answer.direct_types().expect("fully decided realization"));
     assert_eq!(
         direct,
         expect(&[("tom", "Kitten")]),
@@ -809,6 +844,20 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
         DlCompleteness::BudgetExhausted
     );
     honest(&hierarchy);
+    let realized = reasoner.realize().expect("partial realization");
+    for (refusal, original) in [
+        (
+            hierarchy.direct_subsumptions().expect_err("round cap"),
+            hierarchy.certificate(),
+        ),
+        (
+            realized.direct_types().expect_err("round cap"),
+            realized.certificate(),
+        ),
+    ] {
+        assert_eq!(original.completeness(), DlCompleteness::BudgetExhausted);
+        assert!(std::ptr::eq(refusal.certificate(), original));
+    }
 }
 
 /// The SECOND budget degrades the same way, and the certificate says it was the one.
@@ -848,6 +897,22 @@ fn a_narrowed_work_budget_reports_unknown_through_the_same_channel() {
         certificate.steps() * 10 < certificate.budget(),
         "the ROUND figures show what they could not see: {certificate:?}"
     );
+    let classified = reasoner.classify().expect("partial classification");
+    let realized = reasoner.realize().expect("partial realization");
+    for (refusal, original) in [
+        (
+            classified.direct_subsumptions().expect_err("work cap"),
+            classified.certificate(),
+        ),
+        (
+            realized.direct_types().expect_err("work cap"),
+            realized.certificate(),
+        ),
+    ] {
+        assert_eq!(original.completeness(), DlCompleteness::BudgetExhausted);
+        assert_eq!(original.work(), original.work_budget());
+        assert!(std::ptr::eq(refusal.certificate(), original));
+    }
 }
 
 /// A NARROW work cap must cut a LARGE bulk scan off near its own cap rather than letting one

@@ -166,11 +166,11 @@ pub use owl_dl::proof::{
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
-    Certified, Claim, ClaimBasis, ClaimSubject, ClassHierarchy, ConservativeKeep, DlAxiom,
-    DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate,
-    ProfileViolation, Question, Realization, Reasoner, RunAssumptions, RunProof, Service,
-    ServiceProof, ServiceReplay, StopCause, StopReceipt, Verdict, extract_module,
-    extract_module_with_proofs, profile,
+    Certified, Claim, ClaimBasis, ClaimSubject, ClassHierarchy, ConservativeKeep,
+    DirectnessRefusal, DlAxiom, DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod,
+    OwlProfile, ProfileCertificate, ProfileViolation, Question, Realization, Reasoner,
+    RunAssumptions, RunProof, Service, ServiceProof, ServiceReplay, StopCause, StopReceipt,
+    Verdict, extract_module, extract_module_with_proofs, profile,
 };
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,

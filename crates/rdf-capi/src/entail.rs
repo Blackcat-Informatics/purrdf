@@ -482,9 +482,10 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
 /// block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` and `work_cap` behave
 /// exactly as in [`purrdf_entail_consistency`].
 ///
-/// Costs one tableau decision per ORDERED pair of named classes plus the
-/// consistency check, which the certificate's `decisions` line reports so the cost
-/// is a measurement rather than a surprise.
+/// Classification reuses shared saturation; the certificate's `decisions` line
+/// records its actual tableau runs. Incomplete directness returns an error with
+/// `owl-directness-unavailable` and the original full certificate in its message;
+/// neither answer out-parameter is written.
 ///
 /// # Safety
 /// As [`purrdf_entail_consistency`].
@@ -520,6 +521,9 @@ pub unsafe extern "C" fn purrdf_entail_classify(
 /// `*out_certificate` the `purrdf-dl-certificate 1` block. **Free BOTH with
 /// `purrdf_buffer_free`.** `step_cap` and `work_cap` behave exactly as in
 /// [`purrdf_entail_consistency`].
+///
+/// Incomplete directness returns an error with `owl-directness-unavailable` and
+/// the original full certificate in its message; neither answer out-parameter is written.
 ///
 /// # Safety
 /// As [`purrdf_entail_consistency`].

@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Certified direct OWL answers (breaking Rust API and incomplete outcomes):**
+  direct class subsumptions and most-specific types are read from the certified
+  result and require a fully decided supplied ontology. Typed refusals retain
+  the original certificate; raw payloads no longer expose unproved candidates.
+  Shared classification, realization and proof calls refuse incomplete directness
+  with the full original certificate. Fully decided output bytes are unchanged.
+
 - **Governed SRL inference (breaking error payloads):** borrowed stop signals
   reach `srl::infer_until` and `infer_triples_until`, including cancellation
   within scheduled rule groups. Success and all four rule limits retain the

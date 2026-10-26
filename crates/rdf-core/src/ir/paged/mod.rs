@@ -1259,6 +1259,13 @@ impl DatasetView for PagedDataset {
         Self: 'a;
     type ProbePlan = ();
 
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(crate::NoopReservation::owned()))
+    }
+
     fn quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         // Stream page-by-page: each page is materialized lazily on first touch (cached
         // in its `OnceLock`) and its quads are translated to the shared id space on the

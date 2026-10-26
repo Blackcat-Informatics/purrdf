@@ -342,14 +342,14 @@ def test_a_narrowed_work_cap_is_the_second_budget_and_reports_itself() -> None:
     assert "\nwork 1\n" in certificate
     assert "\nwork-budget 1\n" in certificate
     # By keyword, and on every service that takes it.
-    assert entail.classify(TAXONOMY, work_cap=1)[1].count("\nwork-budget 1\n") == 1
-    assert entail.realize(TAXONOMY, work_cap=1)[1].count("\nwork-budget 1\n") == 1
-    assert (
-        entail.instances(TAXONOMY, "<https://example.org/Cat>", work_cap=1)[1].count(
-            "\nwork-budget 1\n"
-        )
-        == 1
+    for service in [entail.classify, entail.realize]:
+        with pytest.raises(ValueError, match="owl-directness-unavailable:") as refused:
+            service(TAXONOMY, work_cap=1)
+        assert str(refused.value).count("\nwork-budget 1\n") == 1
+    _, instance_certificate = entail.instances(
+        TAXONOMY, "<https://example.org/Cat>", work_cap=1
     )
+    assert instance_certificate.count("\nwork-budget 1\n") == 1
     assert entail.entails(TAXONOMY, CHAIN_AXIOM, work_cap=1)[1].count(
         "\nwork-budget 1\n"
     ) == 1

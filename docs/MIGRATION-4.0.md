@@ -6,6 +6,45 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Certified direct OWL answers
+
+Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`
+on `Certified<Realization>`, before discarding or splitting the certificate.
+The raw hierarchy and realization no longer expose direct candidates, including
+in debug output. Their established positive facts remain available.
+
+Both accessors return a `DirectnessRefusal` unless the original certificate is
+exactly `DlCompleteness::Decided`. Its `certificate()` borrows the original full
+certificate, also exposed through structured inspection. A completely searched
+fragment with omitted axioms cannot establish directness for the supplied
+ontology: those axioms could add an intermediate class or a more-specific type.
+
+Shared classification and realization calls now refuse incomplete directness
+before emitting answer rows. Their error message starts with
+`owl-directness-unavailable` and retains the existing complete certificate block.
+One-shot, session and proof calls use the same path across language wrappers.
+Fully decided answer, certificate and proof bytes remain unchanged. The shared
+host methods accept no stop input; native refusals retain native cancellation
+evidence without adding a new host protocol claim.
+
+## Canonical reserved-vocabulary refusals
+
+`ReservedVocabulary` now lends its original IRI and position through `iri()` and
+`position()`. Cloning shares the immutable payload and its original admission
+owner. The refusal remains readable after its source is destroyed.
+
+Sources must provide `DatasetView::reserve_owned_workspace` when an offending
+IRI requires ownership. A missing capability returns
+`CanonError::OwnedWorkspaceUnavailable`; an unknown live ceiling does not grant
+permission. Original admission and source failures remain native causes.
+Verified resident carriers explicitly provide unbounded admission.
+`check_admissible` and `check_admissible_view` now return `CanonError`, including
+physical allocation refusal. Flat boundaries retain native causes through
+`ViewCanonError::Refused(CanonError<E>)`.
+
+This admission covers the retained refusal and its publication control. It does
+not certify canonicalization scratch or successful canonical result ownership.
+
 ## Canonical Function Ontology catalogs
 
 Build `FnoCatalogInput` and pass it to `FnoCatalog::try_new`. The admitted

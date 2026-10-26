@@ -220,6 +220,15 @@ impl<E> WorkspaceReservation for NoopReservation<E> {
     }
 }
 
+impl<E: 'static> NoopReservation<E> {
+    /// Explicit retained admission for a verified unbounded resident carrier.
+    /// The boxed value is zero-sized and allocates no physical storage.
+    #[must_use]
+    pub fn owned() -> OwnedWorkspaceReservation<E> {
+        Box::new(Self::default())
+    }
+}
+
 /// A constants-only id pattern whose chosen read path is being costed.
 ///
 /// `None` is an unbound position, and the graph has the same three-way meaning
@@ -1886,6 +1895,13 @@ impl DatasetView for RdfDataset {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(NoopReservation::owned()))
+    }
 
     fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
         Ok(Some(self.predicate_statistics().statement_count()))
