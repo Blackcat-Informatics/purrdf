@@ -6,6 +6,14 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## ShExC lexical refusals
+
+`ShexError::Lex.reason` and `ShexError::lex` now use `LexicalReason` instead of
+message strings. Match native reasons or inspect the existing `shex-lex` record:
+its `reason` field is a borrowed nested cause, and `at` retains the original byte
+offset. Native Unicode-escape and language-tag causes are also available through
+the standard error-source chain. Human messages and byte offsets are unchanged.
+
 ## Certified direct OWL answers
 
 Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`
