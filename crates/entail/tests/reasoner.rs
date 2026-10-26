@@ -2100,7 +2100,78 @@ fn a_finite_tagged_enumeration_cannot_supply_two_distinct_qualified_values() {
 
 #[test]
 fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
+    use purrdf_entail::proof_source::{ResolvedAxiomSource, ResolvedTerm};
+    use purrdf_entail::{Question, ServiceProof};
     use purrdf_iri::vocab::owl::{BOTTOM_DATA_PROPERTY, BOTTOM_OBJECT_PROPERTY};
+    let bottom = TermValue::Iri(BOTTOM_OBJECT_PROPERTY.to_owned());
+    for mentioned in [false, true] {
+        let input = if mentioned {
+            ds(&[typed(N::V(BOTTOM_OBJECT_PROPERTY), N::V(OBJECT_PROPERTY))])
+        } else {
+            ds(&[])
+        };
+        for (axiom, expected) in [
+            (
+                DlAxiom::SubObjectPropertyOf {
+                    sub: bottom.clone(),
+                    sup: iri("p"),
+                },
+                Verdict::True,
+            ),
+            (
+                DlAxiom::SubObjectPropertyOf {
+                    sub: iri("p"),
+                    sup: bottom.clone(),
+                },
+                Verdict::False,
+            ),
+            (
+                DlAxiom::ObjectPropertyAssertion {
+                    subject: iri("a"),
+                    property: bottom.clone(),
+                    object: iri("b"),
+                },
+                Verdict::False,
+            ),
+        ] {
+            let mut producer = Reasoner::with_proofs(&input).expect("ontology prepares");
+            let answer = producer.entails(&axiom).expect("bottom property query");
+            honest(&answer);
+            assert_eq!(*answer.answer(), expected);
+            let question = Question::AxiomEntailment {
+                axiom: Box::new(axiom),
+            };
+            let original_input = Reasoner::with_proofs(&input)
+                .expect("original source")
+                .proof_context()
+                .expect("recording")
+                .input();
+            let mut consumer = Reasoner::with_proofs(&input).expect("independent consumer");
+            consumer
+                .prepare(&question)
+                .expect("consumer prepares query");
+            let context = consumer.proof_context().expect("prepared context");
+            assert_eq!(context.input(), original_input);
+            let proof = ServiceProof::decode(&answer.proof().expect("recorded").encode())
+                .expect("proof codec");
+            let replay = proof
+                .verify(&input, &question, Some(answer.certificate()), &context)
+                .expect("independently prepared replay");
+            assert_eq!(replay.runs(), replay.replayed());
+            let expected_origin = ResolvedAxiomSource::EmptyRole(if mentioned {
+                ResolvedTerm::Source(&bottom)
+            } else {
+                ResolvedTerm::QuerySymbol(&bottom)
+            });
+            assert!(
+                (0..context.clause_count())
+                    .filter_map(|index| context.clause_tbox_origin(index).expect("clause"))
+                    .chain(context.internalized_axioms().map(|(_, origin)| origin))
+                    .any(|origin| origin == expected_origin),
+                "the native empty-role law keeps its original source/query ownership"
+            );
+        }
+    }
     for (role, kind, object) in [
         (BOTTOM_OBJECT_PROPERTY, OBJECT_PROPERTY, N::E("b")),
         (

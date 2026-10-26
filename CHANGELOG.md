@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Query-only bottom properties:** native axiom refutations install the same
+  empty-role law as ontology parsing. Querying an unmentioned bottom object
+  property now preserves its empty extension and native proof origin.
+
 - **Governed SRL inference (breaking error payloads):** borrowed stop signals
   reach `srl::infer_until` and `infer_triples_until`, including cancellation
   within scheduled rule groups. Success and all four rule limits retain the

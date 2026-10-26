@@ -98,7 +98,7 @@ use purrdf_core::{DatasetView, TermValue};
 use crate::EntailError;
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::graph::{Assumptions, Budget};
-use crate::owl_dl::parser::Vocab;
+use crate::owl_dl::parser::{self, Vocab};
 use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
@@ -986,6 +986,8 @@ impl Reasoner {
                 let subject = self.term_of(subject);
                 let property = self.term_of(property);
                 let object = self.term_of(object);
+                // Query-only empty roles have the same native law as source roles.
+                parser::constrain_bottom_roles(&mut self.kb, [property]);
                 let negated_reach = self.negated(reaches(property, object))?;
                 Refutation::RoleAssertion {
                     subject,
@@ -1018,6 +1020,7 @@ impl Reasoner {
             DlAxiom::SubObjectPropertyOf { sub, sup } => {
                 let sub = self.term_of(sub);
                 let sup = self.term_of(sup);
+                parser::constrain_bottom_roles(&mut self.kb, [sub, sup]);
                 let x = self.fresh.mint(&mut self.kb.interner);
                 let y = self.fresh.mint(&mut self.kb.interner);
                 let negated_reach = self.negated(reaches(sup, y))?;
