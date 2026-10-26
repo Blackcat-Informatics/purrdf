@@ -480,6 +480,52 @@ fn integer_narrowing_refuses_and_exact_decimal_crosses_the_old_bound() {
     assert_eq!(rounded.canonical_lexical(), "0");
 }
 
+/// Inline normalization preserves exact values at word and signed boundaries,
+/// including wide trailing-zero runs and products that return to narrow storage.
+#[test]
+fn inline_decimal_normalization_preserves_boundary_products() {
+    let word_edge = i128::from(u64::MAX);
+    for coefficient in [
+        0,
+        1,
+        -1,
+        10,
+        -10,
+        word_edge - 5,
+        word_edge,
+        word_edge + 1,
+        word_edge + 5,
+        -(word_edge + 5),
+        10_i128.pow(37),
+        -10_i128.pow(37),
+        i128::MAX - 7,
+        i128::MAX - 6,
+        i128::MAX,
+        i128::MIN,
+        i128::MIN + 1,
+        i128::MIN + 8,
+    ] {
+        for scale in [0, 1, 2, 20, 38] {
+            let digits = format!("{:0>width$}", coefficient.unsigned_abs(), width = scale + 1);
+            let split = digits.len() - scale;
+            let sign = if coefficient < 0 { "-" } else { "" };
+            let lexical = format!("{sign}{}.{}", &digits[..split], &digits[split..]);
+            let expected = oracle(&lexical);
+            let scale = u32::try_from(scale).expect("fixture scale");
+            let constructed = Decimal::new(Integer::from_i128(coefficient), scale);
+            let product = Decimal::from_integer(Integer::from_i128(coefficient))
+                .try_mul(&Decimal::new(Integer::ONE, scale))
+                .expect("representable product scale");
+            assert_same(&constructed.canonical_lexical(), &expected, "normalization")
+                .expect("exact boundary value");
+            assert_same(&product.canonical_lexical(), &expected, "product")
+                .expect("exact boundary product");
+            assert_eq!(constructed, product);
+            assert_eq!(constructed.scale(), product.scale());
+        }
+    }
+}
+
 #[test]
 fn owl_rational_identifies_the_full_exact_decimal_branch_only() {
     let half = Rational::from_str("1/2").unwrap();

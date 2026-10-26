@@ -565,6 +565,8 @@ pub enum RuleLimit {
 /// undecidable, and a rule set that needs more states it with the knob this names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleLimitExceeded {
+    /// The original complete resource report of the refused evaluation.
+    usage: purrdf_datalog::seminaive::BudgetReport,
     limit: RuleLimit,
     observed: u64,
     permitted: u64,
@@ -579,6 +581,12 @@ pub struct RuleLimitExceeded {
 }
 
 impl RuleLimitExceeded {
+    /// Every measured resource and effective limit at the refusal.
+    #[must_use]
+    pub fn usage(&self) -> &purrdf_datalog::seminaive::BudgetReport {
+        &self.usage
+    }
+
     /// Rename the rules by their index into the evaluated rule set.
     pub(crate) fn rename(&mut self, name: impl Fn(usize) -> Option<String>) {
         for (slot, &index) in self.rules.iter_mut().zip(&self.indices) {
@@ -720,7 +728,12 @@ pub enum RulesError {
     /// A typed shapes or data materialization refusal.
     Shapes(crate::error::ShapesError),
     /// The rule set passed a rule-evaluation limit ([`RuleOptions`]).
-    LimitExceeded(RuleLimitExceeded),
+    LimitExceeded(Box<RuleLimitExceeded>),
+    /// Cooperative cancellation retains the original native stopped cause.
+    Stopped {
+        /// The Datalog stopped error, including its original usage report.
+        cause: Box<purrdf_datalog::seminaive::EvalError>,
+    },
     /// Any other failure.
     Failed(String),
 }
@@ -760,7 +773,8 @@ impl RulesError {
                 knobs.join_steps(),
             ),
         };
-        Self::LimitExceeded(RuleLimitExceeded {
+        Self::LimitExceeded(Box::new(RuleLimitExceeded {
+            usage: report,
             limit,
             observed,
             permitted,
@@ -769,7 +783,7 @@ impl RulesError {
             rules,
             indices,
             knob: knob.to_owned(),
-        })
+        }))
     }
 }
 
@@ -778,6 +792,7 @@ impl std::fmt::Display for RulesError {
         match self {
             Self::Shapes(error) => error.fmt(f),
             Self::LimitExceeded(limit) => write!(f, "SHACL rules did not complete: {limit}"),
+            Self::Stopped { cause } => cause.fmt(f),
             Self::Failed(message) => f.write_str(message),
         }
     }
@@ -787,7 +802,8 @@ impl std::error::Error for RulesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Shapes(error) => Some(error),
-            Self::LimitExceeded(error) => Some(error),
+            Self::LimitExceeded(error) => Some(error.as_ref()),
+            Self::Stopped { cause } => Some(cause.as_ref()),
             Self::Failed(_) => None,
         }
     }
@@ -983,7 +999,7 @@ pub(crate) fn infer_with(
     )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let rule_set = shacl_rule_set(shapes, options)?;
-    srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution).map_err(|error| {
+    srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution, None).map_err(|error| {
         match error {
             RulesError::Shapes(error) => error,
             error => crate::error::ShapesError::Invalid(error.to_string()),

@@ -72,7 +72,7 @@ where
         selection: &Selection<'_, D, N>,
         rel: &RelationStore<D, N>,
         solution: &mut SlotSolution<I, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         rel.interner().check_read().map_err(EvalError::Source)?;
@@ -193,7 +193,7 @@ where
         &mut self,
         entry: RuleEntry<'_, N>,
         rel: &RelationStore<D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         self.filters.advance(

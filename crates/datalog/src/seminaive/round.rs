@@ -5,8 +5,8 @@
 
 use super::{
     DeltaIndexes, EvalError, GuardEvaluator, JoinStrategy, NoGuards, RelationStore, RoundBuffer,
-    RoundExecution, RoundSnapshot, RuleEntry, StepGovernor, TermDictionary, TermId, TermIdentity,
-    constant_pattern_counts, evidence::RuleEvidence, rule,
+    RoundControl, RoundExecution, RoundSnapshot, RuleEntry, StepGovernor, TermDictionary, TermId,
+    TermIdentity, constant_pattern_counts, evidence::RuleEvidence, rule,
 };
 use crate::store::{Arity, StoreShape};
 use rayon::prelude::*;
@@ -27,14 +27,14 @@ where
     Arity<N>: StoreShape<N>,
 {
     /// Enter a rule only at its original scheduling point, including source reads.
-    fn advance<D: TermDictionary<Id = I>>(
+    fn advance<'s, D: TermDictionary<Id = I>>(
         &mut self,
         snapshot: RoundSnapshot<'_, D, N>,
         strategy: JoinStrategy,
         guards: &dyn GuardEvaluator<D, N>,
-        mut governor: StepGovernor,
+        mut governor: StepGovernor<'s>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
-    ) -> Result<StepGovernor, EvalError<D::Error>> {
+    ) -> Result<StepGovernor<'s>, EvalError<D::Error>> {
         if self.frame.is_none() {
             self.frame = Some(rule::Frame::new(
                 self.entry,
@@ -63,6 +63,7 @@ where
     buffer: RoundBuffer<'r, I, N>,
     steps: u64,
     refused: bool,
+    stopped: bool,
     #[cfg(test)]
     row_visits: u64,
 }
@@ -94,6 +95,7 @@ where
             buffer: RoundBuffer::new(),
             steps: 0,
             refused: false,
+            stopped: false,
             #[cfg(test)]
             row_visits: 0,
         })
@@ -105,6 +107,10 @@ where
 
     pub(super) fn refused(&self) -> bool {
         self.refused
+    }
+
+    pub(super) fn stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Successful cumulative credits; a page's refusal sentinel is not work.
@@ -124,7 +130,7 @@ where
         execution: RoundExecution,
         strategy: JoinStrategy,
         allowance: u64,
-        guards: &dyn GuardEvaluator<D, N>,
+        control: RoundControl<'_, D, N>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         snapshot
@@ -136,7 +142,7 @@ where
             delta_indexes: Some(&self.indexes),
             ..snapshot
         };
-        let pool = StepGovernor::new(allowance);
+        let pool = StepGovernor::new(allowance).with_stop(control.stop);
         let guarded = self.rules.iter().any(|rule| rule.entry.rule.is_guarded());
         if evidence.is_some() || guarded || !execution.should_parallelize(self.rules.len()) {
             while self.merged < self.rules.len() {
@@ -144,7 +150,7 @@ where
                 let task = self.rules[position].advance(
                     snapshot,
                     strategy,
-                    guards,
+                    control.guards,
                     pool.task(),
                     evidence,
                 )?;
@@ -189,7 +195,8 @@ where
         self.steps = self
             .steps
             .saturating_add(pool.pool.used.load(Ordering::Relaxed));
-        self.refused = pool.spent();
+        self.refused = pool.refused();
+        self.stopped = pool.stopped();
         snapshot
             .rel
             .interner()
@@ -231,6 +238,7 @@ where
         }
         self.buffer.join_steps = self.steps.saturating_add(u64::from(self.refused));
         self.buffer.join_refused = self.refused;
+        self.buffer.stopped = self.stopped;
         rel.interner().check_read().map_err(EvalError::Source)?;
         Ok(self.buffer)
     }

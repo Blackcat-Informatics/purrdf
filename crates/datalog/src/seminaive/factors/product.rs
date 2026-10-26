@@ -32,7 +32,7 @@ impl Frame {
         &mut self,
         product: &Product<'_, 'r, D, N>,
         buffer: &mut RoundBuffer<'r, D::Id, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>>
     where

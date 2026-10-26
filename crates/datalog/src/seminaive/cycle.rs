@@ -51,19 +51,34 @@ struct Filtered<const SCAN: u8, const COLUMN: u8, I: TermIdentity> {
 }
 
 impl<const SCAN: u8, const COLUMN: u8, I: TermIdentity> Filtered<SCAN, COLUMN, I> {
-    fn new(rel: &Relation<I>, other: Option<I>, delta: Delta, work: &Work) -> Self {
+    fn new(
+        rel: &Relation<I>,
+        other: Option<I>,
+        delta: Delta,
+        work: &Work,
+        governor: &StepGovernor<'_>,
+    ) -> Self {
         let mut cursor = Self {
             rows: ValuePosition::new(rel, other),
             delta,
             current: None,
         };
-        cursor.fill(rel, None, work);
+        cursor.fill(rel, None, work, governor);
         cursor
     }
 
-    fn fill(&mut self, rel: &Relation<I>, prior: Option<I>, work: &Work) -> Option<I> {
+    fn fill(
+        &mut self,
+        rel: &Relation<I>,
+        prior: Option<I>,
+        work: &Work,
+        governor: &StepGovernor<'_>,
+    ) -> Option<I> {
         self.current = None;
         loop {
+            if governor.stopped() {
+                break;
+            }
             work.record(Probe::ValueNext);
             let Some((value, row)) = self.rows.next(rel) else {
                 break;
@@ -76,18 +91,29 @@ impl<const SCAN: u8, const COLUMN: u8, I: TermIdentity> Filtered<SCAN, COLUMN, I
         self.current
     }
 
-    fn seek(&mut self, rel: &Relation<I>, target: I, work: &Work) -> Option<I> {
+    fn seek(
+        &mut self,
+        rel: &Relation<I>,
+        target: I,
+        work: &Work,
+        governor: &StepGovernor<'_>,
+    ) -> Option<I> {
         work.record(Probe::FilterSeek);
         if self.current.is_some_and(|value| value >= target) {
             return self.current;
         }
         work.record(Probe::ValueSeek);
         self.rows.seek(rel, target);
-        self.fill(rel, None, work)
+        self.fill(rel, None, work, governor)
     }
 
-    fn advance(&mut self, rel: &Relation<I>, work: &Work) -> Option<I> {
-        self.fill(rel, self.current, work)
+    fn advance(
+        &mut self,
+        rel: &Relation<I>,
+        work: &Work,
+        governor: &StepGovernor<'_>,
+    ) -> Option<I> {
+        self.fill(rel, self.current, work, governor)
     }
 }
 
@@ -117,6 +143,7 @@ impl<I: TermIdentity> Cursor<I> {
         scan: Scan,
         delta: Delta,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> Self
     where
         Arity<N>: StoreShape<N>,
@@ -126,9 +153,13 @@ impl<I: TermIdentity> Cursor<I> {
             partition: partition.id(),
             delta_source: matches!(scan, Scan::Delta),
             values: match scan {
-                Scan::Delta => Values::DeltaSubject(Filtered::new(rel, other, delta, work)),
-                Scan::Full => Values::FullSubject(Filtered::new(rel, other, delta, work)),
-                Scan::OldOnly => Values::OldOnlySubject(Filtered::new(rel, other, delta, work)),
+                Scan::Delta => {
+                    Values::DeltaSubject(Filtered::new(rel, other, delta, work, governor))
+                }
+                Scan::Full => Values::FullSubject(Filtered::new(rel, other, delta, work, governor)),
+                Scan::OldOnly => {
+                    Values::OldOnlySubject(Filtered::new(rel, other, delta, work, governor))
+                }
             },
         }
     }
@@ -140,6 +171,7 @@ impl<I: TermIdentity> Cursor<I> {
         scan: Scan,
         delta: Delta,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> Self
     where
         Arity<N>: StoreShape<N>,
@@ -149,9 +181,13 @@ impl<I: TermIdentity> Cursor<I> {
             partition: partition.id(),
             delta_source: matches!(scan, Scan::Delta),
             values: match scan {
-                Scan::Delta => Values::DeltaObject(Filtered::new(rel, other, delta, work)),
-                Scan::Full => Values::FullObject(Filtered::new(rel, other, delta, work)),
-                Scan::OldOnly => Values::OldOnlyObject(Filtered::new(rel, other, delta, work)),
+                Scan::Delta => {
+                    Values::DeltaObject(Filtered::new(rel, other, delta, work, governor))
+                }
+                Scan::Full => Values::FullObject(Filtered::new(rel, other, delta, work, governor)),
+                Scan::OldOnly => {
+                    Values::OldOnlyObject(Filtered::new(rel, other, delta, work, governor))
+                }
             },
         }
     }
@@ -196,18 +232,19 @@ impl<I: TermIdentity> Cursor<I> {
         run: &LeapfrogRun<'_, D, N>,
         target: I,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> Option<I>
     where
         Arity<N>: StoreShape<N>,
     {
         let rel = self.relation(run);
         match &mut self.values {
-            Values::DeltaSubject(cursor) => cursor.seek(rel, target, work),
-            Values::FullSubject(cursor) => cursor.seek(rel, target, work),
-            Values::OldOnlySubject(cursor) => cursor.seek(rel, target, work),
-            Values::DeltaObject(cursor) => cursor.seek(rel, target, work),
-            Values::FullObject(cursor) => cursor.seek(rel, target, work),
-            Values::OldOnlyObject(cursor) => cursor.seek(rel, target, work),
+            Values::DeltaSubject(cursor) => cursor.seek(rel, target, work, governor),
+            Values::FullSubject(cursor) => cursor.seek(rel, target, work, governor),
+            Values::OldOnlySubject(cursor) => cursor.seek(rel, target, work, governor),
+            Values::DeltaObject(cursor) => cursor.seek(rel, target, work, governor),
+            Values::FullObject(cursor) => cursor.seek(rel, target, work, governor),
+            Values::OldOnlyObject(cursor) => cursor.seek(rel, target, work, governor),
         }
     }
 
@@ -215,18 +252,19 @@ impl<I: TermIdentity> Cursor<I> {
         &mut self,
         run: &LeapfrogRun<'_, D, N>,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> Option<I>
     where
         Arity<N>: StoreShape<N>,
     {
         let rel = self.relation(run);
         match &mut self.values {
-            Values::DeltaSubject(cursor) => cursor.advance(rel, work),
-            Values::FullSubject(cursor) => cursor.advance(rel, work),
-            Values::OldOnlySubject(cursor) => cursor.advance(rel, work),
-            Values::DeltaObject(cursor) => cursor.advance(rel, work),
-            Values::FullObject(cursor) => cursor.advance(rel, work),
-            Values::OldOnlyObject(cursor) => cursor.advance(rel, work),
+            Values::DeltaSubject(cursor) => cursor.advance(rel, work, governor),
+            Values::FullSubject(cursor) => cursor.advance(rel, work, governor),
+            Values::OldOnlySubject(cursor) => cursor.advance(rel, work, governor),
+            Values::DeltaObject(cursor) => cursor.advance(rel, work, governor),
+            Values::FullObject(cursor) => cursor.advance(rel, work, governor),
+            Values::OldOnlyObject(cursor) => cursor.advance(rel, work, governor),
         }
     }
 }
@@ -243,22 +281,26 @@ impl<I: TermIdentity> Intersection<I> {
         &mut self,
         run: &LeapfrogRun<'_, D, N>,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> Option<I>
     where
         Arity<N>: StoreShape<N>,
     {
         let mut target = self.cursors.iter().filter_map(Cursor::current).max()?;
         loop {
+            if governor.stopped() {
+                return None;
+            }
             let mut aligned = true;
             for cursor in &mut self.cursors {
-                let value = cursor.seek(run, target, work)?;
+                let value = cursor.seek(run, target, work, governor)?;
                 if value > target {
                     target = value;
                     aligned = false;
                 }
             }
             if aligned {
-                self.cursors[0].advance(run, work);
+                self.cursors[0].advance(run, work, governor);
                 return Some(target);
             }
         }
@@ -270,13 +312,14 @@ impl<I: TermIdentity> Intersection<I> {
         run: &LeapfrogRun<'_, D, N>,
         wanted: I,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> bool
     where
         Arity<N>: StoreShape<N>,
     {
         self.cursors
             .iter_mut()
-            .all(|cursor| cursor.seek(run, wanted, work) == Some(wanted))
+            .all(|cursor| cursor.seek(run, wanted, work, governor) == Some(wanted))
     }
 }
 
@@ -291,13 +334,14 @@ impl<I: TermIdentity> Level<I> {
         &mut self,
         run: &LeapfrogRun<'_, D, N>,
         work: &Work,
+        governor: &StepGovernor<'_>,
     ) -> Option<I>
     where
         Arity<N>: StoreShape<N>,
     {
         match self {
             Self::Fixed(value) => value.take(),
-            Self::Open(intersection) => intersection.next(run, work),
+            Self::Open(intersection) => intersection.next(run, work, governor),
         }
     }
 }
@@ -363,7 +407,7 @@ where
     pub(super) fn advance<D: TermDictionary<Id = I>>(
         &mut self,
         run: &LeapfrogRun<'_, D, N>,
-        governor: &mut StepGovernor,
+        governor: &mut StepGovernor<'_>,
     ) -> Result<(), D::Error> {
         run.rel.interner().check_read()?;
         while !governor.spent() {
@@ -397,7 +441,7 @@ where
             }
             if self.levels.len() == self.depth {
                 let input = self.working.as_ref().expect("the level has an input");
-                match make_level(run, self.depth, input, &self.work)? {
+                match make_level(run, self.depth, input, &self.work, governor)? {
                     Some(level) => self.levels.push(level),
                     None => {
                         self.backtrack(run);
@@ -406,7 +450,7 @@ where
                 }
             }
             let level = &mut self.levels[self.depth];
-            if let Some(value) = level.next(run, &self.work) {
+            if let Some(value) = level.next(run, &self.work, governor) {
                 if matches!(level, Level::Open(_)) {
                     let slot = run.cycle.variable_slots()[self.depth];
                     let working = self.working.as_mut().expect("the level has an input");
@@ -429,6 +473,7 @@ fn make_level<D: TermDictionary, const N: usize>(
     variable_position: usize,
     solution: &SlotSolution<D::Id, N>,
     work: &Work,
+    governor: &StepGovernor<'_>,
 ) -> Result<Option<Level<D::Id>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -450,9 +495,23 @@ where
             return Ok(None);
         };
         let cursor = if subject_slot == variable_slot {
-            Cursor::subject(partition, solution.get(object_slot), scan, run.delta, work)
+            Cursor::subject(
+                partition,
+                solution.get(object_slot),
+                scan,
+                run.delta,
+                work,
+                governor,
+            )
         } else {
-            Cursor::object(partition, solution.get(subject_slot), scan, run.delta, work)
+            Cursor::object(
+                partition,
+                solution.get(subject_slot),
+                scan,
+                run.delta,
+                work,
+                governor,
+            )
         };
         cursors.push(cursor);
     }
@@ -461,7 +520,11 @@ where
     }
     let mut intersection = Intersection { cursors };
     Ok(Some(match solution.get(variable_slot) {
-        Some(value) => Level::Fixed(intersection.contains(run, value, work).then_some(value)),
+        Some(value) => Level::Fixed(
+            intersection
+                .contains(run, value, work, governor)
+                .then_some(value),
+        ),
         None => Level::Open(intersection),
     }))
 }

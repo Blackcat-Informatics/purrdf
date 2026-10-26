@@ -8,6 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Governed SRL inference (breaking error payloads):** borrowed stop signals
+  reach `srl::infer_until` and `infer_triples_until`, including cancellation
+  within scheduled rule groups. Success and all four rule limits retain the
+  complete native usage report. Distinct stopped errors retain their native
+  cause and never publish unfinished inference. Limit payloads are now boxed;
+  their standard sources still borrow the original limit value. Unstopped
+  results, proofs, contract identities and effective limits remain unchanged.
+
 - **Segmented data profile 3 (breaking persisted format):** the reverse index
   stores identifiers into the forward dictionary, and dictionary blocks read
   their first key from its record instead of a second stored fence. Exact reverse
