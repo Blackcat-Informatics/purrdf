@@ -111,7 +111,10 @@ use purrdf_core::{
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
 use crate::ast::Schema;
-use crate::error::{Result, ShexError};
+use crate::error::{
+    MapExpectation, Result, ShapeMapContext, ShapeMapLanguageRefusal, ShapeMapPosition,
+    ShapeMapReason, ShexError,
+};
 use crate::lexer::{LANGTAG_PROFILE, uchar_byte};
 use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions};
@@ -175,7 +178,7 @@ pub struct ShapeMap(pub Vec<ShapeAssociation>);
 ///
 /// # Errors
 ///
-/// Returns [`ShexError::Syntax`] on a grammar violation and [`ShexError::Iri`]
+/// Returns [`ShexError::ShapeMapSyntax`] on a grammar violation and [`ShexError::Iri`]
 /// when a relative IRI cannot be resolved — including when `base` is `None`, where
 /// a relative reference is the shared `iri-relative-no-base` failure rather than a
 /// selector that silently matches nothing.
@@ -500,7 +503,7 @@ impl MapParser {
         }
         self.skip_ws();
         if !self.eof() {
-            return Err(self.err("trailing input after shape map"));
+            return Err(self.err(ShapeMapReason::Trailing { found: self.peek() }));
         }
         Ok(ShapeMap(associations))
     }
@@ -509,7 +512,7 @@ impl MapParser {
         let node = self.parse_node_selector()?;
         self.skip_ws();
         if self.peek() != Some('@') {
-            return Err(self.err("expected '@' between node selector and shape"));
+            return Err(self.expected(MapExpectation::Association));
         }
         self.pos += 1;
         self.skip_ws();
@@ -543,7 +546,7 @@ impl MapParser {
             let predicate = self.parse_predicate()?;
             self.skip_ws();
             if !self.take_keyword("FOCUS") {
-                return Err(self.err("expected FOCUS in triple pattern"));
+                return Err(self.expected(MapExpectation::Focus));
             }
             self.skip_ws();
             self.expect('}')?;
@@ -582,10 +585,9 @@ impl MapParser {
             let mut term = match self.peek() {
                 Some('<') if self.peek_at(1) == Some('<') => {
                     if self.peek_at(2) != Some('(') {
-                        return Err(self.err(
-                            "`<< s p o >>` is RDF 1.2 reifier syntax, not a triple term; \
-                             write a triple term as `<<( s p o )>>`",
-                        ));
+                        return Err(self.err(ShapeMapReason::Reifier {
+                            found: self.peek_at(2),
+                        }));
                     }
                     self.pos += 3;
                     self.skip_ws();
@@ -599,9 +601,8 @@ impl MapParser {
                 Some('"') => self.parse_literal()?,
                 _ => {
                     return match self.peek_prefixed_name() {
-                        Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
-                        None => Err(self
-                            .err("expected a term (<iri>, _:blank, \"literal\" or <<( s p o )>>)")),
+                        Some(name) => Err(self.prefixed_name_err(name, ShapeMapPosition::Node)),
+                        None => Err(self.expected(MapExpectation::Term)),
                     };
                 }
             };
@@ -632,7 +633,7 @@ impl MapParser {
     fn close_triple_term(&mut self) -> Result<()> {
         if self.peek() != Some(')') || self.peek_at(1) != Some('>') || self.peek_at(2) != Some('>')
         {
-            return Err(self.err("expected ')>>' to close a triple term opened with '<<('"));
+            return Err(self.expected(MapExpectation::TripleClose));
         }
         self.pos += 3;
         Ok(())
@@ -642,7 +643,7 @@ impl MapParser {
         // BEFORE the `a` keyword: `a:b` is a prefixed name whose prefix happens to be
         // `a`, and taking the keyword first would read it as rdf:type plus junk.
         if let Some(name) = self.peek_prefixed_name() {
-            return Err(self.prefixed_name_err(&name, "a predicate must be `a` or an IRI"));
+            return Err(self.prefixed_name_err(name, ShapeMapPosition::Predicate));
         }
         if self.take_keyword("a") {
             return Ok(RDF_TYPE.to_owned());
@@ -650,7 +651,7 @@ impl MapParser {
         if self.peek() == Some('<') {
             self.parse_iri()
         } else {
-            Err(self.err("expected a predicate (<iri> or 'a')"))
+            Err(self.expected(MapExpectation::Predicate))
         }
     }
 
@@ -658,7 +659,7 @@ impl MapParser {
         // BEFORE the `START` keyword, for the reason `parse_predicate` checks before `a`:
         // `START:S` is a prefixed name, not the start-shape keyword followed by junk.
         if let Some(name) = self.peek_prefixed_name() {
-            return Err(self.prefixed_name_err(&name, "a shape label must be `START` or an IRI"));
+            return Err(self.prefixed_name_err(name, ShapeMapPosition::Shape));
         }
         if self.take_keyword("START") {
             return Ok(ShapeSelector::Start);
@@ -666,7 +667,7 @@ impl MapParser {
         if self.peek() == Some('<') {
             Ok(ShapeSelector::Label(self.parse_iri()?))
         } else {
-            Err(self.err("expected a shape label (START or <iri>)"))
+            Err(self.expected(MapExpectation::Shape))
         }
     }
 
@@ -734,20 +735,8 @@ impl MapParser {
     /// `shapeSpec`'s `ATPNAME_NS`/`ATPNAME_LN` arms), so this is a deliberate exclusion
     /// rather than an omission. See the module documentation for why PurRDF does not
     /// extend past it.
-    fn prefixed_name_err(&self, name: &str, position: &str) -> ShexError {
-        ShexError::syntax(
-            format!(
-                "{position} in angle brackets; `{name}` is a prefixed name, and the ShapeMap \
-                 grammar admits none — its `iri` production is IRIREF only. The specification \
-                 also declines to say where a prefix map would come from, recording that \
-                 resolving shape references against the schema's prefixes and node references \
-                 against the data's is \"common practice\" that \"this specification does not \
-                 specify\"; two documents may bind one prefix differently, so PurRDF resolves \
-                 none rather than silently choosing a side. Write the IRI in full \
-                 (`<http://example.org/S1>`), or a relative `<S1>` against a base"
-            ),
-            self.pos,
-        )
+    fn prefixed_name_err(&self, name: String, position: ShapeMapPosition) -> ShexError {
+        self.err(ShapeMapReason::PrefixedName { name, position })
     }
 
     /// An `IRIREF`: `'<' … '>'`, resolved against the base in scope.
@@ -795,9 +784,9 @@ impl MapParser {
     fn parse_iri(&mut self) -> Result<String> {
         if self.peek() != Some('<') {
             if let Some(name) = self.peek_prefixed_name() {
-                return Err(self.prefixed_name_err(&name, "an IRI must be written"));
+                return Err(self.prefixed_name_err(name, ShapeMapPosition::Iri));
             }
-            return Err(self.err("expected an IRI in angle brackets"));
+            return Err(self.expected(MapExpectation::Iri));
         }
         self.pos += 1; // '<'
         let mut raw = String::new();
@@ -815,7 +804,12 @@ impl MapParser {
                     raw.push(c);
                     self.pos += 1;
                 }
-                _ => return Err(self.err("unterminated IRI")),
+                _ => {
+                    return Err(self.err(ShapeMapReason::Unterminated {
+                        context: ShapeMapContext::Iri,
+                        found: self.peek(),
+                    }));
+                }
             }
         }
     }
@@ -830,26 +824,15 @@ impl MapParser {
     /// Every failure is a hard error rather than a fallback to the raw backslash,
     /// because no production reachable from here gives `'\'` any other reading.
     fn read_uchar(&mut self) -> Result<char> {
-        self.uchar("IRI")
+        self.uchar(ShapeMapContext::Iri)
     }
 
-    /// Decode the `UCHAR` whose backslash is the current scalar, naming `what`
+    /// Decode the `UCHAR` whose backslash is the current scalar, naming its context
     /// (an IRI or a string) in the error, and advance past it.
-    fn uchar(&mut self, what: &str) -> Result<char> {
+    fn uchar(&mut self, context: ShapeMapContext) -> Result<char> {
         let (decoded, consumed) =
-            terminals::decode_uchar_at(|ahead| self.peek_at(ahead).map(uchar_byte)).map_err(
-                |defect| match defect {
-                    terminals::UcharError::NotAnEscape => self.err(&format!(
-                        "a backslash in an {what} must open a \\u/\\U escape"
-                    )),
-                    terminals::UcharError::BadHex => self.err(&format!(
-                        "bad \\u/\\U escape in {what} (expected hex digits)"
-                    )),
-                    terminals::UcharError::NotAScalar => self.err(&format!(
-                        "\\u/\\U escape in {what} is not a Unicode scalar value"
-                    )),
-                },
-            )?;
+            terminals::decode_uchar_at(|ahead| self.peek_at(ahead).map(uchar_byte))
+                .map_err(|cause| self.err(ShapeMapReason::UnicodeEscape { context, cause }))?;
         self.pos += consumed;
         Ok(decoded)
     }
@@ -886,7 +869,7 @@ impl MapParser {
         // '_' ':' NAME
         self.pos += 1;
         if self.peek() != Some(':') {
-            return Err(self.err("expected ':' after '_' in blank node"));
+            return Err(self.expected(MapExpectation::BlankColon));
         }
         self.pos += 1;
         let mut label = String::new();
@@ -896,9 +879,7 @@ impl MapParser {
                 self.pos += 1;
             }
             _ => {
-                return Err(
-                    self.err("a blank-node label must begin with PN_CHARS_U or a digit after `_:`")
-                );
+                return Err(self.expected(MapExpectation::BlankStart));
             }
         }
         let mut trailing_dots = 0usize;
@@ -940,7 +921,12 @@ impl MapParser {
                     lexical.push(c);
                     self.pos += 1;
                 }
-                _ => return Err(self.err("unterminated string literal")),
+                _ => {
+                    return Err(self.err(ShapeMapReason::Unterminated {
+                        context: ShapeMapContext::String,
+                        found: self.peek(),
+                    }));
+                }
             }
         }
         // Optional datatype or language tag.
@@ -962,18 +948,21 @@ impl MapParser {
             // RDF 1.2 `LANG_DIR` (Turtle 1.2 `[144s]`): a trailing `--ltr` or `--rtl`
             // is the literal's base direction, not part of its language tag. Any
             // other `--` suffix stays in the tag, where the tag grammar refuses it.
-            let (tag, direction) = match tag.rsplit_once("--") {
+            let raw = tag;
+            let (tag, direction) = match raw.rsplit_once("--") {
                 Some((head, token)) => match RdfTextDirection::from_str_token(token) {
                     Some(direction) => (head, Some(direction)),
-                    None => (tag.as_str(), None),
+                    None => (raw.as_str(), None),
                 },
-                None => (tag.as_str(), None),
+                None => (raw.as_str(), None),
             };
-            if let Err(error) = langtag::parse_with(tag, LANGTAG_PROFILE) {
-                return Err(self.err(&format!(
-                    "expected a language tag: {error} [{code}]",
-                    code = error.diagnostic_code()
-                )));
+            if let Err(cause) = langtag::parse_with(tag, LANGTAG_PROFILE) {
+                let tag_bytes = tag.len();
+                return Err(
+                    self.err(ShapeMapReason::Language(ShapeMapLanguageRefusal::new(
+                        raw, tag_bytes, direction, cause,
+                    ))),
+                );
             }
             Ok(match direction {
                 None => TermValue::lang_literal(lexical, tag),
@@ -991,16 +980,18 @@ impl MapParser {
 
     /// `ECHAR` or `UCHAR`, the backslash already consumed.
     fn parse_escape(&mut self) -> Result<char> {
-        let escaped = self.peek().ok_or_else(|| self.err("dangling escape"))?;
+        let escaped = self
+            .peek()
+            .ok_or_else(|| self.err(ShapeMapReason::DanglingEscape))?;
         if let Some(decoded) = u8::try_from(escaped).ok().and_then(terminals::echar_value) {
             self.pos += 1;
             return Ok(decoded);
         }
         if matches!(escaped, 'u' | 'U') {
             self.pos -= 1;
-            return self.uchar("string");
+            return self.uchar(ShapeMapContext::String);
         }
-        Err(self.err("invalid string escape"))
+        Err(self.err(ShapeMapReason::InvalidEscape { found: escaped }))
     }
 
     /// Resolve an `<iri>` against the base the map was parsed with.
@@ -1061,7 +1052,7 @@ impl MapParser {
             self.pos += 1;
             Ok(())
         } else {
-            Err(self.err(&format!("expected '{ch}'")))
+            Err(self.expected(MapExpectation::Character(ch)))
         }
     }
 
@@ -1115,8 +1106,25 @@ impl MapParser {
         true
     }
 
-    fn err(&self, reason: &str) -> ShexError {
-        ShexError::syntax(reason.to_owned(), self.pos)
+    fn expected(&self, expected: MapExpectation) -> ShexError {
+        self.err(ShapeMapReason::Expected {
+            expected,
+            found: self.peek(),
+            next: self.peek_at(1),
+            after_next: self.peek_at(2),
+        })
+    }
+
+    fn err(&self, reason: ShapeMapReason) -> ShexError {
+        let at = self.chars[..self.pos]
+            .iter()
+            .map(|scalar| scalar.len_utf8())
+            .sum();
+        ShexError::ShapeMapSyntax {
+            reason,
+            at,
+            scalar_offset: self.pos,
+        }
     }
 }
 
@@ -1146,7 +1154,7 @@ mod langtag_tests {
     /// fourteen-character subtag, which the N-Triples negative-syntax corpus
     /// requires to be refused.
     ///
-    /// The refusal keeps its `ShexError::Syntax` type and its byte offset; the
+    /// The refusal uses native `ShexError::ShapeMapSyntax` and keeps its ASCII position; the
     /// reason now names the production that bit instead of restating the
     /// terminal.
     #[test]
@@ -1154,8 +1162,8 @@ mod langtag_tests {
         let error = parse_tagged_node("cantbethislong")
             .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
         assert!(
-            matches!(error, ShexError::Syntax { .. }),
-            "the error type and its offset are unchanged: {error:?}"
+            matches!(error, ShexError::ShapeMapSyntax { .. }),
+            "the refusal is native and retains its ASCII position: {error:?}"
         );
         let message = error.to_string();
         for expected in [
