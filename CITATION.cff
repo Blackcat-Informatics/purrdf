@@ -11,12 +11,15 @@ abstract: >-
   algebra, and multiset evaluator with governed execution, SEP-0009 composite
   datatypes, and SPARQL Results JSON/XML/CSV/TSV; SHACL validation (Core,
   SHACL-SPARQL, and SHACL-AF including SHACL Rules); ShEx 2.1 validation;
+  a deterministic semi-naive Datalog substrate with incremental maintenance;
   entailment regimes (RDF, RDFS, OWL 2 RL, D, an OWL 2 Direct-Semantics
   tableau, and RIF-Core) that return a reasoning report with every closure;
-  deterministic full-text search with exact fixed-point BM25 ranking; exact,
+  deterministic full-text search with exact fixed-point BM25F ranking; exact,
   float-free GeoSPARQL 1.1; embedding nearest-neighbour search over the PURREMB
-  companion format; and the GTS single-file, content-addressed, append-only graph
-  transport. Together, the full-text, GeoSPARQL and nearest-neighbour surfaces
+  companion format; byte-covering Markdown, JSON, TOML and MIME document codecs;
+  a canonical five-table Parquet projection; certified segmented storage for
+  budgeted reads of immutable snapshots; and the GTS single-file,
+  content-addressed, append-only graph transport. Together, the full-text, GeoSPARQL and nearest-neighbour surfaces
   answer from SPARQL, in-process and over one dataset, the three queries for
   which an RDF project has usually run PostgreSQL beside its triple store, with
   the same result natively and on WebAssembly. The workspace deliberately exposes no optional Cargo features — as a
@@ -47,6 +50,7 @@ keywords:
   - shacl
   - shex
   - owl
+  - datalog
   - geosparql
   - full-text-search
   - json-ld
@@ -55,6 +59,7 @@ keywords:
   - linked-data
   - canonicalization
   - graph-transport
+  - parquet
   - rust
   - python
   - webassembly

@@ -6,6 +6,28 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## At a glance
+
+Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
+3.x forms:
+
+- Segmented stores written with an earlier data profile: rebuild them from the
+  original RDF input.
+- Independent Datalog proof bytes in encoding version 1: regenerate them from
+  the original inputs and rule program.
+- Cached Datalog plans and reasoning-contract results: the plan solver
+  (`purrdf-datalog-plan-v6`) and calculus (`purrdf-datalog-calculus-v3`)
+  identities changed.
+- Full-text profile and index fingerprints: the ranking identity is now
+  `purrdf-bm25f-fixed-v2`.
+- Developer-schema compilations cached under an earlier `SchemaCompilation.key`.
+
+Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
+C ABI 0.12.0. Several defaults change behavior without a signature change:
+remembered empty named graphs, model-only Datalog output, exact decimal
+division, the SPARQL pre-binding rewrite and specific SPARQL diagnostic codes.
+Each has its own section below.
+
 ## Certified direct OWL answers
 
 Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`
@@ -349,3 +371,168 @@ borrows the projection's names and preserves their visible order. Keep explicit
 list. A consumer that needs such a list can clone the shared view's names at
 that boundary; expanding every nested wildcard snapshot recreates the repeated
 prefix work the compact representation avoids.
+
+## Segmented data profile 3
+
+Segmented stores use data profile 3. The reverse index stores identifiers into
+the forward dictionary, and dictionary blocks read their first key from the
+record instead of a second stored fence. The reader refuses earlier segmented
+profiles. Regenerate those stores from their original RDF input; there is no
+in-place upgrade. Receipt encoding and hash laws are a separate contract and do
+not change with the data profile.
+
+## Explicit Datalog evidence
+
+Ordinary evaluation produces the model only. Request `DerivationMode::Record`
+when derivations are needed. `Evaluation::derivations` now returns an `Option`,
+and constructing a proof from an evaluation that did not record returns a typed
+refusal. Entailment and SHACL proof callers must request recording explicitly.
+`Evaluation::work` reports semantic fact counts and versioned candidate work,
+and each call can select sequential rule execution without changing a global
+pool. Capacity defaults are covered under
+[Explicit capacity limits](#explicit-capacity-limits).
+
+## Exact XSD numerics
+
+`XsdValue::Integer` and `XsdValue::Decimal` carry the exact integer and decimal
+types at every size (`purrdf_xsd::exact::Decimal` and `exact::Integer`). The
+bounded `purrdf_xsd::Decimal`, the bounded `owl:rational` module and the decimal
+narrowing conversions are removed; use `exact::Rational` for `owl:rational`. Code
+that matched the former wide variants matches the same exact variants for small
+values. Integer narrowing to `i128` or `i64` remains explicit and typed.
+
+`bigint_avg_decimal` and `bigint_avg_decimal_lexical` are no longer public. Use
+`numeric_div_with_policy` so aggregate division follows the same policy as
+ordinary division.
+
+Decimal division keeps every digit of a terminating quotient. Otherwise it
+rounds to 18 fractional places, half to even. Select `exact`, `N`,
+`N:ROUNDING` or `exact-or-N[:ROUNDING]` through `QueryOptions::with_division`
+for a different policy. Temporal seconds are exact decimals, including
+fractional precision beyond 18 places.
+
+## Remembered empty named graphs
+
+Rust `MutableDataset::new` and `QueryOptions`, Python `Store` and
+`MutableDataset`, the WASM `Dataset` and `purrdf update` now remember a named
+graph after its last row is removed or it is cleared. `CREATE` registers an
+empty graph and `DROP` removes it. A missing remembered target or transfer
+source fails before any mutation unless the operation is `SILENT`.
+
+To keep row-driven graph existence, select:
+
+| Surface | Setting |
+| --- | --- |
+| Rust | `GraphExistenceMode::Implicit` |
+| Python | `remember_empty_graphs=False` |
+| WASM | `new Dataset(false)`, or `false` as the fourth argument to `Dataset.parse` |
+| CLI | `--graph-existence implicit` |
+
+Otherwise, use `DROP` where an earlier `CLEAR` was meant to remove the graph.
+
+The C entry points `purrdf_graph_from_dataset`, `purrdf_update_governed`,
+`purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo` take
+a required `int32_t graph_existence`: pass
+`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` (0) or `PURRDF_GRAPH_EXISTENCE_IMPLICIT`
+(1). Other values are invalid arguments.
+
+## Exact BM25F ranking
+
+The ranking identity is `purrdf-bm25f-fixed-v2`. Query terms, fields,
+populations, field lengths and frequencies, and nonnegative weights no longer
+have admission ceilings, so profile and index fingerprints change. Score
+lexicals that 3.x admitted are byte-identical.
+
+The fixed maximum and width exports are removed. `PreparedQuery::score` returns
+`BoundedScore { value, bound }`, native `Scored` carries `score_bound`, and
+matched-term counts are `usize`. The bound is derived from the prepared query
+and corpus.
+
+## Developer-schema output
+
+IRI-only ontologies emit different developer schemas, and every
+`SchemaCompilation.key` changes, including for inputs with no OWL. Discard
+cached compilations. The notable output changes:
+
+- `ex:X owl:equivalentClass xsd:…` defines a datatype, not a class.
+- Every OWL-derived property accepts a node or a well-typed literal, following
+  the OWL 2 RDF-Based Semantics. An ill-typed literal is no value of any
+  OWL-derived property. Well-typed literals use the reserved `$defs/Literal`,
+  so a class whose local name is `Literal` is keyed by its CURIE.
+- XSD ranges admit every literal in the datatype's value space.
+- A schema `$id` under a hash namespace no longer has a fragment.
+- Class-membership closure admits up to 16,777,216 memberships.
+- Class constructors on IRIs are projected instead of ignored.
+
+SHACL-derived properties and shaped-only output are unchanged.
+
+## SPARQL pre-binding
+
+Every lane that binds a variable before evaluation uses the SHACL pre-binding
+rewrite: `sh:sparql`, prepared-execution parameters, request substitutions, node
+expression scope and `sh:expression`'s `value`. `ShaclPrebinding` and
+`QueryOptions::with_prebinding` are deprecated and have no effect.
+
+Prepared parameters and request substitutions now reach `OPTIONAL`, `MINUS`,
+sub-`SELECT` and `EXISTS`. To keep a free match there, rename the variable
+inside that position, for example `OPTIONAL { ?s2 ex:p ?y }`. An assignment of a
+pre-bound variable keeps only rows whose assigned value equals the binding;
+assign a fresh variable to keep the old answer. A `VALUES` that lists only other
+terms has no rows. `MINUS` carries the bound value on both sides, so share the
+variables it should match on.
+
+The SHACL lanes refuse `MINUS`. A `sh:sparql` constraint, component validator,
+`sh:SPARQLTarget` `sh:ask` and SPARQL rule refuse every `VALUES`. A node
+expression and `sh:expression` refuse a `VALUES` that mentions a pre-bound name.
+
+## Owned RDF triples
+
+`purrdf_core::RdfTriple` implements `Drop`, which makes dropping deeply nested
+terms stack-safe. Moving a field out of an owned triple, or using struct update
+syntax from one, no longer compiles (E0509). Use `RdfTriple::into_parts`:
+
+```rust,ignore
+let (subject, predicate, object, location) = boxed.into_parts();
+```
+
+Construction, by-reference matching, in-place reads and assignments, and moving
+the `Box<RdfTriple>` out of `RdfTerm::Triple` are unchanged.
+
+## SPARQL evaluator errors and codes
+
+A native host function's own error, a native or property-function panic, a
+function resource ceiling or an invalid host protocol response now fails with
+`EvalError::FunctionOperational`. `EvalError::Function` means only that the
+request was refused for arity, type or access mode. Code that caught host
+failures through `Function` must also match `FunctionOperational`. `EvalError`
+also adds `FunctionAdmission` and `XPathRegex`.
+
+`EvalError::diagnostic_code()` and `code()` return specific codes where the
+native engine previously reported `native-sparql-query-eval`:
+
+| Variant | Code |
+| --- | --- |
+| `Internal` | `native-sparql-internal` |
+| `CompositeBound` | `native-sparql-composite-bound` |
+| `FloatEnvironment` | `native-sparql-float-environment` |
+| `FunctionOperational` | `native-sparql-function-operational` |
+| `XPathRegex` | the exhausted resource's code, otherwise `native-sparql-xpath-operational` |
+
+`RdfDiagnostic::code` and the codes reported by the CLI, C ABI, Python and
+WebAssembly change accordingly.
+
+## SHACL profiles and rule sets
+
+`ShaclProfile::ED_20261016` (`shacl-ed-2026-10-16`) selects the editor's-draft
+law. `ShaclProfile::WD_20260918` follows the working draft text and refuses or
+ignores the four rules published after it. `ShaclProfile::REC_20170720`
+collects prefixes along `sh:prefixes/owl:imports*/sh:declare`. The
+compatibility law reads the editor's draft. Use `ShaclProfile::is_shacl12` to
+select both SHACL 1.2 laws.
+
+A rule set must be typed `sh:RuleSet`. An untyped subject of `sh:hasRule` or
+`sh:includesRuleSet` is no longer a rule set, and `RuleOptions::with_rule_set`
+refuses an untyped IRI. An `sh:includesRuleSet` value that is not a declared
+rule set fails when the shapes graph loads. `validate_change` on a shapes graph
+that declares rules entailment answers with the whole graph and the reason
+`rules entailment`.
