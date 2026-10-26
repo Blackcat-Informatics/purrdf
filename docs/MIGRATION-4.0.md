@@ -6,6 +6,19 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## ShExJ language refusals
+
+All six ShExJ language-tag and stem positions now return
+`ShexError::LanguageTag` with a native `LanguageMember`, original owned value and
+`LanguageTagError`. The structured identity is `shex-json-language-tag`; its
+borrowed fields retain the member, value, fixed profile policy and native cause.
+`SHEXJ_LANGUAGE_PROFILE` exposes the shared native profile, and its policy name
+is bound to that profile at compilation. Standard `source()` lends the original
+language error. Human messages and outer offset behavior are unchanged.
+
+Empty stems remain admitted, including the existing empty exclusion stem. Its
+ShExC conversion remains outside the current round-trip coverage.
+
 ## ShExJ JSON reader refusals
 
 ShExJ ingress now returns `ShexError::JsonRead` with the original native JSON

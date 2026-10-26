@@ -124,7 +124,8 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{
-    LexicalContext, LexicalReason, RepeatOperation, Result, ShexError, XPathValidationError,
+    LanguageMember, LexicalContext, LexicalReason, RepeatOperation, Result, SHEXJ_LANGUAGE_POLICY,
+    SHEXJ_LANGUAGE_PROFILE, ShexError, XPathValidationError,
 };
 pub use exact::{
     ExactSchema, validate_exact, validate_exact_with_xpath, validate_shape_map_exact,

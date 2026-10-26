@@ -26,7 +26,14 @@
 //! closes, so every accepted tag is proven to still survive the full
 //! `parse_shexj → to_shexc → parse_shexc` trip.
 
-use purrdf_shex::{Schema, parse_shexc, parse_shexj, to_shexc};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_hash::error::ErrorValue;
+use purrdf_iri::langtag::{self, Profile};
+use purrdf_shex::{ExactSchema, Schema, ShexError, parse_shexc, parse_shexj, to_shexc};
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
 
 /// Tags real schemas and real data carry, which every position must keep taking.
 ///
@@ -44,6 +51,7 @@ const ACCEPTED: &[&str] = &[
     "x-purrdf-afrikaans",
     "x-gmeow-english",
     "en-fr-jura",
+    "en-a-bb",
     "fr-be-fbcl",
     "abcdefgh",
     "en-x-cantbethislong",
@@ -53,6 +61,7 @@ const ACCEPTED: &[&str] = &[
 /// writes bytes `parse_shexc` cannot read back.
 const REFUSED: &[&str] = &[
     "en us",
+    "en-a!",
     "1",
     "9-9",
     "123-456",
@@ -65,15 +74,27 @@ const REFUSED: &[&str] = &[
 
 /// A named ShExJ position, as the smallest document that puts a language tag in
 /// it — a human label for the failure message, and the builder that reaches it.
-type Position = (&'static str, fn(&str) -> String);
+type Position = (&'static str, &'static str, fn(&str) -> String);
 
 /// The three ShExJ members that hold a WHOLE language tag, each wrapped in the
 /// smallest schema that reaches it, and each with an absolute-IRI skeleton so no
 /// base is needed and nothing but the tag is under test.
 const POSITIONS: &[Position] = &[
-    ("ObjectLiteral \"language\"", object_literal_doc),
-    ("Language \"languageTag\"", language_value_doc),
-    ("LanguageStemRange exclusion", stem_range_exclusion_doc),
+    (
+        "ObjectLiteral: \"language\"",
+        "shexj-object-literal-language",
+        object_literal_doc,
+    ),
+    (
+        "Language: \"languageTag\"",
+        "shexj-language-tag",
+        language_value_doc,
+    ),
+    (
+        "LanguageStemRange exclusion",
+        "shexj-language-range-exclusion",
+        stem_range_exclusion_doc,
+    ),
 ];
 
 fn wrap(values: &str) -> String {
@@ -132,7 +153,7 @@ fn quote(tag: &str) -> String {
 /// under test here.
 #[test]
 fn every_accepted_tag_survives_shexj_to_shexc_to_shexc() {
-    for (what, doc) in POSITIONS {
+    for (what, _, doc) in POSITIONS {
         for tag in ACCEPTED {
             let json = doc(tag);
             let from_json: Schema = parse_shexj(&json, None)
@@ -157,7 +178,7 @@ fn every_accepted_tag_survives_shexj_to_shexc_to_shexc() {
 /// the tag is still in hand, not later at a serializer that can only write it.
 #[test]
 fn every_refused_tag_is_rejected_at_shexj_ingress() {
-    for (what, doc) in POSITIONS {
+    for (what, member, doc) in POSITIONS {
         for tag in REFUSED {
             let json = doc(tag);
             let error = parse_shexj(&json, None).err().unwrap_or_else(|| {
@@ -172,13 +193,29 @@ fn every_refused_tag_is_rejected_at_shexj_ingress() {
                 reason.contains(tag) || tag.is_empty(),
                 "{what} {tag:?} must quote the offending tag, got: {reason}"
             );
+            assert_language_refusal(error, json, tag, what, member);
         }
     }
+    let json = wrap(r#"{"value":"v","language":"en-a!","type":"relative"}"#);
+    let error = parse_shexj(&json, None).unwrap_err();
+    assert_language_refusal(
+        error,
+        json,
+        "en-a!",
+        "ObjectLiteral: \"language\"",
+        "shexj-object-literal-language",
+    );
+    let earlier = parse_shexj(&wrap(r#"{"language":"en-a!"}"#), None).unwrap_err();
+    assert_eq!(
+        Capture::read(&earlier).code,
+        "shex-json",
+        "missing literal value precedes language admission"
+    );
 }
 
 /// A stem position: the label, the builder, and whether ShExC has a production
 /// for an **empty** stem there. See [`STEM_POSITIONS`] for why the third does not.
-type StemPosition = (&'static str, fn(&str) -> String, bool);
+type StemPosition = (&'static str, &'static str, fn(&str) -> String, bool);
 
 /// The three ShExJ positions that hold a language **stem**, each wrapped in the
 /// smallest schema that reaches it.
@@ -195,10 +232,21 @@ type StemPosition = (&'static str, fn(&str) -> String, bool);
 /// grammar: ShExC's `languageExclusion ::= '-' LANGTAG '~'?` has no empty form at
 /// all — see `every_accepted_stem_survives_shexj_to_shexc_to_shexc`.
 const STEM_POSITIONS: &[StemPosition] = &[
-    ("LanguageStem \"stem\"", language_stem_doc, true),
-    ("LanguageStemRange \"stem\"", stem_range_stem_doc, true),
     (
-        "LanguageStemRange exclusion stem",
+        "LanguageStem: \"stem\"",
+        "shexj-language-stem",
+        language_stem_doc,
+        true,
+    ),
+    (
+        "LanguageStemRange: \"stem\"",
+        "shexj-language-range-stem",
+        stem_range_stem_doc,
+        true,
+    ),
+    (
+        "LanguageStemRange exclusion: \"stem\"",
+        "shexj-language-range-stem-exclusion",
         exclusion_stem_doc,
         false,
     ),
@@ -274,7 +322,7 @@ fn refused_stems() -> impl Iterator<Item = &'static str> {
 /// explicit, and the vector is written down above.
 #[test]
 fn every_accepted_stem_survives_shexj_to_shexc_to_shexc() {
-    for (what, doc, empty_is_writable) in STEM_POSITIONS {
+    for (what, _, doc, empty_is_writable) in STEM_POSITIONS {
         for stem in accepted_stems() {
             if stem.is_empty() && !empty_is_writable {
                 // Still prove the INGRESS half: the gate must admit it.
@@ -308,7 +356,7 @@ fn every_accepted_stem_survives_shexj_to_shexc_to_shexc() {
 /// lexer rejects as `langtag-subtag-length-zero`.
 #[test]
 fn every_refused_stem_is_rejected_at_shexj_ingress() {
-    for (what, doc, _) in STEM_POSITIONS {
+    for (what, member, doc, _) in STEM_POSITIONS {
         for stem in refused_stems() {
             let json = doc(stem);
             let error = parse_shexj(&json, None).err().unwrap_or_else(|| {
@@ -323,6 +371,83 @@ fn every_refused_stem_is_rejected_at_shexj_ingress() {
                 reason.contains(stem),
                 "{what} {stem:?} must quote the offending stem, got: {reason}"
             );
+            assert_language_refusal(error, json, stem, what, member);
         }
+    }
+}
+
+fn assert_language_refusal(
+    original: ShexError,
+    json: String,
+    value: &str,
+    what: &str,
+    member: &str,
+) {
+    let native = langtag::parse_with(value, Profile::ConcreteSyntaxLangtagBounded).unwrap_err();
+    assert_eq!(ExactSchema::parse_shexj(&json, None).unwrap_err(), original);
+    assert_eq!(original.byte_offset(), None);
+    assert_eq!(original.locate(&json), None);
+    let imported = (value == "en-a!").then(|| {
+        let root = parse_shexj(
+            r#"{"type":"Schema","imports":["https://example.org/import"]}"#,
+            None,
+        )
+        .unwrap();
+        purrdf_shex::resolve_imports(root, &|_| parse_shexj(&json, None)).unwrap_err()
+    });
+    drop(json);
+    let error = original.clone();
+    drop(original);
+    let expected = format!(
+        "ShExJ error: {what}: malformed language tag {value:?}: {native} [{}]",
+        native.diagnostic_code()
+    );
+    assert_eq!(error.to_string(), expected);
+    assert_eq!(format!("{error:?}"), expected);
+    let source = std::error::Error::source(&error).unwrap();
+    assert_eq!(
+        source.downcast_ref::<langtag::LanguageTagError>().unwrap(),
+        &native
+    );
+    let buffer = Vec::with_capacity(24);
+    let cause_buffer = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, buffer);
+    let ErrorValue::Cause(cause) = fields.field("cause") else {
+        panic!("original language cause");
+    };
+    let cause_fields = Capture::read_with_buffer(cause, cause_buffer);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    assert_eq!(measured.retained_bytes, 0, "{measured:?}");
+    assert_eq!(fields.code, "shex-json-language-tag");
+    assert_eq!(fields.child("member").code, member);
+    assert!(matches!(fields.field("value"), ErrorValue::Text(actual) if actual == value));
+    assert!(matches!(
+        fields.field("profile"),
+        ErrorValue::Code("concrete-syntax-langtag-bounded")
+    ));
+    assert_eq!(cause_fields.code, native.diagnostic_code());
+    if value == "en-a!" {
+        assert_eq!(cause_fields.code, "langtag-terminal-subtag-not-alphanum");
+    }
+    if let Some(original) = imported {
+        let imported = original.clone();
+        drop(original);
+        let fields = Capture::read(&imported);
+        assert_eq!(fields.code, "shex-import");
+        assert!(matches!(
+            fields.field("iri"),
+            ErrorValue::Iri("https://example.org/import")
+        ));
+        let language = fields.child("cause");
+        assert_eq!(language.code, "shex-json-language-tag");
+        assert_eq!(language.child("member").code, member);
+        assert!(matches!(language.field("value"), ErrorValue::Text(actual) if actual == value));
+        assert_eq!(language.child("cause").code, native.diagnostic_code());
+        assert_eq!(
+            imported.to_string(),
+            format!("unresolved IMPORT <https://example.org/import>: {expected}")
+        );
     }
 }

@@ -74,7 +74,7 @@ use crate::ast::{
     NumericLiteral, ObjectLiteral, ObjectValue, Schema, SemAct, Shape, ShapeDecl, ShapeExpr,
     StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
-use crate::error::{Result, ShexError};
+use crate::error::{LanguageMember, Result, ShexError};
 
 /// The canonical `@context` IRI emitted on serialized schemas.
 pub const SHEX_CONTEXT: &str = "http://www.w3.org/ns/shex.jsonld";
@@ -921,15 +921,15 @@ impl Reader {
             }
             Some("LanguageStem") => {
                 let mut obj = Obj::typed(value, "LanguageStem", "LanguageStem")?;
-                let stem = obj.take_str("stem")?;
-                check_language_stem(&stem, "LanguageStem: \"stem\"")?;
+                let stem =
+                    check_language_stem(obj.take_str("stem")?, LanguageMember::LanguageStem)?;
                 obj.finish()?;
                 Ok(ValueSetValue::LanguageStem { stem })
             }
             Some("Language") => {
                 let mut obj = Obj::typed(value, "Language", "Language")?;
-                let language_tag = obj.take_str("languageTag")?;
-                check_language_tag(&language_tag, "Language: \"languageTag\"")?;
+                let language_tag =
+                    check_language_tag(obj.take_str("languageTag")?, LanguageMember::LanguageTag)?;
                 obj.finish()?;
                 Ok(ValueSetValue::Language { language_tag })
             }
@@ -994,22 +994,27 @@ impl Reader {
             .take("stem")
             .ok_or_else(|| ShexError::shexj("LanguageStemRange: missing \"stem\""))
             .and_then(|v| plain_stem(v, "LanguageStemRange"))?;
-        if let StemValue::Str(stem) = &stem {
-            check_language_stem(stem, "LanguageStemRange: \"stem\"")?;
-        }
+        let stem = match stem {
+            StemValue::Str(stem) => {
+                StemValue::Str(check_language_stem(stem, LanguageMember::RangeStem)?)
+            }
+            StemValue::Wildcard => StemValue::Wildcard,
+        };
         let exclusions = obj
             .take_array("exclusions")?
             .unwrap_or_default()
             .iter()
             .map(|e| match e {
                 Value::String(tag) => {
-                    check_language_tag(tag, "LanguageStemRange exclusion")?;
-                    Ok(LanguageExclusion::Language(tag.clone()))
+                    check_language_tag(tag.clone(), LanguageMember::RangeLanguageExclusion)
+                        .map(LanguageExclusion::Language)
                 }
                 other => {
                     let mut obj = Obj::typed(other, "LanguageStem", "LanguageStemRange exclusion")?;
-                    let stem = obj.take_str("stem")?;
-                    check_language_stem(&stem, "LanguageStemRange exclusion: \"stem\"")?;
+                    let stem = check_language_stem(
+                        obj.take_str("stem")?,
+                        LanguageMember::RangeStemExclusion,
+                    )?;
                     obj.finish()?;
                     Ok(LanguageExclusion::Stem(stem))
                 }
@@ -1025,7 +1030,7 @@ impl Reader {
             value: obj.take_str("value")?,
             language: obj
                 .take_str_opt("language")?
-                .map(|tag| check_language_tag(&tag, "ObjectLiteral: \"language\"").map(|()| tag))
+                .map(|tag| check_language_tag(tag, LanguageMember::ObjectLiteralLanguage))
                 .transpose()?,
             datatype: obj
                 .take_str_opt("type")?
@@ -1208,17 +1213,18 @@ fn plain_stem(value: &Value, what: &'static str) -> Result<StemValue> {
 /// "a stem is only a prefix" reading was an escape rather than a carve-out.
 ///
 /// # Errors
-/// [`ShexError::Shexj`] naming the member, the tag, and `purrdf-iri`'s own
+/// [`ShexError::LanguageTag`] retaining the member, value and `purrdf-iri`'s own
 /// `langtag-*` diagnostic code — the same code `crate::lexer` quotes for the same
 /// condition, because ShEx does not get its own vocabulary for a grammar the
 /// workspace shares.
-fn check_language_tag(tag: &str, what: &str) -> Result<()> {
-    match langtag::parse_with(tag, crate::lexer::LANGTAG_PROFILE) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(ShexError::shexj(format!(
-            "{what}: malformed language tag {tag:?}: {error} [{code}]",
-            code = error.diagnostic_code()
-        ))),
+fn check_language_tag(tag: String, member: LanguageMember) -> Result<String> {
+    match langtag::parse_with(&tag, crate::lexer::LANGTAG_PROFILE) {
+        Ok(_) => Ok(tag),
+        Err(cause) => Err(ShexError::LanguageTag {
+            member,
+            value: tag,
+            cause,
+        }),
     }
 }
 
@@ -1251,13 +1257,13 @@ fn check_language_tag(tag: &str, what: &str) -> Result<()> {
 /// two-syntax contract exists to prevent.
 ///
 /// # Errors
-/// [`ShexError::Shexj`] from [`check_language_tag`], naming the member, the stem
+/// [`ShexError::LanguageTag`] from [`check_language_tag`], retaining the member, stem
 /// and `purrdf-iri`'s `langtag-*` diagnostic code.
-fn check_language_stem(stem: &str, what: &str) -> Result<()> {
+fn check_language_stem(stem: String, member: LanguageMember) -> Result<String> {
     if stem.is_empty() {
-        return Ok(());
+        return Ok(stem);
     }
-    check_language_tag(stem, what)
+    check_language_tag(stem, member)
 }
 
 /// Read the `{"type": "Wildcard"}` stem object.
