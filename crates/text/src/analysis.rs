@@ -752,13 +752,20 @@ fn decode_owned<'a>(
         _diagnostics: diagnostic_owner,
     };
     if !owner.resolution.diagnostics.is_empty() {
-        // The diagnostic vector and every decoded buffer remain live and covered
-        // through rendering. Once this immutable message exists they can die.
-        return Err(query_error(
-            workspace,
-            NativeDiagnosticKind::Data,
-            format_args!("HTML reference errors: {:?}", owner.resolution.diagnostics),
-        )?);
+        let DecodedOwner {
+            resolution:
+                purrdf_lex::html::Resolution {
+                    decoded,
+                    diagnostics,
+                },
+            _text: text_owner,
+            _sources: source_owner,
+            _diagnostics: diagnostic_owner,
+        } = owner;
+        drop(decoded);
+        drop(text_owner);
+        drop(source_owner);
+        return Err(TextError::html_in(diagnostics, diagnostic_owner, workspace));
     }
     Ok(owner)
 }
@@ -803,7 +810,7 @@ fn normalize_into<A: Alignment>(
         &decoded_owner.resolution.decoded
     } else {
         resident_decoded =
-            purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
+            purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::html)?;
         &resident_decoded
     };
     admit_source_size_owned(decoded.text.len(), "decoded input", &scratch.workspace)?;
