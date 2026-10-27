@@ -68,6 +68,23 @@ impl Integer {
             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
     }
 
+    /// Copy an integer's native buffer under an admission retained by its caller.
+    /// Already admitted immutable limbs keep their original lease; new buffers
+    /// must remain with the supplied admission until destruction.
+    /// # Errors
+    /// Returns the original admission or allocation refusal before publication.
+    pub fn copy_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(Self::from_i128(*value)),
+            Repr::Big(value) => value
+                .detached_buffer_with_memory(memory)
+                .map(Self::from_bigint),
+        }
+    }
+
     /// Copy a canonical coefficient into an original preparation account.
     ///
     /// # Errors

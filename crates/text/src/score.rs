@@ -792,15 +792,11 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
     let mut rows = admitted(AdmittedVec::with_capacity(ordered.len(), workspace))?;
     for (position, ByRank(candidate)) in ordered.into_iter().enumerate() {
         let rank = position.checked_add(1).ok_or_else(overflow)?;
-        let partition_rank = u32::try_from(rank).map_err(|_| {
-            query_error(
-                workspace,
-                NativeDiagnosticKind::Function,
-                format_args!(
-                    "fixed-point overflow: a partition holds more ranked rows than a u32 can number"
-                ),
+        let partition_rank = u32::try_from(rank).map_err(|cause| {
+            crate::query_workspace::arithmetic_error(
+                crate::arithmetic::ArithmeticRefusal::PartitionRank { rank, cause },
+                Some(workspace),
             )
-            .unwrap_or_else(|failure| failure)
         })?;
         admitted(rows.push(Scored {
             document: candidate.document,

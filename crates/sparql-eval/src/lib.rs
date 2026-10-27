@@ -187,7 +187,7 @@ mod workspace;
 pub use workspace::{
     AdmittedHeap, AdmittedMap, AdmittedOrderedMap, AdmittedOrderedSet, AdmittedVec,
     AdmittedVecIntoIter, OwnedIri, WorkspaceAllocation, WorkspaceArray, WorkspaceBox,
-    WorkspaceCapability, WorkspaceIri, WorkspaceTerm,
+    WorkspaceCapability, WorkspaceInteger, WorkspaceIri, WorkspaceTerm,
 };
 // The per-query record of what the relations a query invoked attested about the
 // indexes behind them — which generation answered, and whether it was whole.
