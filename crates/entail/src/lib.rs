@@ -151,7 +151,8 @@ pub use entails::{
     certain_answers_with, entails, entails_with, rif_resolver, verify,
 };
 pub use explain::{
-    BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
+    BackwardCheck, ChaseProof, ExplainError, ExplanationSession, Justification,
+    PreparedExplanations, explain_conclusion, justify, prepare_explanations,
 };
 pub use owl_dl::proof::source as proof_source;
 pub use owl_dl::proof::{

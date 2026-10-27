@@ -23,10 +23,9 @@
 //! conclusion is never an input to that computation. A step the rule does not license
 //! cannot be made to check by writing a nicer record of it.
 //!
-//! [`explain_conclusion`] is that machinery pointed at a materialized triple. It rebuilds
-//! the very store the closure was produced from — the engine's seeding is a pure function
-//! of `(dataset, regime, program, graph)` — evaluates the declared program, and lifts the
-//! target fact's derivation out as a proof term. **The proof is checked before it is
+//! [`prepare_explanations`] seeds and evaluates one immutable snapshot; its borrowed
+//! [`ExplanationSession`] indexes the recorded derivations once for repeated queries.
+//! [`explain_conclusion`] delegates through that same path for one target. **The proof is checked before it is
 //! returned**, so an unresolvable antecedent is a hard error at construction rather than a
 //! surprise at the caller's first `check()`; there is no path by which an unchecked
 //! `ChaseProof` exists.
@@ -79,10 +78,16 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::id::ProofId;
-use purrdf_datalog::proof::{EvaluationProofIndex, ProofArena, ProofContext, ProofError};
+use purrdf_datalog::proof::{
+    EvaluationProofIndex, ProofArena, ProofContext, ProofError, ProofIndexWork,
+};
 use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal};
-use purrdf_datalog::seminaive::compile;
+use purrdf_datalog::seminaive::{
+    BudgetReport, DerivationMode, EvalOptions, Evaluation, WorkReport, compile,
+};
+use purrdf_datalog::stop::StopSignal;
 use purrdf_datalog::store::{Fact, RelationStore};
+use purrdf_lex::allocation::{Shared, StorageError};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
 use crate::engine::{seed, surface_of};
@@ -236,25 +241,14 @@ impl From<EntailError> for ExplainError {
 /// write code that treats a tableau answer as though a rule had fired.
 #[derive(Debug, Clone)]
 pub struct ChaseProof {
-    /// The lane whose calculus drew the conclusion.
-    regime: Regime,
-    /// The graph whose closure drew it; `None` is the default graph.
-    graph: Option<TermValue>,
+    /// Shared original program, seed, model and recorded evaluation inventory.
+    context: Shared<ExplanationContext>,
     /// The explained triple.
     conclusion: (TermValue, TermValue, TermValue),
-    /// The hash-consed proof term — exactly the sub-DAG of this conclusion, constructed
-    /// from its recorded ancestors so nothing of the wider evaluation rides along.
+    /// Exactly the requested proof sub-DAG; the shared context pins the full evaluation.
     arena: ProofArena,
-    /// The proof's root in [`Self::arena`].
+    /// The proof's root in its arena.
     root: ProofId,
-    /// The clause program the proof cites, by index.
-    program: Vec<DlClause>,
-    /// Clause index → the rule that clause states, for [`Self::rules`].
-    attribution: Vec<ChaseRule>,
-    /// The seeded store an axiom leaf must appear in.
-    edb: RelationStore,
-    /// The saturated store a negated body atom is re-decided against.
-    model: RelationStore,
     /// What the independent backward re-derivation concluded.
     backward: BackwardCheck,
 }
@@ -262,14 +256,14 @@ pub struct ChaseProof {
 impl ChaseProof {
     /// The lane whose calculus drew the conclusion.
     #[must_use]
-    pub const fn regime(&self) -> Regime {
-        self.regime
+    pub fn regime(&self) -> Regime {
+        self.context.regime
     }
 
     /// The graph whose closure drew the conclusion; `None` is the default graph.
     #[must_use]
-    pub const fn graph(&self) -> Option<&TermValue> {
-        self.graph.as_ref()
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.context.graph.as_ref()
     }
 
     /// The explained triple, as `(subject, predicate, object)`.
@@ -315,7 +309,7 @@ impl ChaseProof {
     /// conclusion cites none.
     #[must_use]
     pub fn rules(&self) -> Vec<RuleId> {
-        let owl = matches!(self.regime, Regime::OwlRl);
+        let owl = matches!(self.context.regime, Regime::OwlRl);
         let mut cited: BTreeSet<usize> = BTreeSet::new();
         let mut stack = vec![self.root];
         let mut seen: BTreeSet<ProofId> = BTreeSet::new();
@@ -330,7 +324,7 @@ impl ChaseProof {
         }
         let ids: BTreeSet<RuleId> = cited
             .into_iter()
-            .filter_map(|clause| self.attribution.get(clause))
+            .filter_map(|clause| self.context.attribution.get(clause))
             .map(|rule| rule.rule_id(owl))
             .collect();
         RuleId::ALL
@@ -378,7 +372,11 @@ impl ChaseProof {
     /// the seeded store, a premise the cited clause's body does not match, a head the
     /// premises do not bind, or a conclusion that differs from the one re-derived.
     pub fn check(&self) -> Result<Fact, ExplainError> {
-        let ctx = ProofContext::new(&self.program, &self.edb, &self.model);
+        let ctx = ProofContext::new(
+            &self.context.program,
+            &self.context.seeded,
+            self.context.evaluation.facts(),
+        );
         self.arena
             .check(self.root, &ctx)
             .map_err(ExplainError::Unchecked)
@@ -521,9 +519,10 @@ fn confirm_backward(
 ///
 /// # Errors
 ///
-/// [`ExplainError::Existential`] for `RDF` and `RDFS`, whose four blank-node-minting rules
-/// have no checkable proof term; [`ExplainError::NotDerived`] if the triple is neither
-/// asserted in the seed nor derived by the closure — a hard error, because there is nothing
+/// [`ExplainError::Existential`] when the triple is unavailable in the checkable Datalog
+/// fragment of a regime with existential rules (`RDF` or `RDFS`); those rules have no
+/// checkable proof term. Other regimes return [`ExplainError::NotDerived`] if the triple is
+/// neither asserted in the seed nor derived by the closure — a hard error, because there is nothing
 /// to explain and an empty answer would read as though there were; [`ExplainError::Entail`]
 /// if the run itself fails; [`ExplainError::Unchecked`] if the constructed proof does not
 /// re-derive, which is an engine defect made visible rather than shipped.
@@ -566,6 +565,25 @@ pub fn explain_conclusion(
     predicate: &TermValue,
     object: &TermValue,
 ) -> Result<ChaseProof, ExplainError> {
+    prepare_explanations(ds, regime, graph, &EvalOptions::default(), None)?
+        .session()?
+        .explain(subject, predicate, object)
+}
+
+/// Prepare one immutable snapshot for repeated checked explanation queries.
+///
+/// Seeding, compilation and shared context construction use resident allocation.
+/// The existing evaluator uses all caller options and cancellation, forcing only
+/// derivation recording. No mutable source or replacement program enters a session.
+/// # Errors
+/// Preserves native seeding, compilation, evaluation and shared allocation refusals.
+pub fn prepare_explanations(
+    ds: &RdfDataset,
+    regime: Regime,
+    graph: Option<&TermValue>,
+    options: &EvalOptions,
+    stop: Option<&dyn StopSignal>,
+) -> Result<PreparedExplanations, ExplainError> {
     let (full_program, attribution) = program_with_attribution(regime);
     // An existential head has no Datalog semantics — there is no head for the checker to
     // instantiate — so those clauses cannot appear in a checkable proof. They are dropped
@@ -586,83 +604,204 @@ pub fn explain_conclusion(
         .collect();
 
     let (edb, _terms) = seed(ds, regime, &program, graph)?;
-    let goal = Fact {
-        subject: surface_of(subject),
-        predicate: surface_of(predicate),
-        object: surface_of(object),
-        graph: RelationStore::DEFAULT_GRAPH.to_owned(),
-    };
-    // The seeded store is what an AXIOM leaf checks against, so it has to outlive the
-    // evaluation that consumes it.
     let seeded = edb.clone();
     let executable = compile(program.clone()).map_err(EntailError::Evaluate)?;
     let evaluation = purrdf_datalog::seminaive::evaluate_guarded(
         &executable,
         edb,
         &purrdf_datalog::guard::NoGuards,
-        &purrdf_datalog::seminaive::EvalOptions::default()
-            .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
-        None,
+        &options.with_derivation_mode(DerivationMode::Record),
+        stop,
     )
     .map_err(EntailError::Evaluate)?;
-
-    let proof_error = |error| match error {
-        ProofError::Storage(cause) => ExplainError::from(EntailError::from(cause)),
-        other => ExplainError::Unchecked(other),
-    };
-    let proofs = EvaluationProofIndex::of(&evaluation).map_err(proof_error)?;
-    // Construct only this conclusion's sub-DAG through the original proof arena.
-    let (arena, root) = match proofs.extract(&goal).map_err(proof_error)? {
-        Some(proof) => proof,
-        None => {
-            // Not derived. It may still be GIVEN, which is an explanation in its own right
-            // and a checkable one — and if it is neither, that is the unresolvable
-            // antecedent, refused by name.
-            if !seeded.contains(&goal.subject, &goal.predicate, &goal.object, &goal.graph) {
-                // The Datalog subset did not reach it. If the regime HAS existential rules,
-                // one of them may be what derives it, and this checker cannot produce a term
-                // for such a step — so the refusal is named rather than reported as
-                // "not entailed", which would be a different and false answer.
-                if existential_present {
-                    return Err(ExplainError::Existential(regime));
-                }
-                return Err(ExplainError::NotDerived {
-                    conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
-                });
-            }
-            let mut arena = ProofArena::default();
-            let root = arena.axiom(goal.clone()).map_err(EntailError::from)?;
-            (arena, root)
-        }
-    };
-
-    // INDEPENDENT RE-DERIVATION. The chase says this holds; a different engine — SLG
-    // resolution over the same clause program — is asked the same question.
-    let backward = confirm_backward(regime, &program, &seeded, &goal)?;
-
-    let proof = ChaseProof {
-        regime,
-        graph: graph.cloned(),
-        conclusion: (subject.clone(), predicate.clone(), object.clone()),
-        arena,
-        root,
+    let context = Shared::try_new(ExplanationContext {
         program,
         attribution,
-        edb: seeded,
-        model: evaluation.into_facts(),
-        backward,
-    };
-    // CHECKED BEFORE IT ESCAPES. There is no constructor that skips this, so a `ChaseProof`
-    // a caller holds is one whose conclusion has been re-derived at least once.
-    let derived = proof.check()?;
-    if derived != goal {
-        return Err(ExplainError::Unchecked(ProofError::GoalMismatch {
-            rule: usize::MAX,
-            derived: Box::new(derived),
-            stated: Box::new(goal),
-        }));
+        seeded,
+        evaluation,
+        regime,
+        graph: graph.cloned(),
+        existential_present,
+    })
+    .map_err(|_| EntailError::from(StorageError::AllocationFailed))?;
+    Ok(PreparedExplanations { context })
+}
+
+#[derive(Debug)]
+struct ExplanationContext {
+    program: Vec<DlClause>,
+    attribution: Vec<ChaseRule>,
+    seeded: RelationStore,
+    evaluation: Evaluation,
+    regime: Regime,
+    graph: Option<TermValue>,
+    existential_present: bool,
+}
+
+/// One immutable forward preparation shared by sessions and returned proofs.
+///
+/// Each proof pins the entire original context, including its recorded evaluation
+/// inventory, until the last owner drops. Only its requested proof DAG is separate.
+/// Cloning this handle shares the context; it never copies the program or stores.
+#[derive(Debug, Clone)]
+pub struct PreparedExplanations {
+    context: Shared<ExplanationContext>,
+}
+
+impl PreparedExplanations {
+    /// The exact regime used to prepare this immutable snapshot.
+    #[must_use]
+    pub fn regime(&self) -> Regime {
+        self.context.regime
     }
-    Ok(proof)
+
+    /// The original named graph, or the default graph when absent.
+    #[must_use]
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.context.graph.as_ref()
+    }
+
+    /// Actual work of the one forward evaluation, unchanged by proof queries.
+    #[must_use]
+    pub fn work(&self) -> WorkReport {
+        self.context.evaluation.work()
+    }
+
+    /// Native budget report of the original forward evaluation.
+    #[must_use]
+    pub fn budget(&self) -> BudgetReport {
+        self.context.evaluation.budget()
+    }
+
+    /// Build one resident derivation index for repeated queries over this owner.
+    /// The session borrows this snapshot and cannot be rebound to another source.
+    /// # Errors
+    /// Preserves the native index allocation or recording refusal.
+    pub fn session(&self) -> Result<ExplanationSession<'_>, ExplainError> {
+        Ok(ExplanationSession {
+            prepared: self,
+            proofs: EvaluationProofIndex::of(&self.context.evaluation).map_err(proof_error)?,
+        })
+    }
+}
+
+/// A borrowed immutable snapshot and its one reusable resident derivation index.
+///
+/// Index and returned proof arenas retain their existing resident allocation
+/// contracts. Each query still checks its proof and performs the existing
+/// independent backward confirmation. Where enabled, that confirmation copies the
+/// program and scans/copies seeded facts per query; extraction is not a claim that
+/// the whole explanation operation scales only with its requested subtree.
+#[derive(Debug)]
+pub struct ExplanationSession<'a> {
+    prepared: &'a PreparedExplanations,
+    proofs: EvaluationProofIndex<'a>,
+}
+
+impl ExplanationSession<'_> {
+    /// Actual work of building this session's index once.
+    #[must_use]
+    pub fn preparation_work(&self) -> ProofIndexWork {
+        self.proofs.preparation_work()
+    }
+
+    /// Extract, independently confirm and check one conclusion over the frozen context.
+    /// # Errors
+    /// Preserves the one-shot explanation's missing, existential and checking refusals.
+    pub fn explain(
+        &self,
+        subject: &TermValue,
+        predicate: &TermValue,
+        object: &TermValue,
+    ) -> Result<ChaseProof, ExplainError> {
+        self.explain_counted(subject, predicate, object, &mut ProofIndexWork::default())
+    }
+
+    /// Explain while reporting native proof-index traversal work.
+    ///
+    /// Resets `work` before extraction, preserving completed counts on refusal.
+    /// These counts exclude the checker and independent backward confirmation;
+    /// allocation measurements around this complete call include both operations.
+    /// # Errors
+    /// Preserves the same original refusals as [`Self::explain`].
+    pub fn explain_counted(
+        &self,
+        subject: &TermValue,
+        predicate: &TermValue,
+        object: &TermValue,
+        work: &mut ProofIndexWork,
+    ) -> Result<ChaseProof, ExplainError> {
+        let context = &*self.prepared.context;
+        let goal = Fact {
+            subject: surface_of(subject),
+            predicate: surface_of(predicate),
+            object: surface_of(object),
+            graph: RelationStore::DEFAULT_GRAPH.to_owned(),
+        };
+        // Construct only this conclusion's sub-DAG through the original proof arena.
+        let (arena, root) = match self
+            .proofs
+            .extract_counted(&goal, work)
+            .map_err(proof_error)?
+        {
+            Some(proof) => proof,
+            None => {
+                // Not derived. It may still be GIVEN, which is an explanation in its own right
+                // and a checkable one — and if it is neither, that is the unresolvable
+                // antecedent, refused by name.
+                if !context.seeded.contains(
+                    &goal.subject,
+                    &goal.predicate,
+                    &goal.object,
+                    &goal.graph,
+                ) {
+                    // The Datalog subset did not reach it. If the regime HAS existential rules,
+                    // one of them may be what derives it, and this checker cannot produce a term
+                    // for such a step — so the refusal is named rather than reported as
+                    // "not entailed", which would be a different and false answer.
+                    if context.existential_present {
+                        return Err(ExplainError::Existential(context.regime));
+                    }
+                    return Err(ExplainError::NotDerived {
+                        conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
+                    });
+                }
+                let mut arena = ProofArena::default();
+                let root = arena.axiom(goal.clone()).map_err(EntailError::from)?;
+                (arena, root)
+            }
+        };
+
+        // INDEPENDENT RE-DERIVATION. The chase says this holds; a different engine — SLG
+        // resolution over the same clause program — is asked the same question.
+        let backward = confirm_backward(context.regime, &context.program, &context.seeded, &goal)?;
+
+        let proof = ChaseProof {
+            context: self.prepared.context.clone(),
+            conclusion: (subject.clone(), predicate.clone(), object.clone()),
+            arena,
+            root,
+            backward,
+        };
+        // CHECKED BEFORE IT ESCAPES. There is no constructor that skips this, so a `ChaseProof`
+        // a caller holds is one whose conclusion has been re-derived at least once.
+        let derived = proof.check()?;
+        if derived != goal {
+            return Err(ExplainError::Unchecked(ProofError::GoalMismatch {
+                rule: usize::MAX,
+                derived: Box::new(derived),
+                stated: Box::new(goal),
+            }));
+        }
+        Ok(proof)
+    }
+}
+
+fn proof_error(error: ProofError) -> ExplainError {
+    match error {
+        ProofError::Storage(cause) => ExplainError::from(EntailError::from(cause)),
+        other => ExplainError::Unchecked(other),
+    }
 }
 
 // ── The tableau lane: a minimal entailing subset ────────────────────────────────
@@ -1294,6 +1433,197 @@ mod tests {
 
     // ── The chase proof ─────────────────────────────────────────────────────────
 
+    /// Repeated extraction preserves the eager arena's canonical order and shares
+    /// the original checker context, even after every preparation handle is gone.
+    #[test]
+    fn prepared_queries_share_context_and_match_eager_proofs() {
+        use purrdf_datalog::proof::EvaluationProofs;
+
+        let source = chain();
+        let prepared =
+            prepare_explanations(&source, Regime::OwlRl, None, &EvalOptions::default(), None)
+                .unwrap();
+        let forward_work = prepared.work();
+        let forward_budget = prepared.budget();
+        let session = prepared.session().unwrap();
+        let index_work = session.preparation_work();
+        let eager = EvaluationProofs::of(&prepared.context.evaluation).unwrap();
+        let mut retained = Vec::new();
+        for (subject, predicate, object) in [
+            (TOM, TYPE, ANIMAL),
+            (CAT, SUB, ANIMAL),
+            (CAT, SUB, MAMMAL),
+            (TOM, TYPE, ANIMAL),
+        ] {
+            let proof = session
+                .explain(
+                    &TermValue::iri(subject),
+                    &TermValue::iri(predicate),
+                    &TermValue::iri(object),
+                )
+                .unwrap();
+            let fact = proof.check().unwrap();
+            if let Some(root) = eager.root_for(&fact) {
+                assert_eq!(proof.encode(), eager.arena().encode(root));
+            } else {
+                assert!(proof.is_asserted());
+                assert_eq!(proof.steps(), 1);
+            }
+            assert!(std::ptr::eq(
+                &raw const *prepared.context,
+                &raw const *proof.context
+            ));
+            assert_eq!(proof.backward(), BackwardCheck::Skipped);
+            retained.push(proof);
+        }
+        assert_eq!(prepared.context.strong_count(), 1 + retained.len());
+        assert_eq!(prepared.work(), forward_work);
+        assert_eq!(prepared.budget(), forward_budget);
+        assert_eq!(session.preparation_work(), index_work);
+        assert_eq!(retained[0].encode(), retained[3].encode());
+        drop(eager);
+        drop(session);
+        drop(prepared);
+        drop(source);
+        for proof in &retained {
+            assert!(proof.check().is_ok());
+            assert_eq!(proof.context.strong_count(), retained.len());
+        }
+    }
+
+    /// Refused preparations publish no context, and independent successful snapshots
+    /// retain their source and regime rather than adopting another query's inputs.
+    #[test]
+    fn prepared_refusals_do_not_poison_fresh_or_existing_snapshots() {
+        let source = chain();
+        #[derive(Debug)]
+        struct Stopped;
+        impl StopSignal for Stopped {
+            fn stopped(&self) -> bool {
+                true
+            }
+        }
+        let stopped = Stopped;
+        let options = EvalOptions::default();
+        assert!(matches!(
+            prepare_explanations(&source, Regime::OwlRl, None, &options, Some(&stopped)),
+            Err(ExplainError::Entail(cause)) if matches!(*cause, EntailError::Evaluate(
+                purrdf_datalog::seminaive::EvalError::Stopped { .. }
+            ))
+        ));
+        assert!(matches!(
+            prepare_explanations(
+                &source,
+                Regime::OwlRl,
+                None,
+                &options.with_max_stored_facts(0),
+                None
+            ),
+            Err(ExplainError::Entail(cause)) if matches!(*cause, EntailError::Evaluate(
+                purrdf_datalog::seminaive::EvalError::BudgetExhausted { .. }
+            ))
+        ));
+        let prepared = prepare_explanations(&source, Regime::OwlRl, None, &options, None).unwrap();
+        let empty = dataset(&[]);
+        let other = prepare_explanations(&empty, Regime::OwlRl, None, &options, None).unwrap();
+        let rdfs = prepare_explanations(&source, Regime::Rdfs, None, &options, None).unwrap();
+        let subject = TermValue::iri(TOM);
+        let predicate = TermValue::iri(TYPE);
+        let object = TermValue::iri(ANIMAL);
+        let session = prepared.session().unwrap();
+        assert!(session.explain(&subject, &predicate, &object).is_ok());
+        assert!(matches!(
+            other
+                .session()
+                .unwrap()
+                .explain(&subject, &predicate, &object),
+            Err(ExplainError::NotDerived { .. })
+        ));
+        assert!(matches!(
+            rdfs.session().unwrap().explain(
+                &TermValue::iri(FISH),
+                &TermValue::iri(SUB),
+                &TermValue::iri(CAT)
+            ),
+            Err(ExplainError::Existential(Regime::Rdfs))
+        ));
+        assert!(session.explain(&subject, &predicate, &object).is_ok());
+    }
+
+    /// Whole-call allocation includes checking and backward confirmation. Only the
+    /// last owner releases the resident inventory; query count does not rebuild it.
+    #[test]
+    fn prepared_query_growth_and_last_owner_release_are_measured() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_datalog::seminaive::RoundExecution;
+
+        let source = chain();
+        let subject = TermValue::iri(TOM);
+        let predicate = TermValue::iri(TYPE);
+        let options = EvalOptions::default().with_round_execution(RoundExecution::Sequential);
+        for regime in [Regime::OwlRl, Regime::Simple] {
+            let object = TermValue::iri(if regime == Regime::Simple {
+                CAT
+            } else {
+                ANIMAL
+            });
+            let mut measurements = [(0, 0, ProofIndexWork::default()); 3];
+            // Warm any process-wide tables before measuring this owner's lifetime.
+            drop(prepare_explanations(&source, regime, None, &options, None).unwrap());
+            let lifetime = CurrentThreadWindow::open();
+            let prepared = prepare_explanations(&source, regime, None, &options, None).unwrap();
+            let forward_work = prepared.work();
+            let session = prepared.session().unwrap();
+            let index_work = session.preparation_work();
+            let mut prior = None;
+            for (measurement, targets) in measurements.iter_mut().zip([1, 4, 16]) {
+                let mut counts = ProofIndexWork::default();
+                let before = lifetime.sample();
+                for _ in 0..targets {
+                    let proof = session
+                        .explain_counted(&subject, &predicate, &object, &mut counts)
+                        .unwrap();
+                    assert_eq!(
+                        proof.backward(),
+                        if regime == Regime::Simple {
+                            BackwardCheck::Confirmed
+                        } else {
+                            BackwardCheck::Skipped
+                        }
+                    );
+                    assert!(std::ptr::eq(
+                        &raw const *proof.context,
+                        &raw const *prepared.context
+                    ));
+                }
+                let after = lifetime.sample();
+                let bytes = after.requested_bytes - before.requested_bytes;
+                let allocations = after.allocations - before.allocations;
+                assert_eq!(after.retained_bytes, before.retained_bytes);
+                if let Some((previous_bytes, previous_allocations, previous_counts)) = prior {
+                    assert_eq!(bytes, previous_bytes * 4);
+                    assert_eq!(allocations, previous_allocations * 4);
+                    assert_eq!(counts, previous_counts);
+                }
+                prior = Some((bytes, allocations, counts));
+                *measurement = (bytes, allocations, counts);
+                assert_eq!(prepared.work(), forward_work);
+                assert_eq!(session.preparation_work(), index_work);
+            }
+            let survivor = session.explain(&subject, &predicate, &object).unwrap();
+            drop(session);
+            drop(prepared);
+            assert_eq!(survivor.context.strong_count(), 1);
+            assert!(lifetime.sample().retained_bytes > 0);
+            assert!(survivor.check().is_ok());
+            drop(survivor);
+            assert_eq!(lifetime.close().retained_bytes, 0);
+            eprintln!(
+                "{regime:?}: forward={forward_work:?}; index={index_work:?}; whole-call (bytes, allocations, per-query extraction) for 1, 4, 16 queries={measurements:?}"
+            );
+        }
+    }
+
     /// A DERIVED triple is explained by the rules that derived it, and the proof RE-DERIVES.
     #[test]
     fn a_derived_conclusion_carries_a_checkable_derivation() {
@@ -1456,31 +1786,50 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         let graph = TermValue::iri("http://example.org/g");
-        let proof = explain_conclusion(
+        let prepared = prepare_explanations(
             &ds,
             Regime::OwlRl,
             Some(&graph),
-            &TermValue::iri(TOM),
-            &TermValue::iri(TYPE),
-            &TermValue::iri(MAMMAL),
+            &EvalOptions::default(),
+            None,
         )
-        .expect("the named graph's closure derives it");
+        .unwrap();
+        let default =
+            prepare_explanations(&ds, Regime::OwlRl, None, &EvalOptions::default(), None).unwrap();
+        assert_eq!(prepared.graph(), Some(&graph));
+        assert!(default.graph().is_none());
+        let session = prepared.session().unwrap();
+        let proof = session
+            .explain(
+                &TermValue::iri(TOM),
+                &TermValue::iri(TYPE),
+                &TermValue::iri(MAMMAL),
+            )
+            .expect("the named graph's closure derives it");
         assert_eq!(proof.graph(), Some(&graph));
         assert!(proof.rules().contains(&RuleId::CaxSco));
         assert!(proof.check().is_ok());
 
         // The DEFAULT graph's run has no instance, so it has no explanation to give.
         assert!(matches!(
-            explain_conclusion(
-                &ds,
-                Regime::OwlRl,
-                None,
+            default.session().unwrap().explain(
                 &TermValue::iri(TOM),
                 &TermValue::iri(TYPE),
                 &TermValue::iri(MAMMAL),
             ),
             Err(ExplainError::NotDerived { .. })
         ));
+        assert_eq!(
+            session
+                .explain(
+                    &TermValue::iri(TOM),
+                    &TermValue::iri(TYPE),
+                    &TermValue::iri(MAMMAL),
+                )
+                .unwrap()
+                .encode(),
+            proof.encode()
+        );
     }
 
     /// THE CHECKER RE-DERIVES RATHER THAN RE-READS, and it closes circularity too.
