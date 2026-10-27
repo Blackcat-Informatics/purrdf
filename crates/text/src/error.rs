@@ -10,7 +10,12 @@
 //! score would be indistinguishable from a ranked answer that legitimately did
 //! not match it, so the omission is refused instead.
 //!
-//! At the evaluator boundary a [`TextError`] is reduced to a
+//! Arithmetic refusals retain their native operands and allocation owners across
+//! clones and evaluator conversion. Their equality is retained owner identity.
+//! The v4 interface removes string-only arithmetic constructors and `Hash`;
+//! inspection uses the borrowed structured error protocol.
+//!
+//! At the evaluator boundary a [`TextError`] is converted to a
 //! [`purrdf_sparql_eval::EvalError`] by the [`From`] impl at the bottom of this
 //! module — that conversion is the single place the mapping is decided, so the
 //! same failure never reaches a caller wearing two different labels.
@@ -187,13 +192,15 @@ pub(crate) fn term_ordinal(current_count: usize) -> Result<u32, TextDeltaError> 
 /// [`purrdf_hash::error::StructuredError`] exposes every retained field without
 /// rendering. Native causes and ordered HTML diagnostics remain borrowed;
 /// message variants report their existing stored text.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TextError {
     /// Native query workspace refusal, without allocating a diagnostic.
     Capacity(crate::query_workspace::CapacityFailure),
     /// Immutable native query diagnostic retaining its allocation admission.
     Diagnostic(purrdf_sparql_eval::NativeDiagnostic),
+    /// An original arithmetic refusal retained under its query allocation account.
+    RetainedDiagnostic(purrdf_sparql_eval::RetainedNativeFailure),
     /// Exact substring admission or resource refusal, with generation and counters.
     Substring(crate::surface::SubstringRefusal),
     /// Explicit phonetic-domain or pronunciation refusal.
@@ -229,12 +236,12 @@ pub enum TextError {
     /// construction, so an intermediate that does not fit is reported rather
     /// than wrapped or saturated: a wrapped score is a wrong ranking presented
     /// as a right one.
-    Overflow(String),
+    Overflow(purrdf_sparql_eval::RetainedNativeFailure),
 
     /// A mathematical domain violation — the natural logarithm of a
     /// non-positive value, or a division whose divisor is zero. There is no
     /// value to return, so none is invented.
-    Domain(String),
+    Domain(purrdf_sparql_eval::RetainedNativeFailure),
 }
 
 purrdf_lex::constructors! {
@@ -248,11 +255,6 @@ purrdf_lex::constructors! {
         /// Construct a fatal operational source refusal.
         pub fn source_read(what) -> Self::SourceRead;
 
-        /// Construct a [`TextError::Overflow`] from any displayable message.
-        pub fn overflow(what) -> Self::Overflow;
-
-        /// Construct a [`TextError::Domain`] from any displayable message.
-        pub fn domain(what) -> Self::Domain;
     }
 }
 
@@ -261,24 +263,36 @@ impl core::fmt::Display for TextError {
         match self {
             Self::Capacity(failure) => core::fmt::Display::fmt(failure, f),
             Self::Diagnostic(diagnostic) => core::fmt::Display::fmt(diagnostic, f),
+            Self::RetainedDiagnostic(failure) => core::fmt::Display::fmt(failure, f),
             Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
-            Self::Overflow(msg) => write!(f, "fixed-point overflow: {msg}"),
-            Self::Domain(msg) => write!(f, "fixed-point domain error: {msg}"),
+            Self::Overflow(failure) | Self::Domain(failure) => {
+                core::fmt::Display::fmt(failure.cause(), f)
+            }
         }
     }
 }
 
-purrdf_hash::error_sources!(TextError, Capacity, Diagnostic, Substring, Phonetic);
+purrdf_hash::error_sources!(
+    TextError,
+    Capacity,
+    Diagnostic,
+    RetainedDiagnostic,
+    Substring,
+    Phonetic,
+    Overflow,
+    Domain
+);
 
 impl purrdf_hash::error::StructuredError for TextError {
     purrdf_hash::error_visit! {
         Capacity(cause) => "text-capacity" { "cause" => Cause(cause) },
         Diagnostic(cause) => "text-diagnostic" { "cause" => Cause(cause) },
+        RetainedDiagnostic(cause) => "text-retained-diagnostic" { "cause" => Cause(cause) },
         Substring(cause) => "text-substring" { "cause" => Cause(cause) },
         Phonetic(cause) => "text-phonetic" { "cause" => Cause(cause) },
         Config(message) => "text-config" { "message" => Text(message) },
@@ -287,8 +301,8 @@ impl purrdf_hash::error::StructuredError for TextError {
         },
         Data(message) => "text-data" { "message" => Text(message) },
         SourceRead(message) => "text-source-read" { "message" => Text(message) },
-        Overflow(message) => "text-overflow" { "message" => Text(message) },
-        Domain(message) => "text-domain" { "message" => Text(message) },
+        Overflow(cause) => "text-overflow" { "cause" => Cause(cause) },
+        Domain(cause) => "text-domain" { "cause" => Cause(cause) },
     }
 }
 
@@ -327,8 +341,9 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
             TextError::Config(msg) => Self::config(msg),
             TextError::Data(msg) => Self::data(msg),
             TextError::SourceRead(msg) => Self::SourceRead(msg),
-            TextError::Overflow(msg) => Self::function(format!("fixed-point overflow: {msg}")),
-            TextError::Domain(msg) => Self::function(format!("fixed-point domain error: {msg}")),
+            TextError::Overflow(failure)
+            | TextError::Domain(failure)
+            | TextError::RetainedDiagnostic(failure) => Self::RetainedNativeFailure(failure),
         }
     }
 }
@@ -433,48 +448,27 @@ mod tests {
             TextError::Data("x".to_owned()),
             "data() must build Data"
         );
-        assert_eq!(
-            TextError::overflow("x"),
-            TextError::Overflow("x".to_owned()),
-            "overflow() must build Overflow"
-        );
-        assert_eq!(
-            TextError::domain("x"),
-            TextError::Domain("x".to_owned()),
-            "domain() must build Domain"
-        );
     }
 
     /// Every rendering names the detail it was given, so a diagnostic never
     /// loses the one piece of information a reader needs.
     #[test]
     fn display_carries_the_detail() {
-        for err in [
-            TextError::config("no predicate IRI supplied"),
-            TextError::data("predicate absent from the dataset"),
-            TextError::source_read("storage checksum mismatch"),
-            TextError::overflow("product exceeds i128"),
-            TextError::domain("ln of a non-positive value"),
+        for (error, detail) in [
+            (
+                TextError::config("no predicate IRI supplied"),
+                "no predicate IRI supplied",
+            ),
+            (
+                TextError::data("predicate absent from the dataset"),
+                "predicate absent from the dataset",
+            ),
+            (
+                TextError::source_read("storage checksum mismatch"),
+                "storage checksum mismatch",
+            ),
         ] {
-            let rendered = err.to_string();
-            let detail = match &err {
-                TextError::Html(_)
-                | TextError::Substring(_)
-                | TextError::Phonetic(_)
-                | TextError::Capacity(_)
-                | TextError::Diagnostic(_) => {
-                    unreachable!("test uses string diagnostic variants")
-                }
-                TextError::Config(m)
-                | TextError::SourceRead(m)
-                | TextError::Data(m)
-                | TextError::Overflow(m)
-                | TextError::Domain(m) => m.clone(),
-            };
-            assert!(
-                rendered.contains(&detail),
-                "rendering `{rendered}` dropped the detail `{detail}`"
-            );
+            assert!(error.to_string().contains(detail));
         }
     }
 
@@ -506,26 +500,27 @@ mod tests {
     /// as bad data and not as bad configuration.
     #[test]
     fn conversion_maps_arithmetic_failures_to_function() {
-        for err in [
-            TextError::overflow("product exceeds i128"),
-            TextError::domain("ln of a non-positive value"),
+        for error in [
+            crate::Fixed::from_raw(i128::MAX)
+                .checked_add(crate::Fixed::ONE)
+                .unwrap_err(),
+            crate::Fixed::ZERO.ln().unwrap_err(),
         ] {
-            let converted: EvalError = err.clone().into();
-            assert!(
-                matches!(converted, EvalError::Function(_)),
-                "{err:?} must map to EvalError::Function, got {converted:?}"
+            let expected = EvalError::function(error.to_string()).to_string();
+            let copy = error.clone();
+            let converted: EvalError = error.into();
+            let EvalError::RetainedNativeFailure(failure) = &converted else {
+                panic!("arithmetic keeps the original native cause");
+            };
+            assert_eq!(
+                failure.kind(),
+                purrdf_sparql_eval::NativeDiagnosticKind::Function
             );
+            let (TextError::Overflow(original) | TextError::Domain(original)) = copy else {
+                panic!("original arithmetic classification");
+            };
+            assert!(core::ptr::eq(original.cause(), failure.cause()));
+            assert_eq!(converted.to_string(), expected);
         }
-    }
-
-    /// The detail survives the conversion: a caller reading the evaluator's
-    /// message still learns which arithmetic failure occurred.
-    #[test]
-    fn conversion_preserves_the_detail() {
-        let converted: EvalError = TextError::overflow("product exceeds i128").into();
-        assert!(
-            converted.to_string().contains("product exceeds i128"),
-            "conversion dropped the detail: {converted}"
-        );
     }
 }

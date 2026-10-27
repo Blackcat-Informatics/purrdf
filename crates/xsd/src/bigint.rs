@@ -1759,7 +1759,12 @@ impl BigInt {
             .expect("resident integer copy allocation")
     }
 
-    fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    /// Copy the native limb buffer, keeping short magnitudes inline. Already
+    /// admitted immutable limbs share their original lease. The caller must keep
+    /// the returned buffer with the supplied admission until destruction.
+    /// # Errors
+    /// Preserves original physical layout, allocator or admission refusal.
+    pub(crate) fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
         &self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {

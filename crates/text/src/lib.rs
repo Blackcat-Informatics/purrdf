@@ -102,6 +102,7 @@
 #![deny(clippy::float_arithmetic)]
 
 mod analysis;
+mod arithmetic;
 pub mod character;
 pub use character::{HanCharacterIndex, HanMatchEvidence};
 pub mod dictionary;

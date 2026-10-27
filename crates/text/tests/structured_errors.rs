@@ -213,3 +213,86 @@ fn delta_coverage_keeps_original_term_and_full_width_populations() {
         if value == "https://example.org/original/predicate"));
     assert!(error.source().is_none());
 }
+
+#[test]
+fn arithmetic_operands_survive_cloning_and_evaluator_transport_without_inspection_allocations() {
+    use purrdf_text::Fixed;
+    let error = Fixed::from_raw(i128::MIN)
+        .checked_sub(Fixed::from_raw(1))
+        .unwrap_err();
+    let buffers = [
+        Vec::with_capacity(2),
+        Vec::with_capacity(2),
+        Vec::with_capacity(2),
+    ];
+    let [root, retained, fields] = buffers;
+    let window = CurrentThreadWindow::open();
+    let copy = error.clone();
+    drop(error);
+    let root = Capture::read_with_buffer(&copy, root);
+    let retained = Capture::read_with_buffer(cause(&root), retained);
+    let native = cause(&retained);
+    let fields = Capture::read_with_buffer(native, fields);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(fields.code, "text-fixed-subtract-overflow");
+    assert!(matches!(
+        fields.field("left_raw"),
+        ErrorValue::Signed(i128::MIN)
+    ));
+    assert!(matches!(fields.field("right_raw"), ErrorValue::Signed(1)));
+    let converted: purrdf_sparql_eval::EvalError = copy.clone().into();
+    let purrdf_sparql_eval::EvalError::RetainedNativeFailure(retained) = converted else {
+        panic!("original arithmetic transport");
+    };
+    assert!(core::ptr::eq(native, retained.cause()));
+}
+
+#[test]
+fn prepared_ranking_retains_normalization_inputs_and_score_bound() {
+    use purrdf_text::{FieldInput, Fixed, PreparedCorpus, RankingField, RankingProfile};
+    let profile = RankingProfile::new(
+        vec![RankingField::new("body", Fixed::ONE, Fixed::ONE).unwrap()],
+        Vec::new(),
+        Some(0),
+    )
+    .unwrap();
+    let corpus = PreparedCorpus::new(&profile, 2, &[u128::from(u64::MAX)]).unwrap();
+    let query = corpus.prepare_query(&[("needle", 1)]).unwrap();
+    let error = query
+        .contribution(
+            0,
+            &[FieldInput {
+                term_frequency: 1,
+                length: 1,
+            }],
+        )
+        .unwrap_err();
+    let root = Capture::read(&error);
+    let retained = Capture::read(cause(&root));
+    let fields = Capture::read(cause(&retained));
+    assert_eq!(fields.code, "text-fixed-field-normalization");
+    assert!(
+        matches!(fields.field("b_raw"), ErrorValue::Signed(value) if value == Fixed::ONE.into_raw())
+    );
+    assert!(matches!(
+        fields.field("relative_raw"),
+        ErrorValue::Signed(0)
+    ));
+    assert!(matches!(
+        fields.field("normalized_raw"),
+        ErrorValue::Signed(0)
+    ));
+    let error = query
+        .score_bound()
+        .validate(Fixed::from_raw(-1))
+        .unwrap_err();
+    let root = Capture::read(&error);
+    let retained = Capture::read(cause(&root));
+    let fields = Capture::read(cause(&retained));
+    assert_eq!(fields.code, "text-fixed-score-outside-bound");
+    assert!(matches!(fields.field("score_raw"), ErrorValue::Signed(-1)));
+    assert!(
+        matches!(fields.field("maximum_raw"), ErrorValue::Signed(value) if value == query.score_bound().maximum().into_raw())
+    );
+}

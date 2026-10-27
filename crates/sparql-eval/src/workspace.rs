@@ -1299,6 +1299,26 @@ impl PartialEq for WorkspaceIri {
 }
 impl Eq for WorkspaceIri {}
 
+/// A copied exact integer retaining its original native allocation admission.
+#[derive(Debug)]
+pub struct WorkspaceInteger {
+    value: purrdf_xsd::exact::Integer,
+    _frame: LexicalFrame,
+}
+impl std::ops::Deref for WorkspaceInteger {
+    type Target = purrdf_xsd::exact::Integer;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+impl purrdf_hash::error::StructuredError for WorkspaceInteger {
+    purrdf_hash::error_visit! {
+        @record self { value, _frame } => "workspace-integer" {
+            "value" => Record(&self.value),
+        }
+    }
+}
+
 /// Validated IRI retaining either caller configuration or its original native grant.
 #[derive(Clone)]
 pub struct OwnedIri(OwnedIriStorage);
@@ -1361,6 +1381,22 @@ impl std::fmt::Debug for OwnedIri {
 }
 
 impl WorkspaceCapability {
+    /// Copy an exact integer through its native storage home, retaining its grant.
+    /// # Errors
+    /// Returns the original native layout, admission or allocator refusal.
+    pub fn copy_integer(
+        &self,
+        value: &purrdf_xsd::exact::Integer,
+    ) -> Result<WorkspaceInteger, EvalError> {
+        let mut frame = LexicalFrame::new(self);
+        let result = value.copy_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut frame));
+        let value = result.map_err(|error| frame.storage_error(error, "native exact integer"))?;
+        Ok(WorkspaceInteger {
+            value,
+            _frame: frame,
+        })
+    }
+
     /// Parse one new IRI through the original lexical home before publication.
     /// # Errors
     /// Returns the original physical refusal or an admitted grammar diagnostic.
@@ -2599,6 +2635,36 @@ pub(crate) mod owned_row_regressions {
             ledger,
             base,
         )
+    }
+
+    #[test]
+    fn copied_integer_keeps_exact_native_grant_and_refunds_original_account() {
+        let input = purrdf_xsd::exact::Integer::from_i128(i128::MAX);
+        let input = input.try_mul(&input).unwrap();
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let payload_bytes = input.limb_len() * u64::try_from(size_of::<u64>()).unwrap();
+        let ordinary_grant = capability.charge(payload_bytes).unwrap();
+        let expected_live = ledger.live.load(Ordering::Relaxed);
+        drop(ordinary_grant);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        let copy = capability.copy_integer(&input).unwrap();
+        assert_eq!(*copy, input);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert_eq!(retained, expected_live, "one native limb-buffer grant");
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+
+        let (workspace, ledger, _) = account(base);
+        let failure = workspace.capability().copy_integer(&input).unwrap_err();
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     struct DropCursor {

@@ -111,12 +111,10 @@ impl ScoreBound {
     ) -> Result<Fixed, TextError> {
         if !(Fixed::ZERO..=self.maximum).contains(&score) {
             return Err(arithmetic_error(
-                true,
-                format_args!(
-                    "score {} is outside the prepared interval [0, {}]",
-                    score.decimal_display(),
-                    self.maximum.decimal_display()
-                ),
+                crate::arithmetic::ArithmeticRefusal::ScoreOutsideBound {
+                    score: score.into_raw(),
+                    maximum: self.maximum.into_raw(),
+                },
                 workspace,
             ));
         }
@@ -653,8 +651,11 @@ impl PreparedQuery<'_, '_> {
                 .checked_add_with(field.b.checked_mul_with(relative, workspace)?, workspace)?;
             if normalization <= Fixed::ZERO {
                 return Err(arithmetic_error(
-                    true,
-                    "field normalization rounds to zero under this profile",
+                    crate::arithmetic::ArithmeticRefusal::FieldNormalization {
+                        b: field.b.into_raw(),
+                        relative: relative.into_raw(),
+                        normalized: normalization.into_raw(),
+                    },
                     workspace,
                 ));
             }
