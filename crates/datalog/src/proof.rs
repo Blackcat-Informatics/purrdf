@@ -84,6 +84,8 @@ use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInter
 
 mod malformed;
 pub use malformed::ProofMalformed;
+mod index;
+pub use index::{EvaluationProofIndex, ProofIndexWork};
 
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
 
@@ -1860,9 +1862,20 @@ mod tests {
                 "{name}: one proof per derivation"
             );
 
+            let index = EvaluationProofIndex::of(&evaluation).unwrap();
             let edb = workload.edb();
             let ctx = ProofContext::new(&workload.rules, &edb, evaluation.facts());
             for (derived, root) in proofs.roots() {
+                let (requested, requested_root) = index.extract(derived).unwrap().unwrap();
+                assert_eq!(
+                    requested.encode(requested_root),
+                    proofs.arena().encode(*root)
+                );
+                assert_eq!(
+                    requested.digest(requested_root),
+                    proofs.arena().digest(*root)
+                );
+                assert_eq!(&requested.check(requested_root, &ctx).unwrap(), derived);
                 let checked = proofs
                     .arena()
                     .check(*root, &ctx)
@@ -2852,6 +2865,83 @@ mod tests {
             assert_eq!(proofs.root_for(fact), Some(*root));
         }
         assert_eq!(proofs.root_for(&fact("nope", P, "nope")), None);
+    }
+
+    /// One reusable index preserves the caller's retained grant across queries and refusals.
+    #[test]
+    fn requested_proof_scratch_refunds_without_releasing_the_index() {
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        struct Grant {
+            limit: usize,
+        }
+        impl Admission for Grant {
+            fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+                if live > self.limit {
+                    Err(StorageError::AdmissionFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let workload = synth_corpus::transitive_closure(6);
+        let exe = compile(workload.rules.clone()).unwrap();
+        let model_only = crate::seminaive::evaluate(&exe, workload.edb()).unwrap();
+        assert!(matches!(
+            EvaluationProofIndex::of(&model_only),
+            Err(ProofError::DerivationsNotRecorded)
+        ));
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            workload.edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        let mut grant = Grant { limit: usize::MAX };
+        let mut memory = Memory::new(&mut grant);
+        let retained = memory.collect([1u8; 17]).unwrap();
+        let baseline = memory.admitted_bytes();
+        memory.admission_mut().limit = baseline;
+        assert!(matches!(
+            EvaluationProofIndex::of_with_memory(&evaluation, &mut memory),
+            Err(ProofError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.admission_mut().limit = usize::MAX;
+        let index = EvaluationProofIndex::of_with_memory(&evaluation, &mut memory).unwrap();
+        let indexed = memory.admitted_bytes();
+        let goal = evaluation.derivations().unwrap().last().unwrap().fact();
+        let mut work = ProofIndexWork::default();
+        memory.admission_mut().limit = indexed;
+        assert!(matches!(
+            index.extract_with_memory(goal, &mut memory, &mut work),
+            Err(ProofError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(memory.admitted_bytes(), indexed);
+        memory.admission_mut().limit = usize::MAX;
+        let edb = workload.edb();
+        let ctx = ProofContext::new(&workload.rules, &edb, evaluation.facts());
+        for _ in 0..2 {
+            let (arena, root) = index
+                .extract_with_memory(goal, &mut memory, &mut work)
+                .unwrap()
+                .unwrap();
+            assert_eq!(&arena.check(root, &ctx).unwrap(), goal);
+            assert_eq!(memory.admitted_bytes(), indexed);
+        }
+        assert!(
+            index
+                .extract(&fact("missing", P, "missing"))
+                .unwrap()
+                .is_none()
+        );
+        index.release_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), baseline);
+        assert_eq!(retained, [1u8; 17]);
+        memory.release_vec(retained).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     /// Proof building is DETERMINISTIC end to end: two runs of the same program over the

@@ -79,7 +79,7 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::id::ProofId;
-use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
+use purrdf_datalog::proof::{EvaluationProofIndex, ProofArena, ProofContext, ProofError};
 use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal};
 use purrdf_datalog::seminaive::compile;
 use purrdf_datalog::store::{Fact, RelationStore};
@@ -242,8 +242,8 @@ pub struct ChaseProof {
     graph: Option<TermValue>,
     /// The explained triple.
     conclusion: (TermValue, TermValue, TermValue),
-    /// The hash-consed proof term — exactly the sub-DAG of this conclusion, re-interned
-    /// from its own canonical encoding so nothing of the wider evaluation rides along.
+    /// The hash-consed proof term — exactly the sub-DAG of this conclusion, constructed
+    /// from its recorded ancestors so nothing of the wider evaluation rides along.
     arena: ProofArena,
     /// The proof's root in [`Self::arena`].
     root: ProofId,
@@ -606,16 +606,14 @@ pub fn explain_conclusion(
     )
     .map_err(EntailError::Evaluate)?;
 
-    let proofs = EvaluationProofs::of(&evaluation).map_err(|error| match error {
+    let proof_error = |error| match error {
         ProofError::Storage(cause) => ExplainError::from(EntailError::from(cause)),
         other => ExplainError::Unchecked(other),
-    })?;
-    // Re-intern through the canonical encoding, so the returned arena is EXACTLY this
-    // conclusion's sub-DAG rather than a handle into the whole evaluation's.
-    let (arena, root) = match proofs.root_for(&goal) {
-        Some(id) => {
-            ProofArena::decode(&proofs.arena().encode(id)).map_err(ExplainError::Unchecked)?
-        }
+    };
+    let proofs = EvaluationProofIndex::of(&evaluation).map_err(proof_error)?;
+    // Construct only this conclusion's sub-DAG through the original proof arena.
+    let (arena, root) = match proofs.extract(&goal).map_err(proof_error)? {
+        Some(proof) => proof,
         None => {
             // Not derived. It may still be GIVEN, which is an explanation in its own right
             // and a checkable one — and if it is neither, that is the unresolvable
