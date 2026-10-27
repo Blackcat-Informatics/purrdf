@@ -13,6 +13,8 @@
 //! program, including its internal demand facts, and all original input facts.
 //! The retained partial closure is private: it is complete only for the requested goal.
 
+mod stratified;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::binding_pattern::BindingPattern;
@@ -34,7 +36,7 @@ pub enum Unsupported {
     Head(HeadForm),
     /// Guards, including model reads, need a different demand contract.
     Guard,
-    /// Negated atoms or conjunctions need a different demand contract.
+    /// The requested goal must be positive.
     Negation,
     /// Immutable base reads belong to the scheduled evaluator.
     BaseRead,
@@ -65,7 +67,7 @@ pub enum DemandError<E> {
         /// The first unsupported construct.
         reason: Unsupported,
     },
-    /// The ordinary compiler refused the transformed clauses.
+    /// The ordinary compiler refused the authored or transformed clauses.
     Compile(EvalError),
     /// The original source dictionary refused a preparation lookup.
     Source(E),
@@ -126,13 +128,35 @@ where
 {
     evaluation: Evaluation<D, N>,
     goal: ClauseAtom<N>,
+    preparation: Preparation,
+}
+
+/// Resident source preparation before the governed evaluator starts.
+///
+/// Shadow facts and terms are part of the evaluator's transformed input baseline,
+/// including its generated-term allowance. They are not reported as derived facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Preparation {
+    /// Original caller-owned rows before shadow seeding.
+    pub original_facts: usize,
+    /// Original dictionary's distinct terms before shadow seeding.
+    pub original_terms: u64,
+    /// Additional input rows in isolated shadow relations.
+    pub shadow_facts: usize,
+    /// Additional dictionary terms minted while seeding those rows.
+    pub shadow_terms: u64,
 }
 
 impl<D: TermDictionary, const N: usize> DemandAnswer<D, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    /// The original dictionary, extended only by terms of the transformed execution.
+    /// Original input and resident shadow-seeding counts.
+    pub const fn preparation(&self) -> Preparation {
+        self.preparation
+    }
+
+    /// The original dictionary, extended by transformed preparation and execution.
     pub fn dictionary(&self) -> &D {
         self.evaluation.facts().interner()
     }
@@ -192,12 +216,15 @@ where
     }
 }
 
-/// Answer one pure positive, fixed-predicate triple or quad goal with demand propagation.
+/// Answer one positive, fixed-predicate triple or quad goal with demand propagation.
 ///
 /// The complete authored program and goal are validated before dictionary mutation
-/// or execution. Atomic heads must be range-restricted; guards, base/model reads,
-/// negation and every other head form are refused. All preparation is resident;
-/// the ordinary evaluator alone enforces execution options and cancellation.
+/// or execution. Atomic heads must be range-restricted; guards, base/model reads
+/// and every other head form are refused. Stratified negation, including guard-free
+/// conjunctions, discovers demand through an isolated positive shadow of the input.
+/// Shadow input is resident preparation and belongs to the transformed input baseline;
+/// [`DemandAnswer::preparation`] reports its additional rows and terms. The ordinary
+/// evaluator alone enforces execution options and cancellation.
 /// # Errors
 /// Returns an unsupported fragment, namespace/dictionary failure, or the original
 /// compiler/evaluator refusal. A budget or cancellation refusal yields no answer owner.
@@ -212,8 +239,20 @@ where
     Arity<N>: StoreShape<N>,
 {
     validate(rules, goal)?;
+    if rules
+        .iter()
+        .any(|rule| !rule.negations().is_empty() || rule.body().iter().any(ClauseAtom::is_negated))
+    {
+        return stratified::evaluate(rules, goal, edb, options, stop);
+    }
+    let preparation = Preparation {
+        original_facts: edb.row_count(),
+        original_terms: edb.interner().term_count(),
+        shadow_facts: 0,
+        shadow_terms: 0,
+    };
     let descriptors = descriptors(rules, goal);
-    let names = names(&descriptors, rules, goal, edb.interner())?;
+    let names = names(&descriptors, rules, goal, edb.interner(), 0)?;
     let transformed = transform(rules, goal, &descriptors, &names);
     let executable = compile(transformed).map_err(DemandError::Compile)?;
     let evaluation = evaluate_guarded(&executable, edb, &NoGuards, options, stop)
@@ -221,6 +260,7 @@ where
     Ok(DemandAnswer {
         evaluation,
         goal: goal.clone(),
+        preparation,
     })
 }
 
@@ -239,10 +279,18 @@ fn validate<E, const N: usize>(
         if !rule.guards().is_empty() {
             return Err(refuse(Unsupported::Guard));
         }
-        if !rule.negations().is_empty() {
-            return Err(refuse(Unsupported::Negation));
+        if rule
+            .negations()
+            .iter()
+            .any(|group| !group.guards().is_empty())
+        {
+            return Err(refuse(Unsupported::Guard));
         }
-        for atom in rule.body().iter().chain(rule.head_atoms()) {
+        for atom in rule.body().iter().chain(rule.head_atoms()).chain(
+            rule.negations()
+                .iter()
+                .flat_map(crate::guard::Negation::atoms),
+        ) {
             validate_atom(atom).map_err(refuse)?;
         }
         let bound = rule.bound_variables();
@@ -255,13 +303,16 @@ fn validate<E, const N: usize>(
             }
         }
     }
+    if goal.is_negated() {
+        return Err(DemandError::Unsupported {
+            rule: None,
+            reason: Unsupported::Negation,
+        });
+    }
     validate_atom(goal).map_err(|reason| DemandError::Unsupported { rule: None, reason })
 }
 
 fn validate_atom<const N: usize>(atom: &ClauseAtom<N>) -> Result<(), Unsupported> {
-    if atom.is_negated() {
-        return Err(Unsupported::Negation);
-    }
     if atom.read_source() != ReadSource::Evaluation {
         return Err(Unsupported::BaseRead);
     }
@@ -368,10 +419,17 @@ fn names<D: TermDictionary, const N: usize>(
     rules: &[DlClause<N>],
     goal: &ClauseAtom<N>,
     dictionary: &D,
+    additional: usize,
 ) -> Result<Vec<String>, DemandError<D::Error>> {
     let authored: BTreeSet<_> = rules
         .iter()
-        .flat_map(|rule| rule.body().iter().chain(rule.head_atoms()))
+        .flat_map(|rule| {
+            rule.body().iter().chain(rule.head_atoms()).chain(
+                rule.negations()
+                    .iter()
+                    .flat_map(crate::guard::Negation::atoms),
+            )
+        })
         .chain(std::iter::once(goal))
         .flat_map(ClauseAtom::terms)
         .filter_map(ClauseTerm::surface)
@@ -392,7 +450,7 @@ fn names<D: TermDictionary, const N: usize>(
     dictionary.check_read().map_err(DemandError::Source)?;
     let mut nonce = 0_u64;
     loop {
-        let candidates: Vec<_> = (0..=descriptors.len())
+        let candidates: Vec<_> = (0..=descriptors.len() + additional)
             .map(|ordinal| format!("urn:purrdf:demand:{digest}:{nonce}:{ordinal}"))
             .collect();
         let mut collision = false;
