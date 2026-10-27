@@ -26,7 +26,7 @@ pub enum CapacityFailure {
 impl CapacityFailure {
     /// `charge`, `resize`, and native reserve helpers return only these classes.
     /// Adding another workspace failure requires extending this explicit mapping.
-    fn from_workspace(error: &EvalError) -> Self {
+    pub(crate) fn from_workspace(error: &EvalError) -> Self {
         match error {
             EvalError::WorkspaceStopped => Self::Stopped,
             EvalError::WorkspaceBoundOverflow => Self::LayoutOverflow,

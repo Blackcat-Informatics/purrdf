@@ -199,7 +199,7 @@ pub enum TextError {
     Capacity(crate::query_workspace::CapacityFailure),
     /// Immutable native query diagnostic retaining its allocation admission.
     Diagnostic(purrdf_sparql_eval::NativeDiagnostic),
-    /// An original arithmetic refusal retained under its query allocation account.
+    /// An original refusal retained under its query allocation account.
     RetainedDiagnostic(purrdf_sparql_eval::RetainedNativeFailure),
     /// Exact substring admission or resource refusal, with generation and counters.
     Substring(crate::surface::SubstringRefusal),
@@ -214,7 +214,7 @@ pub enum TextError {
     /// [`crate::RankingProfile`], whose identity carries every scoring choice.
     Config(String),
     /// Strict HTML character-reference parse errors with original source ranges.
-    Html(Vec<purrdf_lex::html::Diagnostic>),
+    Html(purrdf_sparql_eval::RetainedNativeFailure),
 
     /// The input data cannot be indexed or queried as given — a literal whose
     /// datatype does not resolve to an IRI, a corpus larger than the `u32`
@@ -255,6 +255,39 @@ purrdf_lex::constructors! {
 }
 
 impl TextError {
+    /// Retain ordered HTML-reference diagnostics under resident admission.
+    pub fn html(diagnostics: Vec<purrdf_lex::html::Diagnostic>) -> Self {
+        Self::html_in(
+            diagnostics,
+            None,
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+    }
+
+    pub(crate) fn html_in(
+        diagnostics: Vec<purrdf_lex::html::Diagnostic>,
+        allocation: Option<purrdf_sparql_eval::WorkspaceAllocation>,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Self {
+        let failure = purrdf_sparql_eval::RetainedNativeFailure::error(
+            purrdf_sparql_eval::NativeDiagnosticKind::Data,
+            HtmlFailure {
+                diagnostics,
+                _allocation: allocation,
+            },
+            workspace,
+        );
+        match failure {
+            purrdf_sparql_eval::EvalError::RetainedNativeFailure(failure)
+                if workspace.is_bounded() =>
+            {
+                Self::RetainedDiagnostic(failure)
+            }
+            purrdf_sparql_eval::EvalError::RetainedNativeFailure(failure) => Self::Html(failure),
+            error => Self::Capacity(crate::CapacityFailure::from_workspace(&error)),
+        }
+    }
+
     /// Retain an original dataset read failure without rendering or cloning it.
     /// Construction APIs have no query workspace; the resident native owner
     /// preserves any allocation ownership already carried by the provider error.
@@ -271,7 +304,7 @@ impl core::fmt::Display for TextError {
             Self::RetainedDiagnostic(failure) => core::fmt::Display::fmt(failure, f),
             Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
-            Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
+            Self::Html(failure) => core::fmt::Display::fmt(failure.cause(), f),
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(failure) => {
@@ -289,6 +322,7 @@ purrdf_hash::error_sources!(
     Capacity,
     Diagnostic,
     RetainedDiagnostic,
+    Html,
     SourceRead,
     Substring,
     Phonetic,
@@ -304,9 +338,7 @@ impl purrdf_hash::error::StructuredError for TextError {
         Substring(cause) => "text-substring" { "cause" => Cause(cause) },
         Phonetic(cause) => "text-phonetic" { "cause" => Cause(cause) },
         Config(message) => "text-config" { "message" => Text(message) },
-        Html(diagnostics) => "text-html" {
-            "diagnostics" => List(diagnostics.iter().map(|value| purrdf_hash::error::ErrorValue::Cause(value))),
-        },
+        Html(cause) => "text-html" { "cause" => Cause(cause) },
         Data(message) => "text-data" { "message" => Text(message) },
         SourceRead(cause) => "text-source-read" { "cause" => Cause(cause) },
         Overflow(cause) => "text-overflow" { "cause" => Cause(cause) },
@@ -343,15 +375,36 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
             TextError::Diagnostic(diagnostic) => Self::NativeDiagnostic(diagnostic),
             TextError::Substring(refusal) => Self::data(refusal.to_string()),
             TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
-            TextError::Html(diagnostics) => {
-                Self::data(format!("HTML reference errors: {diagnostics:?}"))
-            }
+            TextError::Html(failure) => Self::RetainedNativeFailure(failure),
             TextError::Config(msg) => Self::config(msg),
             TextError::Data(msg) => Self::data(msg),
             TextError::SourceRead(failure) => Self::RetainedNativeFailure(failure),
             TextError::Overflow(failure)
             | TextError::Domain(failure)
             | TextError::RetainedDiagnostic(failure) => Self::RetainedNativeFailure(failure),
+        }
+    }
+}
+
+/// The diagnostic payload dies before the original allocation grant.
+#[derive(Debug)]
+struct HtmlFailure {
+    diagnostics: Vec<purrdf_lex::html::Diagnostic>,
+    _allocation: Option<purrdf_sparql_eval::WorkspaceAllocation>,
+}
+
+impl core::fmt::Display for HtmlFailure {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "HTML reference errors: {:?}", self.diagnostics)
+    }
+}
+
+impl std::error::Error for HtmlFailure {}
+
+impl purrdf_hash::error::StructuredError for HtmlFailure {
+    purrdf_hash::error_visit! {
+        @record self { diagnostics, _allocation } => "text-html-diagnostics" {
+            "diagnostics" => List(self.diagnostics.iter().map(|value| purrdf_hash::error::ErrorValue::Cause(value))),
         }
     }
 }
@@ -364,6 +417,161 @@ mod tests {
 
     #[global_allocator]
     static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+    #[test]
+    fn bounded_html_failure_retains_diagnostics_and_refunds_original_grants() {
+        use purrdf_core::{
+            SegmentedBuildLimits, SegmentedBuilder, SegmentedReadLimits, SparqlRequest,
+        };
+        use purrdf_sparql_eval::{
+            Arity, ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry,
+        };
+        use std::sync::{Arc, Mutex};
+        let image =
+            SegmentedBuilder::new(SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap())
+                .unwrap()
+                .seal()
+                .unwrap();
+        let focus = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+        for stop in [false, true] {
+            let source = image
+                .open_session(SegmentedReadLimits::new(
+                    8_000_000, 2, 16_384, 20_000_000, 8,
+                ))
+                .unwrap();
+            let live = || {
+                let evidence = source.evidence();
+                evidence.live_bytes()
+                    - evidence.unpinned_cache_bytes()
+                    - evidence.bookkeeping_bytes()
+            };
+            let baseline = live();
+            let slot = Arc::new(Mutex::new(None));
+            let saved = Arc::clone(&slot);
+            let mut functions = UserFunctionRegistry::default();
+            functions.register_expr_admitted(
+                "http://example.org/capture-html",
+                Arity::Exact(0),
+                Arc::new(move |_, capability| {
+                    *saved.lock().unwrap() = Some(capability.clone());
+                    Ok(None)
+                }),
+            );
+            let env = ExtensionEnv::empty();
+            let engine = NativeSparqlEngine::new();
+            let functions = engine.bind_functions(functions, env).unwrap();
+            let result = engine
+                .query_fallible_view(
+                    &source,
+                    SparqlRequest {
+                        query: "SELECT (<http://example.org/capture-html>() AS ?value) WHERE {}",
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::new()
+                        .with_env(env)
+                        .with_functions(&functions)
+                        .with_focus_graph(Some(&focus)),
+                )
+                .unwrap();
+            drop(result);
+            drop(functions);
+            drop(engine);
+            let capability = slot.lock().unwrap().take().unwrap();
+            assert!(capability.is_bounded());
+            let controls = live();
+            if stop {
+                let mut diagnostics = Vec::new();
+                let mut allocation = None;
+                capability
+                    .reserve_vec(&mut diagnostics, &mut allocation, 1)
+                    .unwrap();
+                diagnostics.push(purrdf_lex::html::Diagnostic {
+                    kind: purrdf_lex::html::ErrorKind::NullCharacterReference,
+                    source: 0..4,
+                });
+                assert!(live() > controls);
+                assert!(matches!(
+                    capability.charge(8_000_000),
+                    Err(EvalError::WorkspaceStopped)
+                ));
+                let error = TextError::html_in(diagnostics, allocation, &capability);
+                assert!(matches!(
+                    error,
+                    TextError::Capacity(crate::CapacityFailure::Stopped)
+                ));
+                assert_eq!(
+                    live(),
+                    controls,
+                    "failed shared admission refunds the diagnostic vector"
+                );
+                drop(capability);
+                assert_eq!(live(), baseline);
+                continue;
+            }
+            let analyzer = crate::Analyzer::with_profile(
+                crate::AnalyzerProfile::empty_lexicon().with_input_mode(crate::InputMode::HtmlText),
+            )
+            .unwrap();
+            let input = String::from("é&#0; &nope;");
+            assert_eq!(
+                &*analyzer
+                    .analysis_form_owned("e&#x301;", &capability)
+                    .unwrap(),
+                "e"
+            );
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = analyzer.terms_owned(&input, &capability).unwrap_err();
+            let retained_bytes = window.close().retained_bytes;
+            drop(input);
+            drop(analyzer);
+            let held = live();
+            assert_eq!(retained_bytes, i64::try_from(held - controls).unwrap());
+            let TextError::RetainedDiagnostic(original) = &error else {
+                panic!("bounded HTML keeps evaluator presentation and original owner");
+            };
+            let native = std::error::Error::source(original)
+                .unwrap()
+                .downcast_ref::<super::HtmlFailure>()
+                .unwrap();
+            assert_eq!(native.diagnostics.len(), 2);
+            let pointer = native.diagnostics.as_ptr();
+            let expected =
+                EvalError::data(format!("HTML reference errors: {:?}", native.diagnostics))
+                    .to_string();
+            assert_eq!(error.to_string(), expected);
+            let buffer = Vec::with_capacity(4);
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let copy = error.clone();
+            let converted: EvalError = error.into();
+            let EvalError::RetainedNativeFailure(retained) = &converted else {
+                panic!("native Data owner");
+            };
+            let fields =
+                purrdf_testkit::error_capture::Capture::read_with_buffer(retained.cause(), buffer);
+            assert_eq!(window.close().allocations, 0);
+            assert_eq!(fields.code, "text-html-diagnostics");
+            let native = std::error::Error::source(retained)
+                .unwrap()
+                .downcast_ref::<super::HtmlFailure>()
+                .unwrap();
+            assert_eq!(native.diagnostics.as_ptr(), pointer);
+            assert_eq!(
+                retained.kind(),
+                purrdf_sparql_eval::NativeDiagnosticKind::Data
+            );
+            drop(fields);
+            drop(converted);
+            drop(capability);
+            assert_eq!(
+                live(),
+                held,
+                "only diagnostic storage and its retained owner remain"
+            );
+            drop(copy);
+            assert_eq!(live(), baseline, "last clone releases the original grant");
+        }
+    }
 
     #[test]
     fn native_workspace_layout_refusal_is_inspectable_without_allocation() {
