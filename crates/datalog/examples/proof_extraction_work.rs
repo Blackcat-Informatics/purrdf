@@ -9,6 +9,8 @@
 //! retains all requested output arenas. Peaks and retention describe each phase
 //! separately, not whole-query ownership. Verification and destruction are excluded.
 //! Raw perf coverage and worker allocation/work records remain in the directory.
+//! Fixture evaluation uses the sequential policy so no background Rayon worker
+//! contributes unrelated instructions to the inherited counter window.
 
 #[cfg(target_os = "linux")]
 mod native {
@@ -19,7 +21,9 @@ mod native {
     use purrdf_datalog::proof::{
         EvaluationProofIndex, EvaluationProofs, ProofArena, ProofContext, ProofIndexWork,
     };
-    use purrdf_datalog::seminaive::{DerivationMode, EvalOptions, compile, evaluate_guarded};
+    use purrdf_datalog::seminaive::{
+        DerivationMode, EvalOptions, RoundExecution, compile, evaluate_guarded,
+    };
     use purrdf_datalog::store::{Fact, RelationStore};
     use purrdf_testkit::bench::counter::{CounterCommand, CounterControl, collect_instructions};
     use std::error::Error;
@@ -127,7 +131,9 @@ mod native {
             &executable,
             edb.clone(),
             &NoGuards,
-            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_round_execution(RoundExecution::Sequential),
             None,
         )?;
         let context = ProofContext::new(&program, &edb, evaluation.facts());
