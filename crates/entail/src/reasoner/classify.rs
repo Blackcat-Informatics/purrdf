@@ -224,24 +224,6 @@ impl Subsumptions {
     pub(crate) fn holds(&self, sub: usize, sup: usize) -> bool {
         self.verdict(sub, sup).is_true()
     }
-
-    /// Whether the two classes were established equivalent.
-    pub(crate) fn equivalent(&self, a: usize, b: usize) -> bool {
-        self.holds(a, b) && self.holds(b, a)
-    }
-
-    /// The index of the canonical member of `i`'s equivalence class — the lowest index it
-    /// was established equivalent to, so a whole equivalence class collapses to one
-    /// representative deterministically.
-    pub(crate) fn representative(&self, i: usize) -> usize {
-        (0..=i).find(|&j| self.equivalent(i, j)).unwrap_or(i)
-    }
-
-    /// Whether `classes[sub]` is strictly below `classes[sup]` — subsumed and not
-    /// equivalent.
-    fn strictly_below(&self, sub: usize, sup: usize) -> bool {
-        self.holds(sub, sup) && !self.holds(sup, sub)
-    }
 }
 
 /// Whether `KB ⊨ sub ⊑ sup`, by refuting `x : sub ⊓ ¬sup` over a fresh anonymous witness.
@@ -316,19 +298,7 @@ impl ClassHierarchy {
         let name = |i: usize| kb.interner.value(classes[i].0).clone();
         let n = classes.len();
 
-        let mut subsumptions = Vec::new();
-        let mut equivalences = Vec::new();
-        for i in 0..n {
-            for j in 0..n {
-                if i == j || !m.holds(i, j) {
-                    continue;
-                }
-                subsumptions.push((name(i), name(j)));
-                if i < j && m.holds(j, i) {
-                    equivalences.push((name(i), name(j)));
-                }
-            }
-        }
+        let relations = super::hierarchy::Relations::derive(n, name, |i, j| m.holds(i, j), || true);
 
         // A class is unsatisfiable exactly when it is subsumed by `owl:Nothing`'s concept,
         // which the signature always carries; if the signature somehow lacks it there is
@@ -338,37 +308,11 @@ impl ClassHierarchy {
             (0..n).filter(|&i| m.holds(i, b)).map(name).collect()
         });
 
-        // The transitive reduction over equivalence-class representatives.
-        //
-        // The representatives are computed ONCE into a dense positional vector rather than
-        // re-derived at each of the reduction's three loop levels:
-        // `Subsumptions::representative` scans an equivalence class to find its lowest
-        // member, so calling it from the
-        // innermost `any` would put a linear scan under a cubic loop. Memoizing changes no
-        // answer — it is the same function of the same matrix — and it is what keeps
-        // classifying a large signature bounded by the reduction rather than by bookkeeping.
-        let representatives: Vec<usize> = (0..n).map(|i| m.representative(i)).collect();
-        let canonical: Vec<usize> = (0..n).filter(|&i| representatives[i] == i).collect();
-        let mut direct = Vec::new();
-        for &i in &canonical {
-            for &j in &canonical {
-                if !m.strictly_below(i, j) {
-                    continue;
-                }
-                let interposed = canonical
-                    .iter()
-                    .any(|&k| m.strictly_below(i, k) && m.strictly_below(k, j));
-                if !interposed {
-                    direct.push((name(i), name(j)));
-                }
-            }
-        }
-
         let mut out = Self {
-            subsumptions,
-            equivalences,
+            subsumptions: relations.subsumptions,
+            equivalences: relations.equivalences,
             unsatisfiable,
-            direct,
+            direct: relations.direct,
         };
         out.sort();
         out

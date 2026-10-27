@@ -72,6 +72,9 @@ fn bare(assumptions: &RunAssumptions) -> bool {
 
 fn authorized(question: &Question, subject: &ClaimSubject, kb: &Kb) -> bool {
     match (question, subject) {
+        (Question::ObjectPropertyClassification { properties }, ClaimSubject::Axiom { axiom }) => {
+            matches!(axiom.as_ref(), DlAxiom::SubObjectPropertyOf { sub, sup } if properties.contains(sub) && properties.contains(sup))
+        }
         (Question::Consistency, ClaimSubject::Consistent) => true,
         (
             Question::ClassSatisfiability { class: requested },

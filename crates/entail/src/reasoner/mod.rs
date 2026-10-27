@@ -106,7 +106,9 @@ use crate::report::Construct;
 pub mod axiom;
 pub mod certificate;
 pub mod classify;
+mod hierarchy;
 pub mod module;
+pub mod object_properties;
 pub mod profile;
 pub mod proof;
 pub mod realize;
@@ -123,6 +125,7 @@ pub use classify::ClassHierarchy;
 pub use module::{
     ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,
 };
+pub use object_properties::ObjectPropertyHierarchy;
 pub use profile::{OwlProfile, ProfileCertificate, ProfileViolation, profile};
 pub use proof::{
     Claim, ClaimBasis, ClaimSubject, Question, RunAssumptions, RunProof, Service, ServiceProof,
@@ -477,6 +480,14 @@ impl Reasoner {
     /// and opens no session.
     pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
         match question {
+            Question::ObjectPropertyClassification { properties } => {
+                let expected = self.object_property_classification_question()?;
+                if !matches!(expected, Question::ObjectPropertyClassification { properties: ref names } if names == properties)
+                {
+                    return Err(EntailError::Parse("object-property classification question differs from the source property universe".to_owned()));
+                }
+                let _prepared = self.prepare_object_properties()?;
+            }
             Question::ClassSatisfiability { class } | Question::InstanceRetrieval { class } => {
                 self.concept_of(class)?;
             }

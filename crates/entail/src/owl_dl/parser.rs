@@ -67,6 +67,7 @@
 //! propagates — rather than a stack overflow, which is not a refusal at all: the process
 //! aborts, nothing unwinds, and a host embedding this library dies with it.
 
+use super::property_kinds::{ANNOTATION, ANY, DATA, LOGICAL, OBJECT, PropertyKinds};
 use super::syntax::{Kind as SyntaxKind, Syntax};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -424,6 +425,7 @@ pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
 /// concept-interning [`ConceptTable`] is *not* needed here (extraction returns a
 /// [`Concept`] tree; interning is the caller's concern).
 pub(crate) struct CeExtractor<'a> {
+    property_kinds: RefCell<PropertyKinds>,
     syntax: RefCell<Syntax>,
     index: &'a TripleIndex,
     interner: &'a Interner,
@@ -478,6 +480,7 @@ impl<'a> CeExtractor<'a> {
     ) -> Self {
         Self {
             syntax: RefCell::new(Syntax::default()),
+            property_kinds: RefCell::new(PropertyKinds::default()),
             index,
             interner,
             v,
@@ -490,6 +493,75 @@ impl<'a> CeExtractor<'a> {
             counted_roles: BTreeSet::new(),
             stop,
         }
+    }
+
+    /// Record only named source operands; an inverse expression names its operand.
+    fn property(&self, node: u32, allowed: u8) -> Option<u32> {
+        let (property, allowed) = if matches!(self.interner.value(node), TermValue::Blank { .. }) {
+            let target = self
+                .index
+                .get(&node)?
+                .get(&self.v.inverse_of)?
+                .first()
+                .copied()?;
+            (target, allowed & OBJECT)
+        } else {
+            (node, allowed)
+        };
+        let TermValue::Iri(iri) = self.interner.value(property) else {
+            return None;
+        };
+        let mut kinds = self.property_kinds.borrow_mut();
+        kinds.constrain(property, allowed);
+        for (declaration, kind) in [
+            (OWL_OBJECTPROPERTY, OBJECT),
+            (OWL_DATATYPEPROPERTY, DATA),
+            (OWL_ANNOTATIONPROPERTY, ANNOTATION),
+        ] {
+            if self
+                .interner
+                .id_of_iri(declaration)
+                .is_some_and(|ty| self.has_type(property, ty))
+            {
+                kinds.constrain(property, kind);
+            }
+        }
+        if [
+            purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY,
+            OWL_BOTTOMOBJECTPROPERTY,
+        ]
+        .contains(&iri.as_str())
+        {
+            kinds.constrain(property, OBJECT);
+        }
+        if [
+            purrdf_iri::vocab::owl::TOP_DATA_PROPERTY,
+            OWL_BOTTOMDATAPROPERTY,
+        ]
+        .contains(&iri.as_str())
+        {
+            kinds.constrain(property, DATA);
+        }
+        Some(property)
+    }
+
+    fn property_link(&self, left: u32, right: u32, allowed: u8) {
+        if let (Some(left), Some(right)) =
+            (self.property(left, allowed), self.property(right, allowed))
+        {
+            self.property_kinds.borrow_mut().link(left, right);
+        }
+    }
+
+    fn assertion_property(&self, property: u32, target: u32) {
+        let kind = if self.has_type(property, self.v.annotation_property) {
+            ANNOTATION
+        } else if matches!(self.interner.value(target), TermValue::Literal { .. }) {
+            DATA
+        } else {
+            OBJECT
+        };
+        self.property(property, kind);
     }
 
     /// Refuse promptly when the governed caller has cancelled reverse mapping.
@@ -997,16 +1069,51 @@ impl<'a> CeExtractor<'a> {
             self.boundaries.insert(construct);
         }
         let role = self.role_of(r)?;
+        self.property(r, LOGICAL);
+        if self
+            .index
+            .get(&node)
+            .is_some_and(|predicates| predicates.contains_key(&self.v.on_class))
+        {
+            self.property(r, OBJECT);
+        }
+        if self
+            .index
+            .get(&node)
+            .is_some_and(|predicates| predicates.contains_key(&self.v.on_data_range))
+        {
+            self.property(r, DATA);
+        }
         if let Some(c) = self.get(node, self.v.some_values) {
-            return Ok(Concept::Some(role, Box::new(self.expr(c)?)));
+            let filler = self.expr(c)?;
+            self.property(
+                r,
+                if matches!(filler, Concept::Data(_)) {
+                    DATA
+                } else {
+                    OBJECT
+                },
+            );
+            return Ok(Concept::Some(role, Box::new(filler)));
         }
         if let Some(c) = self.get(node, self.v.all_values) {
-            return Ok(Concept::All(role, Box::new(self.expr(c)?)));
+            let filler = self.expr(c)?;
+            self.property(
+                r,
+                if matches!(filler, Concept::Data(_)) {
+                    DATA
+                } else {
+                    OBJECT
+                },
+            );
+            return Ok(Concept::All(role, Box::new(filler)));
         }
         if let Some(a) = self.get(node, self.v.has_value) {
+            self.assertion_property(r, a);
             return Ok(Concept::Some(role, Box::new(Concept::Nominal(vec![a]))));
         }
         if let Some(lit) = self.get(node, self.v.has_self) {
+            self.property(r, OBJECT);
             self.counted_roles.insert(role);
             return Ok(self.self_restriction(role, lit));
         }
@@ -1204,13 +1311,17 @@ impl<'a> CeExtractor<'a> {
         Some(object)
     }
 
-    /// Whether `s rdf:type o` is asserted.
-    fn is_typed(&self, s: u32, o: u32) -> bool {
-        let holds = self
-            .index
+    /// Read declaration metadata without adding a semantic proof premise.
+    fn has_type(&self, s: u32, o: u32) -> bool {
+        self.index
             .get(&s)
             .and_then(|m| m.get(&self.v.ty))
-            .is_some_and(|os| os.contains(&o));
+            .is_some_and(|os| os.contains(&o))
+    }
+
+    /// Whether `s rdf:type o` is asserted.
+    fn is_typed(&self, s: u32, o: u32) -> bool {
+        let holds = self.has_type(s, o);
         if holds {
             self.syntax.borrow_mut().triple(s, self.v.ty, o);
         }
@@ -1310,6 +1421,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         let mut acc = Accums::default();
         let mut ranges = DataRangeTable::default();
         let syntax;
+        let property_kinds;
         {
             let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
             // The n-ary axioms are stated as a node carrying a list or a reification, so they
@@ -1391,6 +1503,16 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                     break;
                 }
             }
+            if let Some(program) = &role_program {
+                for chain in &program.source.chains {
+                    for role in std::iter::once(&chain.head).chain(&chain.body) {
+                        ce.poll().map_err(EntailError::with_read_error)?;
+                        let (Role::Named(property) | Role::Inv(property)) = *role;
+                        ce.property(property, OBJECT);
+                    }
+                }
+            }
+            property_kinds = ce.property_kinds.take();
             syntax = ce.into_syntax().map_err(EntailError::with_read_error)?;
         }
 
@@ -1469,6 +1591,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         poll(stop)?;
         let source_terms = u32::try_from(interner.len()).expect("term count fits u32");
         let mut kb = Kb {
+            property_kinds,
             syntax,
             query_syntax: Syntax::query(),
             inputs: acc.inputs,
@@ -1798,6 +1921,12 @@ fn axiom_node(
     } else if axiom_class == v.all_disjoint_properties {
         if let Some(head) = ce.get(node, v.members) {
             let members = ce.node_list(head)?;
+            for &member in &members {
+                ce.property(member, LOGICAL);
+            }
+            for pair in members.windows(2) {
+                ce.property_link(pair[0], pair[1], LOGICAL);
+            }
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
                     ce.poll()?;
@@ -1841,12 +1970,14 @@ fn negative_assertion(
     ) else {
         return Ok(());
     };
-    let Some(target) = ce
-        .get(node, v.target_individual)
-        .or_else(|| ce.get(node, v.target_value))
-    else {
+    let (target, kind) = if let Some(target) = ce.get(node, v.target_individual) {
+        (target, OBJECT)
+    } else if let Some(target) = ce.get(node, v.target_value) {
+        (target, DATA)
+    } else {
         return Ok(());
     };
+    ce.property(property, kind);
     let concept = Concept::All(
         Role::Named(property),
         Box::new(Concept::Not(Box::new(Concept::Nominal(vec![target])))),
@@ -1890,6 +2021,7 @@ fn axiom(
     } else if p == v.disjoint_union {
         disjoint_union(ce, table, acc, s, o)?;
     } else if p == v.domain {
+        ce.property(s, ANY);
         let d = ce.expr(o)?;
         gci(
             table,
@@ -1899,6 +2031,16 @@ fn axiom(
         );
     } else if p == v.range {
         let d = ce.expr(o)?;
+        ce.property(
+            s,
+            if ce.has_type(s, v.annotation_property) {
+                ANNOTATION
+            } else if matches!(d, Concept::Data(_)) {
+                DATA
+            } else {
+                OBJECT
+            },
+        );
         gci(
             table,
             acc,
@@ -1906,6 +2048,7 @@ fn axiom(
             Concept::All(Role::Named(s), Box::new(d)),
         );
     } else if p == v.inverse_of {
+        ce.property_link(s, o, OBJECT);
         for (left, right) in [(s, o), (o, s)] {
             if acc.inverses.entry(left).or_default().insert(right) {
                 acc.inputs
@@ -1913,6 +2056,7 @@ fn axiom(
             }
         }
     } else if p == v.equiv_prop {
+        ce.property_link(s, o, LOGICAL);
         for (sup, sub) in [(s, o), (o, s)] {
             if acc.role_sub.entry(sup).or_default().insert(sub) {
                 acc.inputs
@@ -1920,6 +2064,7 @@ fn axiom(
             }
         }
     } else if p == v.sub_prop {
+        ce.property_link(s, o, ANY);
         // s ⊑ o : `o` has sub-role `s`.
         if acc.role_sub.entry(o).or_default().insert(s) {
             acc.inputs.record(
@@ -1928,6 +2073,7 @@ fn axiom(
             )?;
         }
     } else if p == v.property_disjoint_with {
+        ce.property_link(s, o, LOGICAL);
         for (left, right) in [(s, o), (o, s)] {
             if acc.disjoint_roles.insert((left, right)) {
                 acc.inputs
@@ -1938,6 +2084,9 @@ fn axiom(
         let class = ce.expr(s)?;
         let cid = table.intern(class);
         let properties = ce.node_list(o)?;
+        for &property in &properties {
+            ce.property(property, LOGICAL);
+        }
         acc.inputs
             .record(Input::Key(acc.keys.len()), Source::Anchor(acc.source))?;
         acc.keys.push((cid, properties));
@@ -1960,7 +2109,7 @@ fn axiom(
     } else if p == v.ty {
         type_assertion(ce, table, acc, v, interner, s, o)?;
     } else {
-        role_or_boundary(acc, interner, v, s, p, o)?;
+        role_or_boundary(ce, acc, interner, v, s, p, o)?;
     }
     Ok(())
 }
@@ -2012,6 +2161,7 @@ fn disjoint_union(
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
 fn role_or_boundary(
+    ce: &CeExtractor<'_>,
     acc: &mut Accums,
     interner: &Interner,
     v: &Vocab,
@@ -2026,6 +2176,7 @@ fn role_or_boundary(
             Input::Role(acc.abox_roles.len()),
             Source::Anchor(acc.source),
         )?;
+        ce.assertion_property(p, o);
         acc.abox_roles.push((s, p, o));
         acc.name(interner, s);
         acc.name(interner, o);
@@ -2053,6 +2204,7 @@ fn role_or_boundary(
                 Input::Role(acc.abox_roles.len()),
                 Source::Anchor(acc.source),
             )?;
+            ce.assertion_property(p, o);
             acc.abox_roles.push((s, p, o));
             acc.name(interner, s);
             acc.name(interner, o);
@@ -2071,6 +2223,26 @@ fn type_assertion(
     s: u32,
     o: u32,
 ) -> Result<(), EntailError> {
+    // Source declarations are inventory evidence even when they state no axiom.
+    if matches!(interner.value(o), TermValue::Iri(iri) if [OWL_OBJECTPROPERTY, OWL_DATATYPEPROPERTY, OWL_ANNOTATIONPROPERTY].contains(&iri.as_str()))
+    {
+        ce.property(s, ANY);
+    }
+    if o == v.functional {
+        ce.property(s, LOGICAL);
+    }
+    if [
+        v.inverse_functional,
+        v.symmetric,
+        v.transitive,
+        v.asymmetric,
+        v.reflexive,
+        v.irreflexive,
+    ]
+    .contains(&o)
+    {
+        ce.property(s, OBJECT);
+    }
     // --- The role characteristics, each a global axiom or a graph-level constraint. ---
     if o == v.functional {
         // ⊤ ⊑ ≤1 s.⊤.

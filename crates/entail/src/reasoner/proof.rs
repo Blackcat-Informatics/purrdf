@@ -143,11 +143,13 @@ pub enum Service {
     /// [`extract_module`](super::extract_module) — syntactic, so it makes no tableau
     /// run and its proof term carries none. See the [module docs](self).
     ModuleExtraction,
+    /// Native semantic object-property classification.
+    ObjectPropertyClassification,
 }
 
 impl Service {
     /// Every service, in wire order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Consistency,
         Self::ClassSatisfiability,
         Self::Classification,
@@ -155,6 +157,7 @@ impl Service {
         Self::InstanceRetrieval,
         Self::AxiomEntailment,
         Self::ModuleExtraction,
+        Self::ObjectPropertyClassification,
     ];
 
     /// A short, stable name.
@@ -168,6 +171,7 @@ impl Service {
             Self::InstanceRetrieval => "instance-retrieval",
             Self::AxiomEntailment => "axiom-entailment",
             Self::ModuleExtraction => "module-extraction",
+            Self::ObjectPropertyClassification => "object-property-classification",
         }
     }
 
@@ -188,6 +192,11 @@ impl Service {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Question {
+    /// Semantic classification over the source-fixed named object properties.
+    ObjectPropertyClassification {
+        /// Canonically ordered named object properties, including top and bottom.
+        properties: Vec<TermValue>,
+    },
     /// Does the ontology have a model at all.
     Consistency,
     /// Can this class have an instance in some model.
@@ -232,6 +241,7 @@ impl Question {
     #[must_use]
     pub const fn service(&self) -> Service {
         match self {
+            Self::ObjectPropertyClassification { .. } => Service::ObjectPropertyClassification,
             Self::Consistency => Service::Consistency,
             Self::ClassSatisfiability { .. } => Service::ClassSatisfiability,
             Self::Classification { .. } => Service::Classification,
@@ -1089,6 +1099,7 @@ impl ServiceProof {
                 });
             }
             if causal.is_some()
+                || matches!(self.question, Question::ObjectPropertyClassification { .. })
                 || proof
                     .merges()
                     .iter()
@@ -1704,6 +1715,22 @@ pub fn hierarchy_claims(hierarchy: &ClassHierarchy) -> Vec<ClaimSubject> {
         .collect()
 }
 
+/// The established nonreflexive inclusions of an object-property hierarchy.
+/// Equivalence and exact direct edges are views of this same relation.
+#[must_use]
+pub fn object_hierarchy_claims(hierarchy: &super::ObjectPropertyHierarchy) -> Vec<ClaimSubject> {
+    hierarchy
+        .subsumptions()
+        .iter()
+        .map(|(sub, sup)| ClaimSubject::Axiom {
+            axiom: Box::new(DlAxiom::SubObjectPropertyOf {
+                sub: sub.clone(),
+                sup: sup.clone(),
+            }),
+        })
+        .collect()
+}
+
 /// The claims a [`Realization`] reports.
 ///
 /// [`Realization::types`] — the direct types are the subset of them no other entailed type
@@ -1866,6 +1893,10 @@ fn encode_terms(out: &mut Vec<u8>, terms: &[TermValue]) {
 /// Append a [`Question`].
 fn encode_question(out: &mut Vec<u8>, question: &Question) {
     match question {
+        Question::ObjectPropertyClassification { properties } => {
+            out.push(7);
+            encode_terms(out, properties);
+        }
         Question::Consistency => out.push(0),
         Question::ClassSatisfiability { class } => {
             out.push(1);
@@ -2224,6 +2255,9 @@ fn decode_question(reader: &mut Reader<'_>) -> Result<Question, DlProofError> {
                 .ok_or_else(|| malformed("module method ordinal outside ModuleMethod::ALL"))?;
             Ok(Question::ModuleExtraction { signature, method })
         }
+        7 => Ok(Question::ObjectPropertyClassification {
+            properties: decode_terms(reader)?,
+        }),
         _ => Err(malformed("unknown question kind")),
     }
 }
@@ -2788,6 +2822,40 @@ mod tests {
             ),
             Err(DlProofError::WrongQuestion { .. })
         ));
+    }
+
+    /// An object-hierarchy run cannot be relabelled as the opposite inclusion.
+    #[test]
+    fn object_property_classification_refuses_a_forged_inclusion_binding() {
+        let ontology = taxonomy();
+        let mut producer = Reasoner::with_proofs(&ontology).unwrap();
+        let question = producer.object_property_classification_question().unwrap();
+        let answer = producer.classify_object_properties().unwrap();
+        let mut forged = answer.proof().unwrap().clone();
+        let claim = forged
+            .claims
+            .iter_mut()
+            .find(|claim| claim.is_established())
+            .unwrap();
+        let ClaimSubject::Axiom { axiom } = &mut claim.subject else {
+            panic!("inclusion claim");
+        };
+        let DlAxiom::SubObjectPropertyOf { sub, sup } = axiom.as_mut() else {
+            panic!("property inclusion");
+        };
+        std::mem::swap(sub, sup);
+        let mut consumer = Reasoner::with_proofs(&ontology).unwrap();
+        consumer.prepare(&question).unwrap();
+        assert!(
+            forged
+                .verify(
+                    &ontology,
+                    &question,
+                    Some(answer.certificate()),
+                    &consumer.proof_context().unwrap()
+                )
+                .is_err()
+        );
     }
 
     /// A CLASSIFY proof missing a reported subsumption is rejected.
