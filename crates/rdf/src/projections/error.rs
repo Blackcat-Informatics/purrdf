@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use purrdf_hash::error::{ErrorValue, NativeError};
+
 /// Stable category for a projection failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -47,7 +49,14 @@ pub struct ProjectionError {
     kind: ProjectionErrorKind,
     message: String,
     path: Option<String>,
-    storage: Option<purrdf_lex::allocation::StorageError>,
+    cause: Option<ProjectionCause>,
+}
+
+/// The original native refusal, kept independently of its human-readable context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProjectionCause {
+    Storage(purrdf_lex::allocation::StorageError),
+    Xsd(Box<purrdf_xsd::XsdError>),
 }
 
 impl ProjectionError {
@@ -60,7 +69,7 @@ impl ProjectionError {
             kind,
             message: message.into(),
             path: None,
-            storage: None,
+            cause: None,
         }
     }
 
@@ -89,6 +98,21 @@ impl ProjectionError {
         Self::new(ProjectionErrorKind::Integrity, message)
     }
 
+    /// Preserve a metadata facet's native value-space failure and existing context.
+    pub(crate) fn csvw_facet(error: purrdf_xsd::XsdError) -> Self {
+        let mut result = Self::integrity(format!("invalid CSVW datatype facet: {error}"));
+        result.cause = Some(ProjectionCause::Xsd(Box::new(error)));
+        result
+    }
+
+    fn native_cause(&self) -> Option<&(dyn NativeError + 'static)> {
+        match &self.cause {
+            Some(ProjectionCause::Storage(error)) => Some(error),
+            Some(ProjectionCause::Xsd(error)) => Some(error.as_ref()),
+            None => None,
+        }
+    }
+
     #[must_use]
     pub(crate) fn at_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
@@ -112,7 +136,21 @@ impl ProjectionError {
 
     /// The original logical capacity or physical storage failure, if present.
     pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
-        self.storage
+        match &self.cause {
+            Some(ProjectionCause::Storage(error)) => Some(*error),
+            Some(ProjectionCause::Xsd(_)) | None => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProjectionError {
+    purrdf_hash::error_visit! {
+        @record self { kind, message, path, cause } => "rdf-projection" {
+            "kind" => Code(self.kind.as_str()),
+            "message" => Text(&self.message),
+            "path" => Value(self.path.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "cause" => Value(self.native_cause().map_or(ErrorValue::Absent, |cause| ErrorValue::Cause(cause))),
+        }
     }
 }
 
@@ -129,7 +167,7 @@ impl fmt::Display for ProjectionError {
 impl From<purrdf_lex::allocation::StorageError> for ProjectionError {
     fn from(error: purrdf_lex::allocation::StorageError) -> Self {
         let mut result = Self::new(ProjectionErrorKind::Storage, error.to_string());
-        result.storage = Some(error);
+        result.cause = Some(ProjectionCause::Storage(error));
         result
     }
 }
@@ -142,13 +180,7 @@ impl From<purrdf_core::RdfDiagnostic> for ProjectionError {
     }
 }
 
-impl std::error::Error for ProjectionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.storage
-            .as_ref()
-            .map(|error| error as &dyn std::error::Error)
-    }
-}
+purrdf_hash::error_sources!(ProjectionError, native native_cause);
 
 #[cfg(test)]
 mod tests {
@@ -177,6 +209,13 @@ mod tests {
                     .downcast_ref::<StorageError>(),
                 Some(&cause)
             );
+            let inspected = purrdf_testkit::error_capture::Capture::read(&direct);
+            assert!(matches!(
+                inspected.field("kind"),
+                ErrorValue::Code("storage")
+            ));
+            let expected = purrdf_testkit::error_capture::Capture::read(&cause);
+            assert_eq!(inspected.child("cause").code, expected.code);
         }
     }
 

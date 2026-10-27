@@ -521,12 +521,7 @@ impl core::fmt::Display for Diagnostic {
     }
 }
 
-impl std::error::Error for Diagnostic {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.native_cause()
-            .map(|cause| cause as &dyn std::error::Error)
-    }
-}
+purrdf_hash::error_sources!(Diagnostic, native native_cause);
 
 impl purrdf_hash::error::StructuredError for Diagnostic {
     purrdf_hash::error_visit! {
