@@ -53,6 +53,36 @@ withholds every conclusion that mentions a witness at the materialization
 boundary and reports the withholding, rather than inventing an answer the caller
 did not ask for.
 
+## Querying a positive rule program
+
+`datalog::demand::evaluate_demanded` answers one `ClauseAtom<3>` goal over
+`DlClause<3>` rules and a consumed `RelationStore<D, 3>`. A bound subject or
+object propagates through recursive rules, so asking what one place contains
+can avoid deriving the closure of disconnected places. The transformation emits
+ordinary clauses and runs the existing compiler and semi-naive evaluator.
+
+The returned `DemandAnswer` owns the original dictionary and complete matching
+triples, exposed through `answers()`. Their IDs keep their original meaning;
+`dictionary()` provides read-only resolution. Authored inputs can be dropped.
+Constants and repeated variables in the original goal remain filters even when
+a broader demand relation is shared. The internal closure is not exposed as a
+complete model of the authored program. Dictionary failures remain errors during
+preparation, execution and answer access, including empty answers.
+
+This entry point admits positive relational rules with fixed IRI predicates and
+one range-restricted atomic head. It validates the whole program before execution,
+including unreachable rules. Guards, base or model reads, negation, variable
+predicates and other head forms are refused. Quad rules and maintained demand
+revisions are outside this entry point's contract.
+
+Preparation and the vector returned by `answers()` use resident allocation.
+Execution uses the supplied `EvalOptions` and `StopSignal`; cancellation or an
+exceeded budget returns no partial answer owner. `work()` and `budget()` describe
+the transformed execution, including internal demand facts and all original
+input facts. Internal predicates use a framed native digest of the program, goal
+and sorted binding descriptors, with collision checks against the full dictionary
+and authored constants before any term is minted.
+
 ## Determinism
 
 Use `Guard::not_equal("?left", "?right")` for native term inequality, without a
