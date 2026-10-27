@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Complete answers to one positive triple goal without materializing unrelated rules.
+//! Complete answers to one positive triple or quad goal without materializing unrelated rules.
 //!
-//! A magic-set transformation carries bound subject/object coordinates through
+//! A magic-set transformation carries bound subject/object/graph coordinates through
 //! authored body order. Subsuming adornments share one demand relation; the
 //! original atoms and final goal retain constants and repeated-variable equality.
 //! The transformed clauses run through the ordinary compiler and semi-naive engine.
@@ -24,7 +24,7 @@ use crate::seminaive::{
     BudgetReport, EvalError, EvalOptions, Evaluation, WorkReport, compile, evaluate_guarded,
 };
 use crate::stop::StopSignal;
-use crate::store::{Bound, RelationStore};
+use crate::store::{Arity, Bound, RelationStore, StoreShape};
 use purrdf_hash::{Domain, frame::frame_le_into};
 
 /// A fragment refusal before any transformed execution or source mutation.
@@ -120,12 +120,18 @@ impl<E: std::error::Error + 'static> std::error::Error for DemandError<E> {
 /// Original term IDs and dictionary ownership are preserved. Internal facts are
 /// intentionally inaccessible as a model of the authored program.
 #[derive(Debug)]
-pub struct DemandAnswer<D: TermDictionary> {
-    evaluation: Evaluation<D, 3>,
-    goal: ClauseAtom<3>,
+pub struct DemandAnswer<D: TermDictionary, const N: usize = 3>
+where
+    Arity<N>: StoreShape<N>,
+{
+    evaluation: Evaluation<D, N>,
+    goal: ClauseAtom<N>,
 }
 
-impl<D: TermDictionary> DemandAnswer<D> {
+impl<D: TermDictionary, const N: usize> DemandAnswer<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The original dictionary, extended only by terms of the transformed execution.
     pub fn dictionary(&self) -> &D {
         self.evaluation.facts().interner()
@@ -141,18 +147,18 @@ impl<D: TermDictionary> DemandAnswer<D> {
         self.evaluation.budget()
     }
 
-    /// Complete matching triples in deterministic native arrangement order.
+    /// Complete matching rows in deterministic native partition and arrangement order.
     ///
     /// The returned vector uses resident allocation. IDs borrow their meaning
     /// from this owner's dictionary. Constants and repeated variables are checked
     /// against the original goal even when a broader demand was shared.
     /// # Errors
     /// Preserves dictionary lookup and read failures, including an empty answer.
-    pub fn answers(&self) -> Result<Vec<[D::Id; 3]>, D::Error> {
+    pub fn answers(&self) -> Result<Vec<[D::Id; N]>, D::Error> {
         let dictionary = self.dictionary();
         dictionary.check_read()?;
         let terms = self.goal.terms();
-        let mut constants = [None; 3];
+        let mut constants = [None; N];
         for (at, term) in terms.iter().enumerate() {
             if let Some(surface) = term.surface() {
                 let Some(id) = dictionary.lookup_term(&surface)? else {
@@ -162,9 +168,8 @@ impl<D: TermDictionary> DemandAnswer<D> {
                 constants[at] = Some(id);
             }
         }
-        let repeated = self.goal.subject().is_var() && self.goal.subject() == self.goal.object();
         let mut answers = Vec::new();
-        if let Some(partition) = self.evaluation.facts().partition_for(&constants) {
+        for partition in self.evaluation.facts().partitions_for(constants) {
             let bound = match (constants[0], constants[2]) {
                 (Some(subject), Some(object)) => Bound::Both(subject, object),
                 (Some(subject), None) => Bound::Subject(subject),
@@ -173,8 +178,12 @@ impl<D: TermDictionary> DemandAnswer<D> {
             };
             let mut rows = partition.select(bound);
             while let Some((subject, object, _)) = rows.next() {
-                if !repeated || subject == object {
-                    answers.push(partition.row(subject, object));
+                let row = partition.row(subject, object);
+                if terms.iter().enumerate().all(|(at, term)| {
+                    !term.is_var()
+                        || (0..at).all(|before| terms[before] != *term || row[before] == row[at])
+                }) {
+                    answers.push(row);
                 }
             }
         }
@@ -183,7 +192,7 @@ impl<D: TermDictionary> DemandAnswer<D> {
     }
 }
 
-/// Answer one pure positive, fixed-predicate, graph-free goal with demand propagation.
+/// Answer one pure positive, fixed-predicate triple or quad goal with demand propagation.
 ///
 /// The complete authored program and goal are validated before dictionary mutation
 /// or execution. Atomic heads must be range-restricted; guards, base/model reads,
@@ -192,13 +201,16 @@ impl<D: TermDictionary> DemandAnswer<D> {
 /// # Errors
 /// Returns an unsupported fragment, namespace/dictionary failure, or the original
 /// compiler/evaluator refusal. A budget or cancellation refusal yields no answer owner.
-pub fn evaluate_demanded<D: TermDictionary>(
-    rules: &[DlClause<3>],
-    goal: &ClauseAtom<3>,
-    edb: RelationStore<D, 3>,
+pub fn evaluate_demanded<D: TermDictionary, const N: usize>(
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
+    edb: RelationStore<D, N>,
     options: &EvalOptions,
     stop: Option<&dyn StopSignal>,
-) -> Result<DemandAnswer<D>, DemandError<D::Error>> {
+) -> Result<DemandAnswer<D, N>, DemandError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     validate(rules, goal)?;
     let descriptors = descriptors(rules, goal);
     let names = names(&descriptors, rules, goal, edb.interner())?;
@@ -212,7 +224,10 @@ pub fn evaluate_demanded<D: TermDictionary>(
     })
 }
 
-fn validate<E>(rules: &[DlClause<3>], goal: &ClauseAtom<3>) -> Result<(), DemandError<E>> {
+fn validate<E, const N: usize>(
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
+) -> Result<(), DemandError<E>> {
     for (index, rule) in rules.iter().enumerate() {
         let refuse = |reason| DemandError::Unsupported {
             rule: Some(index),
@@ -243,7 +258,7 @@ fn validate<E>(rules: &[DlClause<3>], goal: &ClauseAtom<3>) -> Result<(), Demand
     validate_atom(goal).map_err(|reason| DemandError::Unsupported { rule: None, reason })
 }
 
-fn validate_atom(atom: &ClauseAtom<3>) -> Result<(), Unsupported> {
+fn validate_atom<const N: usize>(atom: &ClauseAtom<N>) -> Result<(), Unsupported> {
     if atom.is_negated() {
         return Err(Unsupported::Negation);
     }
@@ -262,25 +277,29 @@ struct Descriptor {
     pattern: BindingPattern,
 }
 
-fn arguments(atom: &ClauseAtom<3>) -> [&ClauseTerm; 2] {
-    [atom.subject(), atom.object()]
+fn arguments<const N: usize>(atom: &ClauseAtom<N>) -> impl Iterator<Item = &ClauseTerm> {
+    atom.terms()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, term)| (at != 1).then_some(term))
 }
-fn pattern(atom: &ClauseAtom<3>, bound: &BTreeSet<String>) -> BindingPattern {
+fn pattern<const N: usize>(atom: &ClauseAtom<N>, bound: &BTreeSet<String>) -> BindingPattern {
     BindingPattern::from_bools(
         arguments(atom).map(|term| term.variable().is_none_or(|name| bound.contains(name))),
     )
 }
-fn bind(atom: &ClauseAtom<3>, bound: &mut BTreeSet<String>) {
+fn bind<const N: usize>(atom: &ClauseAtom<N>, bound: &mut BTreeSet<String>) {
     bound.extend(
         arguments(atom)
-            .into_iter()
             .filter_map(ClauseTerm::variable)
             .map(str::to_owned),
     );
 }
-fn head_bindings(head: &ClauseAtom<3>, pattern: BindingPattern) -> BTreeSet<String> {
+fn head_bindings<const N: usize>(
+    head: &ClauseAtom<N>,
+    pattern: BindingPattern,
+) -> BTreeSet<String> {
     arguments(head)
-        .into_iter()
         .enumerate()
         .filter(|(at, _)| pattern.is_bound(*at))
         .filter_map(|(_, term)| term.variable().map(str::to_owned))
@@ -289,7 +308,7 @@ fn head_bindings(head: &ClauseAtom<3>, pattern: BindingPattern) -> BTreeSet<Stri
 
 /// Finite adornment closure followed by its minimal (most general) antichains.
 /// Keep discovered patterns monotonically: a broader pattern may expose new demands.
-fn descriptors(rules: &[DlClause<3>], goal: &ClauseAtom<3>) -> Vec<Descriptor> {
+fn descriptors<const N: usize>(rules: &[DlClause<N>], goal: &ClauseAtom<N>) -> Vec<Descriptor> {
     let definitions: BTreeSet<_> = rules
         .iter()
         // validate admitted one atomic head and an IRI predicate for every rule.
@@ -344,10 +363,10 @@ const NAMESPACE: Domain = Domain::new(b"purrdf-datalog/demand-predicates/v1");
 
 /// One digest, one common collision nonce and unique sorted ordinals avoid
 /// both existing dictionary terms and collisions between internal descriptors.
-fn names<D: TermDictionary>(
+fn names<D: TermDictionary, const N: usize>(
     descriptors: &[Descriptor],
-    rules: &[DlClause<3>],
-    goal: &ClauseAtom<3>,
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
     dictionary: &D,
 ) -> Result<Vec<String>, DemandError<D::Error>> {
     let authored: BTreeSet<_> = rules
@@ -395,26 +414,22 @@ fn names<D: TermDictionary>(
     }
 }
 
-fn demand_atom(
-    atom: &ClauseAtom<3>,
+fn demand_atom<const N: usize>(
+    atom: &ClauseAtom<N>,
     descriptor: &Descriptor,
     name: &str,
     unit: &str,
-) -> ClauseAtom<3> {
-    let [subject, object] = arguments(atom).map(Clone::clone);
-    ClauseAtom::triple(
-        if descriptor.pattern.is_bound(0) {
-            subject
-        } else {
-            ClauseTerm::iri(unit)
-        },
-        ClauseTerm::iri(name),
-        if descriptor.pattern.is_bound(1) {
-            object
-        } else {
-            ClauseTerm::iri(unit)
-        },
-    )
+) -> ClauseAtom<N> {
+    // Dense payload adornments [subject, object, graph] retain their native
+    // positions [0, 2, 3]. In particular, DefaultGraph never leaves its graph slot.
+    let mut positions = atom.terms().map(Clone::clone);
+    positions[1] = ClauseTerm::iri(name);
+    for (payload, at) in (0..N).filter(|at| *at != 1).enumerate() {
+        if !descriptor.pattern.is_bound(payload) {
+            positions[at] = ClauseTerm::iri(unit);
+        }
+    }
+    ClauseAtom::from_positions(positions)
 }
 
 fn select<'a>(
@@ -427,12 +442,12 @@ fn select<'a>(
     })
 }
 
-fn transform(
-    rules: &[DlClause<3>],
-    goal: &ClauseAtom<3>,
+fn transform<const N: usize>(
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
     descriptors: &[Descriptor],
     names: &[String],
-) -> Vec<DlClause<3>> {
+) -> Vec<DlClause<N>> {
     // names emits one ordinal per descriptor plus a unit ordinal, even for an empty set.
     let unit = names.last().expect("the unit has its own ordinal");
     // descriptors starts with the goal pattern; antichain reduction retains either

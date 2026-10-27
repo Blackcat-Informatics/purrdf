@@ -55,25 +55,32 @@ did not ask for.
 
 ## Querying a positive rule program
 
-`datalog::demand::evaluate_demanded` answers one `ClauseAtom<3>` goal over
-`DlClause<3>` rules and a consumed `RelationStore<D, 3>`. A bound subject or
-object propagates through recursive rules, so asking what one place contains
-can avoid deriving the closure of disconnected places. The transformation emits
+`datalog::demand::evaluate_demanded` answers one `ClauseAtom<N>` goal over
+`DlClause<N>` rules and a consumed `RelationStore<D, N>`, for triples (`N = 3`)
+or quads (`N = 4`). Bound subjects, objects and graph names propagate through
+recursive rules, so asking what one place or graph contains can avoid deriving
+disconnected closures. The transformation emits
 ordinary clauses and runs the existing compiler and semi-naive evaluator.
 
-The returned `DemandAnswer` owns the original dictionary and complete matching
-triples, exposed through `answers()`. Their IDs keep their original meaning;
+The returned `DemandAnswer<D, N>` owns the original dictionary and complete matching
+rows, exposed through `answers()` in subject/predicate/object/graph order (without
+the graph position for triples). Its default arity remains three. IDs keep their original meaning;
 `dictionary()` provides read-only resolution. Authored inputs can be dropped.
 Constants and repeated variables in the original goal remain filters even when
-a broader demand relation is shared. The internal closure is not exposed as a
+a broader demand relation is shared, including equalities between a graph and
+another position. A free graph visits every compatible partition; the default
+graph is a bound graph identity with its original empty-string surface, distinct
+from a free graph and internal demand terms. Authored rules retain their local or
+cross-graph relationships. The internal closure is not exposed as a
 complete model of the authored program. Dictionary failures remain errors during
 preparation, execution and answer access, including empty answers.
 
 This entry point admits positive relational rules with fixed IRI predicates and
 one range-restricted atomic head. It validates the whole program before execution,
 including unreachable rules. Guards, base or model reads, negation, variable
-predicates and other head forms are refused. Quad rules and maintained demand
-revisions are outside this entry point's contract.
+predicates and other head forms are refused. A head graph variable must have a
+positive relational binder, like every other head variable. Maintained demand
+revisions remain outside this entry point's contract.
 
 Preparation and the vector returned by `answers()` use resident allocation.
 Execution uses the supplied `EvalOptions` and `StopSignal`; cancellation or an

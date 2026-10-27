@@ -9,14 +9,14 @@ use purrdf_datalog::dictionary::{DictionaryError, DictionaryTerm, TermDictionary
 use purrdf_datalog::guard::{Guard, NoGuards};
 use purrdf_datalog::id::TermId;
 use purrdf_datalog::seminaive::{EvalError, EvalOptions, compile, evaluate_guarded};
-use purrdf_datalog::store::{RelationStore, TermInterner};
-use std::collections::BTreeSet;
+use purrdf_datalog::store::{Arity, RelationStore, StoreShape, TermInterner};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-type Store = RelationStore<TermInterner, 3>;
+type Store<const N: usize = 3> = RelationStore<TermInterner, N>;
 fn term(value: &str) -> ClauseTerm {
     if value.starts_with('?') {
         ClauseTerm::var(value)
@@ -50,12 +50,22 @@ fn store(edges: &[(usize, usize)]) -> Store {
     }
     store
 }
-fn surfaces<D: TermDictionary>(dictionary: &D, rows: Vec<[D::Id; 3]>) -> BTreeSet<[String; 3]> {
+fn surfaces<D: TermDictionary, const N: usize>(
+    dictionary: &D,
+    rows: Vec<[D::Id; N]>,
+) -> BTreeSet<[String; N]> {
     rows.into_iter()
         .map(|row| row.map(|id| dictionary.resolve_term(id).unwrap().as_ref().to_owned()))
         .collect()
 }
-fn full(rules: &[DlClause<3>], goal: &ClauseAtom<3>, input: Store) -> BTreeSet<[String; 3]> {
+fn full<const N: usize>(
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
+    input: Store<N>,
+) -> BTreeSet<[String; N]>
+where
+    Arity<N>: StoreShape<N>,
+{
     let evaluated = evaluate_guarded(
         &compile(rules.to_vec()).unwrap(),
         input,
@@ -69,13 +79,18 @@ fn full(rules: &[DlClause<3>], goal: &ClauseAtom<3>, input: Store) -> BTreeSet<[
         .rows_from(0)
         .filter_map(|(_, row)| {
             let surface = row.map(|id| evaluated.facts().interner().resolve(id).to_owned());
-            let matches = goal
-                .terms()
-                .into_iter()
-                .zip(&surface)
-                .all(|(term, value)| term.surface().is_none_or(|constant| constant == *value));
-            let repeated = goal.subject().is_var() && goal.subject() == goal.object();
-            (matches && (!repeated || row[0] == row[2])).then_some(surface)
+            let mut variables = BTreeMap::new();
+            let matches =
+                goal.terms()
+                    .into_iter()
+                    .zip(&surface)
+                    .all(|(term, value)| match term.variable() {
+                        Some(name) => variables
+                            .insert(name, value)
+                            .is_none_or(|previous| previous == value),
+                        None => term.surface().as_ref() == Some(value),
+                    });
+            matches.then_some(surface)
         })
         .collect()
 }
@@ -87,6 +102,316 @@ fn compare(rules: &[DlClause<3>], goal: &ClauseAtom<3>, edges: &[(usize, usize)]
         surfaces(answer.dictionary(), answer.answers().unwrap()),
         expected,
         "goal {goal:?}"
+    );
+}
+
+fn quad(subject: &str, predicate: &str, object: &str, graph: &str) -> ClauseAtom<4> {
+    ClauseAtom::quad(
+        term(subject),
+        term(predicate),
+        term(object),
+        if graph.is_empty() {
+            ClauseTerm::DefaultGraph
+        } else {
+            term(graph)
+        },
+    )
+}
+
+fn quad_store(edges: &[(&str, &str, &str)]) -> Store<4> {
+    let mut store = Store::with_dictionary(TermInterner::default());
+    for &(subject, object, graph) in edges {
+        let row = quad(subject, "edge", object, graph)
+            .terms()
+            .map(|term| term.surface().unwrap());
+        store
+            .insert_terms(row.each_ref().map(|value| DictionaryTerm::Surface(value)))
+            .unwrap();
+    }
+    store
+}
+
+fn quad_rules() -> Vec<DlClause<4>> {
+    closure::closure_rules("edge", "reach", |s, p, o| quad(s, p, o, "?g"))
+}
+
+#[test]
+fn quad_recursion_and_mutual_recursion_preserve_all_eight_binding_patterns() {
+    let mut rules = quad_rules();
+    rules.extend([
+        DlClause::datalog(
+            quad("?x", "alias", "?y", "?g"),
+            vec![quad("?x", "reach", "?y", "?g")],
+        ),
+        DlClause::datalog(
+            quad("?x", "reach", "?y", "?g"),
+            vec![quad("?x", "alias", "?y", "?g")],
+        ),
+    ]);
+    let edges = [
+        ("0", "1", ""),
+        ("1", "2", ""),
+        ("0", "3", "g"),
+        ("3", "2", "g"),
+        ("4", "5", "h"),
+    ];
+    let closure: BTreeSet<_> = [
+        ("0", "1", ""),
+        ("0", "2", ""),
+        ("1", "2", ""),
+        ("0", "3", "g"),
+        ("0", "2", "g"),
+        ("3", "2", "g"),
+        ("4", "5", "h"),
+    ]
+    .map(|(s, o, g)| {
+        quad(s, "reach", o, g)
+            .terms()
+            .map(|term| term.surface().unwrap())
+    })
+    .into_iter()
+    .collect();
+    for graph in ["", "g", "h", "missing"] {
+        for pattern in 0..8 {
+            let goal = quad(
+                if pattern & 1 == 0 { "?x" } else { "0" },
+                "reach",
+                if pattern & 2 == 0 { "?y" } else { "2" },
+                if pattern & 4 == 0 { "?g" } else { graph },
+            );
+            let expected: BTreeSet<_> = closure
+                .iter()
+                .filter(|row| {
+                    goal.terms().iter().zip(*row).all(|(term, value)| {
+                        term.surface().is_none_or(|constant| constant == *value)
+                    })
+                })
+                .cloned()
+                .collect();
+            let answer = evaluate_demanded(
+                &rules,
+                &goal,
+                quad_store(&edges),
+                &EvalOptions::default(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                surfaces(answer.dictionary(), answer.answers().unwrap()),
+                expected,
+                "{goal:?}"
+            );
+            assert_eq!(full(&rules, &goal, quad_store(&edges)), expected);
+            if pattern == 4 && graph.is_empty() {
+                let default = answer.dictionary().lookup("").unwrap();
+                assert!(
+                    answer
+                        .answers()
+                        .unwrap()
+                        .iter()
+                        .all(|row| row[3] == default)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cross_graph_recursion_shares_broader_demands_and_keeps_graph_equalities() {
+    let rules = vec![
+        DlClause::datalog(
+            quad("?x", "reach", "?y", "?g"),
+            vec![quad("?x", "edge", "?y", "?g")],
+        ),
+        DlClause::datalog(
+            quad("?x", "reach", "?y", "?g"),
+            vec![
+                quad("?x", "reach", "?z", "?previous"),
+                quad("?z", "edge", "?y", "?g"),
+            ],
+        ),
+    ];
+    let edges = [("0", "1", ""), ("1", "2", "left"), ("2", "3", "right")];
+    let goal = quad("0", "reach", "?y", "right");
+    let expected = BTreeSet::from([quad("0", "reach", "3", "right")
+        .terms()
+        .map(|term| term.surface().unwrap())]);
+    let answer = evaluate_demanded(
+        &rules,
+        &goal,
+        quad_store(&edges),
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        surfaces(answer.dictionary(), answer.answers().unwrap()),
+        expected
+    );
+    assert_eq!(full(&rules, &goal, quad_store(&edges)), expected);
+    // A bound graph in the goal becomes free in the recursive call; the broader
+    // descriptor must still preserve the goal's original graph and equalities.
+    let edges = [
+        ("g", "x", "g"),
+        ("x", "g", "g"),
+        ("g", "g", "g"),
+        ("x", "y", "h"),
+    ];
+    for (goal, expected) in [
+        (
+            quad("?g", "reach", "?o", "?g"),
+            vec![("g", "x"), ("g", "g")],
+        ),
+        (
+            quad("?s", "reach", "?g", "?g"),
+            vec![("x", "g"), ("g", "g")],
+        ),
+        (quad("?g", "reach", "?g", "?g"), vec![("g", "g")]),
+    ] {
+        let expected: BTreeSet<_> = expected
+            .into_iter()
+            .map(|(s, o)| {
+                quad(s, "reach", o, "g")
+                    .terms()
+                    .map(|term| term.surface().unwrap())
+            })
+            .collect();
+        let answer = evaluate_demanded(
+            &rules,
+            &goal,
+            quad_store(&edges),
+            &EvalOptions::default(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            surfaces(answer.dictionary(), answer.answers().unwrap()),
+            expected,
+            "{goal:?}"
+        );
+        assert_eq!(full(&rules, &goal, quad_store(&edges)), expected);
+    }
+}
+
+#[test]
+fn authored_default_and_named_graph_constants_keep_their_positions() {
+    let rules = vec![
+        DlClause::datalog(
+            quad("?s", "reach", "?o", ""),
+            vec![quad("?s", "edge", "?o", "input")],
+        ),
+        DlClause::datalog(
+            quad("?s", "reach", "?o", "output"),
+            vec![quad("?s", "reach", "?o", "")],
+        ),
+    ];
+    let edges = [("0", "1", "input"), ("2", "3", "unrelated")];
+    for graph in ["", "output", "?g"] {
+        let goal = quad("?s", "reach", "?o", graph);
+        let expected: BTreeSet<_> = ["", "output"]
+            .into_iter()
+            .filter(|name| graph == "?g" || graph == *name)
+            .map(|name| {
+                quad("0", "reach", "1", name)
+                    .terms()
+                    .map(|term| term.surface().unwrap())
+            })
+            .collect();
+        let answer = evaluate_demanded(
+            &rules,
+            &goal,
+            quad_store(&edges),
+            &EvalOptions::default(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            surfaces(answer.dictionary(), answer.answers().unwrap()),
+            expected
+        );
+        assert_eq!(full(&rules, &goal, quad_store(&edges)), expected);
+    }
+}
+
+#[test]
+fn graph_demand_reduces_work_and_names_bind_graph_identity_without_collisions() {
+    let rules = quad_rules();
+    let goal = quad("?s", "reach", "?o", "selected");
+    let edges = [("0", "1", "selected"), ("1", "2", "selected")];
+    let selected = evaluate_demanded(
+        &rules,
+        &goal,
+        quad_store(&edges),
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    let mut input = quad_store(&edges);
+    for node in 10..35 {
+        let row = [
+            format!("<urn:{node}>"),
+            "<urn:edge>".into(),
+            format!("<urn:{}>", node + 1),
+            "<urn:unrelated>".into(),
+        ];
+        input
+            .insert_terms(row.each_ref().map(|value| DictionaryTerm::Surface(value)))
+            .unwrap();
+    }
+    let full = evaluate_guarded(
+        &compile(rules.clone()).unwrap(),
+        input.clone(),
+        &NoGuards,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    let answer = evaluate_demanded(&rules, &goal, input, &EvalOptions::default(), None).unwrap();
+    assert_eq!(
+        answer.work().committed_facts(),
+        selected.work().committed_facts()
+    );
+    assert_eq!(
+        surfaces(answer.dictionary(), answer.answers().unwrap()),
+        surfaces(selected.dictionary(), selected.answers().unwrap())
+    );
+    assert!(answer.work().join_steps() < full.work().join_steps());
+    let names = internal_terms(answer.dictionary());
+    assert_eq!(names, internal_terms(selected.dictionary()));
+    let other = evaluate_demanded(
+        &rules,
+        &quad("?s", "reach", "?o", ""),
+        quad_store(&edges),
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        internal_terms(other.dictionary())
+            .iter()
+            .all(|name| !names.contains(name))
+    );
+    let mut collision = quad_store(&edges);
+    // Use the exact internal surface in a source graph, not the fixture's urn prefix.
+    let row = [
+        "<urn:reserved>".into(),
+        "<urn:edge>".into(),
+        "<urn:value>".into(),
+        names[0].clone(),
+    ];
+    collision
+        .insert_terms(row.each_ref().map(|value| DictionaryTerm::Surface(value)))
+        .unwrap();
+    let answer =
+        evaluate_demanded(&rules, &goal, collision, &EvalOptions::default(), None).unwrap();
+    assert!(
+        internal_terms(answer.dictionary())
+            .iter()
+            .any(|name| !names.contains(name))
+    );
+    assert_eq!(
+        surfaces(answer.dictionary(), answer.answers().unwrap()),
+        surfaces(selected.dictionary(), selected.answers().unwrap())
     );
 }
 
@@ -316,25 +641,22 @@ impl TermDictionary for CheckedDictionary {
 
 #[test]
 fn answer_owns_original_dictionary_and_propagates_late_and_preparation_failures() {
-    let mut input =
-        RelationStore::<CheckedDictionary, 3>::with_dictionary(CheckedDictionary::default());
-    input
-        .insert_terms(["<urn:0>", "<urn:edge>", "<urn:1>"].map(DictionaryTerm::Surface))
-        .unwrap();
-    let control = input.interner().control.clone();
-    let original = input.interner().lookup_term("<urn:0>").unwrap().unwrap();
-    let rules = transitive();
-    let goal = atom("0", "reach", "?y");
-    let answer = evaluate_demanded(&rules, &goal, input, &EvalOptions::default(), None).unwrap();
-    drop(rules);
-    drop(goal);
-    assert!(Arc::ptr_eq(&control, &answer.dictionary().control));
-    assert_eq!(answer.answers().unwrap()[0][0], original);
-    control.lookup_failure.store(true, Ordering::Relaxed);
-    assert_eq!(answer.answers(), Err(Lost));
-    control.lookup_failure.store(false, Ordering::Relaxed);
-    control.read_failure.store(true, Ordering::Relaxed);
-    assert_eq!(answer.answers(), Err(Lost));
+    answer_ownership(
+        transitive(),
+        atom("0", "reach", "?y"),
+        ["<urn:0>", "<urn:edge>", "<urn:1>"],
+    );
+    answer_ownership(
+        quad_rules(),
+        quad("0", "reach", "?y", ""),
+        ["<urn:0>", "<urn:edge>", "<urn:1>", ""],
+    );
+}
+
+fn answer_ownership<const N: usize>(rules: Vec<DlClause<N>>, goal: ClauseAtom<N>, row: [&str; N])
+where
+    Arity<N>: StoreShape<N>,
+{
     let dictionary = CheckedDictionary::default();
     dictionary
         .control
@@ -342,23 +664,82 @@ fn answer_owns_original_dictionary_and_propagates_late_and_preparation_failures(
         .store(true, Ordering::Relaxed);
     assert!(matches!(
         evaluate_demanded(
-            &transitive(),
-            &atom("0", "reach", "?y"),
+            &rules,
+            &goal,
             RelationStore::with_dictionary(dictionary),
             &EvalOptions::default(),
             None
         ),
         Err(DemandError::Source(Lost))
     ));
+    let mut input =
+        RelationStore::<CheckedDictionary, N>::with_dictionary(CheckedDictionary::default());
+    input
+        .insert_terms(row.map(DictionaryTerm::Surface))
+        .unwrap();
+    let control = input.interner().control.clone();
+    let original = row.map(|surface| input.interner().lookup_term(surface).unwrap().unwrap());
+    let answer = evaluate_demanded(&rules, &goal, input, &EvalOptions::default(), None).unwrap();
+    drop(rules);
+    drop(goal);
+    assert!(Arc::ptr_eq(&control, &answer.dictionary().control));
+    let answers = answer.answers().unwrap();
+    assert_eq!(answers.len(), 1);
+    for at in (0..N).filter(|at| *at != 1) {
+        assert_eq!(answers[0][at], original[at]);
+    }
+    control.lookup_failure.store(true, Ordering::Relaxed);
+    assert_eq!(answer.answers(), Err(Lost));
+    control.lookup_failure.store(false, Ordering::Relaxed);
+    control.read_failure.store(true, Ordering::Relaxed);
+    assert_eq!(answer.answers(), Err(Lost));
 }
 
 #[test]
 fn unsupported_programs_refuse_before_source_access_or_execution() {
+    unsupported_programs(
+        atom,
+        vec![
+            DlClause::datalog(
+                atom("?x", "reach", "?y"),
+                vec![atom("?x", "edge", "?y").from_base()],
+            ),
+            DlClause::no_output(vec![atom("?x", "edge", "?y")]),
+        ],
+        vec![atom("0", "reach", "?y").from_base()],
+    );
+    unsupported_programs(|s, p, o| quad(s, p, o, "?g"), Vec::new(), Vec::new());
+    let dictionary = CheckedDictionary::default();
+    let control = dictionary.control.clone();
+    control.lookup_failure.store(true, Ordering::Relaxed);
+    let error = evaluate_demanded(
+        &[DlClause::datalog(
+            quad("?s", "reach", "?o", "?unbound"),
+            vec![quad("?s", "edge", "?o", "?g")],
+        )],
+        &quad("?s", "reach", "?o", "?g"),
+        RelationStore::with_dictionary(dictionary),
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, DemandError::Unsupported { reason: purrdf_datalog::demand::Unsupported::UnboundVariable(variable), .. } if variable == "?unbound")
+    );
+    assert_eq!(control.writes.load(Ordering::Relaxed), 0);
+}
+
+fn unsupported_programs<const N: usize>(
+    atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>,
+    extra_rules: Vec<DlClause<N>>,
+    extra_goals: Vec<ClauseAtom<N>>,
+) where
+    Arity<N>: StoreShape<N>,
+{
     let head = atom("?x", "reach", "?y");
     let body = atom("?x", "edge", "?y");
     let bad = [
         DlClause::datalog(head.clone(), vec![body.clone().into_negated()]),
-        DlClause::datalog(head.clone(), vec![body.clone().from_base()]),
         DlClause::datalog(head.clone(), vec![atom("?x", "?p", "?y")]),
         DlClause::datalog(head.clone(), vec![body.clone()])
             .with_guards(vec![Guard::not_equal("?x", "?y")]),
@@ -380,11 +761,10 @@ fn unsupported_programs_refuse_before_source_access_or_execution() {
             Vec::new(),
             vec![body.clone()],
         ),
-        DlClause::inconsistency(vec![body.clone()]),
-        DlClause::no_output(vec![body]),
+        DlClause::inconsistency(vec![body]),
         DlClause::datalog(head, Vec::new()),
     ];
-    for rule in bad {
+    for rule in bad.into_iter().chain(extra_rules) {
         let dictionary = CheckedDictionary::default();
         let control = dictionary.control.clone();
         control.lookup_failure.store(true, Ordering::Relaxed);
@@ -410,14 +790,16 @@ fn unsupported_programs_refuse_before_source_access_or_execution() {
     }
     for goal in [
         atom("0", "?p", "?y"),
-        atom("0", "reach", "?y").from_base(),
         atom("0", "reach", "?y").into_negated(),
-    ] {
+    ]
+    .into_iter()
+    .chain(extra_goals)
+    {
         assert!(matches!(
             evaluate_demanded(
                 &[],
                 &goal,
-                Store::with_dictionary(TermInterner::default()),
+                Store::<N>::with_dictionary(TermInterner::default()),
                 &EvalOptions::default(),
                 None
             ),
@@ -428,15 +810,28 @@ fn unsupported_programs_refuse_before_source_access_or_execution() {
 
 #[test]
 fn budgets_and_cancellation_return_no_partial_answer_owner() {
-    let rules = transitive();
-    let goal = atom("0", "reach", "?y");
+    governed(&transitive(), &atom("0", "reach", "?y"), || {
+        store(&[(0, 1), (1, 2)])
+    });
+    governed(&quad_rules(), &quad("0", "reach", "?y", ""), || {
+        quad_store(&[("0", "1", ""), ("1", "2", "")])
+    });
+}
+
+fn governed<const N: usize>(
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
+    input: impl Fn() -> Store<N>,
+) where
+    Arity<N>: StoreShape<N>,
+{
     for options in [
         EvalOptions::default().with_max_join_steps(0),
         EvalOptions::default().with_max_stored_facts(1),
         EvalOptions::default().with_max_term_arena_bytes(1),
     ] {
         assert!(matches!(
-            evaluate_demanded(&rules, &goal, store(&[(0, 1), (1, 2)]), &options, None),
+            evaluate_demanded(rules, goal, input(), &options, None),
             Err(DemandError::Evaluation(EvalError::BudgetExhausted { .. }))
         ));
     }
@@ -450,9 +845,9 @@ fn budgets_and_cancellation_return_no_partial_answer_owner() {
     let stopped = Stopped;
     assert!(matches!(
         evaluate_demanded(
-            &rules,
-            &goal,
-            store(&[(0, 1)]),
+            rules,
+            goal,
+            input(),
             &EvalOptions::default(),
             Some(&stopped)
         ),
