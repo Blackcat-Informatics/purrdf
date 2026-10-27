@@ -243,9 +243,12 @@ where
                         built.insert(frame.entry, root, memory)?;
                     }
                 }
+                // The target is the first pending frame. A frame leaves the work
+                // list permanently only after publishing its entry in `built`,
+                // so an empty work list establishes that the target is present.
                 let root = *built
                     .get(&target)
-                    .expect("completed target frame published its proof");
+                    .expect("INVARIANT: the completed target frame published its proof");
                 built.release(memory)?;
                 pending.release_admitted(memory)?;
                 Ok(Some((arena, root)))
