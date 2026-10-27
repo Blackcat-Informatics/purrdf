@@ -242,9 +242,40 @@ use std::ops::Range;
 /// position that is not two or three numbers, positions of mixed length within
 /// one geometry. [`GeoError::GeometryShape`] retains structural refusals (a
 /// one-position line, a ring shorter than four positions or one that does not
-/// close).
+/// close). Source storage, scanning, aggregate exact decimal construction and
+/// coordinate count use [`crate::ExecutionLimits::GEOMETRY`]; exhaustion returns
+/// the original resource error before the protected work. Accepted values stay
+/// exact. Use [`parse_in_policy`] for explicit limits or [`parse_unbounded`] for
+/// trusted input whose construction costs the caller accepts.
 pub fn parse(lexical: &str, crs: &Crs) -> Result<GeometryLiteral, GeoError> {
-    Ok(GeometryLiteral::new(crs.clone(), geometry_of(lexical)?))
+    parse_in_policy(lexical, crs, crate::ExecutionPolicy::geometry())
+}
+
+/// Parse GeoJSON under explicit aggregate source, work, storage and position limits.
+///
+/// Uses the same streaming reader and exact coordinates as [`parse`]. Foreign
+/// values and coordinates preceding their type consume the same scan allowance.
+/// # Errors
+/// Preserves original resource refusals, including interrupted scans, and the
+/// grammar and shape errors of [`parse`] when resources suffice.
+pub fn parse_in_policy(
+    lexical: &str,
+    crs: &Crs,
+    policy: crate::ExecutionPolicy,
+) -> Result<GeometryLiteral, GeoError> {
+    crate::carrier::parse_in_policy(lexical.len(), policy, |admission| {
+        parse_admitted(lexical, crs, Some(admission))
+    })
+}
+
+/// Parse GeoJSON without aggregate resource limits, preserving the original reader.
+///
+/// The caller accepts exact arithmetic and retained storage costs. The inherited
+/// rational exponent range remains unchanged; nesting uses a heap stack.
+/// # Errors
+/// Returns the grammar, coordinate and geometry-shape errors described by [`parse`].
+pub fn parse_unbounded(lexical: &str, crs: &Crs) -> Result<GeometryLiteral, GeoError> {
+    parse_admitted(lexical, crs, None)
 }
 
 pub(crate) fn parse_admitted(
@@ -313,6 +344,7 @@ fn shape<T>(result: Result<T, GeoError>) -> Step<T> {
 /// the tree meets wins — an object's own members before its collection's
 /// members, the members in written order. So each object is read to its close
 /// before it is judged, and a shape refusal found inside it waits there.
+#[cfg(test)]
 fn geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
     geometry_of_admitted(lexical, None)
 }
@@ -1595,7 +1627,7 @@ fn position_value(coord: &Coord, scale: u32) -> JsonValue {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, write, write_bare};
+    use super::{parse, parse_in_policy, parse_unbounded, write, write_bare};
     use crate::error::GeoError;
     use crate::exact::Rat;
     use crate::geom::{
@@ -1606,6 +1638,162 @@ mod tests {
     /// digits is far more than any fixture here needs, so the goldens turn on the
     /// serializer's shape rather than on its rounding.
     const SCALE: u32 = 12;
+
+    #[test]
+    fn public_policy_admits_source_and_exponents_before_protected_allocation() {
+        let crs = crs();
+        let source_limit = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_workspace_bytes: 1,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let result = parse_in_policy(
+            r#"{"type":"Point","coordinates":[1,2]}"#,
+            &crs,
+            source_limit,
+        );
+        let allocation = window.close();
+        assert_eq!(result, Err(GeoError::MemoryExhausted { limit: 1 }));
+        assert_eq!(allocation.requested_bytes, 0);
+        for text in [
+            r#"{"type":"Point","coordinates":[1e100000,0]}"#,
+            r#"{"coordinates":[1e-100000,0],"type":"Point"}"#,
+        ] {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let result = parse(text, &crs);
+            let allocation = window.close();
+            assert!(matches!(result, Err(GeoError::WorkExhausted { .. })));
+            // Reader containers may allocate; the expanded integer alone would
+            // require over forty thousand bytes, before arithmetic scratch.
+            assert!(allocation.requested_bytes < 4096, "{allocation:?}");
+        }
+        assert!(parse(r#"{"type":"Point","coordinates":[1e60,1e-60]}"#, &crs).is_ok());
+    }
+
+    #[test]
+    fn nested_positions_share_construction_and_output_allowances() {
+        let crs = crs();
+        let member = r#"{"type":"Point","coordinates":[1e60,1e-60,1e60]}"#;
+        assert!(parse(member, &crs).is_ok());
+        let text = format!(
+            r#"{{"type":"GeometryCollection","geometries":[{{"type":"GeometryCollection","geometries":[{}]}}]}}"#,
+            vec![member; 256].join(",")
+        );
+        assert!(matches!(
+            parse(&text, &crs),
+            Err(GeoError::WorkExhausted { .. })
+        ));
+        let raised = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 100_000_000,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        let original = parse_unbounded(&text, &crs).unwrap();
+        assert_eq!(original.geometry().coord_count(), 256);
+        assert_eq!(parse_in_policy(&text, &crs, raised).unwrap(), original);
+        let limited = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_output_elements: 255,
+            ..*raised.limits()
+        })
+        .unwrap();
+        assert_eq!(
+            parse_in_policy(&text, &crs, limited),
+            Err(GeoError::OutputExhausted { limit: 255 })
+        );
+        let storage = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_workspace_bytes: 32_000,
+            ..crate::ExecutionLimits::UNBOUNDED
+        })
+        .unwrap();
+        assert!(
+            parse_in_policy(
+                r#"{"type":"Point","coordinates":[1e308,1e-308]}"#,
+                &crs,
+                storage
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            parse_in_policy(
+                r#"{"type":"MultiPoint","coordinates":[[1e308,1e-308],[1e308,1e-308]]}"#,
+                &crs,
+                storage
+            ),
+            Err(GeoError::MemoryExhausted { limit: 32_000 })
+        );
+    }
+
+    #[test]
+    fn foreign_and_deferred_scans_keep_resource_errors_and_syntax_priority() {
+        let crs = crs();
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 1_000,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        for text in [
+            format!(r#"{{"type":"Feature","foreign":"{}"}}"#, "x".repeat(32_000)),
+            format!(
+                r#"{{"coordinates":[{}1,2],"type":"Point"}}"#,
+                " ".repeat(32_000)
+            ),
+        ] {
+            assert_eq!(
+                parse_in_policy(&text, &crs, policy),
+                Err(GeoError::WorkExhausted { limit: 1_000 })
+            );
+        }
+        // The first scan fits; rereading coordinates before their type must
+        // consume the same remaining work, not a fresh allowance.
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 10_000,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        let padding = " ".repeat(120_000);
+        let ordered = format!(r#"{{"type":"Point","coordinates":[{padding}1,2]}}"#);
+        let deferred = format!(r#"{{"coordinates":[{padding}1,2],"type":"Point"}}"#);
+        assert!(parse_in_policy(&ordered, &crs, policy).is_ok());
+        assert_eq!(
+            parse_in_policy(&deferred, &crs, policy),
+            Err(GeoError::WorkExhausted { limit: 10_000 })
+        );
+        assert_eq!(
+            parse_unbounded(&deferred, &crs).unwrap(),
+            parse(&ordered, &crs).unwrap()
+        );
+        let raised = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 20_000,
+            ..*policy.limits()
+        })
+        .unwrap();
+        assert_eq!(
+            parse_in_policy(&deferred, &crs, raised).unwrap(),
+            parse_in_policy(&ordered, &crs, policy).unwrap()
+        );
+        for text in [
+            r#"{"type":"Feature","foreign":[0,]}"#,
+            r#"{"coordinates":[0,],"type":"Feature"}"#,
+        ] {
+            assert!(matches!(
+                parse_in_policy(text, &crs, policy),
+                Err(GeoError::JsonSyntax(_))
+            ));
+        }
+        assert!(matches!(
+            parse_in_policy(r#"{"type":"Feature","foreign":[0]}"#, &crs, policy),
+            Err(GeoError::GeoJsonShape(_))
+        ));
+        assert!(
+            parse_in_policy(
+                r#"{"type":"Point","coordinates":[1,2],"foreign":[0]}"#,
+                &crs,
+                policy
+            )
+            .is_ok()
+        );
+    }
 
     fn crs() -> Crs {
         Crs::new("http://example.org/crs/OGC/1.3/CRS84").expect("a non-empty IRI")
@@ -2039,19 +2227,35 @@ mod tests {
 
     #[test]
     fn a_wildly_out_of_range_exponent_is_refused_but_a_large_one_is_not() {
-        assert!(
-            read(r#"{"type":"Point","coordinates":[1e999999999,1]}"#).is_err(),
-            "an exponent past the exact reader's cap names no holdable value"
-        );
-        // The neighbouring VALID case: a large but representable exponent.
-        assert!(
-            read(r#"{"type":"Point","coordinates":[1e308,1]}"#).is_ok(),
-            "1e308 is an ordinary number to an exact reader"
-        );
-        assert!(
-            read(r#"{"type":"Point","coordinates":[1e-400,1]}"#).is_ok(),
-            "and so is one an f64 would flush to zero"
-        );
+        // Large exact values remain valid when the caller admits their cost.
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 100_000_000,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        let out_of_range = r#"{"type":"Point","coordinates":[1e999999999,1]}"#;
+        for result in [
+            parse(out_of_range, &crs()),
+            parse_in_policy(out_of_range, &crs(), policy),
+            parse_unbounded(out_of_range, &crs()),
+        ] {
+            let Err(GeoError::GeoJsonShape(cause)) = result else {
+                panic!("the original out-of-range number remains a native shape refusal");
+            };
+            assert!(matches!(
+                *cause,
+                crate::GeoJsonShapeError::InvalidNumber { index: 1, ref lexical }
+                    if lexical == "1e999999999"
+            ));
+        }
+        for text in [
+            r#"{"type":"Point","coordinates":[1e308,1]}"#,
+            r#"{"type":"Point","coordinates":[1e-400,1]}"#,
+        ] {
+            let original =
+                parse_unbounded(text, &crs()).expect("within the original rational range");
+            assert_eq!(parse_in_policy(text, &crs(), policy).unwrap(), original);
+        }
     }
 
     // ---- foreign members --------------------------------------------------
@@ -3383,7 +3587,14 @@ mod nesting_tests {
                 text.len(),
                 OPEN.len() * depth + POINT.len() + CLOSE.len() * depth
             );
-            let geometry = geometry_of(&text).expect("a hundred thousand nested collections read");
+            let reference = crate::Crs::new("http://example.org/crs/deep").unwrap();
+            assert!(matches!(
+                super::parse(&text, &reference),
+                Err(GeoError::MemoryExhausted { .. })
+            ));
+            let geometry = super::parse_unbounded(&text, &reference)
+                .expect("a hundred thousand nested collections read")
+                .into_geometry();
             assert_eq!(geometry.kind(), GeometryKind::GeometryCollection);
             assert_eq!(geometry.dim(), CoordDim::Xy);
             assert_eq!(levels(&geometry), depth);

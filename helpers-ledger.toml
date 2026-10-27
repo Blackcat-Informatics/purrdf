@@ -1675,6 +1675,36 @@ names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
 
 [[distinct]]
 members = [
+    "purrdf_geo_kernel::geojson::parse",
+    "purrdf_geo_kernel::wkt::parse",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::geojson::parse"
+reason = "The public GeoJSON and WKT entries select different grammars through their respective parse_in_policy functions. Both select the fixed geometry policy; source admission and completion-error handling already share carrier::parse_in_policy."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::geojson::parse_in_policy",
+    "purrdf_geo_kernel::wkt::parse_in_policy",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::geojson::parse_in_policy"
+reason = "The explicit-policy entries supply different codec grammars as callbacks to the single carrier::parse_in_policy admission and completion boundary. The forwarding bodies share a shape, but the GeoJSON and WKT parsers accept different languages."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::geojson::parse_unbounded",
+    "purrdf_geo_kernel::wkt::parse_unbounded",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::geojson::parse_unbounded"
+reason = "The unrestricted entries select their respective GeoJSON and WKT readers without an admission account. They expose distinct grammars and preserve each codec's errors; neither copies parsing or accounting logic."
+
+[[distinct]]
+members = [
     "purrdf_core::ir::composite::CompositeDatasetView::reserve_owned_workspace",
     "purrdf_core::ir::mutable::delta_view::DeltaDatasetView::reserve_owned_workspace",
     "purrdf_core::ir::pack::container::PackView::reserve_owned_workspace",
