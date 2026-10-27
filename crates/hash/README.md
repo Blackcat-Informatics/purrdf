@@ -604,6 +604,7 @@ source on every run.
 | `b"purrdf-datalog-scheduled-contract-v1"` | `SCHEDULED_CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-triple-clause-ir-v1"` | `TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-triple-proof-v2"` | `TRIPLE_PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
+| `b"purrdf-datalog/demand-predicates/v1"` | `NAMESPACE` | `crates/datalog/src/demand.rs` |
 | `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |

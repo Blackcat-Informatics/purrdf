@@ -286,6 +286,7 @@ pub mod cache;
 pub mod chase;
 pub mod clause;
 pub mod cursor;
+pub mod demand;
 pub mod dictionary;
 pub mod evidence;
 pub mod guard;
