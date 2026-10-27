@@ -12,11 +12,20 @@
 mod io;
 pub use io::{IoFailure, io_error};
 
-/// Implement the standard error source chain for an enum's single-field cause
-/// variants. Other variants have no underlying error. The original cause is
-/// borrowed without rendering, cloning or type erasure beyond the Error trait.
+/// Implement the standard error source chain from single-field enum variants
+/// or a native-cause accessor (`error_sources!(Type, native accessor)`). Other
+/// enum variants have no underlying error. The original cause is borrowed
+/// without rendering, cloning or type erasure beyond the Error trait.
 #[macro_export]
 macro_rules! error_sources {
+    ($kind:ty, native $method:ident) => {
+        impl ::core::error::Error for $kind {
+            fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {
+                self.$method()
+                    .map(|cause| cause as &dyn ::core::error::Error)
+            }
+        }
+    };
     ($kind:ty, $($variant:ident),+ $(,)?) => {
         impl ::core::error::Error for $kind {
             fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {

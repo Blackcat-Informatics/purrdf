@@ -390,3 +390,91 @@ fn csvw_schema_bounds_admit_the_value_they_spell() {
         );
     }
 }
+
+/// Metadata bounds retain their original XSD refusal after the input is released.
+#[test]
+fn csvw_schema_bound_refusals_retain_native_xsd_fields() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_xsd::{ErrorCode, XsdDatatype, XsdError};
+
+    let metadata_iri = "http://example.org/bounds-metadata.json";
+    let schema_iri = "http://example.org/bounds-schema.json";
+    let table_iri = "http://example.org/bounds.csv";
+    let read = |datatype: &str, lower: &str, upper: &str, cell: &str| {
+        let metadata = format!(
+            r#"{{"@context":"http://www.w3.org/ns/csvw","url":"{table_iri}","tableSchema":"{schema_iri}"}}"#
+        );
+        let schema = format!(
+            r#"{{"columns":[{{"name":"n","titles":"n","datatype":{{"base":"{datatype}","minimum":"{lower}","maximum":"{upper}"}}}}]}}"#
+        );
+        let config = csvw_config();
+        let input = CsvwInput::new(
+            CsvwAction::Metadata {
+                metadata_iri: metadata_iri.to_owned(),
+            },
+            BTreeMap::from([
+                (metadata_iri.to_owned(), metadata.into_bytes()),
+                (schema_iri.to_owned(), schema.into_bytes()),
+                (table_iri.to_owned(), format!("n\n{cell}\n").into_bytes()),
+            ]),
+            config.limits(),
+        )
+        .expect("input");
+        read_csvw(&input, &config)
+    };
+    for (datatype, base, lower, upper, lexical, identity) in [
+        (
+            XsdDatatype::Integer,
+            "integer",
+            "1.5",
+            "10",
+            "1.5",
+            "xsd-invalid-lexical",
+        ),
+        (
+            XsdDatatype::Integer,
+            "integer",
+            "1",
+            "10.5",
+            "10.5",
+            "xsd-invalid-lexical",
+        ),
+        (
+            XsdDatatype::Byte,
+            "byte",
+            "1",
+            "300",
+            "300",
+            "xsd-out-of-range",
+        ),
+    ] {
+        let error = read(base, lower, upper, "5").expect_err("invalid facet");
+        assert_eq!(error.kind(), purrdf_rdf::ProjectionErrorKind::Integrity);
+        assert_eq!(error.path(), Some(schema_iri));
+        assert!(error.message().starts_with("invalid CSVW datatype facet: "));
+        assert_eq!(error.storage_error(), None);
+        let native = std::error::Error::source(&error)
+            .expect("native cause")
+            .downcast_ref::<XsdError>()
+            .expect("the original XSD error");
+        assert_eq!(native.code(), Some(ErrorCode::Forg0001));
+        let inspected = Capture::read(&error);
+        assert_eq!(inspected.code, "rdf-projection");
+        assert!(matches!(
+            inspected.field("kind"),
+            ErrorValue::Code("integrity")
+        ));
+        assert!(matches!(inspected.field("path"), ErrorValue::Text(path) if path == schema_iri));
+        let cause = inspected.child("cause");
+        assert_eq!(cause.code, identity);
+        assert!(matches!(cause.field("datatype"), ErrorValue::Iri(iri) if iri == datatype.iri()));
+        assert!(matches!(cause.field("lexical"), ErrorValue::Text(text) if text == lexical));
+        let accepted = read(base, "1", "10", "5").expect("valid neighboring bounds");
+        assert_eq!(accepted.warnings, []);
+        assert_eq!(
+            accepted.group.tables[0].rows[0].cells[0].values[0].datatype,
+            datatype.iri()
+        );
+    }
+}
