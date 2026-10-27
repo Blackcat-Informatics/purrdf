@@ -16,6 +16,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[global_allocator]
+static ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 type Store<const N: usize = 3> = RelationStore<TermInterner, N>;
 fn term(value: &str) -> ClauseTerm {
     if value.starts_with('?') {
@@ -572,6 +575,7 @@ struct Control {
     lookup_failure: AtomicBool,
     read_failure: AtomicBool,
     writes: AtomicUsize,
+    fail_write_at: AtomicUsize,
 }
 #[derive(Debug, Default)]
 struct CheckedDictionary {
@@ -604,7 +608,10 @@ impl TermDictionary for CheckedDictionary {
         terms: [DictionaryTerm<'_, TermId>; N],
         validate: impl FnOnce(&Self, [TermId; N]) -> Result<T, DictionaryError<Lost>>,
     ) -> Result<T, DictionaryError<Lost>> {
-        self.control.writes.fetch_add(1, Ordering::Relaxed);
+        let write = self.control.writes.fetch_add(1, Ordering::Relaxed) + 1;
+        if write == self.control.fail_write_at.load(Ordering::Relaxed) {
+            return Err(DictionaryError::Source(Lost));
+        }
         let mut candidate = Self {
             terms: self.terms.clone(),
             control: self.control.clone(),
@@ -854,3 +861,6 @@ fn governed<const N: usize>(
         Err(DemandError::Evaluation(EvalError::Stopped { .. }))
     ));
 }
+
+#[path = "demand/stratified.rs"]
+mod stratified;
