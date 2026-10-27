@@ -2398,3 +2398,696 @@ fn malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals() {
         }
     }
 }
+
+/// Semantic role inclusion sees empty roles and reduces equivalence classes once.
+#[test]
+fn object_property_hierarchy_is_semantic_strict_and_source_fixed() {
+    use purrdf_iri::vocab::owl::{
+        BOTTOM_OBJECT_PROPERTY, EQUIVALENT_PROPERTY, TOP_OBJECT_PROPERTY,
+    };
+    use purrdf_iri::vocab::rdfs::DOMAIN;
+    let input = ds(&[
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        typed(N::E("empty"), N::V(OBJECT_PROPERTY)),
+        (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+        (N::E("q"), N::V(EQUIVALENT_PROPERTY), N::E("qAlias")),
+        (N::E("q"), N::V(SUB_PROPERTY), N::E("r")),
+        (N::E("empty"), N::V(DOMAIN), N::V(NOTHING)),
+    ]);
+    let mut reasoner = Reasoner::new(&input).unwrap();
+    let answer = reasoner.classify_object_properties().unwrap();
+    honest(&answer);
+    let bottom = TermValue::Iri(BOTTOM_OBJECT_PROPERTY.to_owned());
+    let top = TermValue::Iri(TOP_OBJECT_PROPERTY.to_owned());
+    let pairs = answer.answer().subsumptions();
+    for edge in [
+        (iri("p"), iri("r")),
+        (iri("empty"), iri("p")),
+        (bottom, iri("empty")),
+        (iri("r"), top.clone()),
+    ] {
+        assert!(pairs.contains(&edge), "missing semantic edge {edge:?}");
+    }
+    assert!(
+        answer
+            .answer()
+            .equivalences()
+            .contains(&(iri("q"), iri("qAlias")))
+    );
+    let direct = answer.direct_subsumptions().unwrap();
+    assert!(direct.contains(&(iri("p"), iri("q"))));
+    assert!(direct.contains(&(iri("q"), iri("r"))));
+    assert!(!direct.contains(&(iri("p"), iri("r"))));
+    assert!(direct.iter().all(|(a, b)| a != b));
+    reasoner
+        .entails(&DlAxiom::SubObjectPropertyOf {
+            sub: iri("queryOnly"),
+            sup: top,
+        })
+        .unwrap();
+    let repeated = reasoner.classify_object_properties().unwrap();
+    assert_eq!(answer.answer(), repeated.answer());
+    assert!(!repeated.answer().properties().contains(&iri("queryOnly")));
+}
+
+/// Undeclared kinds propagate from native uses; annotations and data stay out of the object universe.
+#[test]
+fn object_property_inventory_resolves_kinds_without_guessing() {
+    use purrdf_iri::vocab::owl::{ANNOTATION_PROPERTY, EQUIVALENT_PROPERTY};
+    let input = ds(&[
+        (N::E("a"), N::E("data"), N::L("7", XSD_INTEGER)),
+        (N::E("data"), N::V(SUB_PROPERTY), N::E("dataParent")),
+        (
+            N::E("dataParent"),
+            N::V(EQUIVALENT_PROPERTY),
+            N::E("dataAlias"),
+        ),
+        typed(N::E("note"), N::V(ANNOTATION_PROPERTY)),
+        (N::E("a"), N::E("note"), N::L("text", XSD_STRING)),
+        (N::E("a"), N::E("note"), N::E("b")),
+        (N::E("note"), N::V(SUB_PROPERTY), N::E("noteParent")),
+        (N::E("a"), N::E("object"), N::E("b")),
+    ]);
+    let answer = Reasoner::new(&input)
+        .unwrap()
+        .classify_object_properties()
+        .unwrap();
+    answer.direct_subsumptions().unwrap();
+    for excluded in ["data", "dataParent", "dataAlias", "note", "noteParent"] {
+        assert!(!answer.answer().properties().contains(&iri(excluded)));
+    }
+    assert!(answer.answer().properties().contains(&iri("object")));
+
+    for (triples, conflict) in [
+        (vec![typed(N::E("p"), N::V(FUNCTIONAL_PROPERTY))], false),
+        (
+            vec![(N::E("p"), N::V(purrdf_iri::vocab::rdfs::DOMAIN), N::E("C"))],
+            false,
+        ),
+        (
+            vec![
+                typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+                typed(N::E("q"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+            ],
+            true,
+        ),
+        (
+            vec![
+                typed(N::E("p"), N::V(ANNOTATION_PROPERTY)),
+                (N::E("p"), N::V(EQUIVALENT_PROPERTY), N::E("q")),
+            ],
+            true,
+        ),
+    ] {
+        let source = ds(&triples);
+        let mut reasoner = Reasoner::new(&source).unwrap();
+        assert!(
+            matches!(reasoner.classify_object_properties(), Err(purrdf_entail::EntailError::PropertyKind { conflict: actual, .. }) if actual == conflict)
+        );
+        // The new kind refusal is confined to this service.
+        assert_eq!(*reasoner.consistency().answer(), Verdict::True);
+    }
+}
+
+/// Every accepted source role form contributes its named operand, including inverse and chain-only names.
+#[test]
+fn object_property_inventory_covers_native_source_producers() {
+    use purrdf_iri::vocab::{owl, rdfs};
+    let cases = [
+        vec![typed(N::E("p"), N::V(OBJECT_PROPERTY))],
+        vec![(N::E("a"), N::E("p"), N::E("b"))],
+        vec![(N::E("p"), N::V(rdfs::RANGE), N::E("C"))],
+        vec![typed(N::E("p"), N::V(owl::SYMMETRIC_PROPERTY))],
+        vec![
+            sub(N::E("C"), N::B("r")),
+            (N::B("r"), N::V(ON_PROPERTY), N::E("p")),
+            (N::B("r"), N::V(SOME_VALUES), N::E("D")),
+        ],
+        vec![
+            sub(N::E("C"), N::B("r")),
+            (N::B("r"), N::V(ON_PROPERTY), N::B("inverse")),
+            (N::B("inverse"), N::V(owl::INVERSE_OF), N::E("p")),
+            (N::B("r"), N::V(ALL_VALUES), N::E("D")),
+        ],
+        vec![
+            (N::B("negative"), N::V(owl::SOURCE_INDIVIDUAL), N::E("a")),
+            (N::B("negative"), N::V(owl::ASSERTION_PROPERTY), N::E("p")),
+            (N::B("negative"), N::V(owl::TARGET_INDIVIDUAL), N::E("b")),
+        ],
+        vec![
+            (N::E("head"), N::V(PROPERTY_CHAIN), N::B("list")),
+            (N::B("list"), N::V(FIRST), N::E("p")),
+            (N::B("list"), N::V(REST), N::B("tail")),
+            (N::B("tail"), N::V(FIRST), N::E("q")),
+            (N::B("tail"), N::V(REST), N::V(NIL)),
+        ],
+    ];
+    for triples in cases {
+        let answer = Reasoner::new(&ds(&triples))
+            .unwrap()
+            .classify_object_properties()
+            .unwrap();
+        assert!(answer.answer().properties().contains(&iri("p")));
+        answer.direct_subsumptions().unwrap();
+    }
+}
+
+/// A key's data and object members do not force one another's kinds.
+#[test]
+fn object_property_inventory_preserves_mixed_keys_and_negative_kinds() {
+    use purrdf_iri::vocab::owl;
+    let input = ds(&[
+        (N::E("C"), N::V(owl::HAS_KEY), N::B("list")),
+        (N::B("list"), N::V(FIRST), N::E("object")),
+        (N::B("list"), N::V(REST), N::B("tail")),
+        (N::B("tail"), N::V(FIRST), N::E("data")),
+        (N::B("tail"), N::V(REST), N::V(NIL)),
+        typed(N::E("object"), N::V(OBJECT_PROPERTY)),
+        (N::B("negative"), N::V(owl::SOURCE_INDIVIDUAL), N::E("a")),
+        (
+            N::B("negative"),
+            N::V(owl::ASSERTION_PROPERTY),
+            N::E("data"),
+        ),
+        (
+            N::B("negative"),
+            N::V(owl::TARGET_VALUE),
+            N::L("7", XSD_INTEGER),
+        ),
+    ]);
+    let answer = Reasoner::new(&input)
+        .unwrap()
+        .classify_object_properties()
+        .unwrap();
+    answer.direct_subsumptions().unwrap();
+    assert!(answer.answer().properties().contains(&iri("object")));
+    assert!(!answer.answer().properties().contains(&iri("data")));
+    let contradictory = ds(&[
+        typed(N::E("note"), N::V(owl::ANNOTATION_PROPERTY)),
+        (N::B("negative"), N::V(owl::SOURCE_INDIVIDUAL), N::E("a")),
+        (
+            N::B("negative"),
+            N::V(owl::ASSERTION_PROPERTY),
+            N::E("note"),
+        ),
+        (N::B("negative"), N::V(owl::TARGET_INDIVIDUAL), N::E("b")),
+    ]);
+    assert!(matches!(
+        Reasoner::new(&contradictory)
+            .unwrap()
+            .classify_object_properties(),
+        Err(purrdf_entail::EntailError::PropertyKind { conflict: true, .. })
+    ));
+}
+
+/// The new service retains native proof preparation, wire round trips and replay.
+#[test]
+fn object_property_classification_proofs_replay_and_boundaries_refuse_directness() {
+    use purrdf_entail::{Question, ServiceProof};
+    let input = ds(&[
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+    ]);
+    let mut producer = Reasoner::with_proofs(&input).unwrap();
+    let question = producer.object_property_classification_question().unwrap();
+    let answer = producer.classify_object_properties().unwrap();
+    let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+    proof
+        .covers(&purrdf_entail::reasoner::proof::object_hierarchy_claims(
+            answer.answer(),
+        ))
+        .unwrap();
+    let mut consumer = Reasoner::with_proofs(&input).unwrap();
+    consumer.prepare(&question).unwrap();
+    proof
+        .verify(
+            &input,
+            &question,
+            Some(answer.certificate()),
+            &consumer.proof_context().unwrap(),
+        )
+        .unwrap();
+    let mut wrong = Reasoner::with_proofs(&input).unwrap();
+    assert!(
+        wrong
+            .prepare(&Question::ObjectPropertyClassification {
+                properties: vec![iri("p")]
+            })
+            .is_err()
+    );
+    for cap in [1, 2] {
+        let answer = Reasoner::new(&input)
+            .unwrap()
+            .with_work_cap(cap)
+            .classify_object_properties()
+            .unwrap();
+        assert_ne!(answer.certificate().completeness(), DlCompleteness::Decided);
+        assert!(answer.direct_subsumptions().is_err());
+    }
+    let inconsistent = ds(&[(
+        N::E("a"),
+        N::V(purrdf_iri::vocab::owl::BOTTOM_OBJECT_PROPERTY),
+        N::E("b"),
+    )]);
+    assert!(matches!(
+        Reasoner::new(&inconsistent)
+            .unwrap()
+            .classify_object_properties(),
+        Err(purrdf_entail::EntailError::Unsatisfiable)
+    ));
+}
+
+#[derive(Debug)]
+struct HierarchyStop {
+    calls: std::sync::atomic::AtomicUsize,
+    cut: std::sync::atomic::AtomicUsize,
+}
+
+impl HierarchyStop {
+    fn unlimited() -> Self {
+        Self {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            cut: std::sync::atomic::AtomicUsize::new(usize::MAX),
+        }
+    }
+    fn arm(&self, cut: usize) {
+        use std::sync::atomic::Ordering;
+        self.calls.store(0, Ordering::Relaxed);
+        self.cut.store(cut, Ordering::Relaxed);
+    }
+}
+
+impl purrdf_datalog::StopSignal for HierarchyStop {
+    fn stopped(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.calls.fetch_add(1, Ordering::Relaxed) >= self.cut.load(Ordering::Relaxed)
+    }
+}
+
+/// Stops during preparation/search/reduction never expose exact direct edges or detach answer claims.
+#[test]
+fn object_property_cancellation_preserves_partial_proof_coverage() {
+    use purrdf_entail::{EntailError, ServiceProof};
+    use std::sync::atomic::Ordering;
+    let input = ds(&[
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+        (N::E("q"), N::V(SUB_PROPERTY), N::E("r")),
+    ]);
+    let signal = Arc::new(HierarchyStop::unlimited());
+    let mut reference = Reasoner::with_proofs_and_stop(
+        &input,
+        purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+        signal.clone(),
+    )
+    .unwrap();
+    let question = reference.object_property_classification_question().unwrap();
+    signal.arm(usize::MAX);
+    reference
+        .classify_object_properties()
+        .unwrap()
+        .direct_subsumptions()
+        .unwrap();
+    let polls = signal.calls.load(Ordering::Relaxed);
+    let mut partial = 0;
+    for cut in [0, polls / 4, polls / 2, polls.saturating_sub(2)] {
+        let signal = Arc::new(HierarchyStop::unlimited());
+        let mut reasoner = Reasoner::with_proofs_and_stop(
+            &input,
+            purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+            signal.clone(),
+        )
+        .unwrap();
+        signal.arm(cut);
+        match reasoner.classify_object_properties() {
+            Err(EntailError::Stopped) => {}
+            Ok(answer) => {
+                partial += 1;
+                assert!(answer.certificate().stopped());
+                assert!(answer.direct_subsumptions().is_err());
+                let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+                proof
+                    .covers(&purrdf_entail::reasoner::proof::object_hierarchy_claims(
+                        answer.answer(),
+                    ))
+                    .unwrap();
+                let mut consumer = Reasoner::with_proofs(&input).unwrap();
+                consumer.prepare(&question).unwrap();
+                proof
+                    .verify(
+                        &input,
+                        &question,
+                        Some(answer.certificate()),
+                        &consumer.proof_context().unwrap(),
+                    )
+                    .unwrap();
+            }
+            Err(error) => panic!("unexpected cancellation outcome: {error}"),
+        }
+    }
+    assert!(
+        partial > 0,
+        "the cuts must exercise native partial certificates, not only preparation refusal"
+    );
+}
+
+#[global_allocator]
+static HIERARCHY_ALLOCATOR: purrdf_alloc_probe::CountingAllocator =
+    purrdf_alloc_probe::CountingAllocator;
+
+/// Same-source reasoning and owned allocations remain deterministic as the property universe grows.
+/// The window excludes source parsing and includes hierarchy preparation, native
+/// decisions and the returned answer; its peak is incremental to that starting point.
+#[test]
+fn object_property_classification_reports_deterministic_native_costs() {
+    for count in [1, 2, 4] {
+        let names = ["p", "q", "r", "s"];
+        let triples: Vec<_> = names[..count]
+            .iter()
+            .map(|&name| typed(N::E(name), N::V(OBJECT_PROPERTY)))
+            .collect();
+        let input = ds(&triples);
+        let run = || {
+            let mut reasoner = Reasoner::new(&input).unwrap();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let answer = reasoner.classify_object_properties().unwrap();
+            let memory = window.close();
+            (answer, memory)
+        };
+        let (first, memory) = run();
+        let (second, repeated) = run();
+        assert_eq!(first.answer(), second.answer());
+        assert_eq!(first.certificate(), second.certificate());
+        assert_eq!(memory, repeated);
+        first.direct_subsumptions().unwrap();
+        println!(
+            "object hierarchy: source properties {count}, decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}",
+            first.certificate().decisions(),
+            first.certificate().work(),
+            memory.allocations,
+            memory.requested_bytes,
+            memory.peak_working_bytes
+        );
+    }
+}
+
+/// Typed data restrictions and all-disjoint groups propagate kinds without turning data into objects.
+#[test]
+fn object_property_inventory_resolves_typed_ranges_and_disjoint_groups() {
+    use purrdf_iri::vocab::{owl, rdfs};
+    let input = ds(&[
+        sub(N::E("C"), N::B("restriction")),
+        (N::B("restriction"), N::V(ON_PROPERTY), N::E("data")),
+        (
+            N::B("restriction"),
+            N::V(owl::ON_DATA_RANGE),
+            N::V(XSD_INTEGER),
+        ),
+        (
+            N::B("restriction"),
+            N::V(owl::MIN_QUALIFIED_CARDINALITY),
+            N::L("1", XSD_NON_NEGATIVE_INTEGER),
+        ),
+        (N::E("rangedData"), N::V(rdfs::RANGE), N::V(XSD_STRING)),
+        typed(N::B("disjoint"), N::V(owl::ALL_DISJOINT_PROPERTIES)),
+        (N::B("disjoint"), N::V(owl::MEMBERS), N::B("list")),
+        (N::B("list"), N::V(FIRST), N::E("data")),
+        (N::B("list"), N::V(REST), N::B("tail")),
+        (N::B("tail"), N::V(FIRST), N::E("inferredData")),
+        (N::B("tail"), N::V(REST), N::V(NIL)),
+        (
+            N::E("object"),
+            N::V(owl::PROPERTY_DISJOINT_WITH),
+            N::E("inferredObject"),
+        ),
+        typed(N::E("object"), N::V(OBJECT_PROPERTY)),
+    ]);
+    let answer = Reasoner::new(&input)
+        .unwrap()
+        .classify_object_properties()
+        .unwrap();
+    answer.direct_subsumptions().unwrap();
+    for property in ["data", "rangedData", "inferredData"] {
+        assert!(!answer.answer().properties().contains(&iri(property)));
+    }
+    for property in ["object", "inferredObject"] {
+        assert!(answer.answer().properties().contains(&iri(property)));
+    }
+}
+
+/// A nominal makes classification depend on the ABox and exercise residual refutations.
+fn class_analysis_nominal() -> Arc<RdfDataset> {
+    ds(&[
+        typed(N::E("Female"), N::V(OWL_CLASS)),
+        typed(N::E("Only"), N::V(OWL_CLASS)),
+        (N::E("Only"), N::V(EQUIVALENT_CLASS), N::B("justAlice")),
+        (N::B("justAlice"), N::V(ONE_OF), N::B("cell0")),
+        (N::B("cell0"), N::V(FIRST), N::E("alice")),
+        (N::B("cell0"), N::V(REST), N::V(NIL)),
+        typed(N::E("alice"), N::E("Female")),
+    ])
+}
+
+/// The joint service preserves both standalone answers, including quotient and empty-class views.
+#[test]
+fn class_analysis_shares_classification_without_changing_native_answers() {
+    let empty = ds(&[
+        (N::E("A"), N::V(EQUIVALENT_CLASS), N::E("B")),
+        sub(N::E("Empty"), N::V(NOTHING)),
+    ]);
+    for input in [kittens(), class_analysis_nominal(), empty] {
+        let reasoner = Reasoner::new(&input).unwrap();
+        let hierarchy = reasoner.classify().unwrap();
+        let realization = reasoner.realize().unwrap();
+        let analysis = reasoner.classify_and_realize().unwrap();
+        assert_eq!(analysis.answer().hierarchy(), hierarchy.answer());
+        assert_eq!(analysis.answer().realization(), realization.answer());
+        assert_eq!(
+            analysis.direct_subsumptions().unwrap(),
+            hierarchy.direct_subsumptions().unwrap()
+        );
+        assert_eq!(
+            analysis.direct_types().unwrap(),
+            realization.direct_types().unwrap()
+        );
+        assert_eq!(honest(&analysis).completeness(), DlCompleteness::Decided);
+        assert_eq!(
+            analysis.certificate().decisions(),
+            realization.certificate().decisions()
+        );
+        assert_eq!(
+            analysis.certificate().work(),
+            realization.certificate().work()
+        );
+        assert!(
+            hierarchy.certificate().decisions() + realization.certificate().decisions()
+                > analysis.certificate().decisions()
+        );
+    }
+}
+
+/// Source-bound replay covers exactly both positive views and checks the residual native decisions.
+#[test]
+fn class_analysis_proof_binds_both_source_universes() {
+    use purrdf_entail::{ClaimBasis, Question, ServiceProof};
+    for (residual, input) in [(false, kittens()), (true, class_analysis_nominal())] {
+        let producer = Reasoner::with_proofs(&input).unwrap();
+        let question = producer.class_analysis_question();
+        let answer = producer.classify_and_realize().unwrap();
+        let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+        proof
+            .covers(&purrdf_entail::reasoner::proof::class_analysis_claims(
+                answer.answer(),
+            ))
+            .unwrap();
+        let mut consumer = Reasoner::with_proofs(&input).unwrap();
+        consumer.prepare(&question).unwrap();
+        proof
+            .verify(
+                &input,
+                &question,
+                Some(answer.certificate()),
+                &consumer.proof_context().unwrap(),
+            )
+            .unwrap();
+        let mut wrong = Reasoner::with_proofs(&input).unwrap();
+        assert!(
+            wrong
+                .prepare(&Question::ClassAnalysis {
+                    individuals: Vec::new(),
+                    classes: Vec::new()
+                })
+                .is_err()
+        );
+        assert!(
+            proof
+                .verify(
+                    &input,
+                    &producer.realization_question(),
+                    Some(answer.certificate()),
+                    &producer.borrowed_proof_context().unwrap()
+                )
+                .is_err()
+        );
+        if residual {
+            assert!(proof.claims().iter().any(|claim| matches!(
+                claim.subject(),
+                purrdf_entail::ClaimSubject::Subsumption { .. }
+            ) && matches!(
+                claim.basis(),
+                ClaimBasis::CounterModel { .. }
+            )));
+        }
+    }
+}
+
+/// Inconsistency is refused; source boundaries and native exhaustion gate both direct views.
+#[test]
+fn class_analysis_retains_native_refusals_and_joint_directness() {
+    let inconsistent = ds(&[typed(N::E("a"), N::V(NOTHING))]);
+    assert!(matches!(
+        Reasoner::new(&inconsistent).unwrap().classify_and_realize(),
+        Err(purrdf_entail::EntailError::Unsatisfiable)
+    ));
+    let bounded = ds(&[(
+        N::E("a"),
+        N::V(purrdf_iri::vocab::owl::TOP_DATA_PROPERTY),
+        N::L("1", XSD_INTEGER),
+    )]);
+    let reasoner = Reasoner::new(&bounded).unwrap();
+    let answer = reasoner.classify_and_realize().unwrap();
+    assert_eq!(
+        answer.certificate().boundaries(),
+        reasoner.realize().unwrap().certificate().boundaries()
+    );
+    assert_eq!(
+        honest(&answer).completeness(),
+        DlCompleteness::DecidedWithinBoundaries
+    );
+    assert!(answer.direct_subsumptions().is_err());
+    assert!(answer.direct_types().is_err());
+    let input = class_analysis_nominal();
+    let producer = Reasoner::with_proofs(&input).unwrap().with_work_cap(1);
+    let answer = producer.classify_and_realize().unwrap();
+    assert_eq!(
+        honest(&answer).completeness(),
+        DlCompleteness::BudgetExhausted
+    );
+    assert!(answer.direct_subsumptions().is_err());
+    assert!(answer.direct_types().is_err());
+    let mut consumer = Reasoner::with_proofs(&input).unwrap();
+    let question = producer.class_analysis_question();
+    consumer.prepare(&question).unwrap();
+    answer
+        .proof()
+        .unwrap()
+        .verify(
+            &input,
+            &question,
+            Some(answer.certificate()),
+            &consumer.proof_context().unwrap(),
+        )
+        .unwrap();
+}
+
+/// A late stop, including with no individuals, retains native evidence and withholds BOTH direct views.
+#[test]
+fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage() {
+    use purrdf_entail::ServiceProof;
+    use std::sync::atomic::Ordering;
+    for input in [kittens(), ds(&[sub(N::E("A"), N::E("B"))])] {
+        let signal = Arc::new(HierarchyStop::unlimited());
+        let reference = Reasoner::with_proofs_and_stop(
+            &input,
+            purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+            signal.clone(),
+        )
+        .unwrap();
+        let question = reference.class_analysis_question();
+        signal.arm(usize::MAX);
+        let completed = reference.classify_and_realize().unwrap();
+        let polls = signal.calls.load(Ordering::Relaxed);
+        let mut retained_hierarchy = false;
+        for cut in [0, polls / 3, polls * 2 / 3, polls.saturating_sub(1)] {
+            let signal = Arc::new(HierarchyStop::unlimited());
+            let reasoner = Reasoner::with_proofs_and_stop(
+                &input,
+                purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+                signal.clone(),
+            )
+            .unwrap();
+            signal.arm(cut);
+            let answer = reasoner.classify_and_realize().unwrap();
+            assert!(answer.certificate().stopped(), "cut {cut} of {polls}");
+            assert!(answer.direct_subsumptions().is_err());
+            assert!(answer.direct_types().is_err());
+            retained_hierarchy |= answer.answer().hierarchy().subsumptions()
+                == completed.answer().hierarchy().subsumptions();
+            let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+            proof
+                .covers(&purrdf_entail::reasoner::proof::class_analysis_claims(
+                    answer.answer(),
+                ))
+                .unwrap();
+            let mut consumer = Reasoner::with_proofs(&input).unwrap();
+            consumer.prepare(&question).unwrap();
+            proof
+                .verify(
+                    &input,
+                    &question,
+                    Some(answer.certificate()),
+                    &consumer.proof_context().unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(
+            retained_hierarchy,
+            "a late stop retains the finished hierarchy but gates its direct view"
+        );
+    }
+}
+
+/// Compare owned allocation and native work for the same source, excluding source parsing.
+/// Both windows retain both answers; peak bytes are incremental to each window's start.
+#[test]
+fn class_analysis_measures_avoided_duplicate_native_classification() {
+    for (label, input) in [("Horn", kittens()), ("nominal", class_analysis_nominal())] {
+        let reasoner = Reasoner::new(&input).unwrap();
+        let run = || {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let analysis = reasoner.classify_and_realize().unwrap();
+            let combined = window.close();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let hierarchy = reasoner.classify().unwrap();
+            let realization = reasoner.realize().unwrap();
+            let separate = window.close();
+            (analysis, combined, hierarchy, realization, separate)
+        };
+        let (analysis, combined, hierarchy, realization, separate) = run();
+        let (again, repeated_combined, _, _, repeated_separate) = run();
+        assert_eq!(analysis, again);
+        assert_eq!(combined, repeated_combined);
+        assert_eq!(separate, repeated_separate);
+        let saved = hierarchy.certificate().decisions() + realization.certificate().decisions()
+            - analysis.certificate().decisions();
+        if label == "Horn" {
+            assert_eq!(saved, 1);
+        } else {
+            assert!(saved > 1);
+        }
+        println!(
+            "class analysis {label}: combined decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}; separate decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}; avoided decisions {saved}",
+            analysis.certificate().decisions(),
+            analysis.certificate().work(),
+            combined.allocations,
+            combined.requested_bytes,
+            combined.peak_working_bytes,
+            hierarchy.certificate().decisions() + realization.certificate().decisions(),
+            hierarchy.certificate().work() + realization.certificate().work(),
+            separate.allocations,
+            separate.requested_bytes,
+            separate.peak_working_bytes
+        );
+    }
+}

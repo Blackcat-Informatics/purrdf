@@ -167,11 +167,11 @@ pub use owl_dl::proof::{
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
-    Certified, Claim, ClaimBasis, ClaimSubject, ClassHierarchy, ConservativeKeep,
+    Certified, Claim, ClaimBasis, ClaimSubject, ClassAnalysis, ClassHierarchy, ConservativeKeep,
     DirectnessRefusal, DlAxiom, DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod,
-    OwlProfile, ProfileCertificate, ProfileViolation, Question, Realization, Reasoner,
-    RunAssumptions, RunProof, Service, ServiceProof, ServiceReplay, StopCause, StopReceipt,
-    Verdict, extract_module, extract_module_with_proofs, profile,
+    ObjectPropertyHierarchy, OwlProfile, ProfileCertificate, ProfileViolation, Question,
+    Realization, Reasoner, RunAssumptions, RunProof, Service, ServiceProof, ServiceReplay,
+    StopCause, StopReceipt, Verdict, extract_module, extract_module_with_proofs, profile,
 };
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
@@ -406,6 +406,13 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// An object-property hierarchy is malformed, nonregular, or physically
     /// refused before the regular-language program could be constructed.
     RoleHierarchy(RoleHierarchyError),
+    /// The source does not determine one consistent property kind for classification.
+    PropertyKind {
+        /// Original named property requiring an explicit, consistent declaration.
+        property: String,
+        /// True for contradictory evidence, false for insufficient evidence.
+        conflict: bool,
+    },
     /// A PROOF-CARRYING operation was asked of a reasoner that records no proofs.
     ///
     /// Recording is opt-in: [`Reasoner::new`] answers questions and keeps no evidence, while
@@ -620,6 +627,9 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Decision(report) => "entailment-owl-decision" { "report" => Record(report.as_ref()) },
         KeyMembership(cause) => "entailment-key-membership" { "cause" => Cause(cause.as_ref()) },
         RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
+        PropertyKind { property, conflict } => "entailment-property-kind" {
+            "property" => Iri(property), "conflict" => Boolean(*conflict),
+        },
         ProofsNotRecorded => "entailment-proofs-not-recorded" {},
         Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
         Maintenance(cause) => "entailment-maintenance" { "cause" => Cause(cause.as_ref()) },
@@ -679,6 +689,9 @@ impl EntailError {
             Self::Decision(report) => EntailError::Decision(report),
             Self::KeyMembership(cause) => EntailError::KeyMembership(cause),
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
+            Self::PropertyKind { property, conflict } => {
+                EntailError::PropertyKind { property, conflict }
+            }
             Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
             Self::Evaluate(cause) => EntailError::Evaluate(cause),
             Self::Maintenance(cause) => EntailError::Maintenance(cause),
@@ -754,6 +767,15 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
             }
             Self::KeyMembership(cause) => write!(f, "entailment build error: {cause}"),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
+            Self::PropertyKind { property, conflict } => write!(
+                f,
+                "cannot classify property <{property}>: {} kind evidence; provide consistent object, data or annotation property declarations",
+                if *conflict {
+                    "conflicting"
+                } else {
+                    "unresolved"
+                }
+            ),
             Self::ProofsNotRecorded => write!(
                 f,
                 "this reasoner records no proofs, so it has no ontology identity to check one \
@@ -890,6 +912,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
             Self::Collection(inner) => Some(inner.as_ref()),
             Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
+            | Self::PropertyKind { .. }
             | Self::Decision(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
