@@ -869,13 +869,17 @@ pub(super) fn sort_values(ctx: &mut Ctx<'_>, values: &mut Vec<Value>) {
     }) else {
         return;
     };
-    keyed.sort_unstable_by(|a, b| {
+    if purrdf_lex::walk::try_sort_unstable_by(&mut keyed, |a, b| {
         if policy.charge(a.0.len().min(b.0.len()) as u64 + 1) {
-            a.0.cmp(&b.0)
+            Ok(a.0.cmp(&b.0))
         } else {
-            std::cmp::Ordering::Equal
+            Err(())
         }
-    });
+    })
+    .is_err()
+    {
+        return;
+    }
     // The destination retains its original buffer, large enough for every
     // drained value. Keys are scratch and are released after destruction.
     policy.native(|memory| {
@@ -1855,4 +1859,52 @@ pub(super) fn pattern_resource_refusal(
             cause: error.clone(),
         });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enum_sort_stops_at_the_original_work_ceiling() {
+        let namespaces =
+            Namespaces::new("ex", &[("ex".into(), "https://example.org/".into())]).unwrap();
+        let mut ctx = Ctx::new(
+            BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            &namespaces,
+        );
+        ctx.tool = Some(ToolPolicy {
+            predicate: None,
+            bindings: BTreeMap::new(),
+            used: BTreeSet::new(),
+            classes: BTreeMap::new(),
+            limits: ToolSchemaLimits {
+                work: 10,
+                bytes: 1_000_000,
+                nodes: 1_000,
+            },
+            work: 0,
+            input_bytes: 0,
+            admitted_nodes: 0,
+            native_live: 0,
+            native_nodes: 0,
+            error: None,
+        });
+        // Six traversal units and one four-unit comparison fit; the next
+        // comparison must return the original exhaustion before comparing.
+        let mut values = vec![Value::from("z"), Value::from("y"), Value::from("x")];
+        sort_values(&mut ctx, &mut values);
+        let policy = ctx.tool.unwrap();
+        assert_eq!(policy.work, 10);
+        assert!(matches!(
+            policy.error,
+            Some(ToolSchemaError::Exhausted {
+                resource: "work",
+                used: 14,
+                limit: 10
+            })
+        ));
+    }
 }

@@ -242,6 +242,75 @@ ex:Lossy a sh:NodeShape; sh:datatype xsd:integer; sh:equals ex:other.
 }
 
 #[test]
+fn plain_arguments_validate_scalar_nested_array_cardinality_and_closedness() {
+    let body = r"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:closed true;
+ sh:property [sh:path ex:customer; sh:datatype xsd:string; sh:maxCount 1; sh:minLength 2; sh:maxLength 18446744073709551615];
+ sh:property [sh:path ex:customer; sh:minCount 1];
+ sh:property [sh:path ex:limit; sh:datatype xsd:integer; sh:maxCount 1; sh:minInclusive 0; sh:maxInclusive 10];
+ sh:property [sh:path ex:children; sh:class ex:ChildClass; sh:minCount 1; sh:maxCount 2].
+ex:Inactive a sh:NodeShape; sh:targetClass ex:ChildClass; sh:deactivated true.
+ex:Child a sh:NodeShape; sh:targetClass ex:ChildClass; sh:closed true;
+ sh:property [sh:path ex:name; sh:datatype xsd:string; sh:minCount 1; sh:maxCount 1].
+";
+    let shapes = purrdf_shapes::engine::parse_shapes(&format!("{PREFIXES}{body}"), None).unwrap();
+    let mut profile = profile("Args", "Call", &["customer", "limit", "children"]);
+    profile.fields[0].implementation_property = "customer_id".into();
+    profile.fields.push(ToolFieldBinding {
+        parent_shape_iri: "https://example.org/tools/Child".into(),
+        predicate_iri: "https://example.org/tools/name".into(),
+        implementation_property: "name".into(),
+    });
+    let compiled = compile_tool_arguments(&shapes, &namespaces(), &profile, &LIMITS).unwrap();
+    let mut expected = purrdf_lex::json::read(r##"{
+        "$schema":"https://json-schema.org/draft/2020-12/schema",
+        "$defs":{"ShapeRef0":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}},
+        "type":"object","properties":{
+            "customer_id":{"type":"string","minLength":2,"maxLength":18446744073709551615},
+            "limit":{"type":"integer","minimum":0,"maximum":10},
+            "children":{"type":"array","items":{"$ref":"#/$defs/ShapeRef0","type":["string","integer","boolean","object"]},"minItems":1,"maxItems":2}
+        },"required":["children","customer_id"],"additionalProperties":false
+    }"##).unwrap();
+    expected.sort_keys();
+    assert_eq!(
+        compiled.schema_json,
+        format!("{}\n", purrdf_lex::json::write_pretty(&expected))
+    );
+    assert_eq!(compiled.losses.entries(), []);
+    let schema =
+        purrdf_jsonschema::Schema::from_document(&metaschemas(), "mem:///nested.json", expected)
+            .unwrap();
+    for valid in [
+        r#"{"customer_id":"customer-17","children":[{"name":"Ada"}]}"#,
+        r#"{"customer_id":"ab","limit":10,"children":[{"name":"Ada"},{"name":"Max"}]}"#,
+    ] {
+        assert!(
+            schema
+                .is_valid(&purrdf_lex::json::read(valid).unwrap())
+                .unwrap(),
+            "{valid}"
+        );
+    }
+    for invalid in [
+        r#"{"children":[{"name":"Ada"}]}"#,
+        r#"{"customer_id":"a","children":[{"name":"Ada"}]}"#,
+        r#"{"customer_id":"ab","limit":11,"children":[{"name":"Ada"}]}"#,
+        r#"{"customer_id":"ab","children":{"name":"Ada"}}"#,
+        r#"{"customer_id":"ab","children":[]}"#,
+        r#"{"customer_id":"ab","children":[{}]}"#,
+        r#"{"customer_id":"ab","children":[{"name":"Ada","extra":1}]}"#,
+        r#"{"customer_id":"ab","children":[{"name":"Ada"}],"@id":"x"}"#,
+    ] {
+        assert!(
+            !schema
+                .is_valid(&purrdf_lex::json::read(invalid).unwrap())
+                .unwrap(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn boolean_pattern_matcher_refusal_retains_native_cause_and_source() {
     #[expect(
         clippy::result_large_err,
@@ -306,4 +375,16 @@ ex:Pattern a sh:NodeShape; sh:datatype xsd:boolean; sh:pattern "{oversized}".
         matches!(error, ToolSchemaError::UnsupportedConstruct { predicate, .. }
         if predicate.as_deref() == Some("https://example.org/tools/flag"))
     );
+    for constraint in [
+        "sh:in (\"not-an-integer\"^^xsd:integer)",
+        "sh:hasValue \"not-an-integer\"^^xsd:integer",
+    ] {
+        let error = compile_renamed(&format!(
+            "ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:property [sh:path ex:flag; sh:maxCount 1; sh:node ex:Scalar]. ex:Scalar a sh:NodeShape; sh:datatype xsd:integer; {constraint}."
+        )).expect_err("nested constants are refused before enum emission");
+        assert!(
+            matches!(error, ToolSchemaError::UnsupportedConstruct { location, predicate, .. }
+            if location.contains("https://example.org/tools/Scalar") && predicate.as_deref() == Some("https://example.org/tools/flag"))
+        );
+    }
 }

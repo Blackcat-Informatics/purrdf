@@ -8319,52 +8319,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_arguments_validate_scalar_nested_array_cardinality_and_closedness() {
-        let (shapes, profile, limits) = plain_fixture(
-            r"
-            meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:closed true;
-                sh:property [sh:path meta:customer; sh:datatype xsd:string; sh:maxCount 1; sh:minLength 2; sh:maxLength 18446744073709551615];
-                sh:property [sh:path meta:customer; sh:minCount 1];
-                sh:property [sh:path meta:limit; sh:datatype xsd:integer; sh:maxCount 1; sh:minInclusive 0; sh:maxInclusive 10];
-                sh:property [sh:path meta:children; sh:class meta:ChildClass; sh:minCount 1; sh:maxCount 2].
-            meta:Inactive a sh:NodeShape; sh:targetClass meta:ChildClass; sh:deactivated true.
-            meta:Child a sh:NodeShape; sh:targetClass meta:ChildClass; sh:closed true;
-                sh:property [sh:path meta:name; sh:datatype xsd:string; sh:minCount 1; sh:maxCount 1].
-        ",
-        );
-        let output = compile_tool_arguments(&shapes, &fixture_ns(), &profile, &limits)
-            .expect("plain compilation");
-        for instance in [
-            json!({"customer_id":"customer-17","children":[{"name":"Ada"}]}),
-            json!({"customer_id":"ab","limit":10,"children":[{"name":"Ada"},{"name":"Max"}]}),
-        ] {
-            assert!(
-                validates(&output.schema_json, &instance),
-                "valid {instance:?}"
-            );
-        }
-        for instance in [
-            json!({"children":[{"name":"Ada"}]}),
-            json!({"customer_id":"a","children":[{"name":"Ada"}]}),
-            json!({"customer_id":"ab","limit":11,"children":[{"name":"Ada"}]}),
-            json!({"customer_id":"ab","children":{"name":"Ada"}}),
-            json!({"customer_id":"ab","children":[]}),
-            json!({"customer_id":"ab","children":[{}]}),
-            json!({"customer_id":"ab","children":[{"name":"Ada","extra":1}]}),
-            json!({"customer_id":"ab","children":[{"name":"Ada"}],"@id":"x"}),
-        ] {
-            assert!(
-                !validates(&output.schema_json, &instance),
-                "invalid {instance:?}"
-            );
-        }
-        assert!(!output.schema_json.contains("@value"));
-        assert!(!output.schema_json.contains("@id"));
-        assert!(!output.schema_json.contains("@type"));
-        assert_eq!(output.losses.entries(), []);
-    }
-
-    #[test]
     fn plain_arguments_refuse_invalid_profiles_encodings_and_resource_limits() {
         let (shapes, profile, limits) = plain_fixture(
             r"meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:property [sh:path meta:customer; sh:datatype xsd:string; sh:maxCount 1].",
