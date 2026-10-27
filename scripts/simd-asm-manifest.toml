@@ -2903,8 +2903,10 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row and 
 
   # Pure-integer partials may merge directly. Decimal and duration partials merge
   # only when `MagnitudeBound` proves the combined magnitude fits `i128`, with
-  # decimal scales at most 18; otherwise their rows are replayed. This conservative
-  # merge proof does not limit the precision of sequential arithmetic.
+  # decimal scales at most 18, and `combine_admitted` produces a combined value,
+  # including a successful checked duration-month addition. Unproven merges replay
+  # their rows; operational errors propagate. This conservative merge proof does
+  # not limit the precision of sequential arithmetic.
   # IEEE partials are not reassociated.
   [[site.measure]]
   label = "combine"
