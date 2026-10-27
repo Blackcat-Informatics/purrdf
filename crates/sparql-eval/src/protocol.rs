@@ -1263,6 +1263,7 @@ impl From<&EvalError> for FailureCode {
             | EvalError::AllocationFailed { .. }
             | EvalError::Dataset(_)
             | EvalError::Internal(_)
+            | EvalError::Invariant(_)
             | EvalError::Data(_)
             | EvalError::Function(_)
             | EvalError::FunctionAdmission(_)

@@ -28,6 +28,9 @@
 
 use purrdf_sparql_algebra::ParseError;
 
+mod invariant;
+pub use invariant::{EvaluatorInvariant, StackExpectation};
+
 mod retained_native_failure;
 pub use retained_native_failure::RetainedNativeFailure;
 
@@ -431,6 +434,9 @@ pub enum EvalError {
     /// it); it is surfaced rather than panicking so callers fail cleanly.
     Internal(String),
 
+    /// A native virtual-machine invariant, retained without allocated diagnostic text.
+    Invariant(EvaluatorInvariant),
+
     /// A `SERVICE` federation step failed (transport error or undecodable remote
     /// response) and the `SERVICE` was **not** `SILENT`. Per the hard-fail doctrine a
     /// non-silent federation failure aborts the query rather than silently contributing
@@ -682,6 +688,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
         },
         Dataset(error) => "sparql-eval-dataset" { "cause" => Cause(error) },
         Internal(message) => "sparql-eval-internal" { "message" => Text(message) },
+        Invariant(reason) => "sparql-eval-invariant" { "cause" => Cause(reason) },
         Remote(message) => "sparql-eval-remote" { "message" => Text(message) },
         ServiceUnconfigured(message) => "sparql-eval-service-unconfigured" { "message" => Text(message) },
         ServiceDenied(error) => "sparql-eval-service-denied" { "cause" => Cause(error) },
@@ -834,7 +841,7 @@ impl EvalError {
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
             Self::Capacity(_) => Some("native-sparql-capacity-exhausted"),
             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
-            Self::Internal(_) => Some(Self::INTERNAL_CODE),
+            Self::Internal(_) | Self::Invariant(_) => Some(Self::INTERNAL_CODE),
             Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
             Self::FloatEnvironment(_) => Some(Self::FLOAT_ENVIRONMENT_CODE),
             Self::FunctionOperational(_) => Some(Self::FUNCTION_OPERATIONAL_CODE),
@@ -1047,6 +1054,7 @@ impl core::fmt::Display for EvalError {
                 diagnostic.message
             ),
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
+            Self::Invariant(reason) => write!(f, "internal evaluator error: {reason}"),
             Self::Remote(msg) | Self::ServiceUnconfigured(msg) => {
                 write!(f, "SERVICE federation error: {msg}")
             }
@@ -1129,6 +1137,7 @@ impl std::error::Error for EvalError {
             Self::RetainedNativeFailure(error) => Some(error),
             Self::RetainedServiceFailure(error) => Some(error),
             Self::Parse(error) => Some(error),
+            Self::Invariant(reason) => Some(reason),
             Self::Dataset(error) => Some(error),
             Self::Capacity(error) => Some(error),
             Self::ServiceDenied(error) => Some(error),
