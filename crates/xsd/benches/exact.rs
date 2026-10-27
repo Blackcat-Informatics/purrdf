@@ -17,6 +17,8 @@
 //!   `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`). Both
 //!   routes use the exact tower. Historical bounded instruction counts require
 //!   a separate baseline checkout; these rows cannot establish bounded parity.
+//!   `decimal_div` uses the exact-first half-even default; the separate
+//!   `decimal_div_scale18_toward_zero` row selects eighteen digits toward zero.
 //! - `xsd_exact_growth/*/<digits>` — one operation on operands of 40 to 40 000
 //!   decimal digits: binary addition stays linear; decimal parsing and rendering
 //!   include base conversion. Products and division select the current native
@@ -40,7 +42,7 @@ use std::str::FromStr;
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::bigint::BigInt;
-use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer};
+use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rounding};
 use purrdf_xsd::numeric::parse_decimal;
 use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_mul};
 
@@ -200,6 +202,22 @@ fn bench_small(c: &mut Bench) {
                     black_box(
                         black_box(x)
                             .div(black_box(y), DivisionPolicy::default())
+                            .expect("nonzero"),
+                    );
+                }
+            }
+        });
+    });
+    group.bench_function("decimal_div_scale18_toward_zero/exact", |b| {
+        b.iter(|| {
+            for (x, y) in &exact_decimals {
+                if !y.is_zero() {
+                    black_box(
+                        black_box(x)
+                            .div(
+                                black_box(y),
+                                DivisionPolicy::scale(18, Rounding::TowardZero),
+                            )
                             .expect("nonzero"),
                     );
                 }
