@@ -5844,7 +5844,9 @@ fn compile_property(
     }
     if let Some(n) = max_length {
         value.insert("maxLength".to_owned(), json!(n));
-        rejected.push(literal_value_rejection(json!({ "minLength": n + 1 })));
+        if let Some(next) = n.checked_add(1) {
+            rejected.push(literal_value_rejection(json!({ "minLength": next })));
+        }
     }
     if lexical {
         // "a validation result for each value node that is a blank node" — a
@@ -6324,8 +6326,8 @@ impl LexicalConstraints<'_> {
         {
             rejected.push(iri_id_rejection(json!({ "maxLength": n - 1 })));
         }
-        if let Some(n) = self.max_length {
-            rejected.push(iri_id_rejection(json!({ "minLength": n + 1 })));
+        if let Some(next) = self.max_length.and_then(|n| n.checked_add(1)) {
+            rejected.push(iri_id_rejection(json!({ "minLength": next })));
         }
         if self.violated_by(RDF_NIL) {
             rejected.push(nil_list_schema());
@@ -7865,6 +7867,27 @@ mod tests {
             crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         compile(&shapes, &fixture_ns()).expect("schema compilation")
+    }
+
+    #[test]
+    fn maximal_string_length_compiles_without_overflow_and_preserves_smaller_limits() {
+        let instance = |text: &str| json!({ "@type": "meta:Thing", "meta:label": text });
+        for (limit, accepted, rejected) in [
+            (u64::MAX, "a string below the maximal length", None),
+            (2, "猫🐈", Some("abc")),
+            (0, "", Some("a")),
+        ] {
+            let compiled = compile_ttl(&format!(
+                "meta:Shape a sh:NodeShape; sh:targetClass meta:Thing; \
+                 sh:property [sh:path meta:label; sh:datatype xsd:string; \
+                 sh:maxCount 1; sh:maxLength {limit}]."
+            ));
+            assert!(validates(&compiled.schema_json, &instance(accepted)));
+            if let Some(rejected) = rejected {
+                assert!(!validates(&compiled.schema_json, &instance(rejected)));
+            }
+            assert_eq!(compiled.losses.entries(), []);
+        }
     }
 
     fn compile_ontology(
