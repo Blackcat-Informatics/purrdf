@@ -2884,16 +2884,14 @@ summary = "`bgp::eval_compiled_bgp`, the shared index-nested-loop join probe loo
 
 [[site]]
 id = "eval.aggregate-fold"
-summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the `BigInt` integer tier, the `numeric_add` decimal/float/double tier) and `NumericFold::combine_admitted` per provably exact chunk-partial merge"
+summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row and `NumericFold::combine_admitted` per proven chunk merge, using admitted exact integer/decimal arithmetic and ordered IEEE addition"
 
-  # `NumericFold::step_parsed` is the one per-row fold step: the sequential chain, each
-  # chunk's exact prefix (`NumericSummary::push`) and the in-order replay of every row
-  # from the first float/double operand on all reach it out of line. The
-  # integer-to-float/double promotion it inlines is `BigInt::to_f64`/`to_f32`, a
-  # single correctly rounded integer-to-float cast scaled by an exact power of two:
-  # no multiply-add, fused or otherwise, so the ceiling is 0 on every configuration
-  # (the earlier per-limb `mul_add` Horner fold contracted to hardware FMA on
-  # x86_64-v3/v4 and aarch64, and misrounded).
+  # Sequential folding, chunk prefixes and ordered replay call `step_parsed`.
+  # Numeric addition reaches `ops::value_binary_admitted` through
+  # `numeric_fold_binary` and `NumericFrame`. The native kernel uses checked
+  # `i128` integer addition where possible, admitted exact arithmetic
+  # otherwise, and admitted conversion followed by IEEE addition for float/double
+  # operands. These measures retain a zero-FMA ceiling.
   [[site.measure]]
   label = "step"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2903,10 +2901,13 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the
   max_fma = 0
   forbid_relaxed = true
 
-  # The chunk-partial merge, `O(chunks)` per group above `PARALLEL_MIN_ROWS`, taken
-  # only where it provably equals the chain (both partials pure-integer, or the
-  # decimal/duration magnitude bound fits `i128`); never over a float/double operand.
-  # The same inlined `to_f64` promotion, so no FMA anywhere.
+  # Pure-integer partials may merge directly. Decimal and duration partials merge
+  # only when `MagnitudeBound` proves the combined magnitude fits `i128`, with
+  # decimal scales at most 18, and `combine_admitted` produces a combined value,
+  # including a successful checked duration-month addition. Unproven merges replay
+  # their rows; operational errors propagate. This conservative merge proof does
+  # not limit the precision of sequential arithmetic.
+  # IEEE partials are not reassociated.
   [[site.measure]]
   label = "combine"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2916,9 +2917,8 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the
   max_fma = 0
   forbid_relaxed = true
 
-  # The decimal/float/double tier's per-row addition (and the duration tier's
-  # seconds): one promotion-tower `op:numeric-add`, out of line in `purrdf_xsd`.
-  # Scalar everywhere.
+  # Standalone public numeric-add helper; the aggregate fold uses
+  # `value_binary_admitted`, not this wrapper.
   [[site.measure]]
   label = "numeric_add"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2928,7 +2928,8 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the
   max_fma = 0
   forbid_relaxed = true
 
-  # The integer tier's per-row addition: an `i128` into the limb vector, carry chain.
+  # Standalone BigInt addition of an `i128` operand; not the aggregate fold's
+  # direct per-row entry point.
   [[site.measure]]
   label = "add_i128"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2938,7 +2939,8 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the
   max_fma = 0
   forbid_relaxed = true
 
-  # The integer tier's chunk-partial merge: limb vector plus limb vector, carry chain.
+  # Standalone BigInt addition helper; not the aggregate fold's direct
+  # partial-merge entry point.
   [[site.measure]]
   label = "add_assign"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
