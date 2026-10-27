@@ -5148,6 +5148,92 @@ mod tests {
     use crate::test_support::evidence_scope;
     use crate::test_support::permute;
 
+    /// Recorded predecessor order cannot rescue a later or cyclic antecedent.
+    #[test]
+    fn requested_proofs_preserve_historical_predecessors_and_skip_unrelated_records() {
+        use crate::proof::{
+            EvaluationProofIndex, EvaluationProofs, ProofContext, ProofError, ProofIndexWork,
+        };
+        let fact = |name: &str| Fact {
+            subject: name.to_owned(),
+            predicate: "p".to_owned(),
+            object: "o".to_owned(),
+            graph: RelationStore::DEFAULT_GRAPH.to_owned(),
+        };
+        let record = |name, height, rule, head, sources: Vec<Fact>| Derivation {
+            fact: fact(name),
+            rule,
+            head,
+            sources,
+            proof_height: height,
+        };
+        let exe = compile(Vec::<DlClause>::new()).unwrap();
+        let mut edb = RelationStore::new();
+        edb.insert_row(Arity::<4>::fact_terms(&fact("target")))
+            .unwrap();
+        let asserted = edb.clone();
+        let mut evaluation = evaluate(&exe, edb).unwrap();
+        evaluation.derivations = Some(vec![
+            record("a", 1, 0, 0, vec![fact("a")]),
+            record("target", 2, 2, 1, vec![fact("a"), fact("later"), fact("a")]),
+            record("a", 3, 3, 0, vec![]),
+            record("later", 4, 4, 0, vec![fact("target")]),
+            record("unrelated", 5, usize::MAX, usize::MAX, vec![fact("absent")]),
+        ]);
+        let eager = EvaluationProofs::of(&evaluation).unwrap();
+        let index = EvaluationProofIndex::of(&evaluation).unwrap();
+        let mut work = ProofIndexWork::default();
+        let (arena, root) = index
+            .extract_counted(&fact("target"), &mut work)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            arena.encode(root),
+            eager
+                .arena()
+                .encode(eager.root_for(&fact("target")).unwrap())
+        );
+        // Being asserted must not replace the recorded derivation with an axiom.
+        assert!(!arena.is_axiom(root));
+        assert_eq!(work.derivations, 2);
+        assert_eq!(work.source_slots, 4);
+        let context = ProofContext::new(&[], &asserted, evaluation.facts());
+        assert!(matches!(
+            arena.check(root, &context),
+            Err(ProofError::NotAsserted { .. })
+        ));
+
+        // A deep inventory exercises heap traversal beyond the inline frame stack.
+        evaluation.derivations = Some(
+            (0..1024)
+                .map(|n| Derivation {
+                    fact: fact(&n.to_string()),
+                    rule: 0,
+                    head: 0,
+                    sources: if n == 0 {
+                        vec![]
+                    } else {
+                        vec![fact(&(n - 1).to_string())]
+                    },
+                    proof_height: n + 1,
+                })
+                .collect(),
+        );
+        let index = EvaluationProofIndex::of(&evaluation).unwrap();
+        let (arena, root) = index
+            .extract_counted(&fact("1023"), &mut work)
+            .unwrap()
+            .unwrap();
+        assert_eq!(work.derivations, 1024);
+        assert_eq!(work.source_slots, 1023);
+        assert_eq!(arena.len(), 1024);
+        let eager = EvaluationProofs::of(&evaluation).unwrap();
+        assert_eq!(
+            arena.encode(root),
+            eager.arena().encode(eager.root_for(&fact("1023")).unwrap())
+        );
+    }
+
     #[test]
     fn impossible_constant_patterns_refuse_before_broad_delta_seeding() {
         let broad = ClauseAtom::triple(
