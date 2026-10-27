@@ -1055,6 +1055,11 @@ impl Decimal {
     /// [`ExactError::NonTerminating`] under [`DivisionPolicy::Exact`] for a
     /// quotient with no finite expansion; [`ExactError::ScaleOverflow`] for a
     /// quotient scale past `u32::MAX`.
+    #[allow(
+        clippy::inline_always,
+        reason = "measured caller policy specialization must eliminate the public result boundary"
+    )]
+    #[inline(always)]
     pub fn div(&self, rhs: &Self, policy: DivisionPolicy) -> Result<Self, ExactError> {
         self.div_using(rhs, policy, &crate::bigint::scratch::Unbounded)
             .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
@@ -1147,6 +1152,11 @@ impl Decimal {
         }
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "measured constant division policies must specialize before arithmetic dispatch"
+    )]
+    #[inline(always)]
     fn div_using(
         &self,
         rhs: &Self,
@@ -1225,6 +1235,11 @@ impl Decimal {
     /// The quotient rounded to `scale` digits: with the operands
     /// `a·10^-sa` and `b·10^-sb`, the coefficient is
     /// `round(a · 10^(scale + sb − sa) / b)`.
+    #[allow(
+        clippy::inline_always,
+        reason = "measured explicit rounding must stay constant across this storage delegate"
+    )]
+    #[inline(always)]
     fn div_rounded_using(
         &self,
         rhs: &Self,
@@ -1235,6 +1250,11 @@ impl Decimal {
         self.div_rounded_admitted_using(rhs, scale, rounding, storage, &mut |_| Ok(()))
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "measured rounding must reach the small quotient without dynamic forwarding"
+    )]
+    #[inline(always)]
     fn div_rounded_admitted_using(
         &self,
         rhs: &Self,
@@ -1704,6 +1724,11 @@ fn mul_parts_admitted_using(
     Ok(Decimal::new_using(product, scale, storage)?)
 }
 
+#[allow(
+    clippy::inline_always,
+    reason = "measured small quotient specialization must avoid the general integer storage frame"
+)]
+#[inline(always)]
 fn div_rounded_parts_admitted_using(
     left_parts: (&Integer, u32),
     right_parts: (&Integer, u32),
@@ -1714,12 +1739,33 @@ fn div_rounded_parts_admitted_using(
 ) -> Result<Decimal, super::ExactOperationError> {
     let (left, ls) = left_parts;
     let (right, rs) = right_parts;
-    let negative = left.is_negative() != right.is_negative();
     let shift = i64::from(scale) + i64::from(rs) - i64::from(ls);
     let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
-    if let Some(quotient) = div_rounded_small_parts(left, right, shift, rounding, negative) {
+    if let Some(quotient) = div_rounded_small_parts(left, right, shift, rounding) {
         return Ok(Decimal::from_small(quotient, scale));
     }
+    div_rounded_wide_parts_admitted_using(
+        (left, right),
+        (shift, digits, left.is_negative() != right.is_negative()),
+        scale,
+        rounding,
+        storage,
+        admit,
+    )
+}
+
+// Keep general integer storage and admission state out of the machine-word frame.
+#[cold]
+fn div_rounded_wide_parts_admitted_using(
+    operands: (&Integer, &Integer),
+    alignment: (i64, u32, bool),
+    scale: u32,
+    rounding: Rounding,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Decimal, super::ExactOperationError> {
+    let (left, right) = operands;
+    let (shift, digits, negative) = alignment;
     let copied = cost::live_integer_bytes(&[left, right])?;
     admit(cost::NumericOperationLayout::bytes(copied, copied)?)?;
     let (a, b) = (left.abs_using(storage)?, right.abs_using(storage)?);
@@ -1839,17 +1885,16 @@ fn aligned_small_parts(
     }
 }
 
+#[inline]
 fn div_rounded_small_parts(
     left: &Integer,
     right: &Integer,
     shift: i64,
     rounding: Rounding,
-    negative: bool,
 ) -> Option<i128> {
-    let (a, b) = (
-        left.as_i128()?.unsigned_abs(),
-        right.as_i128()?.unsigned_abs(),
-    );
+    let (a, b) = (left.as_i128()?, right.as_i128()?);
+    let negative = (a < 0) != (b < 0);
+    let (a, b) = (a.unsigned_abs(), b.unsigned_abs());
     let power = POW10.get(usize::try_from(shift.unsigned_abs()).ok()?)?;
     let (numerator, denominator) = if shift >= 0 {
         (a.checked_mul(*power)?, b)
@@ -1857,13 +1902,15 @@ fn div_rounded_small_parts(
         (a, b.checked_mul(*power)?)
     };
     let quotient = numerator / denominator;
-    let remainder = numerator - quotient * denominator;
-    // Twice the remainder against the denominator, as the remainder against
-    // what is left of the denominator: a scaled divisor can pass `2^127`, where
-    // doubling the remainder would overflow `u128`.
-    let half = remainder.cmp(&(denominator - remainder));
-    let magnitude = quotient
-        + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0));
+    let magnitude = if rounding == Rounding::TowardZero {
+        quotient
+    } else {
+        let remainder = numerator - quotient * denominator;
+        // Compare without doubling a remainder that may exceed half of u128.
+        let half = remainder.cmp(&(denominator - remainder));
+        quotient
+            + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0))
+    };
     let magnitude = i128::try_from(magnitude).ok()?;
     Some(if negative { -magnitude } else { magnitude })
 }

@@ -198,17 +198,27 @@ rotation and bound instead of remainders. Wide zero stripping retains the exact
 quotient from that test rather than dividing again. Decimal multiplication widens
 signed 64-bit coefficients before multiplying; other inline coefficients retain
 the checked 128-bit product, and larger products use the existing limb kernels.
+Rounded division keeps its machine-word quotient ahead of a cold general-integer
+storage and admission frame. Caller-selected rounding remains visible through
+the small entry; toward-zero division does not form an unused remainder or
+half-distance. The exact-first half-even default and all general division
+algorithms retain their original laws.
+
 A native arithmetic-source comparison holds current hash/lex foundations
 constant and retains all 1,024 results outside
 each acknowledged instruction window. Ten fresh-process samples per row, fixed
 seeds and unchanged release/bench profiles give these median instructions/value:
+
+The division rows compare against the source after the earlier normalization
+and conversion improvements; other rows retain their historical before figures.
 
 | Production route | Before | After | Change |
 | --- | ---: | ---: | ---: |
 | Exact decimal addition | 172.1465 | 171.9121 | -0.14% |
 | Exact decimal multiplication | 187.4795 | 159.2354 | -15.07% |
 | Public decimal multiplication | 274.9604 | 248.7158 | -9.54% |
-| Exact decimal division, scale eighteen/toward-zero | 367.6816 | 363.1680 | -1.23% |
+| Exact decimal division, scale eighteen/toward-zero | 363.1680 | 243.0713 | -33.07% |
+| Public decimal division, exact-first half-even default | 598.2305 | 507.0273 | -15.25% |
 | Exact decimal conversion to `f64` | 144.3599 | 102.8242 | -28.77% |
 | Public decimal conversion to `f64` | 146.3594 | 104.8242 | -28.38% |
 
@@ -216,7 +226,13 @@ Every returned answer is checked after measurement. The other original small
 rows show no material instruction regression; all measured allocation quantities
 are unchanged. Exact multiplication is 6.56% below the frozen historical bounded
 source's 170.40625 instructions/value. Exact conversion to `f64` is 21.35% below
-its original 130.734375 instructions/value reference. These retained-output figures
+its original 130.734375 instructions/value reference. From the already optimized
+normalization and conversion source, exact division falls from 363.16796875 to
+243.0712890625 instructions/value, 3.13% below its frozen bounded reference of
+250.9365234375. The public division row retains its distinct exact-first,
+eighteen-digit half-even policy. The existing bench default-law rows are
+unchanged; `decimal_div_scale18_toward_zero/exact` names the explicit policy.
+These retained-output figures
 include a common indirect call and exclude setup, validation and destruction;
 they establish neither complete-query speed nor full bounded parity. General
 semantics execute natively; portable release builds are a separate obligation.
