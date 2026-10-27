@@ -802,8 +802,13 @@ fn admitted_small_exact_division_uses_one_initial_grant() {
 #[test]
 fn lexical_refusals_have_valid_neighbours() {
     for refused in [
-        "", "+", "-", "1.2.3", "1e5", " 1", "1 ", "0x10", "\u{0661}", "--1", "1/2",
+        "", "+", "-", ".", "1.2.3", "1e5", " 1", "1 ", "0x10", "\u{0661}", "--1", "1/2",
     ] {
+        assert!(!purrdf_xsd::numeric::is_decimal_lexical(refused));
+        assert!(matches!(
+            Decimal::try_from_lexical(refused),
+            Err(purrdf_xsd::exact::ExactParseError::InvalidLexical { .. })
+        ));
         assert!(
             matches!(
                 Decimal::from_str(refused),
@@ -817,13 +822,27 @@ fn lexical_refusals_have_valid_neighbours() {
         );
     }
     for accepted in [".5", "1.", "+0", "-0", "-.0", "007.700", "0000"] {
+        assert!(purrdf_xsd::numeric::is_decimal_lexical(accepted));
         assert!(Decimal::from_str(accepted).is_ok(), "{accepted:?}");
     }
-    assert_eq!(Decimal::from_str("-0.0").expect("valid").to_string(), "0");
-    assert_eq!(
-        Decimal::from_str("007.700").expect("valid").to_string(),
-        "7.7"
-    );
+    for (lexical, expected) in [
+        ("-0.0", "0"),
+        ("007.700", "7.7"),
+        ("+0009999999999999999999.000", "9999999999999999999"),
+        ("99999999999999999999", "99999999999999999999"),
+        ("-99999999999999999999", "-99999999999999999999"),
+        (
+            "-170141183460469231731687303715884105728",
+            "-170141183460469231731687303715884105728",
+        ),
+    ] {
+        let value = Decimal::from_str(lexical).expect("valid");
+        assert_eq!(value.canonical_lexical(), expected);
+        assert_eq!(
+            Decimal::try_from_lexical(lexical).expect("native parse"),
+            value
+        );
+    }
     for refused in ["", "1.0", "+", "1_000", "１"] {
         assert!(Integer::from_str(refused).is_err(), "{refused:?}");
     }
