@@ -274,6 +274,8 @@ fn parse_admitted(
 /// datatype or non-literal term. [`GeoError::WktSyntax`] retains WKT grammar
 /// failures and [`GeoError::JsonSyntax`] retains JSON grammar failures.
 /// Structural and GeoJSON shape failures retain their literal-error channel.
+/// WKT uses [`wkt::parse`]'s default resource limits; use
+/// [`geometry_arg_in_policy`] for an explicit policy.
 pub fn geometry_arg(vocab: &GeoVocab, value: &TermValue) -> Result<GeometryLiteral, GeoError> {
     geometry_arg_inner(vocab, value, None)
 }
@@ -289,6 +291,9 @@ fn geometry_arg_inner(
         unreachable!("the original carrier-format boundary admits only literals");
     };
     match format {
+        CarrierFormat::Wkt if admission.is_none() => {
+            wkt::parse(lexical_form, vocab.default_wkt_crs())
+        }
         CarrierFormat::Wkt => wkt::parse_admitted(lexical_form, vocab.default_wkt_crs(), admission),
         CarrierFormat::GeoJson => {
             geojson::parse_admitted(lexical_form, vocab.geojson_crs(), admission)

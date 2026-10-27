@@ -363,6 +363,15 @@ fn scientific_coordinate_admission_precedes_large_integer_construction() {
 }
 
 #[test]
+fn compatibility_wkt_carrier_uses_default_construction_limits() {
+    let source = literal("POINT(1e100000 0)", false);
+    assert!(matches!(
+        geometry_arg(crate::standard_vocabulary(), &source),
+        Err(GeoError::WorkExhausted { .. })
+    ));
+}
+
+#[test]
 fn metered_source_refusals_preserve_original_cancellation_inside_lexical_runs() {
     let wkt = literal(&format!("POINT({} 0)", "1".repeat(10000)), false);
     let json = literal(
