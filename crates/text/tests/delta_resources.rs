@@ -83,7 +83,10 @@ fn limits() -> SegmentedReadLimits {
     SegmentedReadLimits::new(512_000_000, 32, 4_000_000, 2_000_000_000, 32)
 }
 
-fn build<D: DatasetView>(source: &D, config: &TextIndexConfig, han: bool) -> TextIndex {
+fn build<D: DatasetView>(source: &D, config: &TextIndexConfig, han: bool) -> TextIndex
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
     if han {
         HanCharacterIndex::from_dataset(source, config)
             .unwrap()

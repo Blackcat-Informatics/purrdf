@@ -62,7 +62,10 @@ impl HanCharacterIndex {
     pub fn from_dataset<D: DatasetView>(
         dataset: &D,
         config: &TextIndexConfig,
-    ) -> Result<Self, TextError> {
+    ) -> Result<Self, TextError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         Self::from_dataset_with_ranking(dataset, config, RankingProfile::single_field())
     }
 
@@ -74,7 +77,10 @@ impl HanCharacterIndex {
         dataset: &D,
         config: &TextIndexConfig,
         ranking: RankingProfile,
-    ) -> Result<Self, TextError> {
+    ) -> Result<Self, TextError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         Ok(Self {
             index: Arc::new(TextIndex::from_dataset_with_ranking(
                 dataset,

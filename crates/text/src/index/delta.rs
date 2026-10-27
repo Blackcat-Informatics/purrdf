@@ -45,12 +45,17 @@ impl<P: CorpusProfile> TextIndex<P> {
         next: &D,
         added: &A,
         removed: &R,
-    ) -> Result<Self, TextDeltaError> {
+    ) -> Result<Self, TextDeltaError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+        A::ReadError: purrdf_hash::error::StructuredError,
+        R::ReadError: purrdf_hash::error::StructuredError,
+    {
         let (additions, added_coverage) = collect_rows(added, &self.config)?;
         let (removals, removed_coverage) = collect_rows(removed, &self.config)?;
         let (observed_source, observed_coverage, version) = next
             .checked_read(|next| self.observe_source(next))
-            .map_err(|error| TextError::source_read(error.to_string()))??;
+            .map_err(TextError::source_read)??;
         let subjects = additions
             .iter()
             .chain(&removals)
@@ -110,7 +115,10 @@ impl<P: CorpusProfile> TextIndex<P> {
 
     /// Obtain next-source evidence independently of the requested additions and
     /// removals. Neither branch enumerates the complete next source.
-    fn observe_source<D: DatasetView>(&self, next: &D) -> Result<ObservedSource, TextDeltaError> {
+    fn observe_source<D: DatasetView>(&self, next: &D) -> Result<ObservedSource, TextDeltaError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         if P::GRAPH_FREE && next.supports_named_graphs() {
             return Err(TextError::config(
                 "the graph-free text profile requires a graph-free source",
@@ -145,7 +153,7 @@ impl<P: CorpusProfile> TextIndex<P> {
                         Err(error) => ControlFlow::Break(error),
                     }
                 })
-                .map_err(|error| TextError::source_read(error.to_string()))?;
+                .map_err(TextError::source_read)?;
             match observed {
                 SourceVisit::Complete { version, .. } => {
                     let coverage = SourceCoverage::of_counts(
@@ -161,24 +169,24 @@ impl<P: CorpusProfile> TextIndex<P> {
         }
         let count = next
             .source_statement_count()
-            .map_err(|error| TextError::source_read(error.to_string()))?
+            .map_err(TextError::source_read)?
             .ok_or(TextDeltaError::SourceObservationUnavailable)?;
         let mut digest = Multiset256::default();
         let mut counts = vec![0_u128; self.config.predicates().len()];
-        if let Some(graph) = P::resolve(self.config.graph(), next)
-            .map_err(|error| TextError::source_read(error.to_string()))?
+        if let Some(graph) =
+            P::resolve(self.config.graph(), next).map_err(TextError::source_read)?
         {
             for (ordinal, predicate) in self.config.predicates().iter().enumerate() {
                 let Some(predicate) = next
                     .term_id_by_value(predicate)
-                    .map_err(|error| TextError::source_read(error.to_string()))?
+                    .map_err(TextError::source_read)?
                 else {
                     continue;
                 };
                 for stream in [StatisticsStream::Asserted, StatisticsStream::Annotations] {
                     let summary = next
                         .source_summary(predicate, graph, stream)
-                        .map_err(|error| TextError::source_read(error.to_string()))?
+                        .map_err(TextError::source_read)?
                         .ok_or(TextDeltaError::SourceObservationUnavailable)?;
                     digest
                         .combine(summary.literal_rows()[usize::from(P::GRAPH_FREE)])
@@ -371,10 +379,11 @@ impl<P: CorpusProfile> TextIndex<P> {
 
 type ObservedSource = (SourceDigest, SourceCoverage, Option<SourceVersion>);
 
-fn finish_read<D: DatasetView>(source: &D) -> Result<(), TextError> {
-    source
-        .checked_read(|_| ())
-        .map_err(|error| TextError::source_read(error.to_string()))
+fn finish_read<D: DatasetView>(source: &D) -> Result<(), TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
+    source.checked_read(|_| ()).map_err(TextError::source_read)
 }
 
 fn selected_graph<P: CorpusProfile>(

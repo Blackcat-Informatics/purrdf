@@ -230,10 +230,16 @@ pub(crate) fn graph_free_rdf12_partitions_and_named_refusal() {
     .unwrap();
     for source in [&dataset, &empty] {
         let read = source.read().unwrap();
-        assert!(matches!(
-            TextIndex::from_dataset(&read, &named),
-            Err(TextError::SourceRead(_))
-        ));
+        let error = TextIndex::from_dataset(&read, &named).unwrap_err();
+        let TextError::SourceRead(retained) = &error else {
+            panic!("named graph refusal keeps its native source");
+        };
+        assert_eq!(
+            std::error::Error::source(retained)
+                .unwrap()
+                .downcast_ref::<TripleReadError>(),
+            Some(&TripleReadError::NamedGraphsUnsupported)
+        );
         assert_eq!(
             read.read_error(),
             Some(TripleReadError::NamedGraphsUnsupported)
