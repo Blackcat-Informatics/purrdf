@@ -212,16 +212,9 @@ pub fn parse_in_policy(
     default_crs: &Crs,
     policy: crate::ExecutionPolicy,
 ) -> Result<GeometryLiteral, GeoError> {
-    let admission = std::cell::RefCell::new(crate::carrier::ParseAdmission::new(
-        lexical.len(),
-        policy,
-        None,
-    )?);
-    let result = parse_admitted(lexical, default_crs, Some(&admission));
-    if let Some(error) = admission.borrow_mut().take_error() {
-        return Err(error);
-    }
-    result
+    crate::carrier::parse_in_policy(lexical.len(), policy, |admission| {
+        parse_admitted(lexical, default_crs, Some(admission))
+    })
 }
 
 /// Parse WKT without aggregate resource limits, preserving the original reader.

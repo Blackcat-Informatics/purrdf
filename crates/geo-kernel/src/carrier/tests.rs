@@ -363,12 +363,26 @@ fn scientific_coordinate_admission_precedes_large_integer_construction() {
 }
 
 #[test]
-fn compatibility_wkt_carrier_uses_default_construction_limits() {
-    let source = literal("POINT(1e100000 0)", false);
-    assert!(matches!(
-        geometry_arg(crate::standard_vocabulary(), &source),
-        Err(GeoError::WorkExhausted { .. })
-    ));
+fn compatibility_carriers_use_default_construction_limits() {
+    let vocab = crate::standard_vocabulary();
+    for (text, json) in [
+        ("POINT(1e100000 0)", false),
+        (r#"{"coordinates":[1e100000,0],"type":"Point"}"#, true),
+    ] {
+        let source = literal(text, json);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let result = geometry_arg(vocab, &source);
+        let allocation = window.close();
+        assert!(matches!(result, Err(GeoError::WorkExhausted { .. })));
+        assert!(allocation.requested_bytes < 4096, "{allocation:?}");
+    }
+    assert!(
+        geometry_arg(
+            vocab,
+            &literal(r#"{"type":"Point","coordinates":[1e60,0]}"#, true)
+        )
+        .is_ok()
+    );
 }
 
 #[test]

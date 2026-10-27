@@ -25,20 +25,21 @@ Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
 C ABI 0.12.0. Several defaults change behavior without a signature change:
 remembered empty named graphs, model-only Datalog output, exact decimal
-division, WKT parsing resource policies, the SPARQL pre-binding rewrite and specific
+division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewrite and specific
 SPARQL diagnostic codes.
 Each has its own section below.
 
-## WKT parsing resource policies
+## WKT and GeoJSON parsing resource policies
 
-`wkt::parse` and the compatibility WKT carrier through `geometry_arg` now apply
+`wkt::parse`, `geojson::parse` and their compatibility carriers through `geometry_arg` now apply
 `ExecutionPolicy::geometry()`. Input scanning, aggregate exact-decimal
-construction and coordinate count can exhaust that policy even for valid WKT.
+construction and coordinate count can exhaust that policy even for valid input.
 Refusals retain their original `WorkExhausted`, `MemoryExhausted` or
 `OutputExhausted` reason. Accepted coordinates and CRS metadata remain exact.
 
-Use `wkt::parse_in_policy` or `geometry_arg_in_policy` for caller-selected limits.
-Use `wkt::parse_unbounded` when the caller accepts unrestricted construction.
+Use `wkt::parse_in_policy`, `geojson::parse_in_policy` or `geometry_arg_in_policy`
+for caller-selected limits. Use `wkt::parse_unbounded` or
+`geojson::parse_unbounded` when the caller accepts unrestricted construction.
 Large exponents or trusted generated text with hundreds of decimal places can
 require either route. Producing a value under one operation's budget does not
 guarantee that a separately budgeted parse can reconstruct it.
@@ -46,6 +47,11 @@ guarantee that a separately budgeted parse can reconstruct it.
 Existing supplied-policy, metered and storage ingress keeps its original account.
 Collections still use a heap stack with no separate nesting-depth ceiling;
 their scanning and construction consume the selected policy's resources.
+GeoJSON foreign members and coordinates preceding their type share that scan
+allowance. With sufficient resources, malformed JSON still takes priority over
+deferred shape errors. The inherited rational exponent ceiling is unchanged.
+These limits admit conservative logical source, work, construction and output
+costs; they do not promise exact retained-heap accounting or cancellation.
 
 ## Shape-map syntax refusals and Unicode positions
 
