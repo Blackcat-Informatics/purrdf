@@ -97,24 +97,39 @@ impl Subsumptions {
         session: &mut Session<'_>,
         classes: &[(u32, u32)],
     ) -> Result<Self, crate::EntailError> {
+        Self::decide_until(session, classes, || true)
+    }
+
+    /// The same matrix, retaining processed cells if the caller cancels.
+    pub(super) fn decide_until(
+        session: &mut Session<'_>,
+        classes: &[(u32, u32)],
+        mut poll: impl FnMut() -> bool,
+    ) -> Result<Self, crate::EntailError> {
         let kb = session.kb();
         let seeds: Vec<u32> = classes.iter().map(|&(_, concept)| concept).collect();
         let taxonomy = saturate(kb, &seeds)?;
         let complete = taxonomy.is_complete();
         let n = classes.len();
-        let mut verdicts = vec![Verdict::False; n * n];
+        let mut verdicts = vec![Verdict::Unknown; n * n];
         // A pair the saturation ruled out on a COMPLETE taxonomy is decided by the saturation
         // too, and its basis says so rather than claiming a run nothing made. Allocated only
         // for a recording session: nothing but `Self::claims` reads it, and nothing but a
         // recording session calls that.
         let records = session.records();
         let mut bases = if records {
-            vec![ClaimBasis::Saturated; n * n]
+            vec![ClaimBasis::NotDecided; n * n]
         } else {
             Vec::new()
         };
-        for (i, &(_, sub)) in classes.iter().enumerate() {
+        'cells: for (i, &(_, sub)) in classes.iter().enumerate() {
             for (j, &(_, sup)) in classes.iter().enumerate() {
+                if !poll() {
+                    break 'cells;
+                }
+                if records {
+                    bases[i * n + j] = ClaimBasis::Saturated;
+                }
                 if i == j {
                     verdicts[i * n + j] = Verdict::True;
                     if records {
@@ -163,6 +178,17 @@ impl Subsumptions {
     /// leave unallocated otherwise: `Reasoner::seal` calls this from inside the closure
     /// `Session::proof` runs only when it has a proof term to put the claims in.
     pub(crate) fn claims(&self, kb: &Kb, classes: &[(u32, u32)]) -> Vec<Claim> {
+        self.claims_with_native_decisions(kb, classes, false)
+    }
+
+    /// Include native negative/undecided runs for the combined service's run binding.
+    /// A negative saturated cell has no signed proof basis and must not become a claim.
+    pub(super) fn claims_with_native_decisions(
+        &self,
+        kb: &Kb,
+        classes: &[(u32, u32)],
+        native_decisions: bool,
+    ) -> Vec<Claim> {
         debug_assert_eq!(
             self.bases.len(),
             self.n * self.n,
@@ -172,7 +198,12 @@ impl Subsumptions {
         let mut out = Vec::new();
         for i in 0..self.n {
             for j in 0..self.n {
-                if i == j || !self.holds(i, j) {
+                let native = native_decisions
+                    && matches!(
+                        self.bases[i * self.n + j],
+                        ClaimBasis::CounterModel { .. } | ClaimBasis::Undecided { .. }
+                    );
+                if i == j || (!self.holds(i, j) && !native) {
                     continue;
                 }
                 out.push(Claim::new(
@@ -255,7 +286,7 @@ pub struct ClassHierarchy {
     /// Named classes established equivalent to `owl:Nothing`.
     unsatisfiable: Vec<TermValue>,
     /// The transitive reduction of [`Self::subsumptions`].
-    direct: Vec<(TermValue, TermValue)>,
+    pub(super) direct: Vec<(TermValue, TermValue)>,
 }
 
 purrdf_hash::debug_non_exhaustive! {
@@ -295,10 +326,25 @@ impl ClassHierarchy {
 
     /// Derive the hierarchy from a decided subsumption matrix.
     pub(crate) fn derive(kb: &Kb, classes: &[(u32, u32)], m: &Subsumptions) -> Self {
+        Self::derive_until(kb, classes, m, || true)
+    }
+
+    /// Preserve all established pairs; cancellation interrupts only direct reduction.
+    pub(super) fn derive_until(
+        kb: &Kb,
+        classes: &[(u32, u32)],
+        m: &Subsumptions,
+        mut poll: impl FnMut() -> bool,
+    ) -> Self {
         let name = |i: usize| kb.interner.value(classes[i].0).clone();
         let n = classes.len();
-
-        let relations = super::hierarchy::Relations::derive(n, name, |i, j| m.holds(i, j), || true);
+        let mut relations = super::hierarchy::Relations::default();
+        for i in 0..n {
+            for j in i + 1..n {
+                relations.record_pair(name(i), name(j), m.holds(i, j), m.holds(j, i));
+            }
+        }
+        relations.reduce(n, &name, &|i, j| m.holds(i, j), &mut poll);
 
         // A class is unsatisfiable exactly when it is subsumed by `owl:Nothing`'s concept,
         // which the signature always carries; if the signature somehow lacks it there is

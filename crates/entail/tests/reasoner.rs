@@ -2835,3 +2835,259 @@ fn object_property_inventory_resolves_typed_ranges_and_disjoint_groups() {
         assert!(answer.answer().properties().contains(&iri(property)));
     }
 }
+
+/// A nominal makes classification depend on the ABox and exercise residual refutations.
+fn class_analysis_nominal() -> Arc<RdfDataset> {
+    ds(&[
+        typed(N::E("Female"), N::V(OWL_CLASS)),
+        typed(N::E("Only"), N::V(OWL_CLASS)),
+        (N::E("Only"), N::V(EQUIVALENT_CLASS), N::B("justAlice")),
+        (N::B("justAlice"), N::V(ONE_OF), N::B("cell0")),
+        (N::B("cell0"), N::V(FIRST), N::E("alice")),
+        (N::B("cell0"), N::V(REST), N::V(NIL)),
+        typed(N::E("alice"), N::E("Female")),
+    ])
+}
+
+/// The joint service preserves both standalone answers, including quotient and empty-class views.
+#[test]
+fn class_analysis_shares_classification_without_changing_native_answers() {
+    let empty = ds(&[
+        (N::E("A"), N::V(EQUIVALENT_CLASS), N::E("B")),
+        sub(N::E("Empty"), N::V(NOTHING)),
+    ]);
+    for input in [kittens(), class_analysis_nominal(), empty] {
+        let reasoner = Reasoner::new(&input).unwrap();
+        let hierarchy = reasoner.classify().unwrap();
+        let realization = reasoner.realize().unwrap();
+        let analysis = reasoner.classify_and_realize().unwrap();
+        assert_eq!(analysis.answer().hierarchy(), hierarchy.answer());
+        assert_eq!(analysis.answer().realization(), realization.answer());
+        assert_eq!(
+            analysis.direct_subsumptions().unwrap(),
+            hierarchy.direct_subsumptions().unwrap()
+        );
+        assert_eq!(
+            analysis.direct_types().unwrap(),
+            realization.direct_types().unwrap()
+        );
+        assert_eq!(honest(&analysis).completeness(), DlCompleteness::Decided);
+        assert_eq!(
+            analysis.certificate().decisions(),
+            realization.certificate().decisions()
+        );
+        assert_eq!(
+            analysis.certificate().work(),
+            realization.certificate().work()
+        );
+        assert!(
+            hierarchy.certificate().decisions() + realization.certificate().decisions()
+                > analysis.certificate().decisions()
+        );
+    }
+}
+
+/// Source-bound replay covers exactly both positive views and checks the residual native decisions.
+#[test]
+fn class_analysis_proof_binds_both_source_universes() {
+    use purrdf_entail::{ClaimBasis, Question, ServiceProof};
+    for (residual, input) in [(false, kittens()), (true, class_analysis_nominal())] {
+        let producer = Reasoner::with_proofs(&input).unwrap();
+        let question = producer.class_analysis_question();
+        let answer = producer.classify_and_realize().unwrap();
+        let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+        proof
+            .covers(&purrdf_entail::reasoner::proof::class_analysis_claims(
+                answer.answer(),
+            ))
+            .unwrap();
+        let mut consumer = Reasoner::with_proofs(&input).unwrap();
+        consumer.prepare(&question).unwrap();
+        proof
+            .verify(
+                &input,
+                &question,
+                Some(answer.certificate()),
+                &consumer.proof_context().unwrap(),
+            )
+            .unwrap();
+        let mut wrong = Reasoner::with_proofs(&input).unwrap();
+        assert!(
+            wrong
+                .prepare(&Question::ClassAnalysis {
+                    individuals: Vec::new(),
+                    classes: Vec::new()
+                })
+                .is_err()
+        );
+        assert!(
+            proof
+                .verify(
+                    &input,
+                    &producer.realization_question(),
+                    Some(answer.certificate()),
+                    &producer.borrowed_proof_context().unwrap()
+                )
+                .is_err()
+        );
+        if residual {
+            assert!(proof.claims().iter().any(|claim| matches!(
+                claim.subject(),
+                purrdf_entail::ClaimSubject::Subsumption { .. }
+            ) && matches!(
+                claim.basis(),
+                ClaimBasis::CounterModel { .. }
+            )));
+        }
+    }
+}
+
+/// Inconsistency is refused; source boundaries and native exhaustion gate both direct views.
+#[test]
+fn class_analysis_retains_native_refusals_and_joint_directness() {
+    let inconsistent = ds(&[typed(N::E("a"), N::V(NOTHING))]);
+    assert!(matches!(
+        Reasoner::new(&inconsistent).unwrap().classify_and_realize(),
+        Err(purrdf_entail::EntailError::Unsatisfiable)
+    ));
+    let bounded = ds(&[(
+        N::E("a"),
+        N::V(purrdf_iri::vocab::owl::TOP_DATA_PROPERTY),
+        N::L("1", XSD_INTEGER),
+    )]);
+    let reasoner = Reasoner::new(&bounded).unwrap();
+    let answer = reasoner.classify_and_realize().unwrap();
+    assert_eq!(
+        answer.certificate().boundaries(),
+        reasoner.realize().unwrap().certificate().boundaries()
+    );
+    assert_eq!(
+        honest(&answer).completeness(),
+        DlCompleteness::DecidedWithinBoundaries
+    );
+    assert!(answer.direct_subsumptions().is_err());
+    assert!(answer.direct_types().is_err());
+    let input = class_analysis_nominal();
+    let producer = Reasoner::with_proofs(&input).unwrap().with_work_cap(1);
+    let answer = producer.classify_and_realize().unwrap();
+    assert_eq!(
+        honest(&answer).completeness(),
+        DlCompleteness::BudgetExhausted
+    );
+    assert!(answer.direct_subsumptions().is_err());
+    assert!(answer.direct_types().is_err());
+    let mut consumer = Reasoner::with_proofs(&input).unwrap();
+    let question = producer.class_analysis_question();
+    consumer.prepare(&question).unwrap();
+    answer
+        .proof()
+        .unwrap()
+        .verify(
+            &input,
+            &question,
+            Some(answer.certificate()),
+            &consumer.proof_context().unwrap(),
+        )
+        .unwrap();
+}
+
+/// A late stop, including with no individuals, retains native evidence and withholds BOTH direct views.
+#[test]
+fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage() {
+    use purrdf_entail::ServiceProof;
+    use std::sync::atomic::Ordering;
+    for input in [kittens(), ds(&[sub(N::E("A"), N::E("B"))])] {
+        let signal = Arc::new(HierarchyStop::unlimited());
+        let reference = Reasoner::with_proofs_and_stop(
+            &input,
+            purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+            signal.clone(),
+        )
+        .unwrap();
+        let question = reference.class_analysis_question();
+        signal.arm(usize::MAX);
+        let completed = reference.classify_and_realize().unwrap();
+        let polls = signal.calls.load(Ordering::Relaxed);
+        let mut retained_hierarchy = false;
+        for cut in [0, polls / 3, polls * 2 / 3, polls.saturating_sub(1)] {
+            let signal = Arc::new(HierarchyStop::unlimited());
+            let reasoner = Reasoner::with_proofs_and_stop(
+                &input,
+                purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+                signal.clone(),
+            )
+            .unwrap();
+            signal.arm(cut);
+            let answer = reasoner.classify_and_realize().unwrap();
+            assert!(answer.certificate().stopped(), "cut {cut} of {polls}");
+            assert!(answer.direct_subsumptions().is_err());
+            assert!(answer.direct_types().is_err());
+            retained_hierarchy |= answer.answer().hierarchy().subsumptions()
+                == completed.answer().hierarchy().subsumptions();
+            let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+            proof
+                .covers(&purrdf_entail::reasoner::proof::class_analysis_claims(
+                    answer.answer(),
+                ))
+                .unwrap();
+            let mut consumer = Reasoner::with_proofs(&input).unwrap();
+            consumer.prepare(&question).unwrap();
+            proof
+                .verify(
+                    &input,
+                    &question,
+                    Some(answer.certificate()),
+                    &consumer.proof_context().unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(
+            retained_hierarchy,
+            "a late stop retains the finished hierarchy but gates its direct view"
+        );
+    }
+}
+
+/// Compare owned allocation and native work for the same source, excluding source parsing.
+/// Both windows retain both answers; peak bytes are incremental to each window's start.
+#[test]
+fn class_analysis_measures_avoided_duplicate_native_classification() {
+    for (label, input) in [("Horn", kittens()), ("nominal", class_analysis_nominal())] {
+        let reasoner = Reasoner::new(&input).unwrap();
+        let run = || {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let analysis = reasoner.classify_and_realize().unwrap();
+            let combined = window.close();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let hierarchy = reasoner.classify().unwrap();
+            let realization = reasoner.realize().unwrap();
+            let separate = window.close();
+            (analysis, combined, hierarchy, realization, separate)
+        };
+        let (analysis, combined, hierarchy, realization, separate) = run();
+        let (again, repeated_combined, _, _, repeated_separate) = run();
+        assert_eq!(analysis, again);
+        assert_eq!(combined, repeated_combined);
+        assert_eq!(separate, repeated_separate);
+        let saved = hierarchy.certificate().decisions() + realization.certificate().decisions()
+            - analysis.certificate().decisions();
+        if label == "Horn" {
+            assert_eq!(saved, 1);
+        } else {
+            assert!(saved > 1);
+        }
+        println!(
+            "class analysis {label}: combined decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}; separate decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}; avoided decisions {saved}",
+            analysis.certificate().decisions(),
+            analysis.certificate().work(),
+            combined.allocations,
+            combined.requested_bytes,
+            combined.peak_working_bytes,
+            hierarchy.certificate().decisions() + realization.certificate().decisions(),
+            hierarchy.certificate().work() + realization.certificate().work(),
+            separate.allocations,
+            separate.requested_bytes,
+            separate.peak_working_bytes
+        );
+    }
+}

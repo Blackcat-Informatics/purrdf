@@ -80,11 +80,16 @@ fn authorized(question: &Question, subject: &ClaimSubject, kb: &Kb) -> bool {
             Question::ClassSatisfiability { class: requested },
             ClaimSubject::ClassSatisfiable { class },
         ) => requested == class,
-        (Question::Classification { classes }, ClaimSubject::Subsumption { sub, sup }) => {
-            classes.contains(sub) && classes.contains(sup)
-        }
+        (
+            Question::Classification { classes } | Question::ClassAnalysis { classes, .. },
+            ClaimSubject::Subsumption { sub, sup },
+        ) => classes.contains(sub) && classes.contains(sup),
         (
             Question::Realization {
+                individuals,
+                classes,
+            }
+            | Question::ClassAnalysis {
                 individuals,
                 classes,
             },

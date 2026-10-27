@@ -13,30 +13,6 @@ pub(super) struct Relations {
 }
 
 impl Relations {
-    /// Representatives use the supplied order; emitted pairs use canonical term order.
-    /// A stopped reduction is usable only under an incomplete certificate.
-    pub(super) fn derive(
-        n: usize,
-        name: impl Fn(usize) -> TermValue,
-        holds: impl Fn(usize, usize) -> bool,
-        mut poll: impl FnMut() -> bool,
-    ) -> Self {
-        let mut out = Self::default();
-        'derive: {
-            for i in 0..n {
-                for j in i + 1..n {
-                    if !poll() {
-                        break 'derive;
-                    }
-                    out.record_pair(name(i), name(j), holds(i, j), holds(j, i));
-                }
-            }
-            out.reduce(n, &name, &holds, &mut poll);
-        }
-        out.sort();
-        out
-    }
-
     pub(super) fn record_pair(
         &mut self,
         left: TermValue,

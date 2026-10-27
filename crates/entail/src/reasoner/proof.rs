@@ -145,11 +145,13 @@ pub enum Service {
     ModuleExtraction,
     /// Native semantic object-property classification.
     ObjectPropertyClassification,
+    /// Named class hierarchy and individual types from one classification pass.
+    ClassAnalysis,
 }
 
 impl Service {
     /// Every service, in wire order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Consistency,
         Self::ClassSatisfiability,
         Self::Classification,
@@ -158,6 +160,7 @@ impl Service {
         Self::AxiomEntailment,
         Self::ModuleExtraction,
         Self::ObjectPropertyClassification,
+        Self::ClassAnalysis,
     ];
 
     /// A short, stable name.
@@ -172,6 +175,7 @@ impl Service {
             Self::AxiomEntailment => "axiom-entailment",
             Self::ModuleExtraction => "module-extraction",
             Self::ObjectPropertyClassification => "object-property-classification",
+            Self::ClassAnalysis => "class-analysis",
         }
     }
 
@@ -192,6 +196,13 @@ impl Service {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Question {
+    /// Joint classification and realization over the source-owned vocabulary.
+    ClassAnalysis {
+        /// The named individuals, in the reasoner's source order.
+        individuals: Vec<TermValue>,
+        /// The named classes, including top and bottom, in source order.
+        classes: Vec<TermValue>,
+    },
     /// Semantic classification over the source-fixed named object properties.
     ObjectPropertyClassification {
         /// Canonically ordered named object properties, including top and bottom.
@@ -242,6 +253,7 @@ impl Question {
     pub const fn service(&self) -> Service {
         match self {
             Self::ObjectPropertyClassification { .. } => Service::ObjectPropertyClassification,
+            Self::ClassAnalysis { .. } => Service::ClassAnalysis,
             Self::Consistency => Service::Consistency,
             Self::ClassSatisfiability { .. } => Service::ClassSatisfiability,
             Self::Classification { .. } => Service::Classification,
@@ -1099,7 +1111,10 @@ impl ServiceProof {
                 });
             }
             if causal.is_some()
-                || matches!(self.question, Question::ObjectPropertyClassification { .. })
+                || matches!(
+                    self.question,
+                    Question::ObjectPropertyClassification { .. } | Question::ClassAnalysis { .. }
+                )
                 || proof
                     .merges()
                     .iter()
@@ -1715,6 +1730,14 @@ pub fn hierarchy_claims(hierarchy: &ClassHierarchy) -> Vec<ClaimSubject> {
         .collect()
 }
 
+/// The exact positive union reported by a combined class analysis.
+#[must_use]
+pub fn class_analysis_claims(analysis: &super::ClassAnalysis) -> Vec<ClaimSubject> {
+    let mut claims = hierarchy_claims(analysis.hierarchy());
+    claims.extend(realization_claims(analysis.realization()));
+    claims
+}
+
 /// The established nonreflexive inclusions of an object-property hierarchy.
 /// Equivalence and exact direct edges are views of this same relation.
 #[must_use]
@@ -1893,6 +1916,14 @@ fn encode_terms(out: &mut Vec<u8>, terms: &[TermValue]) {
 /// Append a [`Question`].
 fn encode_question(out: &mut Vec<u8>, question: &Question) {
     match question {
+        Question::ClassAnalysis {
+            individuals,
+            classes,
+        } => {
+            out.push(8);
+            encode_terms(out, individuals);
+            encode_terms(out, classes);
+        }
         Question::ObjectPropertyClassification { properties } => {
             out.push(7);
             encode_terms(out, properties);
@@ -2257,6 +2288,10 @@ fn decode_question(reader: &mut Reader<'_>) -> Result<Question, DlProofError> {
         }
         7 => Ok(Question::ObjectPropertyClassification {
             properties: decode_terms(reader)?,
+        }),
+        8 => Ok(Question::ClassAnalysis {
+            individuals: decode_terms(reader)?,
+            classes: decode_terms(reader)?,
         }),
         _ => Err(malformed("unknown question kind")),
     }
@@ -2856,6 +2891,38 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    /// A joint proof binds type decisions to their actual subjects, not only the run's verdict.
+    #[test]
+    fn class_analysis_refuses_a_forged_type_binding() {
+        let ontology = taxonomy();
+        let producer = Reasoner::with_proofs(&ontology).unwrap();
+        let question = producer.class_analysis_question();
+        let answer = producer.classify_and_realize().unwrap();
+        let mut forged = answer.proof().unwrap().clone();
+        let claim = forged.claims.iter_mut().find(|claim| {
+            matches!(&claim.subject, ClaimSubject::Type { class, .. } if class == &TermValue::iri(EX_CAT))
+        }).unwrap();
+        let ClaimSubject::Type { class, .. } = &mut claim.subject else {
+            panic!("selected type claim");
+        };
+        *class = TermValue::iri(EX_FISH);
+        assert!(
+            forged
+                .verify(
+                    &ontology,
+                    &question,
+                    Some(answer.certificate()),
+                    &context(&ontology, &question)
+                )
+                .is_err()
+        );
+        let reported = class_analysis_claims(answer.answer());
+        let mut omitted = reported.clone();
+        omitted.pop();
+        assert!(answer.proof().unwrap().covers(&omitted).is_err());
+        assert!(forged.covers(&reported).is_err());
     }
 
     /// A CLASSIFY proof missing a reported subsumption is rejected.

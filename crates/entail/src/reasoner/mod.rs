@@ -103,6 +103,7 @@ use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 
+pub mod analysis;
 pub mod axiom;
 pub mod certificate;
 pub mod classify;
@@ -119,6 +120,7 @@ pub(crate) mod schema_tests;
 #[cfg(test)]
 mod borrowed_tests;
 
+pub use analysis::ClassAnalysis;
 pub use axiom::DlAxiom;
 pub use certificate::{Certified, DirectnessRefusal, DlCertificate, DlCompleteness, Verdict};
 pub use classify::ClassHierarchy;
@@ -480,6 +482,11 @@ impl Reasoner {
     /// and opens no session.
     pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
         match question {
+            Question::ClassAnalysis { .. } => {
+                if question != &self.class_analysis_question() {
+                    return Err(EntailError::Parse("class analysis question differs from the source class and individual universe".to_owned()));
+                }
+            }
             Question::ObjectPropertyClassification { properties } => {
                 let expected = self.object_property_classification_question()?;
                 if !matches!(expected, Question::ObjectPropertyClassification { properties: ref names } if names == properties)
