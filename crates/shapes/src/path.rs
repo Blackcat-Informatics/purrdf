@@ -494,21 +494,76 @@ pub fn path_to_term(path: &Path) -> Term {
 /// syntax) and as the seed for `path_label`. Composite sub-paths are always
 /// parenthesised, so the rendering is unambiguous in any embedding position.
 pub fn path_to_sparql(path: &Path) -> String {
-    fn grouped(path: &Path) -> String {
-        match path {
-            Path::Predicate(_) => path_to_sparql(path),
-            composite => format!("({})", path_to_sparql(composite)),
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    path_to_sparql_with_memory(path, &mut memory).expect("resident path rendering storage")
+}
+
+/// Render the same SPARQL path through caller-owned storage admission.
+///
+/// # Errors
+/// Returns the original admission, allocation or size refusal.
+pub fn path_to_sparql_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    path: &Path,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<String, purrdf_lex::allocation::StorageError> {
+    enum Part<'a> {
+        Path(&'a Path, bool),
+        Text(&'a str),
+    }
+    memory.scope(|memory| {
+        let mut pending = purrdf_lex::walk::WorkList::<Part<'_>, 16>::new();
+        pending.try_push_admitted(Part::Path(path, false), memory)?;
+        let mut text = String::new();
+        while let Some(part) = pending.pop() {
+            let Part::Path(path, grouped) = part else {
+                let Part::Text(piece) = part else {
+                    unreachable!()
+                };
+                memory.push_str(&mut text, piece)?;
+                continue;
+            };
+            if grouped && !matches!(path, Path::Predicate(_)) {
+                memory.push_str(&mut text, "(")?;
+                pending.try_push_admitted(Part::Text(")"), memory)?;
+            }
+            match path {
+                Path::Predicate(predicate) => {
+                    memory.push_str(&mut text, "<")?;
+                    memory.push_str(&mut text, predicate.as_str())?;
+                    memory.push_str(&mut text, ">")?;
+                }
+                Path::Inverse(inner) => {
+                    memory.push_str(&mut text, "^")?;
+                    pending.try_push_admitted(Part::Path(inner, true), memory)?;
+                }
+                Path::Sequence(parts) | Path::Alternative(parts) => {
+                    let separator = if matches!(path, Path::Sequence(_)) {
+                        "/"
+                    } else {
+                        "|"
+                    };
+                    for (index, part) in parts.iter().enumerate().rev() {
+                        pending.try_push_admitted(Part::Path(part, true), memory)?;
+                        if index != 0 {
+                            pending.try_push_admitted(Part::Text(separator), memory)?;
+                        }
+                    }
+                }
+                Path::ZeroOrMore(inner) | Path::OneOrMore(inner) | Path::ZeroOrOne(inner) => {
+                    let suffix = match path {
+                        Path::ZeroOrMore(_) => "*",
+                        Path::OneOrMore(_) => "+",
+                        _ => "?",
+                    };
+                    pending.try_push_admitted(Part::Text(suffix), memory)?;
+                    pending.try_push_admitted(Part::Path(inner, true), memory)?;
+                }
+            }
         }
-    }
-    match path {
-        Path::Predicate(p) => format!("<{}>", p.as_str()),
-        Path::Inverse(inner) => format!("^{}", grouped(inner)),
-        Path::Sequence(parts) => parts.iter().map(grouped).collect::<Vec<_>>().join("/"),
-        Path::Alternative(parts) => parts.iter().map(grouped).collect::<Vec<_>>().join("|"),
-        Path::ZeroOrMore(inner) => format!("{}*", grouped(inner)),
-        Path::OneOrMore(inner) => format!("{}+", grouped(inner)),
-        Path::ZeroOrOne(inner) => format!("{}?", grouped(inner)),
-    }
+        pending.release_admitted(memory)?;
+        Ok(text)
+    })
 }
 
 /// A deterministic blank-node label for a complex path: the SPARQL rendering
@@ -1119,6 +1174,28 @@ mod tests {
             ])))),
             format!("({p}/{q})+")
         );
+
+        struct Ceiling;
+        impl purrdf_lex::allocation::Admission for Ceiling {
+            fn resize(&mut self, bytes: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+                if bytes > 16 {
+                    Err(purrdf_lex::allocation::StorageError::AdmissionFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let mut admission = Ceiling;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+        let retained = memory.string("kept").unwrap();
+        let baseline = memory.admitted_bytes();
+        assert_eq!(
+            path_to_sparql_with_memory(&pred("p"), &mut memory),
+            Err(purrdf_lex::allocation::StorageError::AdmissionFailed)
+        );
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(retained).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

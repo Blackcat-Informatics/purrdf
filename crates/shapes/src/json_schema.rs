@@ -1234,14 +1234,21 @@ pub struct ValueVocabProjection<'a> {
     pub ontology: &'a RdfDataset,
 }
 
+mod tool_arguments;
+pub use tool_arguments::{
+    ToolArgumentProfile, ToolFieldBinding, ToolRepresentationError, ToolSchemaError,
+    ToolSchemaLimits, compile_tool_arguments,
+};
+
 // ── Compilation context ──────────────────────────────────────────────────────
 
 /// Accumulates losses while compiling so every emitter helper can record one,
 /// and carries the caller-supplied [`Namespaces`] every helper compacts with.
 struct Ctx<'ns> {
     model: Option<Arc<ModelOwner>>,
+    tool: Option<tool_arguments::ToolPolicy>,
     catalog_keys: ::purrdf_rdf::FastMap<(usize, usize, bool), String>,
-    catalog_defs: Map<String, (Value, Term)>,
+    catalog_defs: Map<String, (Value, String)>,
     catalog_ordinal: usize,
     reserved_defs: BTreeSet<String>,
     pattern_error: Option<SchemaCompileError>,
@@ -1305,6 +1312,7 @@ impl<'ns> Ctx<'ns> {
     ) -> Self {
         Self {
             model: None,
+            tool: None,
             catalog_keys: ::purrdf_rdf::FastMap::default(),
             catalog_defs: Map::new(),
             catalog_ordinal: 0,
@@ -1327,6 +1335,9 @@ impl<'ns> Ctx<'ns> {
 
     /// The ontology's datatypes and definitions, as the surface judges them.
     fn catalog_ref(&mut self, target: &Term, member: Option<(&str, &str)>) -> Value {
+        if !tool_arguments::step(self) {
+            return json!({});
+        }
         let Some(model) = self.model.clone() else {
             self.pattern_error.get_or_insert_with(|| {
                 SchemaCompileError::Materialization(
@@ -1351,10 +1362,15 @@ impl<'ns> Ctx<'ns> {
             member.is_some(),
         );
         if let Some(key) = self.catalog_keys.get(&identity) {
-            return json!({ "$ref": format!("#/$defs/{key}") });
+            let reference =
+                tool_arguments::format_policy(&mut self.tool, format_args!("#/$defs/{key}"));
+            return tool_arguments::emitted_json!(self; { "$ref": reference });
         }
         let key = loop {
-            let key = format!("ShapeRef{}", self.catalog_ordinal);
+            let key = tool_arguments::format_policy(
+                &mut self.tool,
+                format_args!("ShapeRef{}", self.catalog_ordinal),
+            );
             let Some(next) = self.catalog_ordinal.checked_add(1) else {
                 self.pattern_error
                     .get_or_insert(SchemaCompileError::SizeOverflow {
@@ -1372,14 +1388,23 @@ impl<'ns> Ctx<'ns> {
                 break key;
             }
         };
-        self.catalog_keys.insert(identity, key.clone());
+        if !tool_arguments::resident(self, 0, 1) {
+            return Value::Null;
+        }
+        let catalog_key = tool_arguments::copy_text(self, &key);
+        self.catalog_keys.insert(identity, catalog_key);
         let body = match member {
             Some((shape, property)) => compile_member_schema(definition, shape, property, self),
             None => compile_object_schema(definition, self),
         };
-        self.catalog_defs
-            .insert(key.clone(), (body, target.clone()));
-        json!({ "$ref": format!("#/$defs/{key}") })
+        if !tool_arguments::resident(self, 0, 1) {
+            return Value::Null;
+        }
+        let definition_key = tool_arguments::copy_text(self, &key);
+        let target = tool_arguments::format_text(self, format_args!("{target}"));
+        self.catalog_defs.insert(definition_key, (body, target));
+        let reference = tool_arguments::format_text(self, format_args!("#/$defs/{key}"));
+        tool_arguments::emitted_json!(self; { "$ref": reference })
     }
 
     fn append_catalog_defs(
@@ -1394,10 +1419,12 @@ impl<'ns> Ctx<'ns> {
                 return Err(SchemaCompileError::DefinitionCollision {
                     key,
                     first: "existing schema definition".to_owned(),
-                    second: target.to_string(),
+                    second: target,
                 });
             }
-            defs.insert(key, body);
+            if tool_arguments::resident(self, 0, 1) {
+                defs.insert(key, body);
+            }
         }
         Ok(())
     }
@@ -1419,7 +1446,7 @@ impl<'ns> Ctx<'ns> {
     /// mapped, e.g. `"sh:sparql"`; `subject` = the shape/class IRI or
     /// blank-node id it concerns; `note` = a human-readable reason).
     fn record(&mut self, code: &str, subject: &str, note: &str) {
-        self.ledger.record(loss_entry(code, subject, note));
+        tool_arguments::record_loss(self, code, subject, note);
     }
 
     /// Absorb a batch of already-built [`LossEntry`] values (e.g. the
@@ -1721,7 +1748,7 @@ pub fn compile_with_value_vocab(
 
     ctx.append_catalog_defs(&mut defs)?;
     let schema = root_schema(&defs, ns);
-    let openapi = openapi_doc(defs);
+    let openapi = openapi_doc(defs)?;
 
     Ok(CompiledSchema {
         schema_json: to_pretty(&schema),
@@ -1894,7 +1921,7 @@ fn compile_with_surface(
     ctx.append_catalog_defs(&mut defs)?;
     Ok(CompiledSchema {
         schema_json: to_pretty(&root_schema(&defs, ns)),
-        openapi_json: to_pretty(&openapi_doc(defs)),
+        openapi_json: to_pretty(&openapi_doc(defs)?),
         losses: ctx.ledger,
     })
 }
@@ -3860,39 +3887,65 @@ fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
 }
 
 /// The OpenAPI 3.1 document embedding the same `$defs` as `components/schemas`.
-fn openapi_doc(mut defs: Map<String, Value>) -> Value {
-    // Move the already-emitted catalog into its OpenAPI location. Walk only
-    // schema positions: a `$ref` member inside const/enum/default/examples is
-    // instance data, and must retain its original value. References are edges,
-    // never an instruction to unfold a recursive definition.
-    let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
-    pending.extend(defs.values_mut());
-    while let Some(schema) = pending.pop() {
-        let Value::Object(object) = schema else {
-            continue;
-        };
-        for (keyword, value) in object.iter_mut() {
-            if keyword == "$ref" {
-                if let Value::String(reference) = value
-                    && reference.starts_with("#/$defs/")
+fn openapi_definitions(
+    mut defs: Map<String, Value>,
+) -> Result<Map<String, Value>, SchemaCompileError> {
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    rewrite_openapi_references(defs.values_mut(), &mut memory).map_err(|error| {
+        SchemaCompileError::Materialization(crate::PreparationRefusal::Storage(error).into())
+    })?;
+    Ok(defs)
+}
+
+fn rewrite_openapi_references<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+    roots: impl IntoIterator<Item = &'a mut Value>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    memory.scope(|memory| {
+        let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
+        for root in roots {
+            pending.try_push_admitted(root, memory)?;
+        }
+        while let Some(schema) = pending.pop() {
+            let Value::Object(object) = schema else {
+                continue;
+            };
+            for (keyword, value) in object.iter_mut() {
+                if keyword == "$ref" {
+                    if let Value::String(reference) = value
+                        && let Some(suffix) = reference.strip_prefix("#/$defs/")
+                    {
+                        let mut replacement = memory.string("#/components/schemas/")?;
+                        memory.push_str(&mut replacement, suffix)?;
+                        *reference = replacement;
+                    }
+                } else if crate::schema_catalog::schema_map_keywords().contains(&keyword.as_str()) {
+                    if let Value::Object(children) = value {
+                        for child in children.values_mut() {
+                            pending.try_push_admitted(child, memory)?;
+                        }
+                    }
+                } else if crate::schema_catalog::schema_array_keywords().contains(&keyword.as_str())
                 {
-                    // The suffix is already a JSON Pointer; preserve its
-                    // escaped tokens rather than decoding/re-encoding them.
-                    reference.replace_range(.."#/$defs/".len(), "#/components/schemas/");
+                    if let Value::Array(children) = value {
+                        for child in children {
+                            pending.try_push_admitted(child, memory)?;
+                        }
+                    }
+                } else if crate::schema_catalog::schema_single_keywords()
+                    .contains(&keyword.as_str())
+                {
+                    pending.try_push_admitted(value, memory)?;
                 }
-            } else if crate::schema_catalog::schema_map_keywords().contains(&keyword.as_str()) {
-                if let Value::Object(children) = value {
-                    pending.extend(children.values_mut());
-                }
-            } else if crate::schema_catalog::schema_array_keywords().contains(&keyword.as_str()) {
-                if let Value::Array(children) = value {
-                    pending.extend(children.iter_mut());
-                }
-            } else if crate::schema_catalog::schema_single_keywords().contains(&keyword.as_str()) {
-                pending.push(value);
             }
         }
-    }
+        pending.release_admitted(memory)
+    })
+}
+
+fn openapi_doc(defs: Map<String, Value>) -> Result<Value, SchemaCompileError> {
+    let defs = openapi_definitions(defs)?;
     let mut document = json!({
         "openapi": "3.1.0",
         "info": {
@@ -3927,7 +3980,7 @@ fn openapi_doc(mut defs: Map<String, Value>) -> Value {
     // json! borrows expression values through ToJson; install the catalog
     // directly so it is moved, rather than cloned by that conversion.
     document["components"]["schemas"] = crate::json_model::object(defs);
-    document
+    Ok(document)
 }
 
 // ── The `@annotation` fragment (statement metadata) ─────────────────────
@@ -4013,31 +4066,39 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // `sh:someValue`, which the empty schema states exactly. (A deactivated
     // top-level shape gets no `$def` at all.)
     if shape.deactivated {
-        return json!({});
+        return tool_arguments::emitted_json!(ctx; {});
     }
-    let shape_iri = shape.id.to_string();
+    let shape_iri = tool_arguments::format_text(ctx, format_args!("{}", shape.id));
+    if !tool_arguments::admit_object(shape, ctx) {
+        return tool_arguments::emitted_json!(ctx; {});
+    }
 
     let mut properties: Map<String, Value> = Map::new();
     let mut required: Vec<String> = Vec::new();
     let mut comments: Vec<String> = Vec::new();
 
-    // `@id` and `@type` are always allowed JSON-LD keywords.
-    properties.insert("@id".to_owned(), json!({ "type": "string" }));
-    properties.insert(
-        "@type".to_owned(),
-        json!({
-            "anyOf": [
-                { "type": "string" },
-                { "type": "array", "items": { "type": "string" } }
-            ]
-        }),
-    );
+    if ctx.tool.is_none() {
+        // `@id` and `@type` are always allowed JSON-LD keywords.
+        tool_arguments::insert!(ctx; &mut properties,
+            "@id",
+            tool_arguments::emitted_json!(ctx; { "type": "string" }),
+        );
+        tool_arguments::insert!(ctx; &mut properties,
+            "@type",
+            tool_arguments::emitted_json!(ctx; {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" } }
+                ]
+            }),
+        );
 
-    // The optional statement-metadata key on the node itself.
-    properties.insert(
-        "@annotation".to_owned(),
-        json!({ "$ref": "#/$defs/Annotation" }),
-    );
+        // The optional statement-metadata key on the node itself.
+        tool_arguments::insert!(ctx; &mut properties,
+            "@annotation",
+            tool_arguments::emitted_json!(ctx; { "$ref": "#/$defs/Annotation" }),
+        );
+    }
 
     // Group property-shape constraints by JSON key. A node shape may carry
     // SEVERAL `sh:property` blocks for the SAME path (e.g. one `sh:minCount 1`
@@ -4050,7 +4111,7 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // Each entry: compacted JSON key → (raw predicate IRI, merged constraints).
     // The raw IRI is retained so the value-vocabulary `rdfs:range` lookup can key
     // by predicate IRI (the compacted key would lose the namespace).
-    let mut by_key: BTreeMap<String, (String, Vec<Constraint>)> = BTreeMap::new();
+    let mut by_key: BTreeMap<String, (String, Vec<&Constraint>)> = BTreeMap::new();
     // Keys a `sh:closed true` object still permits although no value schema is
     // emitted for them: SHACL 1.2 Core §7.9.1 collects the permitted properties
     // from every `sh:property/sh:path` IRI, whatever the property shape's state.
@@ -4062,36 +4123,58 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             Err(error) => {
                 ctx.pattern_error
                     .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
-                return json!({});
+                return tool_arguments::emitted_json!(ctx; {});
             }
         };
         let ps = view.property;
+        if ctx.tool.is_some() && view.deactivated() {
+            // A closed shape still permits its declared direct paths, even
+            // when their constraints are inactive. Open shapes need no key.
+            let closed = shape.constraints.iter().any(|c| {
+                matches!(
+                    c,
+                    Constraint::Closed {
+                        mode: ClosedMode::Declared,
+                        ..
+                    }
+                )
+            });
+            if closed && let Path::Predicate(predicate) = &ps.path {
+                tool_arguments::push!(ctx; &mut permitted_keys,tool_arguments::field_key(
+                    ctx,
+                    &shape_iri,
+                    predicate.as_str(),
+                ));
+            }
+            continue;
+        }
+
         // Only direct predicate paths shape outgoing JSON properties; inverse
         // and composite paths (sequence/alternative/closures) are dropped, and
         // the loss recorded.
         let Path::Predicate(pred) = &ps.path else {
             if !view.deactivated() {
-                let path_text = crate::path::path_to_sparql(&ps.path);
-                ctx.record(
+                let path_text = tool_arguments::path_text(ctx, &ps.path);
+                tool_arguments::record!(ctx;
                     "sh:path",
                     &shape_iri,
-                    &format!(
+                    &tool_arguments::format!(ctx;
                         "a property shape on the path {path_text}, which is not one predicate, \
                          constrains no outgoing JSON property"
                     ),
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "the property shape on the path {path_text} was dropped (only direct \
                      predicate paths constrain outgoing JSON properties)"
                 ));
             }
             continue;
         };
-        let key = ctx.ns.compact_iri(pred.as_str());
+        let key = tool_arguments::field_key(ctx, &shape_iri, pred.as_str());
         // "Deactivated shapes are ignored during validation": nothing to project,
         // and nothing dropped.
         if view.deactivated() {
-            permitted_keys.push(key);
+            tool_arguments::push!(ctx; &mut permitted_keys,key);
             continue;
         }
         // SHACL 1.2 Core: the value nodes of a property shape with `sh:values` or
@@ -4106,19 +4189,22 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                 (ps.default_value.is_some(), "sh:defaultValue"),
             ] {
                 if present {
-                    ctx.record(
+                    tool_arguments::record!(ctx;
                         term,
                         &shape_iri,
                         "a property shape's computed value nodes have no JSON Schema equivalent",
                     );
                 }
             }
-            comments.push(format!(
+            tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                 "the property shape on {key} was dropped (its value nodes are computed by \
                  sh:values / sh:defaultValue, which a JSON document does not carry)"
             ));
-            permitted_keys.push(key);
+            tool_arguments::push!(ctx; &mut permitted_keys,key);
             continue;
+        }
+        if !tool_arguments::admit_property_storage(&ps.constraints, ctx) {
+            return tool_arguments::emitted_json!(ctx; {});
         }
         record_property_shape_losses(ps, &shape_iri, &key, &mut comments, ctx);
         let enforced = enforced_constraints(
@@ -4130,20 +4216,25 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             &mut comments,
             ctx,
         );
+        if !tool_arguments::resident(ctx, pred.as_str().len(), 1)
+            || !tool_arguments::resident(ctx, size_of_val(enforced.as_slice()), enforced.len())
+        {
+            return tool_arguments::emitted_json!(ctx; {});
+        }
         by_key
             .entry(key)
             .or_insert_with(|| (pred.as_str().to_owned(), Vec::new()))
             .1
-            .extend(enforced.into_iter().cloned());
+            .extend(enforced);
     }
 
     for (key, (pred_iri, constraints)) in &by_key {
         let (value_schema, is_required) =
-            compile_property(constraints, &shape_iri, key, pred_iri, ctx);
+            compile_property_refs(constraints, &shape_iri, key, pred_iri, ctx);
         if is_required {
-            required.push(key.clone());
+            tool_arguments::push!(ctx; &mut required,tool_arguments::copy_text(ctx, key));
         }
-        properties.insert(key.clone(), value_schema);
+        tool_arguments::insert!(ctx; &mut properties,&key, value_schema);
     }
 
     // ── Node-level constraints ──
@@ -4167,30 +4258,32 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     );
     for c in node_constraints {
         match c {
-            Constraint::Reference(target) => all_of.push(ctx.catalog_ref(target, None)),
+            Constraint::Reference(target) => {
+                tool_arguments::push!(ctx; &mut all_of,ctx.catalog_ref(target, None));
+            }
             Constraint::PropertyReference(_) => {}
             Constraint::And(members) => {
                 for m in members {
-                    all_of.push(compile_object_schema(m, ctx));
+                    tool_arguments::push!(ctx; &mut all_of,compile_object_schema(m, ctx));
                 }
             }
             Constraint::Or(members) => {
                 for m in members {
-                    any_of.push(compile_object_schema(m, ctx));
+                    tool_arguments::push!(ctx; &mut any_of,compile_object_schema(m, ctx));
                 }
             }
             Constraint::Xone(members) => {
                 for m in members {
-                    one_of.push(compile_object_schema(m, ctx));
+                    tool_arguments::push!(ctx; &mut one_of,compile_object_schema(m, ctx));
                 }
             }
             Constraint::Node(inner) => {
-                all_of.push(compile_object_schema(inner, ctx));
+                tool_arguments::push!(ctx; &mut all_of,compile_object_schema(inner, ctx));
             }
             // SHACL 1.2 Core §7.8.3: "In node shapes, sh:someValue is equivalent
             // to using sh:node" — the one value node is the focus node itself.
             Constraint::SomeValue(inner) => {
-                all_of.push(compile_object_schema(inner, ctx));
+                tool_arguments::push!(ctx; &mut all_of,compile_object_schema(inner, ctx));
             }
             Constraint::Not(inner) => match compile_negand(inner, ctx) {
                 // The inner is losslessly expressible as the conjunction
@@ -4208,23 +4301,23 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                     let negand = if parts.len() == 1 {
                         parts.pop().expect("len == 1")
                     } else {
-                        json!({ "allOf": parts })
+                        tool_arguments::emitted_json!(ctx; { "allOf": parts })
                     };
-                    all_of.push(json!({ "not": negand }));
+                    tool_arguments::push!(ctx; &mut all_of,tool_arguments::emitted_json!(ctx; { "not": negand }));
                 }
                 // Negative position is unsound to widen: an inner constraint the
                 // object projection would silently drop turns `not` into a negation
                 // of the permissive base — rejecting every node. Record the loss
                 // and emit no `not` (the SHACL/JSON-Schema Option-2 outcome).
                 None => {
-                    ctx.record(
+                    tool_arguments::record!(ctx;
                         "sh:not",
                         &shape_iri,
                         "sh:not inner shape is not losslessly expressible in the \
                          object projection; omitted rather than emitting a \
                          base-negating (vacuous) not",
                     );
-                    comments.push(
+                    tool_arguments::push!(ctx; &mut comments,
                         "a node-level sh:not was dropped (inner shape not soundly \
                          expressible in the object projection)"
                             .to_owned(),
@@ -4240,7 +4333,7 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                 // key and never emits it as a property, so ignoring it permits
                 // nothing more; a second key for it would name no instance key.
                 for n in ignored.iter().filter(|n| n.as_str() != rdf::TYPE) {
-                    closed_ignored.push(ctx.ns.compact_iri(n.as_str()));
+                    closed_ignored.push(tool_arguments::field_key(ctx, &shape_iri, n.as_str()));
                 }
             }
             // SHACL 1.2 Core §7.9.1: under `sh:ByTypes` the permitted properties are
@@ -4252,47 +4345,47 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                 mode: ClosedMode::ByTypes(_),
                 ..
             } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:closed sh:ByTypes",
                     &shape_iri,
                     "a set of permitted properties chosen by each instance's own rdf:type \
                      values has no projection in an object schema's fixed key set",
                 );
-                comments.push(
+                tool_arguments::push!(ctx; &mut comments,
                     "a node-level sh:closed sh:ByTypes constraint was dropped (the permitted \
                      properties depend on each instance's types)"
                         .to_owned(),
                 );
             }
             Constraint::Sparql { .. } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:sparql",
                     &shape_iri,
                     "SPARQL-AF constraint has no JSON Schema equivalent",
                 );
-                comments.push(
+                tool_arguments::push!(ctx; &mut comments,
                     "a node-level sh:sparql constraint was dropped (no JSON Schema equivalent)"
                         .to_owned(),
                 );
             }
             Constraint::Expression { .. } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:expression",
                     &shape_iri,
                     "SHACL-AF expression constraint has no JSON Schema equivalent",
                 );
-                comments.push(
+                tool_arguments::push!(ctx; &mut comments,
                     "a node-level sh:expression constraint was dropped (no JSON Schema equivalent)"
                         .to_owned(),
                 );
             }
             Constraint::NodeByExpression { .. } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:nodeByExpression",
                     &shape_iri,
                     "SHACL node-expression-computed node shapes have no JSON Schema equivalent",
                 );
-                comments.push(
+                tool_arguments::push!(ctx; &mut comments,
                     "a node-level sh:nodeByExpression constraint was dropped (no JSON Schema \
                      equivalent)"
                         .to_owned(),
@@ -4330,12 +4423,12 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             | Constraint::UniqueMembers(_)
             | Constraint::MemberShape(_) => node_list.add(c),
             Constraint::RootClass(_) => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:rootClass",
                     &shape_iri,
                     "an rdfs:subClassOf* bound on the focus node has no JSON Schema equivalent",
                 );
-                comments.push(
+                tool_arguments::push!(ctx; &mut comments,
                     "a node-level sh:rootClass constraint was dropped (no JSON Schema equivalent)"
                         .to_owned(),
                 );
@@ -4356,7 +4449,9 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             | Constraint::MinInclusive(_)
             | Constraint::MaxInclusive(_)
             | Constraint::MinExclusive(_)
-            | Constraint::MaxExclusive(_) => all_of.push(json!(false)),
+            | Constraint::MaxExclusive(_) => {
+                tool_arguments::push!(ctx; &mut all_of,tool_arguments::emitted_json!(ctx; false));
+            }
             // The focus node's own identity is its `@id` (the full IRI, or a
             // blank-node label): its node kind, `sh:in` and `sh:hasValue` judge
             // it there.
@@ -4365,33 +4460,35 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                     .iter()
                     .filter_map(|kind| match kind {
                         NodeKindValue::Iri | NodeKindValue::IriOrLiteral => {
-                            Some(json!({ "pattern": IRI_ID_PATTERN }))
+                            Some(tool_arguments::emitted_json!(ctx; { "pattern": IRI_ID_PATTERN }))
                         }
                         NodeKindValue::BlankNode | NodeKindValue::BlankNodeOrLiteral => {
-                            Some(json!({ "pattern": "^_:" }))
+                            Some(tool_arguments::emitted_json!(ctx; { "pattern": "^_:" }))
                         }
-                        NodeKindValue::BlankNodeOrIri => Some(json!({})),
+                        NodeKindValue::BlankNodeOrIri => {
+                            Some(tool_arguments::emitted_json!(ctx; {}))
+                        }
                         NodeKindValue::Literal | NodeKindValue::TripleTerm => None,
                     })
                     .collect();
-                all_of.push(focus_id_schema(match alternatives.len() {
-                    0 => json!(false),
+                tool_arguments::push!(ctx; &mut all_of,focus_id_schema(match alternatives.len() {
+                    0 => tool_arguments::emitted_json!(ctx; false),
                     1 => alternatives.into_iter().next().expect("one alternative"),
-                    _ => json!({ "anyOf": alternatives }),
+                    _ => tool_arguments::emitted_json!(ctx; { "anyOf": alternatives }),
                 }));
             }
             Constraint::In(terms) => {
                 let mut ids: Vec<Value> = terms.iter().filter_map(focus_id).collect();
                 crate::term::sort_canonical(&mut ids);
                 ids.dedup();
-                all_of.push(focus_id_schema(if ids.is_empty() {
-                    json!(false)
+                tool_arguments::push!(ctx; &mut all_of,focus_id_schema(if ids.is_empty() {
+                    tool_arguments::emitted_json!(ctx; false)
                 } else {
-                    json!({ "enum": ids })
+                    tool_arguments::emitted_json!(ctx; { "enum": ids })
                 }));
             }
             Constraint::HasValue(term) => {
-                all_of.push(focus_id_schema(
+                tool_arguments::push!(ctx; &mut all_of,focus_id_schema(
                     focus_id(term).map_or_else(|| json!(false), |id| json!({ "const": id })),
                 ));
             }
@@ -4399,17 +4496,18 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             // no lexical form and fails (see `LexicalConstraints`).
             Constraint::Pattern { regex, flags, .. } => {
                 match purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or("")) {
-                    Ok(pattern) => focus_lexical.push(json!({ "pattern": pattern })),
+                    Ok(pattern) => focus_lexical
+                        .push(tool_arguments::emitted_json!(ctx; { "pattern": pattern })),
                     Err(
                         error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
                         | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
                     ) => {
-                        ctx.record(
+                        tool_arguments::record!(ctx;
                             "sh:pattern",
                             &shape_iri,
-                            &format!("the pattern {regex:?} has no ECMA-262 translation ({error})"),
+                            &tool_arguments::format!(ctx;"the pattern {regex:?} has no ECMA-262 translation ({error})"),
                         );
-                        comments.push(format!(
+                        tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                             "a node-level sh:pattern constraint was dropped (no ECMA-262 \
                              translation: {error})"
                         ));
@@ -4425,8 +4523,12 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                     }
                 }
             }
-            Constraint::MinLength(n) => focus_lexical.push(json!({ "minLength": n })),
-            Constraint::MaxLength(n) => focus_lexical.push(json!({ "maxLength": n })),
+            Constraint::MinLength(n) => {
+                focus_lexical.push(tool_arguments::emitted_json!(ctx; { "minLength": n }));
+            }
+            Constraint::MaxLength(n) => {
+                focus_lexical.push(tool_arguments::emitted_json!(ctx; { "maxLength": n }));
+            }
             // A class membership runs through the data graph's
             // `rdfs:subClassOf*` triples, which live on other `@graph` nodes: a
             // JSON Schema keyword judges only the instance location it applies
@@ -4449,8 +4551,8 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                     "a constraint on the focus node itself has no projection in an object \
                      schema describing the node's properties"
                 };
-                ctx.record(term, &shape_iri, &constraint_note(c, reason));
-                comments.push(format!(
+                tool_arguments::record!(ctx;term, &shape_iri, &constraint_note(ctx, c, reason));
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "a node-level {term} constraint was dropped (no projection in an object schema)"
                 ));
             }
@@ -4460,65 +4562,80 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     }
 
     if node_list.present {
-        all_of.push(node_list.node_schema(&shape_iri, ctx, &mut comments));
+        tool_arguments::push!(ctx; &mut all_of,node_list.node_schema(&shape_iri, ctx, &mut comments));
     }
     if !focus_lexical.is_empty() {
         let mut id = Map::new();
-        id.insert("type".to_owned(), json!("string"));
-        id.insert("pattern".to_owned(), json!(IRI_ID_PATTERN));
-        id.insert("allOf".to_owned(), Value::Array(focus_lexical));
-        all_of.push(focus_id_schema(crate::json_model::object(id)));
+        id.insert(
+            "type".to_owned(),
+            tool_arguments::emitted_json!(ctx; "string"),
+        );
+        id.insert(
+            "pattern".to_owned(),
+            tool_arguments::emitted_json!(ctx; IRI_ID_PATTERN),
+        );
+        id.insert(
+            "allOf".to_owned(),
+            tool_arguments::emission_array!(ctx; focus_lexical),
+        );
+        tool_arguments::push!(ctx; &mut all_of,focus_id_schema(tool_arguments::map(ctx, id)));
     }
 
     // sh:closed: allow the ignored predicates, and the paths of the property
     // shapes that project no value schema, as declared keys too.
     if additional_properties_false {
         for k in closed_ignored.iter().chain(&permitted_keys) {
-            properties
-                .entry(k.clone())
-                .or_insert_with(|| Value::Bool(true));
+            if !properties.contains_key(k) {
+                tool_arguments::insert!(ctx; &mut properties, k, tool_arguments::emitted_json!(ctx; true));
+            }
         }
     }
 
     // Assemble.
     let mut obj: Map<String, Value> = Map::new();
-    obj.insert("type".to_owned(), json!("object"));
+    tool_arguments::insert!(ctx; &mut obj,
+        "type",
+        tool_arguments::emitted_json!(ctx; "object"),
+    );
 
-    obj.insert(
-        "properties".to_owned(),
-        crate::json_model::object(properties),
+    tool_arguments::insert!(ctx; &mut obj,
+        "properties",
+        tool_arguments::map(ctx, properties),
     );
 
     if !required.is_empty() {
         required.sort();
         required.dedup();
-        obj.insert(
-            "required".to_owned(),
-            Value::Array(required.into_iter().map(Value::String).collect()),
+        tool_arguments::insert!(ctx; &mut obj,
+            "required",
+            tool_arguments::emission_array!(ctx; required.into_iter().map(Value::String)),
         );
     }
 
     if additional_properties_false {
-        obj.insert("additionalProperties".to_owned(), Value::Bool(false));
+        tool_arguments::insert!(ctx; &mut obj,"additionalProperties", Value::Bool(false));
     }
 
     if !all_of.is_empty() {
-        obj.insert("allOf".to_owned(), Value::Array(all_of));
+        tool_arguments::insert!(ctx; &mut obj,"allOf", tool_arguments::emission_array!(ctx; all_of));
     }
     if !any_of.is_empty() {
-        obj.insert("anyOf".to_owned(), Value::Array(any_of));
+        tool_arguments::insert!(ctx; &mut obj,"anyOf", tool_arguments::emission_array!(ctx; any_of));
     }
     if !one_of.is_empty() {
-        obj.insert("oneOf".to_owned(), Value::Array(one_of));
+        tool_arguments::insert!(ctx; &mut obj,"oneOf", tool_arguments::emission_array!(ctx; one_of));
     }
 
     if !comments.is_empty() {
         comments.sort();
         comments.dedup();
-        obj.insert("$comment".to_owned(), json!(comments.join("; ")));
+        tool_arguments::insert!(ctx; &mut obj,
+            "$comment",
+            tool_arguments::emitted_json!(ctx; tool_arguments::join(ctx, &comments, "; ")),
+        );
     }
 
-    crate::json_model::object(obj)
+    tool_arguments::map(ctx, obj)
 }
 
 // ── Per-property value schema ────────────────────────────────────────────────
@@ -4706,18 +4823,23 @@ fn compile_negand_body(
         let Constraint::Class(classes) = c else {
             return None;
         };
+        if ctx.tool.is_some() {
+            // Plain objects carry no RDF identity discriminator. Preserve this
+            // negative RDF class condition through the original loss ledger.
+            return None;
+        }
         let [class] = classes.as_slice() else {
             return None;
         };
         if !ctx.ns.is_known(class.as_str()) {
             return None;
         }
-        parts.push(type_discriminator(&ctx.ns.compact_iri(class.as_str())));
+        tool_arguments::push!(ctx; &mut parts,type_discriminator(&ctx.ns.compact_iri(class.as_str())));
     }
 
     // Property shapes: express only direct-predicate paths whose every value
     // constraint round-trips through `compile_property`.
-    let inner_iri = inner.id.to_string();
+    let inner_iri = tool_arguments::format_text(ctx, format_args!("{}", inner.id));
     let model = ctx.model.clone();
     for view in inner.properties_in(model.as_deref()) {
         let view = match view {
@@ -4754,7 +4876,7 @@ fn compile_negand_body(
         if !ps.constraints.iter().all(negand_value_constraint_ok) {
             return None;
         }
-        let key = ctx.ns.compact_iri(pred.as_str());
+        let key = tool_arguments::field_key(ctx, &inner_iri, pred.as_str());
         // Presence-only negand (constraints are all `negand_value_constraint_ok`,
         // i.e. `sh:minCount`): the value-vocabulary `rdfs:range` enrichment is a
         // POSITIVE value projection and MUST NOT widen a negand (it would make the
@@ -4774,14 +4896,14 @@ fn compile_negand_body(
             return None;
         }
         let mut props: Map<String, Value> = Map::new();
-        props.insert(key.clone(), value_schema);
+        tool_arguments::insert!(ctx; &mut props,&key, value_schema);
         let mut obj: Map<String, Value> = Map::new();
-        obj.insert("type".to_owned(), json!("object"));
-        obj.insert("properties".to_owned(), crate::json_model::object(props));
+        tool_arguments::insert!(ctx; &mut obj,"type", json!("object"));
+        tool_arguments::insert!(ctx; &mut obj,"properties", tool_arguments::map(ctx, props));
         if is_required {
-            obj.insert("required".to_owned(), json!([key]));
+            tool_arguments::insert!(ctx; &mut obj,"required", json!([key]));
         }
-        parts.push(crate::json_model::object(obj));
+        tool_arguments::push!(ctx; &mut parts,tool_arguments::map(ctx, obj));
     }
 
     if parts.is_empty() {
@@ -4791,7 +4913,7 @@ fn compile_negand_body(
     // Deterministic order, independent of constraint-vector position.
     // The canonical sorter serializes each part once instead of on every
     // comparison.
-    crate::term::sort_canonical(&mut parts);
+    tool_arguments::sort_values(ctx, &mut parts);
     Some(parts)
 }
 
@@ -4853,15 +4975,15 @@ const fn constraint_term(constraint: &Constraint) -> &'static str {
 
 /// A loss note for a dropped constraint: `reason`, naming the custom component
 /// when the constraint is one (its code alone does not say which).
-fn constraint_note(constraint: &Constraint, reason: &str) -> String {
+fn constraint_note(ctx: &mut Ctx<'_>, constraint: &Constraint, reason: &str) -> String {
     match constraint {
         Constraint::Component { component, .. } => {
-            format!(
+            tool_arguments::format!(ctx;
                 "{reason} (custom constraint component <{}>)",
                 component.as_str()
             )
         }
-        _ => reason.to_owned(),
+        _ => tool_arguments::copy_text(ctx, reason),
     }
 }
 
@@ -4899,7 +5021,7 @@ fn enforced_constraints<'c>(
     ctx: &mut Ctx<'_>,
 ) -> Vec<&'c Constraint> {
     let disallowed = ConformanceDisallows::default();
-    let mut enforced = Vec::with_capacity(constraints.len());
+    let mut enforced = Vec::new();
     for (index, constraint) in constraints.iter().enumerate() {
         // Identity edges carry the referenced definition's severities. Filtering
         // the edge by its container would discard active child constraints.
@@ -4907,30 +5029,30 @@ fn enforced_constraints<'c>(
             constraint,
             Constraint::Reference(_) | Constraint::PropertyReference(_)
         ) {
-            enforced.push(constraint);
+            tool_arguments::push!(ctx; &mut enforced,constraint);
             continue;
         }
         let severity = constraint_severity(annotations, index, shape_severity);
         if disallowed.contains(severity) {
-            enforced.push(constraint);
+            tool_arguments::push!(ctx; &mut enforced,constraint);
             continue;
         }
         let term = constraint_term(constraint);
         let severity = severity.iri();
-        ctx.record(
+        tool_arguments::record!(ctx;
             "sh:severity",
             shape_iri,
-            &format!(
+            &tool_arguments::format!(ctx;
                 "a {term} constraint whose results carry the severity <{severity}>, outside the \
                  default conformance-disallow set, decides no conformance the schema states"
             ),
         );
-        comments.push(match key {
-            Some(key) => format!(
+        tool_arguments::push!(ctx; &mut *comments,match key {
+            Some(key) => tool_arguments::format!(ctx;
                 "a {term} constraint on property {key} was dropped (its severity <{severity}> \
                  does not decide conformance)"
             ),
-            None => format!(
+            None => tool_arguments::format!(ctx;
                 "a node-level {term} constraint was dropped (its severity <{severity}> does not \
                  decide conformance)"
             ),
@@ -5126,8 +5248,8 @@ fn record_property_shape_losses(
         ),
     ] {
         if present {
-            ctx.record(term, shape_iri, note);
-            comments.push(format!(
+            tool_arguments::record!(ctx;term, shape_iri, note);
+            tool_arguments::push!(ctx; &mut *comments,tool_arguments::format!(ctx;
                 "a {term} constraint on property {key} was dropped (no projection in its value \
                  schema)"
             ));
@@ -5150,21 +5272,21 @@ fn record_pair_loss(
     shape_iri: &str,
     key: Option<&str>,
 ) {
-    let path_text = crate::path::path_to_sparql(path);
-    ctx.record(
+    let path_text = tool_arguments::path_text(ctx, path);
+    tool_arguments::record!(ctx;
         term,
         shape_iri,
-        &format!(
+        &tool_arguments::format!(ctx;
             "a comparison of the values against the nodes the path {path_text} reaches from the \
              focus node has no projection in this emitter"
         ),
     );
-    comments.push(match key {
-        Some(key) => format!(
+    tool_arguments::push!(ctx; &mut *comments,match key {
+        Some(key) => tool_arguments::format!(ctx;
             "a {term} {path_text} constraint on property {key} was dropped (no projection in \
              this emitter)"
         ),
-        None => format!(
+        None => tool_arguments::format!(ctx;
             "a node-level {term} {path_text} constraint was dropped (no projection in this \
              emitter)"
         ),
@@ -5184,25 +5306,26 @@ fn record_unique_values_loss(
     shape_iri: &str,
     key: Option<&str>,
 ) {
-    let listed = properties
-        .iter()
-        .map(|property| format!("<{}>", property.as_str()))
-        .collect::<Vec<_>>()
-        .join(" ");
-    ctx.record(
+    let mut names = Vec::new();
+    for property in properties {
+        tool_arguments::push!(ctx; &mut names,
+            tool_arguments::format!(ctx; "<{}>", property.as_str()));
+    }
+    let listed = tool_arguments::join(ctx, &names, " ");
+    tool_arguments::record!(ctx;
         "sh:uniqueValuesFor",
         shape_iri,
-        &format!(
+        &tool_arguments::format!(ctx;
             "a uniqueness condition on the values of ({listed}) across every target node of the \
              shape has no projection in a schema that judges one instance alone"
         ),
     );
-    comments.push(match key {
-        Some(key) => format!(
+    tool_arguments::push!(ctx; &mut *comments,match key {
+        Some(key) => tool_arguments::format!(ctx;
             "a sh:uniqueValuesFor ({listed}) constraint on property {key} was dropped (no \
              projection in this emitter)"
         ),
-        None => format!(
+        None => tool_arguments::format!(ctx;
             "a node-level sh:uniqueValuesFor ({listed}) constraint was dropped (no projection in \
              this emitter)"
         ),
@@ -5220,6 +5343,32 @@ fn compile_property(
     pred_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> (Value, bool) {
+    let borrowed = tool_arguments::collect(ctx, constraints.iter());
+    compile_property_refs(&borrowed, shape_iri, key, pred_iri, ctx)
+}
+
+fn compile_property_refs(
+    constraints: &[&Constraint],
+    shape_iri: &str,
+    key: &str,
+    pred_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> (Value, bool) {
+    tool_arguments::with_predicate(ctx, pred_iri, |ctx| {
+        compile_property_refs_body(constraints, shape_iri, key, pred_iri, ctx)
+    })
+}
+
+fn compile_property_refs_body(
+    constraints: &[&Constraint],
+    shape_iri: &str,
+    key: &str,
+    pred_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> (Value, bool) {
+    if !tool_arguments::admit_property(constraints, shape_iri, key, ctx) {
+        return (tool_arguments::emitted_json!(ctx; {}), false);
+    }
     // The "scalar" value schema (a single value, pre-cardinality).
     let mut value: Map<String, Value> = Map::new();
     // One group of `anyOf` alternatives per value-type constraint
@@ -5267,7 +5416,7 @@ fn compile_property(
     for c in constraints {
         match c {
             Constraint::Reference(target) => {
-                shape_conjuncts.push(ctx.catalog_ref(target, Some((shape_iri, key))));
+                tool_arguments::push!(ctx; &mut shape_conjuncts,ctx.catalog_ref(target, Some((shape_iri, key))));
             }
             Constraint::PropertyReference(edge) => {
                 if let Err(error) = ctx
@@ -5280,7 +5429,7 @@ fn compile_property(
                         .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
                     continue;
                 }
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:property",
                     shape_iri,
                     "a value shape's property shapes judge the value's separate @graph node, beyond the projected value schema",
@@ -5292,17 +5441,20 @@ fn compile_property(
             // member contributes its alternative, and the alternatives are
             // emitted together as `anyOf`.
             Constraint::Datatype(datatypes) => {
-                groups.push(
-                    datatypes
+                tool_arguments::push!(ctx; &mut groups,
+                    tool_arguments::values!(ctx; datatypes.len(); datatypes
                         .iter()
-                        .map(|dt| datatype_value_schema(dt.as_str(), ctx.ns))
-                        .collect(),
+                        .map(|dt| tool_arguments::datatype_schema(dt.as_str(), ctx))),
                 );
             }
             Constraint::Class(classes) => {
                 let mut alts: Vec<Value> = Vec::new();
                 had_any_class = true;
                 for c in classes {
+                    if ctx.tool.is_some() {
+                        tool_arguments::push!(ctx; &mut alts,tool_arguments::class_schema(c.as_str(), ctx));
+                        continue;
+                    }
                     // A `sh:class` pointing at a value-vocabulary class resolves to the
                     // enum `$ref` (projection-only), tightening the open node-ref to the
                     // anchor set WITHOUT touching the validating shape.
@@ -5326,15 +5478,15 @@ fn compile_property(
                     // as a node reference's does, so it is admitted as they are.
                     // A non-empty list's cells carry no `rdf:type` (see
                     // `crate::instance`), so it is an instance of no class.
-                    alts.push(nil_list_schema());
+                    tool_arguments::push!(ctx; &mut alts,nil_list_schema());
                     let def_key = ctx.ns.def_key(c.as_str());
                     let has_def = ctx.emitted_defs.contains(&def_key);
                     if ctx.ns.is_primary(c.as_str()) {
                         if has_def {
                             // The class has a NodeShape ⇒ a `$def` is emitted for it.
                             // Object property: a node ref OR the class `$ref`.
-                            alts.push(node_ref_schema());
-                            alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
+                            tool_arguments::push!(ctx; &mut alts,node_ref_schema());
+                            tool_arguments::push!(ctx; &mut alts,tool_arguments::emitted_json!(ctx; { "$ref": tool_arguments::format!(ctx;"#/$defs/{def_key}") }));
                         } else {
                             // The class has NO NodeShape ⇒ no `$def` is emitted, so a
                             // `$ref` to it would dangle and make the schema
@@ -5347,13 +5499,13 @@ fn compile_property(
                                 crate::json_model::insert_sorted(
                                     map,
                                     "$comment".to_owned(),
-                                    json!(format!(
+                                    tool_arguments::emitted_json!(ctx; tool_arguments::format!(ctx;
                                         "{} has no NodeShape; node reference only",
                                         ctx.ns.compact_iri(c.as_str())
                                     )),
                                 );
                             }
-                            alts.push(node_ref);
+                            tool_arguments::push!(ctx; &mut alts,node_ref);
                         }
                     } else if has_def {
                         // Non-primary class WITH a NodeShape ⇒ it DOES have a `$def`
@@ -5362,8 +5514,8 @@ fn compile_property(
                         // CURIE key (e.g. `#/$defs/math:Distribution`). A JSON
                         // pointer reference segment does not need to escape `:`, so
                         // this pointer form is valid without further encoding.
-                        alts.push(node_ref_schema());
-                        alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
+                        tool_arguments::push!(ctx; &mut alts,node_ref_schema());
+                        tool_arguments::push!(ctx; &mut alts,tool_arguments::emitted_json!(ctx; { "$ref": tool_arguments::format!(ctx;"#/$defs/{def_key}") }));
                     } else {
                         // External (non-primary) class with NO NodeShape: the value
                         // is still an RDF node reference, never a string literal, but
@@ -5375,15 +5527,19 @@ fn compile_property(
                             crate::json_model::insert_sorted(
                                 map,
                                 "$comment".to_owned(),
-                                json!(format!("external class {}", c.as_str())),
+                                tool_arguments::emitted_json!(ctx; tool_arguments::format!(ctx;"external class {}", c.as_str())),
                             );
                         }
-                        alts.push(node_ref);
+                        tool_arguments::push!(ctx; &mut alts,node_ref);
                     }
                 }
-                groups.push(alts);
+                tool_arguments::push!(ctx; &mut groups,alts);
             }
             Constraint::NodeKind(kinds) => {
+                if ctx.tool.is_some() {
+                    tool_arguments::push!(ctx; &mut groups,vec![tool_arguments::node_kind_schema(kinds, ctx)]);
+                    continue;
+                }
                 let mut alts: Vec<Value> = Vec::new();
                 // `rdf:nil` is an IRI projected as the empty list, and a
                 // non-empty list's head cell a blank node projected as its
@@ -5392,31 +5548,33 @@ fn compile_property(
                     match nk {
                         NodeKindValue::Literal => alts.extend(literal_schemas()),
                         NodeKindValue::Iri => {
-                            alts.push(iri_ref_schema());
-                            alts.push(nil_list_schema());
+                            tool_arguments::push!(ctx; &mut alts,iri_ref_schema());
+                            tool_arguments::push!(ctx; &mut alts,nil_list_schema());
                         }
                         NodeKindValue::BlankNode => {
-                            alts.push(blank_ref_schema());
-                            alts.push(nonempty_list_schema());
+                            tool_arguments::push!(ctx; &mut alts,blank_ref_schema());
+                            tool_arguments::push!(ctx; &mut alts,nonempty_list_schema());
                         }
                         NodeKindValue::BlankNodeOrIri => {
-                            alts.push(node_ref_schema());
-                            alts.push(any_list_schema());
+                            tool_arguments::push!(ctx; &mut alts,node_ref_schema());
+                            tool_arguments::push!(ctx; &mut alts,any_list_schema());
                         }
                         NodeKindValue::IriOrLiteral => {
-                            alts.push(iri_ref_schema());
-                            alts.push(nil_list_schema());
+                            tool_arguments::push!(ctx; &mut alts,iri_ref_schema());
+                            tool_arguments::push!(ctx; &mut alts,nil_list_schema());
                             alts.extend(literal_schemas());
                         }
                         NodeKindValue::BlankNodeOrLiteral => {
-                            alts.push(blank_ref_schema());
-                            alts.push(nonempty_list_schema());
+                            tool_arguments::push!(ctx; &mut alts,blank_ref_schema());
+                            tool_arguments::push!(ctx; &mut alts,nonempty_list_schema());
                             alts.extend(literal_schemas());
                         }
-                        NodeKindValue::TripleTerm => alts.push(triple_ref_schema()),
+                        NodeKindValue::TripleTerm => {
+                            tool_arguments::push!(ctx; &mut alts,triple_ref_schema());
+                        }
                     }
                 }
-                groups.push(alts);
+                tool_arguments::push!(ctx; &mut groups,alts);
             }
             // The SHACL 1.2 list components (§4.9) each require every value to
             // be a SHACL list, then judge its members; see `ListComponents`.
@@ -5429,40 +5587,39 @@ fn compile_property(
             // negation of `line_break_rejections` (see its documentation).
             Constraint::SingleLine(true) => single_line = true,
             Constraint::RootClass(_) => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:rootClass",
                     shape_iri,
                     "an rdfs:subClassOf* bound on class-valued values has no JSON Schema \
                      equivalent",
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "a sh:rootClass constraint on property {key} was dropped (no JSON Schema \
                      equivalent)"
                 ));
             }
             // SHACL 1.2 Core §7.8.3: at least one value node conforms to the shape.
             Constraint::SomeValue(inner) => {
-                some_values.push(compile_member_schema(inner, shape_iri, key, ctx));
+                tool_arguments::push!(ctx; &mut some_values,compile_member_schema(inner, shape_iri, key, ctx));
             }
             // Every value node conforms to the shape (§4.8.2) — or to every one
             // of the shapes (§4.6.2).
             Constraint::Node(inner) => {
-                shape_conjuncts.push(compile_member_schema(inner, shape_iri, key, ctx));
+                tool_arguments::push!(ctx; &mut shape_conjuncts,compile_member_schema(inner, shape_iri, key, ctx));
             }
             Constraint::And(members) => {
                 for member in members {
-                    shape_conjuncts.push(compile_member_schema(member, shape_iri, key, ctx));
+                    tool_arguments::push!(ctx; &mut shape_conjuncts,compile_member_schema(member, shape_iri, key, ctx));
                 }
             }
             // Every value node conforms to at least one of the shapes (§4.6.3). A
             // member schema that accepts more than its shape does keeps `anyOf`
             // accepting every conforming value.
             Constraint::Or(members) => {
-                let alternatives: Vec<Value> = members
+                let alternatives: Vec<Value> = tool_arguments::values!(ctx; members.len(); members
                     .iter()
-                    .map(|member| compile_member_schema(member, shape_iri, key, ctx))
-                    .collect();
-                shape_conjuncts.push(json!({ "anyOf": alternatives }));
+                    .map(|member| compile_member_schema(member, shape_iri, key, ctx)));
+                tool_arguments::push!(ctx; &mut shape_conjuncts,tool_arguments::emitted_json!(ctx; { "anyOf": alternatives }));
             }
             // Every value node conforms to exactly one of the shapes (§4.6.4) —
             // `oneOf`'s exactly-one, but only over member schemas that accept
@@ -5470,30 +5627,43 @@ fn compile_property(
             // conforming value meet two, and `oneOf` reject it.
             Constraint::Xone(members) => match exact_member_schemas(members, shape_iri, key, ctx) {
                 Some(alternatives) => {
-                    shape_conjuncts.push(json!({ "oneOf": alternatives }));
+                    tool_arguments::push!(ctx; &mut shape_conjuncts,tool_arguments::emitted_json!(ctx; { "oneOf": alternatives }));
                 }
                 None => {
-                    ctx.record(
+                    tool_arguments::record!(ctx;
                         "sh:xone",
                         shape_iri,
                         "a member shape's value schema accepts values the shape does not, \
                              and exactly-one over a wider alternative can reject a conforming \
                              value",
                     );
-                    comments.push(format!(
+                    tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                         "a sh:xone constraint on property {key} was dropped (a member \
                              shape has no exact value schema)"
                     ));
                 }
             },
             Constraint::In(terms) => {
-                in_lists.push(terms.iter().map(|t| term_enum_value(t, ctx.ns)).collect());
+                tool_arguments::push!(ctx; &mut in_lists,
+                    tool_arguments::values!(ctx; terms.len(); terms
+                        .iter()
+                        .map(|t| tool_arguments::enum_value(t, ctx))),
+                );
             }
-            Constraint::HasValue(v) => has_values.push(term_enum_value(v, ctx.ns)),
+            Constraint::HasValue(v) => {
+                tool_arguments::push!(ctx; &mut has_values,tool_arguments::enum_value(v, ctx));
+            }
             Constraint::Pattern { regex, flags, .. } => {
-                match purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or("")) {
+                let translation =
+                    purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or(""));
+                if translation.as_ref().err().is_some_and(|error| {
+                    tool_arguments::pattern_resource_refusal(ctx, shape_iri, key, error)
+                }) {
+                    continue;
+                }
+                match translation {
                     Ok(pattern) => {
-                        patterns.push(pattern);
+                        tool_arguments::push!(ctx; &mut patterns,pattern);
                         sources.push((regex.as_str(), flags.as_deref().unwrap_or("")));
                     }
                     // The pattern is valid but its translation exceeds the
@@ -5505,12 +5675,12 @@ fn compile_property(
                         error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
                         | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
                     ) => {
-                        ctx.record(
+                        tool_arguments::record!(ctx;
                             "sh:pattern",
                             shape_iri,
-                            &format!("the pattern {regex:?} has no ECMA-262 translation ({error})"),
+                            &tool_arguments::format!(ctx;"the pattern {regex:?} has no ECMA-262 translation ({error})"),
                         );
-                        comments.push(format!(
+                        tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                             "a sh:pattern constraint on property {key} was dropped (no \
                              ECMA-262 translation: {error})"
                         ));
@@ -5529,38 +5699,48 @@ fn compile_property(
             }
             Constraint::MinLength(n) => min_length = Some(min_length.map_or(*n, |m| m.max(*n))),
             Constraint::MaxLength(n) => max_length = Some(max_length.map_or(*n, |m| m.min(*n))),
-            Constraint::MinInclusive(t) => bounds.push((Facet::MinInclusive, t)),
-            Constraint::MaxInclusive(t) => bounds.push((Facet::MaxInclusive, t)),
-            Constraint::MinExclusive(t) => bounds.push((Facet::MinExclusive, t)),
-            Constraint::MaxExclusive(t) => bounds.push((Facet::MaxExclusive, t)),
-            Constraint::LanguageIn(tags) => groups.push(vec![lang_literal_schema(tags)]),
+            Constraint::MinInclusive(t) => {
+                tool_arguments::push!(ctx; &mut bounds,(Facet::MinInclusive, t));
+            }
+            Constraint::MaxInclusive(t) => {
+                tool_arguments::push!(ctx; &mut bounds,(Facet::MaxInclusive, t));
+            }
+            Constraint::MinExclusive(t) => {
+                tool_arguments::push!(ctx; &mut bounds,(Facet::MinExclusive, t));
+            }
+            Constraint::MaxExclusive(t) => {
+                tool_arguments::push!(ctx; &mut bounds,(Facet::MaxExclusive, t));
+            }
+            Constraint::LanguageIn(tags) => {
+                tool_arguments::push!(ctx; &mut groups,vec![lang_literal_schema(tags)]);
+            }
             Constraint::Sparql { .. } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:sparql",
                     shape_iri,
                     "SPARQL-AF constraint has no JSON Schema equivalent",
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "a sh:sparql constraint on property {key} was dropped (no JSON Schema equivalent)"
                 ));
             }
             Constraint::Expression { .. } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:expression",
                     shape_iri,
                     "SHACL-AF expression constraint has no JSON Schema equivalent",
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "a sh:expression constraint on property {key} was dropped (no JSON Schema equivalent)"
                 ));
             }
             Constraint::NodeByExpression { .. } => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:nodeByExpression",
                     shape_iri,
                     "SHACL node-expression-computed node shapes have no JSON Schema equivalent",
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "a sh:nodeByExpression constraint on property {key} was dropped (no JSON \
                      Schema equivalent)"
                 ));
@@ -5571,16 +5751,16 @@ fn compile_property(
             Constraint::Not(inner) => {
                 match exact_member_schemas(std::slice::from_ref(&**inner), shape_iri, key, ctx) {
                     Some(mut negand) => {
-                        shape_conjuncts.push(json!({ "not": negand.remove(0) }));
+                        tool_arguments::push!(ctx; &mut shape_conjuncts,tool_arguments::emitted_json!(ctx; { "not": negand.remove(0) }));
                     }
                     None => {
-                        ctx.record(
+                        tool_arguments::record!(ctx;
                             "sh:not",
                             shape_iri,
                             "the negated shape's value schema accepts values the shape does not, \
                              and negating a wider schema rejects conforming values",
                         );
-                        comments.push(format!(
+                        tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                             "a sh:not constraint on property {key} was dropped (its shape has no \
                              exact value schema)"
                         ));
@@ -5648,16 +5828,16 @@ fn compile_property(
             | Constraint::QualifiedValueShape { .. }
             | Constraint::Component { .. } => {
                 let term = constraint_term(c);
-                ctx.record(
+                tool_arguments::record!(ctx;
                     term,
                     shape_iri,
                     &constraint_note(
-                        c,
+                        ctx, c,
                         "a constraint on a property's value nodes has no projection in its \
                          value schema",
                     ),
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                     "a {term} constraint on property {key} was dropped (no projection in its \
                      value schema)"
                 ));
@@ -5674,10 +5854,10 @@ fn compile_property(
             (Some(class_key), _) => {
                 // A vocab `sh:class` already emitted its enum `$ref`; it wins.
                 if range_keys.iter().any(|range_key| range_key != class_key) {
-                    ctx.record(
+                    tool_arguments::record!(ctx;
                         "rdfs:range",
                         shape_iri,
-                        &format!(
+                        &tool_arguments::format!(ctx;
                             "predicate {pred_iri} has a value-vocabulary sh:class ({class_key}) \
                              and conflicting value-vocabulary rdfs:ranges ({}); \
                              sh:class wins, range enum suppressed",
@@ -5688,10 +5868,10 @@ fn compile_property(
             }
             (None, true) => {
                 // A non-vocab `sh:class` is present; it wins, range enum suppressed.
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "rdfs:range",
                     shape_iri,
-                    &format!(
+                    &tool_arguments::format!(ctx;
                         "predicate {pred_iri} has a sh:class and a value-vocabulary \
                          rdfs:range ({}); sh:class wins, range enum suppressed",
                         range_keys.join(", ")
@@ -5702,12 +5882,12 @@ fn compile_property(
                 // Open vocabulary (no sh:class): every range is conjunctive.
                 let mut refs: Vec<Value> = range_keys
                     .into_iter()
-                    .map(|range_key| json!({ "$ref": format!("#/$defs/{range_key}") }))
+                    .map(|range_key| tool_arguments::emitted_json!(ctx; { "$ref": tool_arguments::format!(ctx;"#/$defs/{range_key}") }))
                     .collect();
-                groups.push(vec![if refs.len() == 1 {
+                tool_arguments::push!(ctx; &mut groups,vec![if refs.len() == 1 {
                     refs.pop().expect("one range ref")
                 } else {
-                    json!({ "allOf": refs })
+                    tool_arguments::emitted_json!(ctx; { "allOf": refs })
                 }]);
             }
         }
@@ -5715,18 +5895,17 @@ fn compile_property(
 
     // `sh:in`: a value is a member of every list.
     if let Some((first, rest)) = in_lists.split_first() {
-        let mut members: Vec<Value> = first
+        let mut members: Vec<Value> = tool_arguments::values!(ctx; first.len(); first
             .iter()
             .filter(|member| rest.iter().all(|list| list.contains(member)))
-            .cloned()
-            .collect();
-        crate::term::sort_canonical(&mut members);
+            .map(|member| tool_arguments::emitted_json!(ctx; member)));
+        tool_arguments::sort_values(ctx, &mut members);
         members.dedup();
         if members.is_empty() {
             // No term is in every list: no value conforms.
-            rejected.push(json!({}));
+            tool_arguments::push!(ctx; &mut rejected,tool_arguments::emitted_json!(ctx; {}));
         } else {
-            value.insert("enum".to_owned(), Value::Array(members));
+            tool_arguments::insert!(ctx; &mut value,"enum", tool_arguments::emission_array!(ctx; members));
         }
     }
 
@@ -5735,7 +5914,7 @@ fn compile_property(
     // linked `@graph` nodes is a node reference, whose members no keyword of
     // this value's schema reaches (see `ListComponents::record_node_form_losses`).
     if list.present {
-        groups.push(vec![
+        tool_arguments::push!(ctx; &mut groups,vec![
             list.value_schema(shape_iri, key, ctx),
             node_ref_schema(),
         ]);
@@ -5771,18 +5950,22 @@ fn compile_property(
     // The typed-literal `@type`s every `sh:datatype` admits, when one is
     // present: a typed rejection naming another `@type` rejects nothing the
     // value schema admits.
-    let admitted_types: Option<BTreeSet<String>> = constraints
-        .iter()
-        .filter_map(|constraint| match constraint {
-            Constraint::Datatype(datatypes) => Some(
-                datatypes
-                    .iter()
-                    .map(|dt| ctx.ns.compact_iri(dt.as_str()))
-                    .collect::<BTreeSet<String>>(),
-            ),
-            _ => None,
-        })
-        .reduce(|left, right| left.intersection(&right).cloned().collect());
+    let admitted_types: Option<BTreeSet<String>> = if ctx.tool.is_none() {
+        constraints
+            .iter()
+            .filter_map(|constraint| match constraint {
+                Constraint::Datatype(datatypes) => Some(
+                    datatypes
+                        .iter()
+                        .map(|dt| ctx.ns.compact_iri(dt.as_str()))
+                        .collect::<BTreeSet<String>>(),
+                ),
+                _ => None,
+            })
+            .reduce(|left, right| left.intersection(&right).cloned().collect())
+    } else {
+        None
+    };
     let rejection_admissible = move |rejection: &Value| {
         !ProjectedKinds::of(rejection).intersect(admitted).is_empty()
             && admitted_types
@@ -5795,20 +5978,19 @@ fn compile_property(
 
     // Normalize each group to one schema (its only alternative, or their
     // `anyOf`), in a stable order, de-duplicated.
-    let mut group_schemas: Vec<Value> = groups
-        .into_iter()
-        .filter(|alts| !alts.is_empty())
-        .map(|mut alts| {
-            crate::term::sort_canonical(&mut alts);
-            alts.dedup();
-            if alts.len() == 1 {
-                alts.remove(0)
-            } else {
-                json!({ "anyOf": alts })
-            }
-        })
-        .collect();
-    crate::term::sort_canonical(&mut group_schemas);
+    let mut group_schemas: Vec<Value> = tool_arguments::values!(ctx; groups.len(); groups
+    .into_iter()
+    .filter(|alts| !alts.is_empty())
+    .map(|mut alts| {
+        tool_arguments::sort_values(ctx, &mut alts);
+        alts.dedup();
+        if alts.len() == 1 {
+            alts.remove(0)
+        } else {
+            tool_arguments::emitted_json!(ctx; { "anyOf": alts })
+        }
+    }));
+    tool_arguments::sort_values(ctx, &mut group_schemas);
     group_schemas.dedup();
     if group_schemas.len() == 1 {
         // Fold the one group into the value map.
@@ -5818,7 +6000,7 @@ fn compile_property(
             }
         }
     } else if !group_schemas.is_empty() {
-        value.insert("allOf".to_owned(), Value::Array(group_schemas));
+        tool_arguments::insert!(ctx; &mut value,"allOf", tool_arguments::emission_array!(ctx; group_schemas));
     }
 
     // The lexical-form constraints (see `lexical_form_rejections`).
@@ -5826,26 +6008,42 @@ fn compile_property(
     patterns.dedup();
     let lexical = !patterns.is_empty() || min_length.is_some() || max_length.is_some();
     if let Some((first, rest)) = patterns.split_first() {
-        value.insert("pattern".to_owned(), json!(first));
+        tool_arguments::insert!(ctx; &mut value,
+            "pattern",
+            tool_arguments::emitted_json!(ctx; first),
+        );
         for pattern in rest {
-            rejected.push(json!({ "type": "string", "not": { "pattern": pattern } }));
+            tool_arguments::push!(ctx; &mut rejected,tool_arguments::emitted_json!(ctx; { "type": "string", "not": { "pattern": pattern } }));
         }
     }
-    for pattern in &patterns {
-        rejected.push(literal_value_rejection(
-            json!({ "not": { "pattern": pattern } }),
+    let carries_literals = ctx.tool.is_none();
+    for pattern in patterns.iter().filter(|_| carries_literals) {
+        tool_arguments::push!(ctx; &mut rejected,literal_value_rejection(
+            tool_arguments::emitted_json!(ctx; { "not": { "pattern": pattern } }),
         ));
     }
     if let Some(n) = min_length {
-        value.insert("minLength".to_owned(), json!(n));
-        if n > 0 {
-            rejected.push(literal_value_rejection(json!({ "maxLength": n - 1 })));
+        tool_arguments::insert!(ctx; &mut value,
+            "minLength",
+            tool_arguments::emitted_json!(ctx; n),
+        );
+        if n > 0 && ctx.tool.is_none() {
+            tool_arguments::push!(ctx; &mut rejected,literal_value_rejection(
+                tool_arguments::emitted_json!(ctx; { "maxLength": n - 1 }),
+            ));
         }
     }
     if let Some(n) = max_length {
-        value.insert("maxLength".to_owned(), json!(n));
-        if let Some(next) = n.checked_add(1) {
-            rejected.push(literal_value_rejection(json!({ "minLength": next })));
+        tool_arguments::insert!(ctx; &mut value,
+            "maxLength",
+            tool_arguments::emitted_json!(ctx; n),
+        );
+        if let Some(next) = n.checked_add(1)
+            && ctx.tool.is_none()
+        {
+            tool_arguments::push!(ctx; &mut rejected,literal_value_rejection(
+                tool_arguments::emitted_json!(ctx; { "minLength": next }),
+            ));
         }
     }
     if lexical {
@@ -5853,16 +6051,26 @@ fn compile_property(
         // blank node reference or a non-empty list, whose head cell is one —
         // and a triple term has no lexical form (`str` is undefined on it)
         // either.
-        rejected.push(blank_ref_schema());
-        rejected.push(nonempty_list_schema());
-        rejected.push(triple_ref_schema());
+        if ctx.tool.is_none() {
+            tool_arguments::push!(ctx; &mut rejected,blank_ref_schema());
+            tool_arguments::push!(ctx; &mut rejected,nonempty_list_schema());
+            tool_arguments::push!(ctx; &mut rejected,triple_ref_schema());
+        }
         let lexical = LexicalConstraints {
             patterns: &patterns,
             sources: &sources,
             min_length,
             max_length,
         };
-        lexical.reject_violations(&mut rejected);
+        if ctx.tool.is_none() {
+            lexical.reject_violations(&mut rejected);
+        } else if !admitted.intersect(ProjectedKinds::BOOLEAN).is_empty() {
+            for (scalar, text) in [(true, "true"), (false, "false")] {
+                if lexical.violated_by_admitted(text, shape_iri, key, ctx) {
+                    tool_arguments::push!(ctx; &mut rejected, tool_arguments::emitted_json!(ctx; { "const": scalar }));
+                }
+            }
+        }
         lexical.judge_integers(
             constraints,
             admits,
@@ -5874,24 +6082,37 @@ fn compile_property(
         );
     }
     if single_line {
-        rejected.extend(line_break_rejections());
+        if ctx.tool.is_some() {
+            tool_arguments::push!(ctx; &mut rejected, tool_arguments::emitted_json!(ctx; { "type": "string", "pattern": LINE_BREAK_PATTERN }));
+        } else {
+            rejected.extend(line_break_rejections());
+        }
     }
-    rejected.retain(|rejection| rejection_admissible(rejection));
+    rejected.retain(|rejection| {
+        rejection_admissible(rejection)
+            && (ctx.tool.is_none() || !tool_arguments::is_carrier_rejection(rejection))
+    });
+    if ctx.tool.is_some() && lexical && !admitted.intersect(ProjectedKinds::NODE).is_empty() {
+        tool_arguments::push!(ctx; &mut rejected,tool_arguments::emitted_json!(ctx; { "type": "object" }));
+    }
     if !rejected.is_empty() {
-        crate::term::sort_canonical(&mut rejected);
+        tool_arguments::sort_values(ctx, &mut rejected);
         rejected.dedup();
         let negand = if rejected.len() == 1 {
             rejected.remove(0)
         } else {
-            json!({ "anyOf": rejected })
+            tool_arguments::emitted_json!(ctx; { "anyOf": rejected })
         };
-        value.insert("not".to_owned(), negand);
+        tool_arguments::insert!(ctx; &mut value,"not", negand);
     }
 
     if !comments.is_empty() {
         comments.sort();
         comments.dedup();
-        value.insert("$comment".to_owned(), json!(comments.join("; ")));
+        tool_arguments::insert!(ctx; &mut value,
+            "$comment",
+            tool_arguments::emitted_json!(ctx; tool_arguments::join(ctx, &comments, "; ")),
+        );
     }
 
     // A lone catalog reference is already the complete value schema. Wrapping
@@ -5910,20 +6131,24 @@ fn compile_property(
     }
     if !shape_conjuncts.is_empty() {
         let mut all = value
-            .get("allOf")
-            .and_then(Value::as_array)
-            .cloned()
+            .remove("allOf")
+            .and_then(|value| crate::json_model::into_array(value).ok())
             .unwrap_or_default();
         all.extend(shape_conjuncts);
-        value.insert("allOf".to_owned(), Value::Array(all));
+        tool_arguments::insert!(ctx; &mut value,"allOf", tool_arguments::emission_array!(ctx; all));
     }
 
+    if ctx.tool.is_some() {
+        value.entry("type".to_owned()).or_insert_with(
+            || tool_arguments::emitted_json!(ctx; ["string", "integer", "boolean", "object"]),
+        );
+    }
     // `sh:hasValue` is existential — some value is the term — so it constrains
     // the property's values together, never each one: a lone value must be the
     // term, and an array of values must contain it. `sh:someValue` is the same
     // quantifier over a shape: a lone value must meet its value schema, and an
     // array must contain one that does.
-    crate::term::sort_canonical(&mut has_values);
+    tool_arguments::sort_values(ctx, &mut has_values);
     has_values.dedup();
     // Where one value is written unwrapped beside the array form of several (see
     // below), the value schema must reject an array itself — see
@@ -5933,46 +6158,49 @@ fn compile_property(
     let floor = u64::from(requires_value);
     let single_beside_array = max_count != Some(1)
         && max_count.is_none_or(|n| n >= 1)
-        && min_count.map_or(floor, |n| n.max(floor)) <= 1;
+        && min_count.map_or(floor, |n| n.max(floor)) <= 1
+        && ctx.tool.is_none();
     // Only a value schema or an array form that judges something can be bypassed:
     // an unconstrained value beside an unbounded array of unconstrained values
     // accepts every array either way.
     let judges = value.keys().any(|key| key != "$comment") || max_count.is_some() || requires_value;
-    if single_beside_array && judges && !rejects_arrays(&crate::json_model::object(value.clone())) {
-        value.insert(
-            "type".to_owned(),
-            json!(["boolean", "number", "object", "string"]),
+    if single_beside_array && judges && !rejects_arrays(&tool_arguments::map(ctx, value.clone())) {
+        tool_arguments::insert!(ctx; &mut value,
+            "type",
+            tool_arguments::emitted_json!(ctx; ["boolean", "number", "object", "string"]),
         );
     }
-    let item = crate::json_model::object(value.clone());
+    let item = tool_arguments::clone_map(ctx, &value);
     match has_values.as_slice() {
         [] => {}
         [only] => {
-            value.insert("const".to_owned(), only.clone());
+            let constant = tool_arguments::emitted_json!(ctx; only);
+            tool_arguments::insert!(ctx; &mut value,"const", constant);
         }
         several => {
-            let consts: Vec<Value> = several.iter().map(|v| json!({ "const": v })).collect();
-            value.insert("allOf".to_owned(), {
+            let consts: Vec<Value> = tool_arguments::values!(ctx; several.len(); several
+                .iter()
+                .map(|v| tool_arguments::emitted_json!(ctx; { "const": v })));
+            tool_arguments::insert!(ctx; &mut value,"allOf", {
                 let mut all = value
-                    .get("allOf")
-                    .and_then(Value::as_array)
-                    .cloned()
+                    .remove("allOf")
+                    .and_then(|value| crate::json_model::into_array(value).ok())
                     .unwrap_or_default();
-                all.extend(consts);
-                Value::Array(all)
+                tool_arguments::extend(ctx, &mut all, consts);
+                tool_arguments::emission_array!(ctx; all)
             });
         }
     }
     if !some_values.is_empty() {
         let mut all = value
-            .get("allOf")
-            .and_then(Value::as_array)
-            .cloned()
+            .remove("allOf")
+            .and_then(|value| crate::json_model::into_array(value).ok())
             .unwrap_or_default();
-        all.extend(some_values.iter().cloned());
-        value.insert("allOf".to_owned(), Value::Array(all));
+        let cloned = tool_arguments::clone_values(ctx, &some_values);
+        tool_arguments::extend(ctx, &mut all, cloned);
+        tool_arguments::insert!(ctx; &mut value,"allOf", tool_arguments::emission_array!(ctx; all));
     }
-    let single = crate::json_model::object(value);
+    let single = tool_arguments::map(ctx, value);
 
     // `sh:hasValue` and `sh:someValue` require a value, so each implies
     // `sh:minCount 1`, stated as such so that the schema reads back as the
@@ -5999,26 +6227,38 @@ fn compile_property(
     // `minCount >= 2` we therefore keep the strict array form so the schema does
     // not admit data SHACL rejects.
     let schema = if max_count == Some(1) {
-        single
+        if ctx.tool.is_some() && min_count.is_some_and(|n| n > 1) {
+            tool_arguments::emitted_json!(ctx; false)
+        } else {
+            single
+        }
     } else {
         let mut arr: Map<String, Value> = Map::new();
-        arr.insert("type".to_owned(), json!("array"));
-        arr.insert("items".to_owned(), item);
-        let mut contained: Vec<Value> = has_values.iter().map(|v| json!({ "const": v })).collect();
-        contained.extend(some_values);
+        tool_arguments::insert!(ctx; &mut arr,
+            "type",
+            tool_arguments::emitted_json!(ctx; "array"),
+        );
+        tool_arguments::insert!(ctx; &mut arr,"items", item);
+        let mut contained: Vec<Value> = tool_arguments::values!(ctx; has_values.len(); has_values
+            .iter()
+            .map(|v| tool_arguments::emitted_json!(ctx; { "const": v })));
+        tool_arguments::extend(ctx, &mut contained, some_values);
         match contained.as_slice() {
             [] => {}
             [only] => {
-                arr.insert("contains".to_owned(), only.clone());
+                let contained = tool_arguments::emitted_json!(ctx; only);
+                tool_arguments::insert!(ctx; &mut arr,"contains", contained);
             }
             several => {
-                arr.insert(
-                    "allOf".to_owned(),
-                    Value::Array(
+                tool_arguments::insert!(ctx; &mut arr,
+                    "allOf",
+                    tool_arguments::emission_array!(ctx;
                         several
                             .iter()
-                            .map(|schema| json!({ "contains": schema }))
-                            .collect(),
+                            .map(
+                                |schema| tool_arguments::emitted_json!(ctx; { "contains": schema }),
+                            )
+                            .collect::<Vec<_>>(),
                     ),
                 );
             }
@@ -6026,17 +6266,17 @@ fn compile_property(
         if let Some(n) = min_count
             && n > 0
         {
-            arr.insert("minItems".to_owned(), json!(n));
+            tool_arguments::insert!(ctx; &mut arr,"minItems", tool_arguments::emitted_json!(ctx; n));
         }
         if let Some(n) = max_count {
-            arr.insert("maxItems".to_owned(), json!(n));
+            tool_arguments::insert!(ctx; &mut arr,"maxItems", tool_arguments::emitted_json!(ctx; n));
         }
-        let array_form = crate::json_model::object(arr);
+        let array_form = tool_arguments::map(ctx, arr);
 
         // Both count bounds must admit one before adding the unwrapped form.
         // In particular, maxCount=0 cannot be bypassed by a bare single value.
         if single_beside_array {
-            json!({ "anyOf": [single, array_form] })
+            tool_arguments::emitted_json!(ctx; { "anyOf": [single, array_form] })
         } else {
             array_form
         }
@@ -6299,6 +6539,46 @@ struct LexicalConstraints<'a> {
 }
 
 impl LexicalConstraints<'_> {
+    fn violated_by_admitted(
+        &self,
+        lexical: &str,
+        shape: &str,
+        key: &str,
+        ctx: &mut Ctx<'_>,
+    ) -> bool {
+        if ctx.tool.is_none() {
+            return self.violated_by(lexical);
+        }
+        if !tool_arguments::step(ctx) {
+            return false;
+        }
+        let length = lexical.chars().count() as u64;
+        if self.min_length.is_some_and(|n| length < n)
+            || self.max_length.is_some_and(|n| length > n)
+        {
+            return true;
+        }
+        for &(regex, flags) in self.sources {
+            if !tool_arguments::pattern_input(ctx, regex, flags) {
+                return false;
+            }
+            match purrdf_core::xsd_regex::compile(regex, flags) {
+                Ok(compiled) if !compiled.is_match(lexical) => return true,
+                Ok(_) => {}
+                Err(cause) => {
+                    tool_arguments::pattern_resource_refusal(
+                        ctx,
+                        shape,
+                        key,
+                        &purrdf_core::xsd_regex::Ecma262Error::Source(cause),
+                    );
+                    return false;
+                }
+            }
+        }
+        false
+    }
+
     /// Whether the constant lexical form `lexical` violates a constraint, as
     /// validation decides it.
     fn violated_by(&self, lexical: &str) -> bool {
@@ -6353,7 +6633,7 @@ impl LexicalConstraints<'_> {
     #[allow(clippy::too_many_arguments)]
     fn judge_integers(
         &self,
-        constraints: &[Constraint],
+        constraints: &[&Constraint],
         admits: Admits,
         shape_iri: &str,
         key: &str,
@@ -6361,6 +6641,9 @@ impl LexicalConstraints<'_> {
         comments: &mut Vec<String>,
         ctx: &mut Ctx<'_>,
     ) {
+        if ctx.tool.is_some() && !admits.integer {
+            return;
+        }
         // `L(k) ≤ m`, the canonical numeral's length, is `1 - 10^(m-1) ≤ k ≤
         // 10^m - 1` (`0 ≤ k ≤ 9` for `m = 1`); past 20 characters it holds of
         // every 64-bit integer.
@@ -6383,43 +6666,53 @@ impl LexicalConstraints<'_> {
         {
             match at_most(n - 1) {
                 None => {}
-                Some(None) => rejected.push(json!({ "type": "integer" })),
-                Some(Some((low, high))) => rejected.push(json!({
-                    "type": "integer",
-                    "minimum": json_integer(low),
-                    "maximum": json_integer(high)
-                })),
+                Some(None) => {
+                    tool_arguments::push!(ctx; &mut *rejected,tool_arguments::emitted_json!(ctx;{ "type": "integer" }));
+                }
+                Some(Some((low, high))) => {
+                    tool_arguments::push!(ctx; &mut *rejected,tool_arguments::emitted_json!(ctx;{
+                        "type": "integer",
+                        "minimum": json_integer(low),
+                        "maximum": json_integer(high)
+                    }));
+                }
             }
         }
         if let Some(n) = self.max_length {
             match at_most(n) {
-                None => rejected.push(json!({ "type": "integer" })),
+                None => {
+                    tool_arguments::push!(ctx; &mut *rejected,tool_arguments::emitted_json!(ctx;{ "type": "integer" }));
+                }
                 Some(None) => {}
-                Some(Some((low, high))) => rejected.push(json!({
-                    "type": "integer",
-                    "not": { "minimum": json_integer(low), "maximum": json_integer(high) }
-                })),
+                Some(Some((low, high))) => {
+                    tool_arguments::push!(ctx; &mut *rejected,tool_arguments::emitted_json!(ctx;{
+                        "type": "integer",
+                        "not": { "minimum": json_integer(low), "maximum": json_integer(high) }
+                    }));
+                }
             }
         }
         if self.sources.is_empty() || !admits.integer {
             return;
         }
-        match finite_members(constraints, |term| {
+        let namespace = ctx.ns;
+        let plain = ctx.tool.is_some();
+        match finite_members(ctx, constraints, |term| {
             matches!(term, Term::Literal(literal)
                 if literal.datatype_str() == XSD_INTEGER
-                    && crate::instance::project_value(term, ctx.ns).is_number())
+                    && if plain { tool_arguments::scalar_term(term) } else { crate::instance::project_value(term, namespace).is_number() })
         }) {
             Some(members) => {
                 for member in members {
                     if let Term::Literal(literal) = member
-                        && self.violated_by(literal.value())
+                        && self.violated_by_admitted(literal.value(), shape_iri, key, ctx)
                     {
-                        rejected.push(json!({ "const": term_enum_value(member, ctx.ns) }));
+                        tool_arguments::push!(ctx; &mut *rejected,tool_arguments::emitted_json!(ctx;{ "const": tool_arguments::enum_value(member, ctx) }));
                     }
                 }
             }
             None => {
-                ctx.record(
+                tool_arguments::record!(ctx;
                     "sh:pattern",
                     shape_iri,
                     "the pattern is not checked on an xsd:integer value in canonical form, which \
@@ -6428,7 +6721,7 @@ impl LexicalConstraints<'_> {
                      starting with 1: 1, 10-19, 100-199, ...) are no finite union of the \
                      intervals and residue classes minimum, maximum and multipleOf state",
                 );
-                comments.push(format!(
+                tool_arguments::push!(ctx; &mut *comments,tool_arguments::format!(ctx;
                     "a sh:pattern constraint on property {key} is not checked on canonical \
                      xsd:integer values (JSON numbers)"
                 ));
@@ -6440,22 +6733,55 @@ impl LexicalConstraints<'_> {
 /// The terms `admitted` accepts that every `sh:in` list of `constraints`
 /// contains, when there is an `sh:in` list (the admissible values are then
 /// finite); `None` when there is none.
-fn finite_members(
-    constraints: &[Constraint],
+fn finite_members<'a>(
+    ctx: &mut Ctx<'_>,
+    constraints: &[&'a Constraint],
     admitted: impl Fn(&Term) -> bool,
-) -> Option<Vec<&Term>> {
-    let mut lists = constraints
-        .iter()
-        .filter_map(|constraint| match constraint {
-            Constraint::In(terms) => Some(terms),
-            _ => None,
-        });
-    let first = lists.next()?;
-    let rest: Vec<&Vec<Term>> = lists.collect();
-    let mut members: Vec<&Term> = first
-        .iter()
-        .filter(|term| admitted(term) && rest.iter().all(|list| list.contains(term)))
-        .collect();
+) -> Option<Vec<&'a Term>> {
+    let mut first = None;
+    let mut rest = Vec::new();
+    for constraint in constraints {
+        if !tool_arguments::step(ctx) {
+            return None;
+        }
+        if let Constraint::In(terms) = constraint {
+            if first.is_none() {
+                first = Some(terms);
+            } else {
+                tool_arguments::push!(ctx; &mut rest, terms);
+            }
+        }
+    }
+    let first = first?;
+    let mut members = Vec::new();
+    for term in first {
+        if !tool_arguments::step(ctx) {
+            return None;
+        }
+        if !admitted(term) {
+            continue;
+        }
+        let mut retained = true;
+        for list in &rest {
+            let mut found = false;
+            for candidate in *list {
+                if !tool_arguments::step(ctx) {
+                    return None;
+                }
+                if candidate == term {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                retained = false;
+                break;
+            }
+        }
+        if retained {
+            tool_arguments::push!(ctx; &mut members, term);
+        }
+    }
     members.dedup();
     Some(members)
 }
@@ -6474,7 +6800,7 @@ struct Admits {
 
 impl Admits {
     /// The literal kinds every constraint of `constraints` admits.
-    fn of(constraints: &[Constraint]) -> Self {
+    fn of(constraints: &[&Constraint]) -> Self {
         let mut admits = Self {
             integer: true,
             ieee: true,
@@ -6671,7 +6997,7 @@ fn numeric_datatypes() -> impl Iterator<Item = &'static str> {
 #[allow(clippy::too_many_arguments)]
 fn compile_bounds(
     bounds: &[(Facet, &Term)],
-    constraints: &[Constraint],
+    constraints: &[&Constraint],
     admits: Admits,
     shape_iri: &str,
     key: &str,
@@ -6680,6 +7006,40 @@ fn compile_bounds(
     comments: &mut Vec<String>,
     ctx: &mut Ctx<'_>,
 ) {
+    if ctx.tool.is_some() {
+        let kind = tool_arguments::native_value(ctx, "integer");
+        tool_arguments::insert!(ctx; &mut *value,"type", kind);
+        for (facet, term) in bounds {
+            let Term::Literal(literal) = term else {
+                unreachable!("admitted integer bound")
+            };
+            let integer = literal
+                .value()
+                .parse::<i128>()
+                .expect("admitted integer bound");
+            let (keyword, lower) = match facet {
+                Facet::MinInclusive => ("minimum", true),
+                Facet::MaxInclusive => ("maximum", false),
+                Facet::MinExclusive => ("exclusiveMinimum", true),
+                Facet::MaxExclusive => ("exclusiveMaximum", false),
+            };
+            let previous = value
+                .get(keyword)
+                .and_then(Value::as_number)
+                .and_then(purrdf_lex::json::Number::as_i128);
+            if previous.is_none_or(|previous| {
+                if lower {
+                    integer > previous
+                } else {
+                    integer < previous
+                }
+            }) {
+                let bound = tool_arguments::native_value(ctx, integer);
+                tool_arguments::insert!(ctx; &mut *value,keyword, bound);
+            }
+        }
+        return;
+    }
     let mut numeric = false;
     let mut typed: Vec<Value> = Vec::new();
     let mut numbers: Vec<(Facet, BoundNumberValue)> = Vec::new();
@@ -6729,7 +7089,7 @@ fn compile_bounds(
         return;
     }
     let is_ieee = |term: &Term| matches!(term, Term::Literal(l) if l.datatype_str() == XSD_DOUBLE || l.datatype_str() == XSD_FLOAT);
-    if let Some(members) = finite_members(constraints, is_ieee) {
+    if let Some(members) = finite_members(ctx, constraints, is_ieee) {
         for member in members {
             if !ieee_member_satisfies(member, &numbers) {
                 rejected.push(json!({ "const": term_enum_value(member, ctx.ns) }));
@@ -7130,7 +7490,7 @@ impl<'s> ListComponents<'s> {
             .iter()
             .map(|shape| compile_member_schema(shape, shape_iri, key, ctx))
             .collect();
-        crate::term::sort_canonical(&mut schemas);
+        tool_arguments::sort_values(ctx, &mut schemas);
         schemas.dedup();
         match schemas.len() {
             0 => None,
@@ -7311,6 +7671,9 @@ fn compile_member_schema_in_model(
     key: &str,
     ctx: &mut Ctx<'_>,
 ) -> Value {
+    if ctx.tool.is_some() {
+        return tool_arguments::member_schema(shape, shape_iri, key, ctx);
+    }
     if shape.deactivated {
         return json!({});
     }
@@ -7354,8 +7717,9 @@ fn exact_member_schemas(
     ctx: &mut Ctx<'_>,
 ) -> Option<Vec<Value>> {
     let mut active = ShapeProofStack::new();
+    let domain = ctx.model.clone();
     for shape in shapes {
-        match value_shape_exact(shape, ctx.model.as_deref(), &mut active) {
+        match value_shape_exact(shape, domain.as_deref(), &mut active, ctx, (shape_iri, key)) {
             Ok(true) => {}
             Ok(false) => return None,
             Err(error) => {
@@ -7366,10 +7730,9 @@ fn exact_member_schemas(
         }
     }
     let before = ctx.loss_count();
-    let schemas: Vec<Value> = shapes
+    let schemas: Vec<Value> = tool_arguments::values!(ctx; shapes.len(); shapes
         .iter()
-        .map(|shape| compile_member_schema(shape, shape_iri, key, ctx))
-        .collect();
+        .map(|shape| compile_member_schema(shape, shape_iri, key, ctx)));
     (ctx.loss_count() == before).then_some(schemas)
 }
 
@@ -7379,7 +7742,12 @@ fn value_shape_exact(
     shape: &Shape,
     model: Option<&ModelOwner>,
     active: &mut ShapeProofStack,
+    ctx: &mut Ctx<'_>,
+    location: (&str, &str),
 ) -> Result<bool, crate::PreparationRefusal> {
+    if !tool_arguments::step(ctx) {
+        return Ok(false);
+    }
     if purrdf_stack::is_low() {
         return Err(crate::PreparationRefusal::StackMargin);
     }
@@ -7392,10 +7760,20 @@ fn value_shape_exact(
         model.map_or(0, |model| std::ptr::from_ref(model).addr()),
         std::ptr::from_ref(shape).addr(),
     );
-    if active.contains(&identity) {
+    for entry in active.iter() {
+        if !tool_arguments::step(ctx) || *entry == identity {
+            return Ok(false);
+        }
+    }
+    if !tool_arguments::resident(ctx, size_of::<(usize, usize)>(), 1) {
         return Ok(false);
     }
     active.push(identity);
+    let source = ctx
+        .tool
+        .is_some()
+        .then(|| tool_arguments::format_text(ctx, format_args!("{}", shape.id)));
+    let location = (source.as_deref().unwrap_or(location.0), location.1);
     let disallowed = ConformanceDisallows::default();
     let result = (|| {
         if !(disallowed.contains(&shape.severity)
@@ -7408,12 +7786,19 @@ fn value_shape_exact(
             && shape
                 .property_shapes
                 .iter()
-                .all(|nested| nested.deactivated))
+                .all(|nested| tool_arguments::step(ctx) && nested.deactivated))
         {
             return Ok(false);
         }
         for constraint in &shape.constraints {
-            if !value_constraint_exact(constraint, model, active)? {
+            if !value_constraint_exact(
+                constraint,
+                &shape.constraints,
+                model,
+                active,
+                ctx,
+                location,
+            )? {
                 return Ok(false);
             }
         }
@@ -7429,15 +7814,25 @@ fn value_shape_exact(
 /// exact.
 fn value_constraint_exact(
     constraint: &Constraint,
+    siblings: &[Constraint],
     model: Option<&ModelOwner>,
     active: &mut ShapeProofStack,
+    ctx: &mut Ctx<'_>,
+    location: (&str, &str),
 ) -> Result<bool, crate::PreparationRefusal> {
+    if !tool_arguments::step(ctx) {
+        return Ok(false);
+    }
+    if let Some(exact) = tool_arguments::exact_plain_constraint(constraint, siblings, ctx, location)
+    {
+        return Ok(exact);
+    }
     Ok(match constraint {
         Constraint::Reference(target) => {
             let definition = model
                 .ok_or(crate::PreparationRefusal::UnboundReference)?
                 .definition_required(target)?;
-            value_shape_exact(definition, model, active)?
+            value_shape_exact(definition, model, active, ctx, location)?
         }
         Constraint::PropertyReference(edge) => {
             let property = model
@@ -7450,12 +7845,12 @@ fn value_constraint_exact(
         | Constraint::In(_)
         | Constraint::HasValue(_) => true,
         Constraint::Node(inner) | Constraint::Not(inner) | Constraint::SomeValue(inner) => {
-            value_shape_exact(inner, model, active)?
+            value_shape_exact(inner, model, active, ctx, location)?
         }
         Constraint::And(members) | Constraint::Or(members) | Constraint::Xone(members) => {
             let mut exact = true;
             for member in members {
-                if !value_shape_exact(member, model, active)? {
+                if !value_shape_exact(member, model, active, ctx, location)? {
                     exact = false;
                     break;
                 }
@@ -7473,6 +7868,9 @@ fn compile_member_schema_body(
     key: &str,
     ctx: &mut Ctx<'_>,
 ) -> Value {
+    if !tool_arguments::admit_property_storage(&shape.constraints, ctx) {
+        return tool_arguments::emitted_json!(ctx; {});
+    }
     let mut comments: Vec<String> = Vec::new();
     let enforced = enforced_constraints(
         &shape.constraints,
@@ -7483,24 +7881,24 @@ fn compile_member_schema_body(
         &mut comments,
         ctx,
     );
-    let mut constraints: Vec<Constraint> = Vec::with_capacity(enforced.len() + 1);
+    let mut constraints: Vec<&Constraint> = Vec::new();
     for constraint in enforced {
         if matches!(
             constraint,
             Constraint::MinCount(_) | Constraint::MaxCount(_)
         ) {
             let term = constraint_term(constraint);
-            ctx.record(
+            tool_arguments::record!(ctx;
                 term,
                 shape_iri,
                 "a cardinality on a value shape (a node shape) is not well-formed and \
                  constrains nothing a value's schema states",
             );
-            comments.push(format!(
+            tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
                 "a {term} constraint on a value shape of {key} was dropped"
             ));
         } else if !matches!(constraint, Constraint::PropertyReference(_)) {
-            constraints.push(constraint.clone());
+            tool_arguments::push!(ctx; &mut constraints,constraint);
         }
     }
     let mut has_properties = false;
@@ -7514,28 +7912,37 @@ fn compile_member_schema_body(
         }
     }
     if has_properties {
-        ctx.record(
+        tool_arguments::record!(ctx;
             "sh:property",
             shape_iri,
             "a value shape's property shapes judge each value's own properties, which live on \
              the value's own @graph node, beyond a JSON Schema keyword's reach from the value",
         );
-        comments.push(format!(
+        tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
             "the property shapes of a value shape of {key} were dropped"
         ));
     }
-    constraints.push(Constraint::MaxCount(1));
-    let (mut schema, _) = compile_property(&constraints, shape_iri, key, "", ctx);
+    let scalar_count = Constraint::MaxCount(1);
+    tool_arguments::push!(ctx; &mut constraints,&scalar_count);
+    let (mut schema, _) = compile_property_refs(&constraints, shape_iri, key, "", ctx);
     if !comments.is_empty()
         && let Value::Object(object) = &mut schema
     {
         comments.sort();
         comments.dedup();
+        let comments = tool_arguments::join(ctx, &comments, "; ");
         let joined = match object.get("$comment").and_then(Value::as_str) {
-            Some(existing) => format!("{existing}; {}", comments.join("; ")),
-            None => comments.join("; "),
+            Some(existing) => tool_arguments::format!(ctx;"{existing}; {comments}"),
+            None => comments,
         };
-        crate::json_model::insert_sorted(object, "$comment".to_owned(), json!(joined));
+        if !tool_arguments::resident(ctx, "$comment".len(), 1) {
+            return schema;
+        }
+        crate::json_model::insert_sorted(
+            object,
+            "$comment".to_owned(),
+            tool_arguments::emitted_json!(ctx; joined),
+        );
     }
     schema
 }
@@ -7859,6 +8266,187 @@ mod tests {
             ],
         )
         .expect("fixture namespaces are valid")
+    }
+
+    fn plain_fixture(body: &str) -> (Shapes, ToolArgumentProfile, ToolSchemaLimits) {
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{body}"), None)
+                .expect("Turtle fixture");
+        let options = crate::engine::ValidationOptions::default().with_recursion(
+            crate::recursion::RecursionOptions {
+                semantics: crate::recursion::RecursionSemantics::Gfp,
+                max_pairs: 10_000,
+                max_iterations: 10_000,
+            },
+        );
+        let shapes = crate::shapes::from_dataset_with_options(
+            &dataset,
+            None,
+            &[],
+            None,
+            None,
+            &crate::ShapesImports::new(),
+            &options,
+        )
+        .expect("shape fixture");
+        let profile = ToolArgumentProfile {
+            root_shape_iri: "https://example.org/meta/Args".into(),
+            root_class_iri: "https://example.org/meta/Call".into(),
+            fields: [
+                ("Args", "customer", "customer_id"),
+                ("Args", "limit", "limit"),
+                ("Args", "children", "children"),
+                ("Child", "name", "name"),
+            ]
+            .into_iter()
+            .filter(|(_, predicate, _)| body.contains(&format!("meta:{predicate}")))
+            .map(|(parent, predicate, member)| ToolFieldBinding {
+                parent_shape_iri: format!("https://example.org/meta/{parent}"),
+                predicate_iri: format!("https://example.org/meta/{predicate}"),
+                implementation_property: member.into(),
+            })
+            .collect(),
+        };
+        (
+            shapes,
+            profile,
+            ToolSchemaLimits {
+                work: 100_000,
+                bytes: 64_000_000,
+                nodes: 1_000_000,
+            },
+        )
+    }
+
+    #[test]
+    fn plain_arguments_refuse_invalid_profiles_encodings_and_resource_limits() {
+        let (shapes, profile, limits) = plain_fixture(
+            r"meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:property [sh:path meta:customer; sh:datatype xsd:string; sh:maxCount 1].",
+        );
+        #[expect(
+            clippy::result_large_err,
+            reason = "assert the original public compiler error and native cause"
+        )]
+        let compile = |p: &ToolArgumentProfile, l: &ToolSchemaLimits| {
+            compile_tool_arguments(&shapes, &fixture_ns(), p, l)
+        };
+        let valid = compile(&profile, &limits).expect("valid neighboring profile");
+        assert!(validates(&valid.schema_json, &json!({"customer_id":"a"})));
+        let mut invalid = profile.clone();
+        invalid.root_class_iri.push('x');
+        assert!(matches!(
+            compile(&invalid, &limits),
+            Err(ToolSchemaError::InvalidRoot { .. })
+        ));
+        invalid = profile.clone();
+        invalid.fields.clear();
+        assert!(matches!(
+            compile(&invalid, &limits),
+            Err(ToolSchemaError::IncompleteBinding { .. })
+        ));
+        invalid = profile.clone();
+        invalid.fields.push(invalid.fields[0].clone());
+        assert!(matches!(
+            compile(&invalid, &limits),
+            Err(ToolSchemaError::DuplicateBinding { .. })
+        ));
+        invalid = profile.clone();
+        let mut collision = invalid.fields[0].clone();
+        collision.predicate_iri.push_str("_other");
+        invalid.fields.push(collision);
+        assert!(matches!(
+            compile(&invalid, &limits),
+            Err(ToolSchemaError::AmbiguousBinding { .. })
+        ));
+        for resource in ["work", "bytes", "nodes"] {
+            let mut small = limits;
+            match resource {
+                "work" => small.work = 0,
+                "bytes" => small.bytes = 0,
+                _ => small.nodes = 0,
+            }
+            assert!(
+                matches!(compile(&profile, &small), Err(ToolSchemaError::Exhausted { resource: r, .. }) if r == resource)
+            );
+        }
+        let (unsupported, profile, limits) = plain_fixture(
+            r"meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:property [sh:path meta:customer; sh:datatype rdf:langString; sh:maxCount 1].",
+        );
+        assert!(matches!(
+            compile_tool_arguments(&unsupported, &fixture_ns(), &profile, &limits),
+            Err(ToolSchemaError::UnsupportedConstruct { .. })
+        ));
+        let inactive_body = "meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:property [sh:path meta:customer; sh:datatype xsd:string; sh:maxCount 1]; sh:property [sh:path [sh:inversePath meta:unused]; sh:datatype rdf:langString; sh:deactivated true].";
+        let (inactive, profile, limits) = plain_fixture(inactive_body);
+        let inactive_output = compile_tool_arguments(&inactive, &fixture_ns(), &profile, &limits)
+            .expect("inactive unsupported property is ignored on an open shape");
+        assert!(validates(
+            &inactive_output.schema_json,
+            &json!({"customer_id":"ok"})
+        ));
+        let (active, profile, limits) =
+            plain_fixture(&inactive_body.replace("sh:deactivated true", "sh:deactivated false"));
+        assert!(matches!(
+            compile_tool_arguments(&active, &fixture_ns(), &profile, &limits),
+            Err(ToolSchemaError::UnsupportedConstruct { .. })
+        ));
+        let oversized = "a".repeat(purrdf_core::xsd_regex::MAX_SOURCE_BYTES + 1);
+        let body = format!(
+            "meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:property [sh:path meta:customer; sh:datatype xsd:string; sh:maxCount 1; sh:pattern \"{oversized}\"]."
+        );
+        let (shapes, profile, mut limits) = plain_fixture(&body);
+        limits.work = 1_000_000;
+        let error = compile_tool_arguments(&shapes, &fixture_ns(), &profile, &limits)
+            .expect_err("oversized source retains its regex refusal");
+        assert!(matches!(
+            &error,
+            ToolSchemaError::Pattern { shape, property, cause: purrdf_core::xsd_regex::Ecma262Error::Source(_), .. }
+                if shape.contains("https://example.org/meta/Args") && property == "customer_id"
+        ));
+        assert!(
+            std::error::Error::source(&error)
+                .and_then(|cause| cause.downcast_ref::<purrdf_core::xsd_regex::Ecma262Error>())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn plain_arguments_preserve_recursive_references_and_unmodeled_loss_locations() {
+        let (shapes, mut profile, limits) = plain_fixture(
+            r"
+            meta:Args a sh:NodeShape; sh:targetClass meta:Call; sh:closed true;
+                sh:property [sh:path meta:customer; sh:datatype xsd:string; sh:maxCount 1; sh:equals meta:other];
+                sh:property [sh:path meta:children; sh:node meta:Args; sh:maxCount 3].
+        ",
+        );
+        profile
+            .fields
+            .retain(|field| !field.parent_shape_iri.ends_with("Child"));
+        let output = compile_tool_arguments(&shapes, &fixture_ns(), &profile, &limits)
+            .expect("recursive plain compilation");
+        assert!(validates(
+            &output.schema_json,
+            &json!({"customer_id":"a","children":[{"children":[{}]}]})
+        ));
+        assert!(!validates(
+            &output.schema_json,
+            &json!({"children":[{"unknown":true}]})
+        ));
+        assert!(output.schema_json.contains("$ref"));
+        assert!(has_loss(
+            &output.losses,
+            "sh:equals",
+            "<https://example.org/meta/Args>"
+        ));
+        assert!(
+            !output
+                .losses
+                .entries()
+                .iter()
+                .any(|entry| entry.code == "sh:property")
+        );
+        let legacy = compile(&shapes, &fixture_ns()).expect("legacy compilation");
+        assert!(legacy.schema_json.contains("@id"));
     }
 
     fn compile_ttl(body: &str) -> CompiledSchema {
@@ -10451,7 +11039,7 @@ mod tests {
             "examples": [literal]
         });
         let defs = Map::from([("a/b~c".to_owned(), body.clone())]);
-        let openapi = openapi_doc(defs);
+        let openapi = openapi_doc(defs).expect("OpenAPI references");
         let emitted = &openapi["components"]["schemas"]["a/b~c"];
         assert_eq!(
             emitted["properties"]["next"]["$ref"],
@@ -10476,7 +11064,8 @@ mod tests {
             json!({
                 "anyOf": [false, { "$ref": "#/$defs/a~1b~0c" }]
             }),
-        )]));
+        )]))
+        .expect("recursive OpenAPI references");
         assert_local_reference_closure(&recursive);
     }
 

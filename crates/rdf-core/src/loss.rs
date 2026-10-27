@@ -171,6 +171,21 @@ impl LossLedger {
         self.entries.push(entry);
     }
 
+    /// Append a runtime loss through the caller's storage admission.
+    ///
+    /// The entry's owned fields must already belong to this memory or an
+    /// independent owner. Existing entries preserve their insertion order.
+    ///
+    /// # Errors
+    /// Returns the original storage refusal before changing the ledger.
+    pub fn record_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        entry: LossEntry,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        memory.push(&mut self.entries, entry)
+    }
+
     /// The ledger entries.
     ///
     /// For a [`Self::contract`] ledger this is sorted by `code` (the
