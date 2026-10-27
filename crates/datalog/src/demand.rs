@@ -231,6 +231,7 @@ fn validate<E>(rules: &[DlClause<3>], goal: &ClauseAtom<3>) -> Result<(), Demand
             validate_atom(atom).map_err(refuse)?;
         }
         let bound = rule.bound_variables();
+        // The head-form check above admits only one atomic Datalog head.
         for term in rule.datalog_head().expect("validated atomic head").terms() {
             if let Some(variable) = term.variable()
                 && !bound.contains(variable)
@@ -291,9 +292,11 @@ fn head_bindings(head: &ClauseAtom<3>, pattern: BindingPattern) -> BTreeSet<Stri
 fn descriptors(rules: &[DlClause<3>], goal: &ClauseAtom<3>) -> Vec<Descriptor> {
     let definitions: BTreeSet<_> = rules
         .iter()
+        // validate admitted one atomic head and an IRI predicate for every rule.
         .map(|rule| rule.datalog_head().unwrap().predicate_iri().unwrap())
         .collect();
     let mut found = BTreeSet::from([Descriptor {
+        // validate_atom checked the goal's predicate before descriptors is called.
         predicate: goal.predicate_iri().unwrap().to_owned(),
         pattern: pattern(goal, &BTreeSet::new()),
     }]);
@@ -301,12 +304,16 @@ fn descriptors(rules: &[DlClause<3>], goal: &ClauseAtom<3>) -> Vec<Descriptor> {
         let mut next = found.clone();
         for demand in &found {
             for rule in rules.iter().filter(|rule| {
+                // validate admitted only atomic heads; these immutable rules are unchanged.
                 rule.datalog_head().unwrap().predicate_iri() == Some(demand.predicate.as_str())
             }) {
+                // The same validated rule still has its single atomic head.
                 let mut bound = head_bindings(rule.datalog_head().unwrap(), demand.pattern);
                 for atom in rule.body() {
+                    // validate_atom checked every authored body predicate as an IRI.
                     if definitions.contains(atom.predicate_iri().unwrap()) {
                         next.insert(Descriptor {
+                            // This is the same validated body atom used by the lookup above.
                             predicate: atom.predicate_iri().unwrap().to_owned(),
                             pattern: pattern(atom, &bound),
                         });
@@ -426,9 +433,13 @@ fn transform(
     descriptors: &[Descriptor],
     names: &[String],
 ) -> Vec<DlClause<3>> {
+    // names emits one ordinal per descriptor plus a unit ordinal, even for an empty set.
     let unit = names.last().expect("the unit has its own ordinal");
+    // descriptors starts with the goal pattern; antichain reduction retains either
+    // that pattern or a subsuming pattern for the same predicate, so select succeeds.
     let (seed, descriptor) = select(
         descriptors,
+        // validate_atom admitted this unchanged goal only with an IRI predicate.
         goal.predicate_iri().unwrap(),
         pattern(goal, &BTreeSet::new()),
     )
@@ -438,6 +449,7 @@ fn transform(
         Vec::new(),
     )];
     let definitions: BTreeMap<_, Vec<_>> = rules.iter().fold(BTreeMap::new(), |mut map, rule| {
+        // validate admitted one atomic head with an IRI predicate for every rule.
         map.entry(rule.datalog_head().unwrap().predicate_iri().unwrap())
             .or_default()
             .push(rule);
@@ -448,6 +460,7 @@ fn transform(
             continue;
         };
         for rule in rules {
+            // The definition map contains only the immutable, validated atomic rules.
             let head = rule.datalog_head().unwrap();
             let magic = demand_atom(head, descriptor, &names[ordinal], unit);
             let mut bound = head_bindings(head, descriptor.pattern);
@@ -455,6 +468,7 @@ fn transform(
             for atom in rule.body() {
                 if let Some((at, needed)) = select(
                     descriptors,
+                    // validate_atom admitted every body atom only with an IRI predicate.
                     atom.predicate_iri().unwrap(),
                     pattern(atom, &bound),
                 ) {
