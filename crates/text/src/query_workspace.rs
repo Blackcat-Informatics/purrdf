@@ -191,3 +191,15 @@ pub(crate) fn arithmetic_error(
         error => TextError::Capacity(CapacityFailure::from_workspace(&error)),
     }
 }
+
+/// Capture the source's original value under the construction API's resident owner.
+pub(crate) fn source_error(cause: impl purrdf_hash::error::NativeError + 'static) -> TextError {
+    match purrdf_sparql_eval::RetainedNativeFailure::error(
+        purrdf_sparql_eval::NativeDiagnosticKind::SourceRead,
+        cause,
+        &WorkspaceCapability::resident(),
+    ) {
+        EvalError::RetainedNativeFailure(failure) => TextError::SourceRead(failure),
+        error => TextError::Capacity(CapacityFailure::from_workspace(&error)),
+    }
+}

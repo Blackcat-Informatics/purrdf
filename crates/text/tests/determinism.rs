@@ -417,9 +417,16 @@ fn unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failu
             };
             let fields = purrdf_testkit::error_capture::Capture::read(cause);
             assert_eq!(fields.code, "text-source-read");
-            assert!(
-                matches!(fields.field("message"), purrdf_hash::error::ErrorValue::Text(value)
-                if value == purrdf_core::SegmentedError::EvidenceExhausted.to_string())
+            let purrdf_hash::error::ErrorValue::Cause(retained) = fields.field("cause") else {
+                panic!("the source failure keeps its admitted owner");
+            };
+            let fields = purrdf_testkit::error_capture::Capture::read(retained);
+            let purrdf_hash::error::ErrorValue::Cause(native) = fields.field("cause") else {
+                panic!("the source failure keeps its native fields");
+            };
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(native).code,
+                "segmented-evidence-exhausted"
             );
         }
         match failure {
@@ -435,8 +442,10 @@ fn unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failu
                     panic!("the original source failure must take precedence");
                 };
                 assert_eq!(
-                    detail,
-                    purrdf_core::SegmentedError::EvidenceExhausted.to_string()
+                    std::error::Error::source(&detail)
+                        .unwrap()
+                        .downcast_ref::<purrdf_core::SegmentedError>(),
+                    Some(&purrdf_core::SegmentedError::EvidenceExhausted)
                 );
             }
         }

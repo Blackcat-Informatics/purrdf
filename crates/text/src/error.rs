@@ -230,7 +230,7 @@ pub enum TextError {
     /// [`TextIndex::from_dataset`](crate::TextIndex::from_dataset).
     Data(String),
     /// The input source refused a term or iterator read. No partial index is published.
-    SourceRead(String),
+    SourceRead(purrdf_sparql_eval::RetainedNativeFailure),
 
     /// A fixed-point operation overflowed. The arithmetic is exact by
     /// construction, so an intermediate that does not fit is reported rather
@@ -251,10 +251,15 @@ purrdf_lex::constructors! {
 
         /// Construct a [`TextError::Data`] from any displayable message.
         pub fn data(what) -> Self::Data;
+    }
+}
 
-        /// Construct a fatal operational source refusal.
-        pub fn source_read(what) -> Self::SourceRead;
-
+impl TextError {
+    /// Retain an original dataset read failure without rendering or cloning it.
+    /// Construction APIs have no query workspace; the resident native owner
+    /// preserves any allocation ownership already carried by the provider error.
+    pub fn source_read(cause: impl purrdf_hash::error::NativeError + 'static) -> Self {
+        crate::query_workspace::source_error(cause)
     }
 }
 
@@ -269,7 +274,9 @@ impl core::fmt::Display for TextError {
             Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
-            Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
+            Self::SourceRead(failure) => {
+                write!(f, "text-index source read error: {}", failure.cause())
+            }
             Self::Overflow(failure) | Self::Domain(failure) => {
                 core::fmt::Display::fmt(failure.cause(), f)
             }
@@ -282,6 +289,7 @@ purrdf_hash::error_sources!(
     Capacity,
     Diagnostic,
     RetainedDiagnostic,
+    SourceRead,
     Substring,
     Phonetic,
     Overflow,
@@ -300,7 +308,7 @@ impl purrdf_hash::error::StructuredError for TextError {
             "diagnostics" => List(diagnostics.iter().map(|value| purrdf_hash::error::ErrorValue::Cause(value))),
         },
         Data(message) => "text-data" { "message" => Text(message) },
-        SourceRead(message) => "text-source-read" { "message" => Text(message) },
+        SourceRead(cause) => "text-source-read" { "cause" => Cause(cause) },
         Overflow(cause) => "text-overflow" { "cause" => Cause(cause) },
         Domain(cause) => "text-domain" { "cause" => Cause(cause) },
     }
@@ -340,7 +348,7 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
             }
             TextError::Config(msg) => Self::config(msg),
             TextError::Data(msg) => Self::data(msg),
-            TextError::SourceRead(msg) => Self::SourceRead(msg),
+            TextError::SourceRead(failure) => Self::RetainedNativeFailure(failure),
             TextError::Overflow(failure)
             | TextError::Domain(failure)
             | TextError::RetainedDiagnostic(failure) => Self::RetainedNativeFailure(failure),
@@ -464,7 +472,9 @@ mod tests {
                 "predicate absent from the dataset",
             ),
             (
-                TextError::source_read("storage checksum mismatch"),
+                TextError::source_read(purrdf_core::SegmentedError::Corrupt(
+                    "storage checksum mismatch",
+                )),
                 "storage checksum mismatch",
             ),
         ] {
@@ -489,10 +499,34 @@ mod tests {
 
     #[test]
     fn source_read_failure_remains_fatal_and_preserves_its_detail() {
-        let converted: EvalError = TextError::source_read("storage checksum mismatch").into();
-        assert!(
-            matches!(&converted, EvalError::SourceRead(message) if message == "storage checksum mismatch")
+        let cause = purrdf_core::PagedQueryError::Provider {
+            page: purrdf_core::PageId(7),
+            message: "storage checksum mismatch ".repeat(512),
+        };
+        let error = TextError::source_read(cause.clone());
+        assert_eq!(
+            error.to_string(),
+            format!("text-index source read error: {cause}")
         );
+        let copy = error.clone();
+        let converted: EvalError = error.into();
+        assert!(converted.is_native_storage_failure());
+        assert_eq!(converted.code(), Some("native-sparql-source-read"));
+        let EvalError::RetainedNativeFailure(retained) = converted else {
+            panic!("original native source owner");
+        };
+        let TextError::SourceRead(original) = copy else {
+            unreachable!()
+        };
+        assert!(core::ptr::eq(original.cause(), retained.cause()));
+        let native = std::error::Error::source(&retained)
+            .unwrap()
+            .downcast_ref::<purrdf_core::PagedQueryError>()
+            .unwrap();
+        assert_eq!(native, &cause);
+        let rendered = retained.to_string();
+        assert!(rendered.starts_with("dataset read failed: "));
+        assert!(rendered.len() < cause.to_string().len());
     }
 
     /// The arithmetic failures are the relation's own computation failing

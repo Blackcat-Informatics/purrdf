@@ -41,4 +41,104 @@ purrdf_testkit::harness_main!(
     false_expression_gaps_keep_original_traversal,
     graph_free_corpus_keys_ranking_and_query,
     graph_free_rdf12_partitions_and_named_refusal,
+    source_read_providers_keep_native_fields_after_disposal,
 );
+
+fn source_read_providers_keep_native_fields_after_disposal() {
+    use purrdf_core::{
+        InMemoryPageProvider, PagedDataset, PagedQueryError, PagedQueryLimits, SegmentedError,
+        SegmentedReadLimits,
+    };
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_sparql_eval::EvalError;
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_text::{TextError, TextIndex};
+    use std::sync::Arc;
+
+    let fixture = shape_cases::Fixture::text(&[(
+        "https://example.org/document".into(),
+        "river".into(),
+        None,
+        false,
+    )]);
+    let config = fixture.index.config();
+    let image = shape_cases::segmented(&fixture.dataset);
+    let source = image
+        .open_session(SegmentedReadLimits::new(
+            32_000_000, 2, 16_384, 20_000_000, 8,
+        ))
+        .unwrap();
+    let control = source.evidence().peak_bytes();
+    drop(source);
+    let source = image
+        .open_session(SegmentedReadLimits::new(control, 2, 16_384, 20_000_000, 8))
+        .unwrap();
+    let segmented = TextIndex::from_dataset(&source, config).unwrap_err();
+    drop(source);
+    drop(image);
+
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![
+        fixture.dataset.clone(),
+    ])))
+    .unwrap();
+    let source = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let complete = TextIndex::from_dataset(&source, config).unwrap();
+    assert_eq!(
+        complete.source_fingerprint(),
+        fixture.index.source_fingerprint()
+    );
+    drop(source);
+    let source = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    let paged_error = TextIndex::from_dataset(&source, config).unwrap_err();
+    drop(source);
+    drop(paged);
+    drop(fixture);
+
+    for (error, segmented_source) in [(segmented, true), (paged_error, false)] {
+        let copy = error.clone();
+        let converted: EvalError = error.into();
+        assert!(converted.is_native_storage_failure());
+        let TextError::SourceRead(original) = copy else {
+            panic!("provider refusal must remain a source failure");
+        };
+        let EvalError::RetainedNativeFailure(retained) = converted else {
+            panic!("evaluator must keep the original owner");
+        };
+        assert!(core::ptr::eq(original.cause(), retained.cause()));
+        let buffer = Vec::with_capacity(4);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(retained.cause(), buffer);
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        if segmented_source {
+            let native = std::error::Error::source(&retained)
+                .unwrap()
+                .downcast_ref::<SegmentedError>()
+                .unwrap();
+            assert!(
+                matches!(native, SegmentedError::Residency { limit, .. } if *limit == control),
+                "original source refusal: {native:?}"
+            );
+            assert_eq!(fields.code, "segmented-residency");
+            assert!(
+                matches!(fields.field("limit"), ErrorValue::ByteCount(value) if value == u128::from(control))
+            );
+        } else {
+            let native = std::error::Error::source(&retained)
+                .unwrap()
+                .downcast_ref::<PagedQueryError>()
+                .unwrap();
+            assert!(matches!(
+                native,
+                PagedQueryError::PageBudgetExceeded {
+                    limit: 0,
+                    consumed: 0,
+                    ..
+                }
+            ));
+            assert_eq!(fields.code, "paged-query-page-budget-exceeded");
+            assert!(matches!(fields.field("page"), ErrorValue::Unsigned(0)));
+            assert!(matches!(fields.field("limit"), ErrorValue::Unsigned(0)));
+        }
+    }
+}

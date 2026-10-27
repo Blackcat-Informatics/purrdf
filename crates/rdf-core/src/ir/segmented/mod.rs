@@ -181,6 +181,34 @@ pub enum SegmentedError {
     Stopped(StopCause),
 }
 
+impl purrdf_hash::error::StructuredError for SegmentedError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "segmented-storage" { "cause" => Cause(cause) },
+        Statistics(cause) => "segmented-statistics" { "cause" => Cause(cause) },
+        Compression(cause) => "segmented-compression" { "cause" => Cause(cause) },
+        Provider { operation, host_code } => "segmented-provider" {
+            "operation" => Text(operation),
+            "host_code" => Value(host_code.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |code| purrdf_hash::error::ErrorValue::Signed(i128::from(code)))),
+        },
+        Corrupt(message) => "segmented-corrupt" { "message" => Text(message) },
+        SnapshotMismatch => "segmented-snapshot-mismatch" {},
+        AddressExhausted => "segmented-address-exhausted" {},
+        AllocationFailed(construct) => "segmented-allocation-failed" { "construct" => Text(construct) },
+        SharedOwnership(cause) => "segmented-shared-ownership" { "cause" => Cause(cause) },
+        Residency { requested, limit } => "segmented-residency" {
+            "requested" => ByteCount(u128::from(*requested)), "limit" => ByteCount(u128::from(*limit)),
+        },
+        IoBytes { requested, limit } => "segmented-io-bytes" {
+            "requested" => ByteCount(u128::from(*requested)), "limit" => ByteCount(u128::from(*limit)),
+        },
+        PinnedBlocks => "segmented-pinned-blocks" {},
+        EvidenceExhausted => "segmented-evidence-exhausted" {},
+        ConstructionLimit => "segmented-construction-limit" {},
+        Stopped(cause) => "segmented-stopped" { "cause" => Record(cause) },
+    }
+}
+
 impl SegmentedError {
     fn from_rdf(error: crate::RdfDiagnostic, invalid: &'static str) -> Self {
         let result = error
