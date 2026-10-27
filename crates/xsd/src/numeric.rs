@@ -773,11 +773,35 @@ pub fn is_integer_lexical(lexical: &str) -> bool {
 /// Unbounded, and no whitespace is trimmed, as for [`is_integer_lexical`].
 #[must_use]
 pub fn is_decimal_lexical(lexical: &str) -> bool {
-    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
-    !(int.is_empty() && frac.is_empty())
-        && int.bytes().all(|b| b.is_ascii_digit())
-        && frac.bytes().all(|b| b.is_ascii_digit())
+    decimal_lexical_parts(lexical).is_some()
+}
+
+/// Validate once and borrow the sign and both digit runs for exact conversion.
+#[inline]
+pub(crate) fn decimal_lexical_parts(lexical: &str) -> Option<(bool, &str, &str)> {
+    let first = lexical.as_bytes().first().copied();
+    let negative = first == Some(b'-');
+    let body = if matches!(first, Some(b'+' | b'-')) {
+        &lexical[1..]
+    } else {
+        lexical
+    };
+    let mut point = None;
+    let mut any_digit = false;
+    for (index, byte) in body.bytes().enumerate() {
+        if byte.is_ascii_digit() {
+            any_digit = true;
+        } else if byte == b'.' && point.is_none() {
+            point = Some(index);
+        } else {
+            return None;
+        }
+    }
+    if !any_digit {
+        return None;
+    }
+    let (whole, fraction) = point.map_or((body, ""), |index| (&body[..index], &body[index + 1..]));
+    Some((negative, whole, fraction))
 }
 
 /// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits of

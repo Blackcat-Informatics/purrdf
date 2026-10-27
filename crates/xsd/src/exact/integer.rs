@@ -306,14 +306,19 @@ impl Integer {
     pub fn prepare_decimal_digits(
         &self,
     ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
-        self.with_bigint(BigInt::prepare_decimal_digits)
+        self.prepare_decimal_digits_using(&crate::bigint::scratch::Fallible)
     }
 
     pub(crate) fn prepare_decimal_digits_using(
         &self,
         storage: &impl crate::bigint::scratch::Allocate,
     ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
-        self.with_bigint(|value| value.prepare_decimal_digits_using(storage))
+        match &self.0 {
+            Repr::Small(value) => {
+                BigInt::from_inline_i128(*value).prepare_decimal_digits_using(storage)
+            }
+            Repr::Big(value) => value.prepare_decimal_digits_using(storage),
+        }
     }
 
     /// Checked render layout including sign, point and fractional padding.
