@@ -10,7 +10,7 @@
 //! that drifts when it is copied. There is therefore **one** transcription of
 //! it, here, in the crate that is a common ancestor of those consumers. It is
 //! pure `core`/`alloc` shapes over [`Vec`]: no dependencies, no
-//! `std::fs`/`std::io`, wasm32-clean, and it recurses nowhere.
+//! `std::fs`/`std::io`, portable to `wasm32`, and it recurses nowhere.
 //!
 //! The graph is an adjacency list over the dense node space `0..adjacency.len()`.
 //! Mapping domain identities (slice IRIs, shape labels) onto that space, and
@@ -135,7 +135,7 @@ pub fn tarjan_scc_with_memory<S: Admission + ?Sized>(
     memory
         .scope(|memory| {
             let mut components = Vec::new();
-            tarjan(adjacency, memory, |component, memory| {
+            tarjan(adjacency, memory, &mut || Ok(()), |component, memory| {
                 let members = memory.collect(component.iter().rev().copied())?;
                 memory.push(&mut components, members)
             })?;
@@ -195,21 +195,51 @@ where
     for<'e> &'e E: IntoIterator<Item = &'e usize>,
     S: Admission + ?Sized,
 {
-    validate_adjacency(adjacency)?;
-    memory
-        .scope(|memory| {
-            let mut index = memory.collect(core::iter::repeat_n(usize::MAX, adjacency.len()))?;
-            let mut next = 0;
-            tarjan(adjacency, memory, |component, _memory| {
-                for &member in component {
-                    index[member] = next;
+    scc_component_index_with_control(adjacency, memory, || Ok(()))
+}
+
+/// The same component-index walk, charging or interrupting every graph visit.
+/// The callback runs during edge validation, root/edge traversal and component emission.
+/// No partial component index is returned after a refusal.
+///
+/// # Errors
+/// Returns the callback's original refusal, malformed edges or native storage failure.
+pub fn scc_component_index_with_control<E, S, X>(
+    adjacency: &[E],
+    memory: &mut Memory<'_, S>,
+    mut tick: impl FnMut() -> Result<(), X>,
+) -> Result<Vec<usize>, X>
+where
+    for<'e> &'e E: IntoIterator<Item = &'e usize>,
+    S: Admission + ?Sized,
+    X: From<GraphError> + From<StorageError>,
+{
+    memory.try_scope(|memory| {
+        for (from, edges) in adjacency.iter().enumerate() {
+            tick()?;
+            for &to in edges {
+                tick()?;
+                if to >= adjacency.len() {
+                    return Err(GraphError::InvalidEdge { from, to }.into());
                 }
-                next += 1;
-                Ok(())
-            })?;
-            Ok(index)
-        })
-        .map_err(GraphError::from)
+            }
+        }
+        let mut index = Vec::new();
+        for _ in 0..adjacency.len() {
+            tick()?;
+            memory.push(&mut index, usize::MAX)?;
+        }
+        let mut next = 0;
+        tarjan(adjacency, memory, &mut tick, |component, memory| {
+            for &member in component {
+                index[member] = next;
+            }
+            let _ = memory;
+            next += 1;
+            Ok(())
+        })?;
+        Ok(index)
+    })
 }
 
 fn validate_adjacency<E>(adjacency: &[E]) -> Result<(), GraphError>
@@ -229,31 +259,41 @@ where
 /// Iterative Tarjan over any adjacency, handing each component to `emit` as
 /// the slice of the Tarjan stack it occupies (its root first), in the order
 /// the components finish.
-fn tarjan<'g, E, S>(
+fn tarjan<'g, E, S, X>(
     adjacency: &'g [E],
     memory: &mut Memory<'_, S>,
-    mut emit: impl FnMut(&[usize], &mut Memory<'_, S>) -> Result<(), StorageError>,
-) -> Result<(), StorageError>
+    tick: &mut impl FnMut() -> Result<(), X>,
+    mut emit: impl FnMut(&[usize], &mut Memory<'_, S>) -> Result<(), X>,
+) -> Result<(), X>
 where
     &'g E: IntoIterator<Item = &'g usize>,
     S: Admission + ?Sized,
+    X: From<StorageError>,
 {
     const UNSET: usize = usize::MAX;
     let n = adjacency.len();
-    let mut index = memory.collect(core::iter::repeat_n(UNSET, n))?;
-    let mut low = memory.collect(core::iter::repeat_n(0usize, n))?;
-    let mut on_stack = memory.collect(core::iter::repeat_n(false, n))?;
+    let mut index = Vec::new();
+    let mut low = Vec::new();
+    let mut on_stack = Vec::new();
+    for _ in 0..n {
+        tick()?;
+        memory.push(&mut index, UNSET)?;
+        memory.push(&mut low, 0usize)?;
+        memory.push(&mut on_stack, false)?;
+    }
     let mut stack: Vec<usize> = Vec::new();
     let mut next_index = 0usize;
     // Work frames: a node and the rest of its out-edges.
     let mut work: Vec<(usize, <&'g E as IntoIterator>::IntoIter)> = Vec::new();
 
     for root in 0..n {
+        tick()?;
         if index[root] != UNSET {
             continue;
         }
         let mut enter = Some(root);
         loop {
+            tick()?;
             if let Some(node) = enter.take() {
                 index[node] = next_index;
                 low[node] = next_index;
@@ -267,6 +307,7 @@ where
             };
             let node = *node;
             for &child in edges.by_ref() {
+                tick()?;
                 if index[child] == UNSET {
                     enter = Some(child);
                     break;
@@ -284,11 +325,16 @@ where
                 low[parent] = low[parent].min(low[node]);
             }
             if low[node] == index[node] {
-                let start = stack
-                    .iter()
-                    .rposition(|&member| member == node)
-                    .expect("a finishing root is on the stack");
+                let mut start = stack.len();
+                while start > 0 {
+                    tick()?;
+                    start -= 1;
+                    if stack[start] == node {
+                        break;
+                    }
+                }
                 for &member in &stack[start..] {
+                    tick()?;
                     on_stack[member] = false;
                 }
                 emit(&stack[start..], memory)?;

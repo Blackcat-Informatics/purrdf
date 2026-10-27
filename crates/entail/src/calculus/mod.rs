@@ -851,8 +851,8 @@ mod tests {
                     "{regime:?}: the refusal must NAME the head form: {refusal}"
                 );
                 assert!(
-                    certify(&program).is_certified(),
-                    "{regime:?}: the chase must certify the lane it is asked to run —                      {}",
+                    certify(&program).is_ok(),
+                    "{regime:?}: the chase must certify the lane it is asked to run —                      {:?}",
                     certify(&program)
                 );
                 continue;

@@ -29,8 +29,9 @@
 //! **Termination is COMPUTED, never demanded.** [`certify`] is a pure function of the
 //! clause set: it either proves the program weakly acyclic or names the existential edges
 //! that lie inside a cycle. [`chase`] runs the certificate first and refuses an uncertified
-//! program by name ([`ChaseError::NonTerminating`]) rather than looping. A caller supplies
-//! no budget, no depth and no acyclicity assertion — see the crate docs for why a
+//! program by name ([`ChaseError::Termination`]) rather than looping. A caller supplies
+//! no acyclicity assertion: preparation is fallible and can be governed independently.
+//! There is no caller-chosen depth bound — see the crate docs for why a
 //! caller-supplied budget is not offered here either.
 //!
 //! # Why the position graph is refined by constants
@@ -51,7 +52,7 @@
 //!
 //! Unrefined, `?x`'s body position and `?y`'s head position are the SAME node
 //! `type[subject]`, so the special edge `type[subject] → type[subject]` is a self-loop and
-//! the analysis reports a terminating program as unbounded. Every `C ⊑ ∃p.D` axiom in every
+//! the analysis fails to certify a terminating program. Every `C ⊑ ∃p.D` axiom in every
 //! ontology would be refused.
 //!
 //! A position is therefore refined by the constants co-occurring in the atom's OTHER slots.
@@ -83,7 +84,7 @@
 //!
 //! Each of these is a permanent refusal with a documented reason, never a stub:
 //!
-//! * [`ChaseError::NonTerminating`] — the analysis found an existential edge in a cycle.
+//! * [`ChaseError::Termination`] — the analysis found an existential edge in a cycle.
 //! * [`ChaseError::DisjunctiveExistentialHead`] — `∃ȳ. (C₁ ∨ … ∨ Cₘ)` with `m > 1`. A
 //!   disjunctive head needs a hypertableau case split; there is none here, and PICKING a
 //!   disjunct would assert something the program does not entail.
@@ -126,333 +127,16 @@ use std::fmt;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct, HeadForm};
 use crate::cursor::LendingIterator;
 use crate::id::TermId;
-use crate::plan::{
-    ATOM_ARITY, POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT,
-};
+use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::{BudgetReport, BudgetResource, EvalOptions, render_capacity_refusal};
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
 
-// ── The position dependency graph ───────────────────────────────────────────────
-
-/// The class refinement one slot contributes to a position node.
-///
-/// A constant slot refines the position by its exact lexical surface — the same bytes the
-/// store interns — so two positions differing only in that constant are different nodes. A
-/// variable slot contributes the wildcard, which is compatible with every constant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum ClassKey {
-    /// The slot holds this constant lexical surface.
-    Const(String),
-    /// The slot holds a variable, so it matches any term.
-    Wildcard,
-}
-
-impl ClassKey {
-    /// The refinement `term` contributes.
-    fn of(term: &ClauseTerm) -> Self {
-        term.surface().map_or(Self::Wildcard, Self::Const)
-    }
-
-    /// Whether these two refinements can denote the same term at run time.
-    ///
-    /// Two constants are compatible only when they are byte-equal; a wildcard is compatible
-    /// with everything. This is the relation the conservative subsumption edges are built
-    /// from, so it must over-approximate — saying "compatible" too often costs precision,
-    /// saying it too rarely would let a non-terminating program certify.
-    fn compatible(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Const(left), Self::Const(right)) => left == right,
-            _ => true,
-        }
-    }
-
-    /// Borrow the existing diagnostic spelling, without rendering an operand.
-    fn diagnostic_text(&self) -> &str {
-        match self {
-            // The default graph's surface is the EMPTY surface, which would render as
-            // nothing at all; name it instead of printing a blank.
-            Self::Const(surface) if surface.is_empty() => "(default graph)",
-            Self::Const(surface) => surface,
-            Self::Wildcard => "*",
-        }
-    }
-}
-
-/// Which of an atom's four slots a variable occupies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Slot {
-    /// The subject slot.
-    Subject,
-    /// The predicate slot — an ordinary analysed slot here, because the predicate is data.
-    Predicate,
-    /// The object slot.
-    Object,
-    /// The graph slot.
-    Graph,
-}
-
-impl Slot {
-    /// The four slots, in the atom's own `(subject, predicate, object, graph)` order.
-    const ALL: [Self; ATOM_ARITY] = [Self::Subject, Self::Predicate, Self::Object, Self::Graph];
-
-    /// This slot's index into [`ClauseAtom::terms`].
-    const fn index(self) -> usize {
-        match self {
-            Self::Subject => POSITION_SUBJECT,
-            Self::Predicate => POSITION_PREDICATE,
-            Self::Object => POSITION_OBJECT,
-            Self::Graph => POSITION_GRAPH,
-        }
-    }
-
-    /// This slot's one-letter name, for a diagnostic.
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Subject => "s",
-            Self::Predicate => "p",
-            Self::Object => "o",
-            Self::Graph => "g",
-        }
-    }
-}
-
-/// One node of the position dependency graph: a slot of an atom, refined by the constants
-/// co-occurring in that atom's other three slots.
-///
-/// The refinement at the node's own slot is unused (it is the position being described), so
-/// it is held as [`ClassKey::Wildcard`] and rendered as `?`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Position<const N: usize> {
-    /// Which slot the variable occupies.
-    slot: Slot,
-    /// The refinement contributed by each slot; the entry at `slot` is unused.
-    keys: [ClassKey; N],
-}
-
-impl<const N: usize> Position<N> {
-    /// The position of `atom`'s `slot`, refined by the atom's other three slots.
-    fn of(atom: &ClauseAtom<N>, slot: Slot) -> Self {
-        let terms = atom.terms();
-        let keys = std::array::from_fn(|index| {
-            if index == slot.index() {
-                ClassKey::Wildcard
-            } else {
-                ClassKey::of(terms[index])
-            }
-        });
-        Self { slot, keys }
-    }
-
-    /// Whether a term flowing into `self` could also flow into `other`.
-    ///
-    /// Requires the same slot and pairwise-compatible refinements. Conservative by
-    /// construction: a wildcard agrees with every constant, so the subsumption edges this
-    /// drives can only ADD reachability.
-    fn compatible(&self, other: &Self) -> bool {
-        self.slot == other.slot
-            && self
-                .keys
-                .iter()
-                .zip(&other.keys)
-                .all(|(left, right)| left.compatible(right))
-    }
-}
-
-/// Original refined position retained by a termination refusal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChasePosition {
-    slot: Slot,
-    keys: Vec<ClassKey>,
-}
-
-impl ChasePosition {
-    fn capture<const N: usize>(position: &Position<N>) -> Self {
-        Self {
-            slot: position.slot,
-            keys: position.keys.to_vec(),
-        }
-    }
-
-    fn diagnostic_keys(&self) -> impl Iterator<Item = &str> {
-        self.keys.iter().enumerate().map(|(index, key)| {
-            if index == self.slot.index() {
-                "?"
-            } else {
-                key.diagnostic_text()
-            }
-        })
-    }
-
-    fn diagnostic_chars(&self) -> impl Iterator<Item = char> + '_ {
-        "[".chars()
-            .chain(self.diagnostic_keys().enumerate().flat_map(|(index, key)| {
-                (if index == 0 { "" } else { ", " })
-                    .chars()
-                    .chain(Slot::ALL[index].name().chars())
-                    .chain("=".chars())
-                    .chain(key.chars())
-            }))
-            .chain("]".chars())
-    }
-}
-
-impl Ord for ChasePosition {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        // Preserve the previous rendered diagnostic ordering, borrowing the
-        // exact components rather than allocating a presentation as a sort key.
-        self.diagnostic_chars()
-            .cmp(other.diagnostic_chars())
-            .then_with(|| self.slot.cmp(&other.slot))
-            .then_with(|| self.keys.cmp(&other.keys))
-    }
-}
-
-impl PartialOrd for ChasePosition {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl fmt::Display for ChasePosition {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("[")?;
-        for (index, text) in self.diagnostic_keys().enumerate() {
-            if index != 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{}={text}", Slot::ALL[index].name())?;
-        }
-        f.write_str("]")
-    }
-}
-
-impl purrdf_hash::error::StructuredError for ChasePosition {
-    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
-        use purrdf_hash::error::ErrorValue;
-        let Self { slot, keys } = self;
-        visitor.variant("chase-position");
-        visitor.value(Some("slot"), ErrorValue::Code(slot.name()));
-        purrdf_hash::error::visit_list(
-            visitor,
-            Some("keys"),
-            keys.iter().map(|key| ErrorValue::Record(key)),
-        );
-    }
-}
-
-impl purrdf_hash::error::StructuredError for ClassKey {
-    purrdf_hash::error_visit! {
-        Const(surface) => "chase-position-constant" { "surface" => Text(surface) },
-        Wildcard => "chase-position-wildcard" {},
-    }
-}
-
-/// The existential edge whose return path prevented termination certification.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TerminationViolation {
-    /// Original position at the beginning of the edge.
-    pub from: ChasePosition,
-    /// Original existential destination position.
-    pub to: ChasePosition,
-}
-
-impl purrdf_hash::error::StructuredError for TerminationViolation {
-    purrdf_hash::error_visit! {
-        @record self { from, to } => "chase-existential-cycle" {
-            "from" => Record(&self.from), "to" => Record(&self.to)
-        }
-    }
-}
-
-impl fmt::Display for TerminationViolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "existential edge {} -> {} lies in a cycle, so the restricted chase may not terminate",
-            self.from, self.to
-        )
-    }
-}
-
-/// Every refined position at which `variable` occurs across `atoms`.
-///
-/// A variable occurring twice in one atom yields two positions, and a variable occurring in
-/// two atoms yields one per atom — the analysis is about slots, not occurrences of a name.
-fn refined_positions<'a, const N: usize>(
-    atoms: impl IntoIterator<Item = &'a ClauseAtom<N>>,
-    variable: &str,
-) -> Vec<Position<N>> {
-    let mut out = Vec::new();
-    for atom in atoms {
-        let terms = atom.terms();
-        for slot in Slot::ALL.into_iter().take(N) {
-            if terms[slot.index()].variable() == Some(variable) {
-                out.push(Position::of(atom, slot));
-            }
-        }
-    }
-    out
-}
-
-/// Connect every pair of COMPATIBLE distinct positions, in both directions.
-///
-/// This is the conservative over-approximation the constant refinement owes: a wildcard
-/// refinement can denote any constant at run time, so a null reaching the wildcard node can
-/// reach every constant node of the same slot and vice versa. It subsumes both the
-/// wildcard-class case (`p(?x, ?y)` versus `p(?x, <C>)`) and the wildcard-PREDICATE case (a
-/// rule that quantifies over the predicate is joined to every constant-predicate position
-/// of the same slot).
-///
-/// Distinct compatible positions always differ at some slot where one side is a wildcard —
-/// two positions whose refinements are all byte-equal constants ARE the same node — so this
-/// never adds a self-edge that the program did not already have.
-fn add_subsumption<const N: usize>(
-    adjacency: &mut BTreeMap<Position<N>, BTreeSet<Position<N>>>,
-    nodes: &[Position<N>],
-) {
-    for (index, left) in nodes.iter().enumerate() {
-        for right in &nodes[index + 1..] {
-            if left.compatible(right) {
-                adjacency
-                    .entry(left.clone())
-                    .or_default()
-                    .insert(right.clone());
-                adjacency
-                    .entry(right.clone())
-                    .or_default()
-                    .insert(left.clone());
-            }
-        }
-    }
-}
-
-/// Whether `to` is reachable from `from` over at least ONE edge.
-///
-/// "At least one" is the point: a special edge `(u, v)` is a violation exactly when `v`
-/// reaches `u`, and for a self-loop `u == v` that means the edge `u → u` itself must count.
-/// A depth-first walk over `BTreeSet` adjacency, so the answer is a pure function of the
-/// graph.
-fn reaches<const N: usize>(
-    adjacency: &BTreeMap<Position<N>, BTreeSet<Position<N>>>,
-    from: &Position<N>,
-    to: &Position<N>,
-) -> bool {
-    let mut stack: Vec<&Position<N>> = adjacency.get(from).into_iter().flatten().collect();
-    let mut seen: BTreeSet<&Position<N>> = BTreeSet::new();
-    while let Some(node) = stack.pop() {
-        if node == to {
-            return true;
-        }
-        if !seen.insert(node) {
-            continue;
-        }
-        if let Some(successors) = adjacency.get(node) {
-            stack.extend(successors.iter());
-        }
-    }
-    false
-}
+mod termination;
+pub use termination::{
+    AnalysisLimits, AnalysisReport, PreparedChase, SourcePosition, TerminationError,
+    TerminationViolation, WA_LAW_VERSION, WaCertificate, certify, certify_with,
+};
 
 /// What the termination analysis proved about a clause set.
 ///
@@ -476,9 +160,9 @@ pub enum ChaseTermination {
     /// This does NOT prove the program non-terminating — weak acyclicity is sufficient, not
     /// necessary — but it is the only honest answer this analysis can give, and [`chase`]
     /// refuses rather than risk a fixpoint that never closes.
-    Unbounded {
-        /// One diagnostic per offending edge, sorted and deduplicated.
-        violations: Vec<TerminationViolation>,
+    Uncertified {
+        /// First offending existential edge in canonical source-position order.
+        violation: TerminationViolation,
     },
 }
 
@@ -494,8 +178,8 @@ impl purrdf_hash::error::StructuredError for ChaseTermination {
         WeaklyAcyclic { positions, existential_edges } => "chase-weakly-acyclic" {
             "positions" => Unsigned(*positions as u128), "existential_edges" => Unsigned(*existential_edges as u128)
         },
-        Unbounded { violations } => "chase-unbounded" {
-            "violations" => List(violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value)))
+        Uncertified { violation } => "chase-wa-uncertified" {
+            "edge" => Record(violation)
         },
     }
 }
@@ -511,105 +195,8 @@ impl fmt::Display for ChaseTermination {
                 "weakly acyclic: {positions} refined position(s), {existential_edges} \
                  existential edge(s), none in a cycle"
             ),
-            Self::Unbounded { violations } => write!(
-                f,
-                "not weakly acyclic: {} existential edge(s) lie in a cycle",
-                violations.len()
-            ),
+            Self::Uncertified { violation } => violation.fmt(f),
         }
-    }
-}
-
-/// Decide whether the restricted chase over `program` is certified to terminate.
-///
-/// A PURE function of the clause set: no store, no caller input, no budget knob and no
-/// tunable. Two callers holding the same program always get the same certificate, and a
-/// caller cannot assert termination it has not proved.
-///
-/// The analysis is constant-refined weak acyclicity over the carrier's position dependency
-/// graph — see the [module docs](self) for the node shape, the worked example that motivates
-/// the refinement, and the soundness argument for it. Reachability is over-approximated
-/// (compatible refinements of one slot are connected in both directions), so a program that
-/// does not terminate can never be certified; the price is that a terminating program may
-/// occasionally be reported [`Unbounded`](ChaseTermination::Unbounded).
-///
-/// A program with no existential head has no special edges at all and is therefore
-/// trivially weakly acyclic, however cyclic its Datalog recursion is — transitive closure
-/// invents nothing.
-pub fn certify<const N: usize>(program: &[DlClause<N>]) -> ChaseTermination {
-    let mut adjacency: BTreeMap<Position<N>, BTreeSet<Position<N>>> = BTreeMap::new();
-    let mut special: BTreeSet<(Position<N>, Position<N>)> = BTreeSet::new();
-    let mut nodes: BTreeSet<Position<N>> = BTreeSet::new();
-
-    for clause in program {
-        let frontier = clause.frontier_variables();
-
-        // Normal edges: a frontier variable's body positions flow to its head positions.
-        // Every body atom counts, negated ones included: a negated atom binds nothing, so
-        // the extra edges only over-approximate, which is the safe direction.
-        for variable in &frontier {
-            let body_positions = refined_positions(clause.body(), variable);
-            let head_positions = refined_positions(clause.head_atoms(), variable);
-            for from in &body_positions {
-                for to in &head_positions {
-                    nodes.insert(from.clone());
-                    nodes.insert(to.clone());
-                    adjacency
-                        .entry(from.clone())
-                        .or_default()
-                        .insert(to.clone());
-                }
-            }
-        }
-
-        // Special edges: every frontier body position flows to every existential head
-        // position, because the invented null is a function of the whole frontier binding.
-        if clause.existentials().is_empty() {
-            continue;
-        }
-        let mut frontier_positions: Vec<Position<N>> = Vec::new();
-        for variable in &frontier {
-            frontier_positions.extend(refined_positions(clause.body(), variable));
-        }
-        for existential in clause.existentials() {
-            for to in refined_positions(clause.head_atoms(), existential) {
-                for from in &frontier_positions {
-                    nodes.insert(from.clone());
-                    nodes.insert(to.clone());
-                    adjacency
-                        .entry(from.clone())
-                        .or_default()
-                        .insert(to.clone());
-                    special.insert((from.clone(), to.clone()));
-                }
-            }
-        }
-    }
-
-    let ordered: Vec<Position<N>> = nodes.iter().cloned().collect();
-    add_subsumption(&mut adjacency, &ordered);
-
-    // A special edge `(u, v)` violates weak acyclicity exactly when `v` reaches `u`: the
-    // null created at `v` can flow back to a position that creates another null.
-    let mut violations = Vec::new();
-    for (from, to) in &special {
-        if reaches(&adjacency, to, from) {
-            violations.push(TerminationViolation {
-                from: ChasePosition::capture(from),
-                to: ChasePosition::capture(to),
-            });
-        }
-    }
-    violations.sort();
-    violations.dedup();
-
-    if violations.is_empty() {
-        ChaseTermination::WeaklyAcyclic {
-            positions: nodes.len(),
-            existential_edges: special.len(),
-        }
-    } else {
-        ChaseTermination::Unbounded { violations }
     }
 }
 
@@ -777,15 +364,8 @@ pub enum ChaseError {
     Storage(purrdf_lex::allocation::StorageError),
     /// The complete existential rule bundle violates a declaration.
     NeverDerive(crate::admission::AdmissionRefusal),
-    /// [`certify`] could not prove the program terminating.
-    ///
-    /// Running it anyway could invent nulls forever, and truncating the run would return a
-    /// structure that is not a model of the program. The payload is the sorted violation
-    /// list, so the diagnostic points at the edges to fix.
-    NonTerminating {
-        /// The offending existential edges, sorted and deduplicated.
-        violations: Vec<TerminationViolation>,
-    },
+    /// Native termination preparation, checking or account reclamation refused.
+    Termination(TerminationError),
     /// An EXISTENTIAL head has more than one disjunct.
     ///
     /// `∃ȳ. (C₁ ∨ … ∨ Cₘ)` with `m > 1` has no single universal model: satisfying it means
@@ -880,7 +460,7 @@ impl purrdf_hash::error::StructuredError for ChaseError {
         NoOutputClause { clause } => "chase-no-output-clause" { "clause" => Unsigned(*clause as u128) },
         Storage(cause) => "chase-storage" { "cause" => Cause(cause) },
         NeverDerive(cause) => "chase-never-derive" { "cause" => Cause(cause) },
-        NonTerminating { violations } => "chase-non-terminating" { "violations" => List(violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))) },
+        Termination(cause) => "chase-termination-refused" { "cause" => Cause(cause) },
         DisjunctiveExistentialHead { clause, disjuncts } => "chase-disjunctive-existential-head" { "clause" => Unsigned(*clause as u128), "disjuncts" => Unsigned(*disjuncts as u128) },
         DisjunctiveHead { clause, disjuncts } => "chase-disjunctive-head" { "clause" => Unsigned(*clause as u128), "disjuncts" => Unsigned(*disjuncts as u128) },
         InconsistencyClause { clause } => "chase-inconsistency-clause" { "clause" => Unsigned(*clause as u128) },
@@ -905,18 +485,7 @@ impl fmt::Display for ChaseError {
             ),
             Self::Storage(error) => error.fmt(f),
             Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
-            Self::NonTerminating { violations } => {
-                f.write_str(
-                    "the restricted chase is not certified to terminate on this program: ",
-                )?;
-                for (index, violation) in violations.iter().enumerate() {
-                    if index != 0 {
-                        f.write_str("; ")?;
-                    }
-                    fmt::Display::fmt(violation, f)?;
-                }
-                Ok(())
-            }
+            Self::Termination(error) => error.fmt(f),
             Self::DisjunctiveExistentialHead { clause, disjuncts } => write!(
                 f,
                 "clause {clause} has an existential head with {disjuncts} disjuncts: the chase \
@@ -975,9 +544,12 @@ impl fmt::Display for ChaseError {
     }
 }
 
-purrdf_lex::error_source!(ChaseError { Storage });
+purrdf_lex::error_source!(ChaseError {
+    Storage,
+    Termination
+});
 
-purrdf_lex::variant_from!(ChaseError { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(ChaseError { Storage(purrdf_lex::allocation::StorageError), Termination(TerminationError) });
 
 // ── The chase ───────────────────────────────────────────────────────────────────
 
@@ -1476,8 +1048,8 @@ where
     /// The termination certificate that admitted the program.
     ///
     /// Always [`ChaseTermination::WeaklyAcyclic`] on a successful run — the
-    /// [`Unbounded`](ChaseTermination::Unbounded) case is returned as
-    /// [`ChaseError::NonTerminating`] instead — and carried here so a caller can report the
+    /// [`Uncertified`](ChaseTermination::Uncertified) case is returned as
+    /// [`ChaseError::Termination`] instead — and carried here so a caller can report the
     /// proof alongside the facts it justifies.
     pub fn termination(&self) -> &ChaseTermination {
         &self.termination
@@ -1491,8 +1063,8 @@ where
 ///
 /// # What it does, in order
 ///
-/// 1. [`certify`] the clause set. An [`Unbounded`](ChaseTermination::Unbounded) verdict is
-///    refused as [`ChaseError::NonTerminating`] — the ONLY programs this function rejects
+/// 1. [`certify`] the clause set. An [`Uncertified`](ChaseTermination::Uncertified) verdict is
+///    refused as [`ChaseError::Termination`] — the ONLY programs this function rejects
 ///    for termination are the ones the analysis actually failed to certify.
 /// 2. Refuse every head form and body shape the chase has no semantics for; see
 ///    [`ChaseError`] for the complete list and the reason attached to each.
@@ -1587,10 +1159,29 @@ pub fn chase_with<const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let termination = certify(program);
-    if let ChaseTermination::Unbounded { violations } = termination {
-        return Err(ChaseError::NonTerminating { violations });
-    }
+    let prepared = certify_with(
+        program,
+        purrdf_lex::allocation::Resident,
+        AnalysisLimits::default(),
+        stop,
+    )?
+    .prepare(program, AnalysisLimits::default(), stop)?;
+    let outcome = prepared.chase_with(edb, options, stop);
+    prepared.close()?;
+    outcome
+}
+
+/// The original executor; only checked preparation can enter this private path.
+fn execute<const N: usize>(
+    program: &[DlClause<N>],
+    edb: RelationStore<TermInterner, N>,
+    options: &EvalOptions,
+    stop: Option<&dyn StopSignal>,
+    termination: ChaseTermination,
+) -> Result<ChaseOutcome<N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
     let firings = plan_firings(program)?;
 
     let mut state = ChaseState {
@@ -1866,31 +1457,27 @@ mod tests {
             Some(&Fixed(true)),
         )
         .expect_err("a signal that is already firing must stop the chase");
-        let ChaseError::Stopped { report } = &error else {
-            panic!("a stop is not a ceiling: {error:?}");
-        };
-        assert_eq!(report.join_steps(), 0, "nothing ran before the first round");
-        let rendered = error.to_string();
-        assert!(
-            rendered.contains("stopped by the caller's stop signal"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("no universal model was computed"),
-            "{rendered}"
-        );
+        assert!(matches!(
+            error,
+            ChaseError::Termination(TerminationError::Stopped { work: 0 })
+        ));
     }
 
     #[test]
     fn a_mid_fixpoint_stop_refuses_after_recording_committed_work() {
         let program = [restriction()];
         let signal = AfterNPolls(std::sync::atomic::AtomicU64::new(1));
-        let error = chase_until(
-            &program,
-            store_of(&[("a", TYPE, A), ("b", TYPE, A)]),
-            Some(&signal),
-        )
-        .expect_err("the second round boundary must observe the latched stop");
+        let prepared = certify(&program)
+            .unwrap()
+            .prepare(&program, AnalysisLimits::default(), None)
+            .unwrap();
+        let error = prepared
+            .chase_with(
+                store_of(&[("a", TYPE, A), ("b", TYPE, A)]),
+                &EvalOptions::default(),
+                Some(&signal),
+            )
+            .expect_err("the second round boundary must observe the latched stop");
         let ChaseError::Stopped { report } = error else {
             panic!("a mid-fixpoint stop must use the typed stopped channel");
         };
@@ -1984,7 +1571,7 @@ mod tests {
     #[test]
     fn a_restriction_mints_one_blank_node_witness_per_subject() {
         let program = [restriction()];
-        assert!(certify(&program).is_certified());
+        assert!(certify(&program).is_ok());
         let outcome = run(&program, store_of(&[("a", TYPE, A), ("b", TYPE, A)]));
 
         assert_eq!(
@@ -2174,59 +1761,27 @@ mod tests {
 
     // ── Termination analysis ────────────────────────────────────────────────────
 
-    /// The classic non-terminating rule `r(?x, ?y) → ∃?z. r(?y, ?z)` is reported UNBOUNDED,
+    /// The classic non-terminating rule `r(?x, ?y) → ∃?z. r(?y, ?z)` is reported uncertified,
     /// and [`chase`] refuses it rather than looping.
     #[test]
-    fn the_classic_non_terminating_rule_is_unbounded_and_refused() {
+    fn the_classic_existential_cycle_is_uncertified_and_refused() {
         let program = [DlClause::new(
             vec![HeadDisjunct::atom(role("?y", R, "?z"))],
             vec!["?z".to_owned()],
             vec![role("?x", R, "?y")],
         )];
-        let termination = certify(&program);
-        assert!(!termination.is_certified(), "{termination:?}");
-        let ChaseTermination::Unbounded { violations } = &termination else {
-            panic!("expected an unbounded verdict: {termination:?}");
+        let failure = certify(&program).expect_err("WA cannot certify the existential cycle");
+        let TerminationError::Uncertified(edge) = failure else {
+            panic!("expected uncertified WA: {failure}");
         };
-        assert_ne!(violations.as_slice(), []);
-        let mut sorted = violations.clone();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(&sorted, violations, "violations are sorted and deduped");
-        let presented: Vec<_> = violations.iter().map(ToString::to_string).collect();
-        let mut presentation_order = presented.clone();
-        presentation_order.sort();
-        assert_eq!(presented, presentation_order);
-        assert!(
-            violations[0].to_string().contains("lies in a cycle"),
-            "{violations:?}"
-        );
-        assert!(termination.to_string().contains("not weakly acyclic"));
-
-        let refusal = chase(&program, store_of(&[("a", R, "b")]))
-            .expect_err("a non-certified program is refused");
-        assert_eq!(
-            refusal,
-            ChaseError::NonTerminating {
-                violations: violations.clone()
-            }
-        );
-        assert!(refusal.to_string().contains("not certified to terminate"));
+        assert_eq!(edge.from.clause, 0);
+        assert_eq!(edge.to.clause, 0);
+        assert_eq!(certify(&program).unwrap_err(), failure);
+        let refusal = chase(&program, store_of(&[("a", R, "b")])).unwrap_err();
+        assert_eq!(refusal, ChaseError::Termination(failure));
         drop(program);
-        let fields = purrdf_testkit::error_capture::Capture::read(&refusal);
-        let edges = fields.records("violations");
-        assert!(!edges.is_empty());
-        for edge in edges {
-            assert_eq!(edge.code, "chase-existential-cycle");
-            for endpoint in ["from", "to"] {
-                let position = edge.child(endpoint);
-                assert!(matches!(
-                    position.field("slot"),
-                    purrdf_hash::error::ErrorValue::Code(_)
-                ));
-                assert_eq!(position.records("keys").len(), 4);
-            }
-        }
+        assert!(refusal.to_string().contains("uncertified"));
+        assert!(!refusal.to_string().contains("non-terminating"));
     }
 
     /// The constant-refined `type(?x, <C>) → ∃?y. ( p(?x, ?y) ∧ type(?y, <D>) )` IS weakly
@@ -2246,16 +1801,16 @@ mod tests {
             vec!["?y".to_owned()],
             vec![concept("?x", CONCEPT_C)],
         )];
-        let termination = certify(&program);
+        let termination = certify(&program).unwrap();
         assert!(
-            termination.is_certified(),
+            termination.summary().is_certified(),
             "the constant refinement must separate the C-typed and D-typed positions: \
              {termination:?}"
         );
         let ChaseTermination::WeaklyAcyclic {
             positions,
             existential_edges,
-        } = termination
+        } = termination.summary()
         else {
             unreachable!("just asserted certified");
         };
@@ -2269,9 +1824,9 @@ mod tests {
 
     /// Swapping the head's class constant for the BODY's turns the same shape into the
     /// non-terminating `C ⊑ ∃p.C`, and the refinement no longer separates the positions —
-    /// so the analysis reports it unbounded. The refinement is precise, not permissive.
+    /// so the analysis cannot certify it. The refinement is precise, not permissive.
     #[test]
-    fn a_self_typed_restriction_is_unbounded() {
+    fn a_self_typed_restriction_is_uncertified() {
         let program = [DlClause::new(
             vec![HeadDisjunct::new(vec![
                 role("?x", P, "?y"),
@@ -2280,7 +1835,7 @@ mod tests {
             vec!["?y".to_owned()],
             vec![concept("?x", CONCEPT_C)],
         )];
-        assert!(!certify(&program).is_certified());
+        assert!(certify(&program).is_err());
     }
 
     /// A program with NO existential head is trivially weakly acyclic however cyclic its
@@ -2291,7 +1846,7 @@ mod tests {
             role("?x", R, "?z"),
             vec![role("?x", R, "?y"), role("?y", R, "?z")],
         )];
-        let termination = certify(&program);
+        let termination = certify(&program).unwrap().summary();
         assert_eq!(
             termination,
             ChaseTermination::WeaklyAcyclic {
@@ -2307,7 +1862,7 @@ mod tests {
     fn termination_positions(termination: &ChaseTermination) -> usize {
         match termination {
             ChaseTermination::WeaklyAcyclic { positions, .. } => *positions,
-            ChaseTermination::Unbounded { .. } => panic!("expected a certified verdict"),
+            ChaseTermination::Uncertified { .. } => panic!("expected a certified verdict"),
         }
     }
 
@@ -2330,7 +1885,7 @@ mod tests {
             )],
         )];
         assert!(
-            !certify(&program).is_certified(),
+            certify(&program).is_err(),
             "a variable predicate must not be treated as a fresh, unconnected relation"
         );
     }
@@ -2346,7 +1901,7 @@ mod tests {
             DlClause::datalog(concept("?x", A), vec![concept("?x", CONCEPT_D)]),
             restriction(),
         ];
-        assert!(certify(&program).is_certified());
+        assert!(certify(&program).is_ok());
         let outcome = run(&program, store_of(&[("a", TYPE, CONCEPT_D)]));
         assert!(outcome.facts().contains(
             &iri("a"),
@@ -2627,7 +2182,7 @@ mod tests {
         assert!(outcome.witnesses().is_empty());
         assert_eq!(outcome.facts().row_count(), 1);
         assert_eq!(
-            certify::<4>(&[]),
+            certify::<4>(&[]).unwrap().summary(),
             ChaseTermination::WeaklyAcyclic {
                 positions: 0,
                 existential_edges: 0
@@ -2714,28 +2269,5 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(registry.len(), 1);
         assert_eq!(registry.explain(&first), Some(&address));
-    }
-
-    /// A position renders both its own slot and its refinement, so a violation names two
-    /// readable nodes.
-    #[test]
-    fn a_position_renders_its_slot_and_refinement() {
-        let rendered =
-            ChasePosition::capture(&Position::of(&concept("?x", CONCEPT_C), Slot::Subject))
-                .to_string();
-        assert_eq!(
-            rendered,
-            format!(
-                "[s=?, p={}, o={}, g=(default graph)]",
-                iri(TYPE),
-                iri(CONCEPT_C)
-            )
-        );
-        let wildcard =
-            ChasePosition::capture(&Position::of(&role("?x", P, "?y"), Slot::Subject)).to_string();
-        assert_eq!(
-            wildcard,
-            format!("[s=?, p={}, o=*, g=(default graph)]", iri(P))
-        );
     }
 }
