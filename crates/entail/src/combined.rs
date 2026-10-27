@@ -261,7 +261,7 @@ pub struct CombinedMaterialization {
 ///
 /// Propagates [`EntailError`] from the underlying reverse mapping or the restricted chase
 /// (an inconsistent knowledge base, a malformed class-expression graph, or — unreachable in
-/// practice since [`certify`] gates every call — a chase budget refusal).
+/// practice since [`certify_with`] gates every call — a chase budget refusal).
 pub fn materialize_combined<D: DatasetView>(
     ds: &D,
     query_bgp: &[QTriple],
