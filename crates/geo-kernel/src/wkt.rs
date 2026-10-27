@@ -87,7 +87,12 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Parse a `geo:wktLiteral` lexical form.
+/// Parse a `geo:wktLiteral` lexical form under the fixed geometry resource limits.
+///
+/// Source storage, aggregate exact decimal construction and coordinate count are
+/// admitted under [`crate::ExecutionLimits::GEOMETRY`] before allocation. Accepted
+/// coordinates remain exact. Use [`parse_in_policy`] for caller-selected limits,
+/// or [`parse_unbounded`] to explicitly accept unrestricted construction.
 ///
 /// The optional leading `<IRI>` names the coordinate reference system the
 /// ordinates are expressed in. When it is absent the literal is in
@@ -106,9 +111,10 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 /// explicit CRS identifier. [`GeoError::GeometryShape`] retains a body
 /// [`Geometry::new`] refuses structurally (a one-position line, an unclosed ring,
 /// a collection member whose dimension differs from the collection's).
-/// Nesting has no bound: the reader keeps its open
-/// collections on a heap stack, so a `GEOMETRYCOLLECTION(` a hundred thousand deep
-/// is a geometry, not a refusal.
+/// Resource exhaustion returns [`GeoError::WorkExhausted`],
+/// [`GeoError::MemoryExhausted`] or [`GeoError::OutputExhausted`]. The reader keeps
+/// open collections on a heap stack, with no separate nesting-depth ceiling;
+/// their source storage and scanning still count toward the resource limits.
 ///
 /// # What it accepts that a stricter reader might not
 ///
@@ -189,6 +195,44 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 /// assert!(wkt::parse("POINTZ(1 2 3)", &default).is_err());
 /// ```
 pub fn parse(lexical: &str, default_crs: &Crs) -> Result<GeometryLiteral, GeoError> {
+    parse_in_policy(lexical, default_crs, crate::ExecutionPolicy::geometry())
+}
+
+/// Parse WKT under explicit aggregate source, work, storage and coordinate limits.
+///
+/// Uses the same grammar and exact coordinates as [`parse`]. Every ordinate's
+/// expanded decimal cost is admitted before its mantissa or power is allocated,
+/// including Z/M ordinates and members of nested collections.
+///
+/// # Errors
+/// Preserves the grammar and shape errors of [`parse`] and the original resource
+/// refusal, including when exhaustion interrupts a token scan.
+pub fn parse_in_policy(
+    lexical: &str,
+    default_crs: &Crs,
+    policy: crate::ExecutionPolicy,
+) -> Result<GeometryLiteral, GeoError> {
+    let admission = std::cell::RefCell::new(crate::carrier::ParseAdmission::new(
+        lexical.len(),
+        policy,
+        None,
+    )?);
+    let result = parse_admitted(lexical, default_crs, Some(&admission));
+    if let Some(error) = admission.borrow_mut().take_error() {
+        return Err(error);
+    }
+    result
+}
+
+/// Parse WKT without aggregate resource limits, preserving the original reader.
+///
+/// The caller accepts the arithmetic and retained storage costs of all exact
+/// coordinates. For untrusted documents use [`parse`] or [`parse_in_policy`].
+/// Collections use a heap stack, so nesting has no depth ceiling.
+///
+/// # Errors
+/// Returns the grammar, CRS and geometry-shape errors described by [`parse`].
+pub fn parse_unbounded(lexical: &str, default_crs: &Crs) -> Result<GeometryLiteral, GeoError> {
     parse_admitted(lexical, default_crs, None)
 }
 
@@ -1311,7 +1355,7 @@ fn write_coord(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, write, write_bare};
+    use super::{parse, parse_in_policy, parse_unbounded, write, write_bare};
     use crate::error::GeoError;
     use crate::exact::Rat;
     use crate::geom::{
@@ -1322,6 +1366,71 @@ mod tests {
     /// round-trip failure means the codec disagreed rather than that the caller
     /// asked for too few digits.
     const SCALE: u32 = 40;
+
+    #[test]
+    fn public_parser_refuses_aggregate_decimal_expansion() {
+        // Each point fits the default policy, but construction costs accumulate
+        // across all ordinates, including nested collection members and Z/M.
+        let member = "POINT ZM (1e60 1e-60 1e60 1e-60)";
+        assert!(read(member).is_ok());
+        let members = vec![member; 128].join(",");
+        let text = format!("GEOMETRYCOLLECTION ZM ({members})");
+        assert!(matches!(read(&text), Err(GeoError::WorkExhausted { .. })));
+        let unrestricted = parse_unbounded(&text, &crs()).expect("explicit unrestricted source");
+        assert_eq!(unrestricted.geometry().coord_count(), 128);
+    }
+
+    #[test]
+    fn public_parser_refuses_extreme_exponents_before_integer_allocation() {
+        let default = crs();
+        for text in ["POINT(1e100000 0)", "POINT(1e-100000 0)"] {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let result = parse(text, &default);
+            let allocations = window.close();
+            assert!(matches!(result, Err(GeoError::WorkExhausted { .. })));
+            assert_eq!(allocations.requested_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn explicit_policy_bounds_aggregate_expanded_storage() {
+        let limit = 28_000;
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_workspace_bytes: limit,
+            ..crate::ExecutionLimits::UNBOUNDED
+        })
+        .expect("positive limits");
+        let default = crs();
+        assert!(parse_in_policy("POINT(1e308 1e-308)", &default, policy).is_ok());
+        assert_eq!(
+            parse_in_policy("LINESTRING(1e308 1e-308,1e308 1e-308)", &default, policy),
+            Err(GeoError::MemoryExhausted { limit })
+        );
+    }
+
+    #[test]
+    fn explicit_policy_preserves_scan_refusal_and_coordinate_limits() {
+        let default = crs();
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: 1_000,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .expect("positive limits");
+        let text = format!("POINT(1 2){}", " ".repeat(16_000));
+        assert_eq!(
+            parse_in_policy(&text, &default, policy),
+            Err(GeoError::WorkExhausted { limit: 1_000 })
+        );
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_output_elements: 1,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .expect("positive limits");
+        assert_eq!(
+            parse_in_policy("LINESTRING(0 0,1 1)", &default, policy),
+            Err(GeoError::OutputExhausted { limit: 1 })
+        );
+    }
 
     #[test]
     fn exact_writer_preserves_source_scales_across_dimensions_and_collections() {
@@ -1947,8 +2056,8 @@ mod tests {
         );
     }
 
-    /// `NaN` and `INF` are not coordinates; a very large finite exponent one
-    /// character away is, and must not be swept up by the same refusal.
+    /// `NaN` and `INF` are not coordinates. Finite exponents remain representable
+    /// when the caller admits their construction.
     #[test]
     fn nan_and_inf_are_refused_but_large_and_small_exponents_are_not() {
         for bad in [
@@ -1973,13 +2082,15 @@ mod tests {
             "POINT(-2.5E-3 2)",
             "POINT(+1.5 2)",
             "POINT(.5 2)",
-            "POINT(1e308 2)",
-            "POINT(-1e-308 2)",
         ] {
             assert!(
                 read(text).is_ok(),
                 "{text:?} is a finite decimal and must parse"
             );
+        }
+        for text in ["POINT(1e308 2)", "POINT(-1e-308 2)"] {
+            assert!(parse_unbounded(text, &crs()).is_ok(), "{text:?} is finite");
+            assert!(matches!(read(text), Err(GeoError::WorkExhausted { .. })));
         }
         assert_eq!(
             geometry_of("POINT(1e10 2)")
@@ -2474,7 +2585,8 @@ mod tests {
         text
     }
 
-    /// Nesting has no bound: a point inside a hundred thousand collections parses,
+    /// Explicit unbounded parsing retains the original nesting guarantee: a point
+    /// inside a hundred thousand collections parses,
     /// renders back to the text it was read from, re-reads as an equal geometry and
     /// drops — on a 128 KiB stack, so a walk that cost even a few bytes of stack
     /// per level would abort here rather than pass.
@@ -2489,7 +2601,7 @@ mod tests {
         let text = nested(wrappers, "POINT(1 2)");
         assert_eq!(text.len(), wrappers * 20 + 10);
         purrdf_stack::on_stack(128 * 1024, move || {
-            let parsed = good(&text);
+            let parsed = parse_unbounded(&text, &crs()).expect("unrestricted deep geometry");
             assert_eq!(parsed.geometry().coord_count(), 1);
             assert!(!parsed.geometry().is_empty());
             let rendered = write_bare(parsed.geometry(), SCALE);
@@ -2497,7 +2609,7 @@ mod tests {
                 rendered == text,
                 "the geometry must render back exactly as written"
             );
-            let again = good(&rendered);
+            let again = parse_unbounded(&rendered, &crs()).expect("unrestricted rendering");
             assert!(
                 again.geometry() == parsed.geometry(),
                 "and must re-read as itself"
@@ -2524,14 +2636,14 @@ mod tests {
         let misspelled = nested(wrappers, "PONT(1 2)");
         let not_a_number = nested(wrappers, "POINT(1 x)");
         purrdf_stack::on_stack(128 * 1024, move || {
-            let error = refused(&misspelled);
+            let error = parse_unbounded(&misspelled, &crs()).expect_err("unknown keyword");
             assert!(
                 error
                     .detail()
                     .contains(&format!("expected a geometry keyword at byte {keyword_at}")),
                 "got {error}"
             );
-            let error = refused(&not_a_number);
+            let error = parse_unbounded(&not_a_number, &crs()).expect_err("invalid ordinate");
             assert!(
                 error
                     .detail()
@@ -2762,6 +2874,11 @@ mod tests {
 
         for text in FIXTURES {
             let once = good(text);
+            assert_eq!(
+                once,
+                parse_unbounded(text, &crs()).expect("original grammar"),
+                "admission preserves every exact coordinate and structural choice"
+            );
             let rendered = write(&once, SCALE);
             let twice = parse(&rendered, &crs()).unwrap_or_else(|err| {
                 panic!("{text:?} rendered as {rendered:?}, which failed to re-parse: {err}")
