@@ -2643,14 +2643,15 @@ pub(crate) mod owned_row_regressions {
         let input = input.try_mul(&input).unwrap();
         let (workspace, ledger, base) = account(1_000_000);
         let capability = workspace.capability();
+        let payload_bytes = input.limb_len() * u64::try_from(size_of::<u64>()).unwrap();
+        let ordinary_grant = capability.charge(payload_bytes).unwrap();
+        let expected_live = ledger.live.load(Ordering::Relaxed);
+        drop(ordinary_grant);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
         let copy = capability.copy_integer(&input).unwrap();
         assert_eq!(*copy, input);
         let retained = ledger.live.load(Ordering::Relaxed);
-        assert_eq!(
-            copy._frame.admitted_bytes(),
-            usize::try_from(input.limb_len()).unwrap() * size_of::<u64>()
-        );
-        assert!(retained > base);
+        assert_eq!(retained, expected_live, "one native limb-buffer grant");
         drop(capability);
         drop(workspace);
         assert_eq!(ledger.live.load(Ordering::Relaxed), retained);

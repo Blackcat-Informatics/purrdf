@@ -1764,7 +1764,7 @@ impl BigInt {
     /// the returned buffer with the supplied admission until destruction.
     /// # Errors
     /// Preserves original physical layout, allocator or admission refusal.
-    pub fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    pub(crate) fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
         &self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {
