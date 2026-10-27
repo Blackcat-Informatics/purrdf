@@ -417,7 +417,7 @@ impl<const N: usize> ClauseAtom<N> {
     }
 
     /// Validate the three RDF term positions at the shared constructor home.
-    fn from_positions(positions: [ClauseTerm; N]) -> Self {
+    pub(crate) fn from_positions(positions: [ClauseTerm; N]) -> Self {
         assert!(
             positions[..3].iter().all(|term| !term.is_default_graph()),
             "the default graph is a graph name, so it is legal in the graph position only"
