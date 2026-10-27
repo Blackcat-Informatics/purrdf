@@ -144,22 +144,41 @@ fn html_diagnostics_preserve_encounter_order_and_original_ranges() {
         AnalyzerProfile::empty_lexicon().with_input_mode(InputMode::HtmlText),
     )
     .unwrap();
-    let input = String::from("&#0; &nope;");
+    let input = String::from("é&#0; &nope;");
     let error = analyzer.terms(&input).unwrap_err();
     drop(input);
     drop(analyzer);
+    let expected_display = error.to_string();
+    let TextError::Html(original) = error.clone() else {
+        panic!("resident HTML diagnostics retain their owner");
+    };
     let buffer = Vec::with_capacity(4);
     let window = CurrentThreadWindow::open();
-    let root = Capture::read_with_buffer(&error, buffer);
+    let converted: purrdf_sparql_eval::EvalError = error.into();
+    let copy = converted.clone();
+    drop(converted);
+    let purrdf_sparql_eval::EvalError::RetainedNativeFailure(retained) = &copy else {
+        panic!("conversion retains the original diagnostic owner");
+    };
+    assert!(core::ptr::eq(original.cause(), retained.cause()));
+    let root = Capture::read_with_buffer(retained.cause(), buffer);
     let measured = window.close();
     assert_eq!(measured.allocations, 0);
     assert_eq!(measured.requested_bytes, 0);
-    assert_eq!(root.code, "text-html");
+    assert_eq!(root.code, "text-html-diagnostics");
+    assert_eq!(
+        retained.kind(),
+        purrdf_sparql_eval::NativeDiagnosticKind::Data
+    );
+    assert_eq!(
+        copy.to_string(),
+        purrdf_sparql_eval::EvalError::data(expected_display).to_string()
+    );
     let diagnostics = root.records("diagnostics");
     assert_eq!(diagnostics.len(), 2);
     for (diagnostic, start, end, kind) in [
-        (&diagnostics[0], 0, 4, "null-character-reference"),
-        (&diagnostics[1], 5, 11, "unknown-named-character-reference"),
+        (&diagnostics[0], 2, 6, "null-character-reference"),
+        (&diagnostics[1], 7, 13, "unknown-named-character-reference"),
     ] {
         assert_eq!(diagnostic.code, "html-character-reference");
         assert!(
@@ -174,8 +193,8 @@ fn html_diagnostics_preserve_encounter_order_and_original_ranges() {
         assert_eq!(Capture::read(value).code, kind);
     }
     assert!(
-        error.source().is_none(),
-        "a diagnostic list has no single cause"
+        retained.source().unwrap().source().is_none(),
+        "the diagnostic list owns the records without selecting one as its source"
     );
 }
 
