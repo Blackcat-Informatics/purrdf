@@ -1877,6 +1877,20 @@ mod tests {
 
     mod coordinates;
 
+    /// The bytes of a buffer handle, read through `purrdf_buffer_data`, then the buffer freed.
+    pub(super) fn take_buffer_text(buffer: *mut PurrdfBuffer) -> String {
+        let mut ptr = std::ptr::null();
+        let mut len = 0;
+        assert_eq!(
+            unsafe { purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len) },
+            PurrdfStatus::Ok as i32
+        );
+        let text = String::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+            .expect("UTF-8 buffer");
+        unsafe { purrdf_buffer_free(buffer) };
+        text
+    }
+
     fn initialized_governors() -> PurrdfQueryGovernors {
         let mut out = MaybeUninit::uninit();
         assert_eq!(unsafe { purrdf_query_governors_init(out.as_mut_ptr()) }, 0);

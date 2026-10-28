@@ -27,11 +27,11 @@ impl Drop for Answer {
 }
 
 impl Answer {
-    fn values(&self) -> Vec<String> {
+    fn values(mut self) -> Vec<String> {
         unsafe {
             if !self.buffer.is_null() {
-                let text = std::str::from_utf8(&(*self.buffer).0).expect("JSON UTF-8");
-                let document = purrdf_lex::json::read(text).expect("results JSON");
+                let text = take_buffer_text(std::mem::replace(&mut self.buffer, null_mut()));
+                let document = purrdf_lex::json::read(&text).expect("results JSON");
                 return ["clock", "random", "uuid", "text"]
                     .map(|name| {
                         document
@@ -340,14 +340,7 @@ fn execute(route: usize, now: Option<&CStr>, seed: Option<&u64>) -> Result<Answe
         if route >= 9 {
             assert_eq!(unsafe { entailment_evidence.assume_init() }.query_ran, 1);
             assert!(!report.is_null());
-            assert!(
-                unsafe { std::str::from_utf8(&(*report).0) }
-                    .expect("report UTF-8")
-                    .contains("\nregime rdfs\n")
-            );
-            unsafe {
-                purrdf_buffer_free(report);
-            }
+            assert!(take_buffer_text(report).contains("\nregime rdfs\n"));
         }
     }
     Ok(answer)
