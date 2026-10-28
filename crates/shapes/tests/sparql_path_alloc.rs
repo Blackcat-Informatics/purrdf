@@ -53,29 +53,42 @@
 //! `N = 1,280` and `2N = 2,560`. The "before" column is this same file, unchanged,
 //! run against the revision this one replaced:
 //!
-//! | surface | allocations before | after | historical requested bytes before | after |
+//! | surface | historical allocations before | current allocations | historical requested bytes before | historical requested bytes after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 77 | 16,156 | 6,555 |
-//! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 79 | 13,393 | 6,744 |
+//! | `sh:sparql` constraint | 2,695 | 42 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 97 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 54 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 95 | 13,393 | 6,744 |
 //!
-//! The "after" column is the figure pinned below, which is a live number rather
-//! than a historical one: it moves whenever the evaluator's per-query setup gets
-//! cheaper, and the pins move with it.
+//! The current allocations column is pinned below and moves whenever the
+//! evaluator's per-query setup changes. The byte columns retain their historical
+//! measurements.
 //! Historically, moving short BIND loops to the sequential path made the expression fixture
 //! requests 5,737,974 bytes at N and 11,496,054 at 2N, with 85 allocations per
 //! focus node; its governed counterpart has 110 allocations per focus node.
 //!
 //! Native ownership now retains unchanged immutable schemas through unions and
 //! projections, instead of cloning their columns and allocating another outer
-//! control. The current expression cost is 79 per focus node, six fewer across
-//! its two scalar calls; ASK is 77. The governed costs are 56/97/64/103. Existing
+//! control. Before execution receipts, this brought expression cost to 79 per
+//! focus node and ASK to 77; governed costs were 56/97/64/103. Existing
 //! filtered schemas still construct their exact admitted layout before birth.
 //! Borrowed delta-view IRI lookup removes one focus resolution copy from each
 //! expression's path-values evaluation and four setup copies from its governed
 //! change expansion. Its entry constant is now 37; every N/2N/4N closed-form
 //! assertion still uses exact equality, with no tolerance.
+//!
+//! Execution receipts now identify every effective binding, including unused
+//! bindings and repeated names. `capture_query` grounds value-door bindings under
+//! the original memory account before hashing the shared algebra token stream.
+//! In these fixtures each owned text needs its bytes and shared control: two for an IRI
+//! or blank label, four for a plain or typed literal including its datatype.
+//! Already-grounded id-door bindings share their immutable text without allocation.
+//! Thus the per-focus increases are exactly 2 for `sh:sparql` (current shape),
+//! 20 for ASK (two runs, each with current shape 2, boolean parameter 4 and value 4),
+//! 6 for SELECT (current shape 2 and boolean parameter 4), and 16 for the expression
+//! (two runs with two literals at 4 each). Both lanes pay the same increments:
+//! 42/97/54/95 ungoverned and 58/117/70/119 governed. Entry and doubling terms
+//! are unchanged. Receipt grounding is separate from the rewrite's retained probes.
 //!
 //! # What a run does not pay for
 //!
@@ -86,7 +99,8 @@
 //! that does hold one (the `sh:ask` validator's `isLiteral($value) && $askParam`) is
 //! compiled on each run into the tables of the program it compiled last. A parameter
 //! that is bound to the same term on consecutive runs (the shape and shapes-graph
-//! context a validator binds per focus node) is grounded once and shared. What each
+//! context a validator binds per focus node) is grounded once and shared by the
+//! rewrite; receipt identity separately grounds its effective binding. What each
 //! figure is made of is the query's evaluation itself: grounding the focus node, the
 //! seed row, the basic graph pattern and its join onto the seed, the `FILTER`'s link
 //! and rows, and the SHACL side's binding and result materialization.
@@ -531,8 +545,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 40,
-        governed_per_focus_node: 56,
+        per_focus_node: 42,
+        governed_per_focus_node: 58,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -551,12 +565,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 77,
+        per_focus_node: 97,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 97,
+        governed_per_focus_node: 117,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -579,8 +593,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 48,
-        governed_per_focus_node: 64,
+        per_focus_node: 54,
+        governed_per_focus_node: 70,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -597,8 +611,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 79,
-        governed_per_focus_node: 103,
+        per_focus_node: 95,
+        governed_per_focus_node: 119,
         governed_entry: 37,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -1373,7 +1387,7 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
 /// [`CASES`] — same harness, same closed form, same two populations.
 ///
-/// It sits well above [`CASES`]'s `86` for the prepared `sh:ask component`
+/// It sits well above [`CASES`]'s `97` for the prepared `sh:ask component`
 /// case: the `&str` door re-probes the plan cache by hashing the whole query
 /// text on every run, re-interns every parameter name, and rebuilds the
 /// pre-binding list from scratch per value node, none of which the prepared
@@ -1393,7 +1407,12 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// program, and the rest to the engine entry and the SHACL side's value terms.
 /// That trace was taken at 212; a query the seed alone reaches now skips the
 /// rewrite's expression walk, which took 12 of the rewrite's share.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 198;
+/// Execution receipt capture adds 20 to the previous pin of 198: each of two
+/// runs grounds the focus IRI (2), literal value (4), and both occurrences of the
+/// current-shape IRI (2 each). Unlike the prepared door, this fallback carries
+/// the focus as an owned value too. Repeated names remain part of the request
+/// identity; neither binding is discarded.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 218;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.

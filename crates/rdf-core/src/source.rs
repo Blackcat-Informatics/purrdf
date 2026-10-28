@@ -23,7 +23,7 @@ pub(crate) fn resident_snapshot(
 ) -> purrdf_hash::hex::Digest32 {
     const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v1");
     const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v1");
-    let mut hash = Hasher::new();
+    let mut hash = purrdf_hash::blake3::RecordHasher::new();
     hash.update(&records.fingerprint(ROWS));
     hash.update(&graphs.fingerprint(GRAPHS));
     hash.update(&dictionary);

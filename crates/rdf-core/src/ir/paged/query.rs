@@ -775,14 +775,6 @@ impl<'dataset> PagedQueryView<'dataset> {
         // it (clause G10). Typed, and latched sticky by the caller, exactly like every
         // other refusal above: the content is provider-supplied and must never abort
         // the process.
-        if materialization.dataset.frozen_snapshot_identity()
-            != slot.translation.summary().snapshot_identity
-        {
-            return Err(PagedQueryError::InvalidData {
-                page: id,
-                message: "page content identity changed after sealing".to_owned(),
-            });
-        }
         let digest =
             PageSummary::digest_of(&materialization.dataset).map_err(|error| match error {
                 super::summary::SummarySealError::Contents(defect) => {
@@ -800,6 +792,14 @@ impl<'dataset> PagedQueryView<'dataset> {
             return Err(PagedQueryError::InvalidData {
                 page: id,
                 message: summary_drift_message(sealed, digest, &materialization.dataset),
+            });
+        }
+        // Preserve the specific summary-drift diagnostic before checking the
+        // encompassing identity, which also catches changes with equal counts.
+        if materialization.dataset.frozen_snapshot_identity() != sealed.snapshot_identity {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: "page content identity changed after sealing".to_owned(),
             });
         }
         Ok(())

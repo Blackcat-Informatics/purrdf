@@ -519,7 +519,7 @@ fn an_ungoverned_invocation_is_unchanged() {
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let out = run(&["query", "--data", &ttl, "--results-format", "tsv", KNOWS]);
     assert_eq!(code(&out), 0, "stderr:\n{}", stderr(&out));
-    assert!(support::execution_diagnostics(&out, "started").is_empty());
+    assert_eq!(support::execution_diagnostics(&out, "started"), "");
     let body = stdout(&out);
     assert_eq!(body.lines().count(), 4, "header plus three rows: {body}");
     for row in ["bob", "carol", "dave"] {

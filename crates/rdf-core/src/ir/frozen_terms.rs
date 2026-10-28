@@ -92,7 +92,7 @@ impl FrozenTerms {
     ) -> Result<[u8; 32], purrdf_lex::allocation::StorageError> {
         const DICTIONARY: purrdf_hash::Domain =
             purrdf_hash::Domain::new(b"purrdf-core/snapshot/dictionary/v1");
-        let mut hash = purrdf_hash::blake3::Hasher::new();
+        let mut hash = purrdf_hash::blake3::RecordHasher::new();
         hash.update(DICTIONARY.as_bytes());
         hash.update(&(self.terms.len() as u64).to_le_bytes());
         memory.try_scope(|memory| {

@@ -207,7 +207,7 @@ fn update_applies_then_serializes_the_committed_dataset() {
     let output = run(&["update", "--data", &input, "--to", "ntriples", INSERT]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(support::execution_diagnostics(&output, "not-started").is_empty());
+    assert_eq!(support::execution_diagnostics(&output, "not-started"), "");
     let body = String::from_utf8(output.stdout).expect("UTF-8 output");
     assert!(body.contains("<http://example.org/old>"), "{body}");
     assert!(body.contains("<http://example.org/new>"), "{body}");

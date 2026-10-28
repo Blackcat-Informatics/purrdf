@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 40 |
-| custom `sh:ask` component | 77 |
-| custom `sh:select` component | 48 |
-| `sh:expression` function call | 79 |
+| `sh:sparql` constraint | 42 |
+| custom `sh:ask` component | 97 |
+| custom `sh:select` component | 54 |
+| `sh:expression` function call | 95 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 56 |
-| custom `sh:ask` component, governed | 97 |
-| custom `sh:select` component, governed | 64 |
-| `sh:expression` function call, governed | 103 |
+| `sh:sparql` constraint, governed | 58 |
+| custom `sh:ask` component, governed | 117 |
+| custom `sh:select` component, governed | 70 |
+| `sh:expression` function call, governed | 119 |
 
 Native ownership retains an unchanged immutable schema through a union or
 projection instead of copying its columns and publishing another outer control.
@@ -88,9 +88,23 @@ Filtered layouts still use the same admitted builder.
 Borrowed IRI lookup on delta views removes one focus-spelling copy from each
 expression path-values evaluation: its governed slope moves from 104 to 103.
 Four setup copies also disappear from its change expansion, moving the entry
-constant from 41 to 37. The exact governed expression form is now
+constant from 41 to 37. Before execution receipts the exact governed expression form was
 `37 + 103 N + 3 log2(N / 1280)`, asserted at 1,280, 2,560 and 5,120 focus nodes.
 The doubling term and zero-tolerance assertions remain unchanged.
+
+Execution receipts identify every effective binding through the shared algebra
+identity stream, under the original memory account. In these fixtures their
+separate grounding adds two allocations for each value-door IRI or blank label and four for each
+plain or typed literal; id-door bindings share their existing immutable owners.
+The marginal additions are 2 for the SELECT constraint's current shape,
+20 for the ASK component's two runs (current shape 2, boolean parameter 4 and
+literal value 4 per run), 6 for the SELECT component's current shape and boolean,
+and 16 for the expression's two runs with two literals each. Both lanes pay
+these same increments. The current governed expression form is
+`37 + 119 N + 3 log2(N / 1280)`; entry and doubling terms remain unchanged.
+The duplicate-name ASK fallback adds 20 to its prior 198, reaching 218: each
+of two runs grounds a focus IRI, a literal value and both current-shape IRI
+bindings. Receipt identity preserves both bindings even though their names match.
 
 Historically, short BIND loops moved to the sequential evaluator path rather than constructing
 a worker context and converting its output. On the expression fixture this

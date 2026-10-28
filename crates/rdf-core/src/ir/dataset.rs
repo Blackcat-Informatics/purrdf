@@ -1084,7 +1084,7 @@ impl RdfDataset {
             let mut graphs = purrdf_hash::multiset::Multiset256::default();
             let mut pending = Vec::new();
             for &graph in &named_graphs {
-                let mut hash = purrdf_hash::blake3::Hasher::new();
+                let mut hash = purrdf_hash::blake3::RecordHasher::new();
                 dictionary.visit_canonical_bytes(graph, &mut pending, memory, |bytes| {
                     hash.update(bytes);
                 })?;

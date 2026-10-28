@@ -383,6 +383,13 @@ impl ReportSourceContext {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompleteValidationError {
+    /// Original typed refusal with the rule contexts captured before failure.
+    RuleExecution {
+        /// The authoritative dated, native or governor refusal.
+        cause: Box<Self>,
+        /// Supplied inputs and observed effective contexts.
+        coordinates: Box<crate::RuleCoordinates>,
+    },
     /// Parsing or admitting the underlying shape graph failed.
     Shapes(ShapesError),
     /// The existing authenticated prepared-product boundary refused restoration.
@@ -415,6 +422,7 @@ purrdf_lex::variant_from!(CompleteValidationError {
 impl std::fmt::Display for CompleteValidationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RuleExecution { cause, .. } => cause.fmt(formatter),
             Self::Shapes(error) => error.fmt(formatter),
             Self::Preparation(error) => error.fmt(formatter),
             Self::SourceConstraint(error) => error.fmt(formatter),
@@ -432,6 +440,7 @@ impl std::fmt::Display for CompleteValidationError {
 impl std::error::Error for CompleteValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RuleExecution { cause, .. } => Some(cause.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::Preparation(error) => Some(error),
             Self::SourceConstraint(error) => Some(error),
@@ -447,6 +456,41 @@ impl std::error::Error for CompleteValidationError {
 }
 
 impl CompleteValidationError {
+    /// Whether a selected-law capsule may refine this generic execution failure.
+    pub(crate) fn is_generic_execution(&self) -> bool {
+        match self {
+            Self::Execution(_)
+            | Self::Shapes(ShapesError::Invalid(_) | ShapesError::Processor(_)) => true,
+            Self::Shapes(ShapesError::RuleExecution(execution)) => {
+                let mut cause = execution.cause.as_ref();
+                while let crate::rules::RulesError::Execution(nested) = cause {
+                    cause = nested.cause.as_ref();
+                }
+                matches!(
+                    cause,
+                    crate::rules::RulesError::Failed(_)
+                        | crate::rules::RulesError::Shapes(
+                            ShapesError::Invalid(_) | ShapesError::Processor(_)
+                        )
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Keep an observed rule receipt when a more authoritative refusal wins.
+    pub(crate) fn with_rule_coordinates(self, original: Self) -> Self {
+        let coordinates = match original {
+            Self::RuleExecution { coordinates, .. } => coordinates,
+            Self::Shapes(ShapesError::RuleExecution(execution)) => Box::new(execution.coordinates),
+            _ => return self,
+        };
+        Self::RuleExecution {
+            cause: Box::new(self),
+            coordinates,
+        }
+    }
+
     /// Preserve the execution category of ordinary evaluator diagnostics while
     /// carrying operational causes without rendering them into that category.
     pub(crate) fn execution(error: ShapesError) -> Self {
@@ -462,14 +506,10 @@ impl CompleteValidationError {
     /// generic execution lane projects an attached native diagnostic.
     pub(crate) fn from_native_run(error: crate::xpath::RunError<Self>) -> Self {
         match error.into_parts() {
-            (
-                Some(cause),
-                None
-                | Some(
-                    Self::Execution(_)
-                    | Self::Shapes(ShapesError::Invalid(_) | ShapesError::Processor(_)),
-                ),
-            ) => Self::XPath(Box::new(cause.into_public())),
+            (Some(cause), Some(error)) if error.is_generic_execution() => {
+                Self::XPath(Box::new(cause.into_public())).with_rule_coordinates(error)
+            }
+            (Some(cause), None) => Self::XPath(Box::new(cause.into_public())),
             (_, Some(error)) => error,
             (None, None) => unreachable!("a refused run retains an actual error"),
         }
@@ -478,6 +518,12 @@ impl CompleteValidationError {
     /// Reuse the native public error vocabulary while retaining richer dated causes.
     pub(crate) fn into_xpath(self) -> crate::xpath::XPathValidationError {
         match self {
+            Self::RuleExecution { cause, coordinates } => {
+                crate::xpath::XPathValidationError::RuleExecution {
+                    cause: Box::new(cause.into_xpath()),
+                    coordinates,
+                }
+            }
             Self::XPath(error) => *error,
             Self::Shapes(error) => crate::xpath::XPathValidationError::Shapes(error),
             Self::Execution(error) => crate::xpath::XPathValidationError::Execution(error),
@@ -499,6 +545,12 @@ impl CompleteValidationError {
     /// Project through an existing closed compatibility error without changing it.
     pub(crate) fn into_shapes(self) -> ShapesError {
         match self {
+            Self::RuleExecution { cause, coordinates } => {
+                ShapesError::RuleExecution(Box::new(crate::rules::RuleExecutionError {
+                    cause: Box::new(crate::rules::RulesError::Shapes(cause.into_shapes())),
+                    coordinates: *coordinates,
+                }))
+            }
             Self::Shapes(error) => error,
             error => ShapesError::Invalid(error.to_string()),
         }

@@ -1186,20 +1186,22 @@ impl PagedDataset {
         // done; see `verify_parts` and clause G10. This is a typed fault, never an
         // assertion — the content is provider-supplied, exactly like the four checks
         // above.
-        if materialization.dataset.frozen_snapshot_identity()
-            != slot.translation.summary().snapshot_identity
-        {
-            return Err(PageFault::invalid_data(
-                id,
-                "page content identity changed after sealing",
-            ));
-        }
         let digest = PageSummary::digest_of(&materialization.dataset)
             .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?;
         if digest != slot.translation.summary().digest() {
             return Err(PageFault::invalid_data(
                 id,
                 summary_drift_message(slot.translation.summary(), digest, &materialization.dataset),
+            ));
+        }
+        // Match query admission: diagnose structural drift first, then refuse
+        // remaining content changes even when every summary count is unchanged.
+        if materialization.dataset.frozen_snapshot_identity()
+            != slot.translation.summary().snapshot_identity
+        {
+            return Err(PageFault::invalid_data(
+                id,
+                "page content identity changed after sealing",
             ));
         }
         let _ = slot.resident.set(materialization.dataset);

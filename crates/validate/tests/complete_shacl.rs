@@ -392,14 +392,24 @@ fn native_allocation_refusals_keep_resource_status_across_pattern_and_query() {
         let evaluator = EvalError::XPathRegex(cause);
         let diagnostic =
             RdfDiagnostic::error(evaluator.code().unwrap(), "unrelated diagnostic words");
-        let query = Err(CompleteValidationError::XPath(Box::new(
-            XPathValidationError::Query(diagnostic),
-        )));
-        assert_eq!(
-            complete_validation_status(&query),
-            CompleteValidationStatus::ResourceRefused,
-            "{resource:?}: public SPARQL code to Query status",
-        );
+        for wrapped in [false, true] {
+            let cause = CompleteValidationError::XPath(Box::new(XPathValidationError::Query(
+                diagnostic.clone(),
+            )));
+            let query = Err(if wrapped {
+                CompleteValidationError::RuleExecution {
+                    cause: Box::new(cause),
+                    coordinates: Box::default(),
+                }
+            } else {
+                cause
+            });
+            assert_eq!(
+                complete_validation_status(&query),
+                CompleteValidationStatus::ResourceRefused,
+                "{resource:?}: public SPARQL resource status, rule receipt: {wrapped}",
+            );
+        }
     }
 
     let generic_query = Err(CompleteValidationError::XPath(Box::new(

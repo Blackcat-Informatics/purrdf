@@ -1149,19 +1149,28 @@ fn a_rules_resource_refusal_aborts_and_the_neighbour_runs() {
             purrdf_shapes::RuleSource::Shapes(&sparql),
             purrdf_shapes::RuleSource::Srl(&srl),
         ] {
-            assert!(matches!(
-                selected_rules(source, &data, profile),
-                Err(XPathValidationError::Query(diagnostic))
-                    if diagnostic.code == Resource::PatternBytes.code()
-            ));
+            let error = selected_rules(source, &data, profile).unwrap_err();
+            let XPathValidationError::RuleExecution { cause, coordinates } = error else {
+                panic!("the rule refusal must retain its execution receipt: {error:?}");
+            };
+            assert!(matches!(*cause, XPathValidationError::Query(diagnostic)
+                if diagnostic.code == Resource::PatternBytes.code()));
+            assert!(coordinates.program_identity().is_some());
+            assert!(coordinates.snapshot_identity().is_some());
         }
         // A condition shape's sh:pattern is refused by the native compiler.
         let triple = rule_shapes(&over, false);
-        assert!(matches!(
-            selected_rules(purrdf_shapes::RuleSource::Shapes(&triple), &data, profile),
-            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
-                if refusal.resource == Resource::PatternBytes
-        ));
+        let error =
+            selected_rules(purrdf_shapes::RuleSource::Shapes(&triple), &data, profile).unwrap_err();
+        let XPathValidationError::RuleExecution { cause, coordinates } = error else {
+            panic!("the rule refusal must retain its execution receipt: {error:?}");
+        };
+        assert!(
+            matches!(*cause, XPathValidationError::Pattern(Error::Resource(refusal))
+            if refusal.resource == Resource::PatternBytes)
+        );
+        assert!(coordinates.program_identity().is_some());
+        assert!(coordinates.snapshot_identity().is_some());
         // The pattern exactly at the bound is admitted, and matches nothing.
         let sparql = rule_shapes(&at, true);
         let triple = rule_shapes(&at, false);
