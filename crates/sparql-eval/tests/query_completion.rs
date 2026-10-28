@@ -1226,6 +1226,8 @@ fn destination() -> RdfDatasetBuilder {
 }
 /// Graph failures preserve the destination; successful publication appends only after checking.
 fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
+    let now = coordinate_time();
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
     let engine = NativeSparqlEngine::new();
     let prepared = engine
         .prepare_query(CONSTRUCT, None)
@@ -1247,7 +1249,7 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
                 &source,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                options,
                 &state,
                 &mut destination,
             ),
@@ -1258,6 +1260,17 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
                 RefusedRead::FinalRead(source.site)
             },
         );
+        if matches!(
+            site,
+            RefusalSite::Reporting | RefusalSite::Execution | RefusalSite::ExecutionSticky
+        ) {
+            assert_eq!(
+                error.evidence().coordinates,
+                purrdf_sparql_eval::QueryCoordinates::NotStarted
+            );
+        } else {
+            assert_supplied_coordinates(&error.evidence().coordinates);
+        }
         assert_eq!(error.evidence().governors, state.evidence());
         let actual = destination.freeze().expect("unchanged destination");
         assert_eq!(actual.term_count(), expected.term_count());
@@ -1277,11 +1290,12 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
             &source,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            options,
             &state,
             &mut destination,
         )
         .expect("healthy graph publication");
+    assert_supplied_coordinates(&evidence.coordinates);
     assert_eq!(stats.statements, 1);
     assert_eq!(evidence.governors, state.evidence());
     assert_held_receipt(&source, &evidence.view);
@@ -1809,6 +1823,30 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
     );
     assert_eq!(error.evidence().execution_guards, 1);
 }
+const COORDINATE_TIME: &str = "-12345-06-07T08:09:10.123456789123456789123456789+05:30";
+
+fn coordinate_time() -> purrdf_xsd::temporal::DateTime {
+    let purrdf_xsd::XsdValue::DateTime(now) =
+        purrdf_xsd::parse(COORDINATE_TIME, purrdf_xsd::XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("timestamp")
+    };
+    now
+}
+
+fn assert_supplied_coordinates(coordinates: &purrdf_sparql_eval::QueryCoordinates) {
+    let purrdf_sparql_eval::QueryCoordinates::Started(inputs) = coordinates else {
+        panic!("constructed context")
+    };
+    assert!(
+        inputs
+            .now()
+            .unwrap()
+            .same_representation(&coordinate_time())
+    );
+    assert_eq!(inputs.entropy_seed(), Some(0));
+}
+
 /// Select governor ownership while preserving the same plan, source, and publication boundary.
 #[allow(
     clippy::result_large_err,
@@ -1821,23 +1859,13 @@ fn prepared_governed(
     governors: &QueryGovernors,
     shared: bool,
 ) -> FallibleSparqlResult<RefusedRead, GovernedEvidence<Receipt>> {
+    let now = coordinate_time();
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
     if shared {
         let state = Arc::new(GovernorState::new(governors));
-        engine.query_prepared_governed_fallible_in_operation(
-            source,
-            prepared,
-            &[],
-            QueryOptions::EMPTY,
-            &state,
-        )
+        engine.query_prepared_governed_fallible_in_operation(source, prepared, &[], options, &state)
     } else {
-        engine.query_prepared_governed_fallible_view(
-            source,
-            prepared,
-            &[],
-            QueryOptions::EMPTY,
-            governors,
-        )
+        engine.query_prepared_governed_fallible_view(source, prepared, &[], options, governors)
     }
 }
 
@@ -1858,6 +1886,7 @@ fn prepared_governed_queries_discard_rows_produced_before_an_iterator_failure() 
             &source,
             RefusedRead::FinalRead(RefusalSite::AfterRow),
         );
+        assert_supplied_coordinates(&refusal.evidence().coordinates);
         assert_eq!(source.yielded.load(Ordering::Relaxed), 1);
         let checkpoint = source.checkpoints.load(Ordering::Relaxed);
         assert!(checkpoint >= 2);
@@ -1895,6 +1924,10 @@ fn the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome() {
             let healthy = Source::at(RefusalSite::Never);
             let healthy_outcome =
                 prepared_governed(&engine, &healthy, &prepared, &governors, shared);
+            match &healthy_outcome {
+                Ok(complete) => assert_supplied_coordinates(&complete.evidence.coordinates),
+                Err(error) => assert_supplied_coordinates(&error.evidence().coordinates),
+            }
             let healthy_governors = match (expected, healthy_outcome) {
                 (ReadyOutcome::Complete, Ok(complete)) => {
                     assert_eq!(
@@ -1955,11 +1988,132 @@ fn the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome() {
                 &source,
                 RefusedRead::FinalRead(RefusalSite::FinalCheckpoint),
             );
+            assert_supplied_coordinates(&refusal.evidence().coordinates);
             assert_eq!(source.checkpoints.load(Ordering::Relaxed), final_checkpoint);
             assert!(refusal.evidence().view.failed);
             assert_eq!(refusal.evidence().view.checkpoints, final_checkpoint);
             assert_eq!(refusal.evidence().governors, healthy_governors);
         }
+    }
+}
+
+/// EXPLAIN captures its actual context even on forecast refusal, and keeps it through read failures.
+fn governed_explain_coordinates_survive_forecast_and_publication_refusals() {
+    let engine = NativeSparqlEngine::new();
+    let now = coordinate_time();
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
+    for site in [
+        RefusalSite::Never,
+        RefusalSite::Iterator,
+        RefusalSite::Checkpoint,
+        RefusalSite::Reporting,
+    ] {
+        let source = Source::at(site);
+        let result = engine.explain_governed_fallible_view(
+            &source,
+            request(QUERY),
+            options,
+            &QueryGovernors::METERED,
+        );
+        if site == RefusalSite::Never {
+            let (_, evidence) = result.expect("healthy measurement");
+            assert_supplied_coordinates(&evidence.coordinates);
+        } else {
+            let expected = if site == RefusalSite::Reporting {
+                RefusedRead::Workspace
+            } else {
+                RefusedRead::FinalRead(site)
+            };
+            let error = assert_source_refusal(result, &source, expected);
+            if site == RefusalSite::Reporting {
+                assert_eq!(
+                    error.evidence().coordinates,
+                    purrdf_sparql_eval::QueryCoordinates::NotStarted
+                );
+            } else {
+                assert_supplied_coordinates(&error.evidence().coordinates);
+            }
+        }
+    }
+    let source = Source::at(RefusalSite::Never);
+    let (_, evidence) = engine
+        .explain_governed_fallible_view(
+            &source,
+            request(QUERY),
+            options,
+            &QueryGovernors::METERED.with_max_intermediate_cells(0),
+        )
+        .unwrap();
+    assert_supplied_coordinates(&evidence.coordinates);
+    assert!(evidence.governors.tripped.is_some());
+}
+
+/// Real materialized publication retains only its original coordinate owner after results drop.
+fn materialized_coordinate_receipts_balance_with_retained_engine_and_plan() {
+    for prepared_route in [false, true] {
+        let source = Source::at(RefusalSite::BoundedHealthy);
+        let state = source.state.clone();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT (1 AS ?value) WHERE {}";
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let run = |options| {
+            if prepared_route {
+                engine.query_prepared_governed_fallible_view(
+                    &source,
+                    &prepared,
+                    &[],
+                    options,
+                    &QueryGovernors::METERED,
+                )
+            } else {
+                engine.query_governed_fallible_view(
+                    &source,
+                    request(query),
+                    options,
+                    &QueryGovernors::METERED,
+                )
+            }
+            .unwrap()
+        };
+        // Warm the existing immutable plan/cache owners, with no supplied coordinate.
+        drop(run(QueryOptions::EMPTY));
+        let baseline = state.owned_bytes.load(Ordering::Relaxed);
+        let purrdf_xsd::XsdValue::DateTime(now) = purrdf_xsd::parse(
+            &format!("2024-02-29T12:34:56.{}+05:30", "7".repeat(4096)),
+            purrdf_xsd::XsdDatatype::DateTime,
+        )
+        .unwrap() else {
+            panic!("wide timestamp")
+        };
+        let mut retained = None;
+        for iteration in 0..4 {
+            let result = run(QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0));
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let coordinates = result.evidence.coordinates.clone();
+            let measured = window.close();
+            assert_eq!(measured.allocations, 0);
+            assert_eq!(measured.requested_bytes, 0);
+            drop(result);
+            assert!(state.owned_bytes.load(Ordering::Relaxed) > baseline);
+            let purrdf_sparql_eval::QueryCoordinates::Started(inputs) = &coordinates else {
+                panic!("started materialized query")
+            };
+            assert!(inputs.now().unwrap().same_representation(&now));
+            assert_eq!(inputs.entropy_seed(), Some(0));
+            if iteration == 3 {
+                retained = Some(coordinates);
+            } else {
+                drop(coordinates);
+                assert_eq!(state.owned_bytes.load(Ordering::Relaxed), baseline);
+            }
+        }
+        drop(now);
+        drop(prepared);
+        drop(engine);
+        drop(source);
+        assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+        drop(retained);
+        state.assert_released();
     }
 }
 
@@ -2637,4 +2791,6 @@ purrdf_testkit::harness_main!(
     explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence,
     prepared_governed_queries_discard_rows_produced_before_an_iterator_failure,
     the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome,
+    governed_explain_coordinates_survive_forecast_and_publication_refusals,
+    materialized_coordinate_receipts_balance_with_retained_engine_and_plan,
 );

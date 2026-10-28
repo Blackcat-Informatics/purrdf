@@ -29,6 +29,23 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Native governed query coordinates
+
+`GovernedOutcome::Complete`, `InternedGoverned::Complete`, `BudgetExhausted`
+and `GovernedEvidence` now carry `coordinates: QueryCoordinates`. Update
+exhaustive patterns and preserve this field when reconstructing an outcome.
+The two outcome enums expose `coordinates()`; `AdmittedInternedGoverned`
+delegates to its contained outcome, so conversion retains the same receipt.
+
+`NotStarted` means no evaluation context was constructed. `Started` retains
+independently optional supplied time and the initial entropy seed, including
+on exhaustion or a later typed operational failure. Governed EXPLAIN reports
+its actual context even when its forecast prevents evaluation. Missing inputs
+make no claim about sampled defaults. Timestamp clones share the original
+admitted coefficient owner, retaining exact fractional seconds and timezone.
+Bare diagnostic errors keep their existing contracts. These receipts do not
+change query-text identity or add a complete execution or snapshot identity.
+
 ## C query time and entropy
 
 All twelve existing C query entries now take `const char *now` and

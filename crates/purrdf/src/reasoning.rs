@@ -1132,12 +1132,14 @@ fn withhold_surrogates_from_outcome(
             mut result,
             evidence,
             relations,
+            coordinates,
         } => {
             withhold_surrogate_triples(&mut result, surrogates)?;
             GovernedOutcome::Complete {
                 result,
                 evidence,
                 relations,
+                coordinates,
             }
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {

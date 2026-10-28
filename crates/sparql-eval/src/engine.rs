@@ -1674,10 +1674,12 @@ impl NativeSparqlEngine {
                 result,
                 evidence,
                 relations,
+                coordinates,
             } => GovernedOutcome::Complete {
                 result: prepared.publish(result),
                 evidence,
                 relations,
+                coordinates,
             },
             GovernedOutcome::BudgetExhausted(mut exhausted) => {
                 use crate::governed::{PartialAnswers, PartialSparqlResult};
@@ -2119,6 +2121,7 @@ impl NativeSparqlEngine {
                 &state,
                 Sequencing::Free,
                 &workspace,
+                &mut QueryCoordinates::NotStarted,
             )
             .map(AdmittedGovernedOutcome::into_caller)
         })
@@ -2169,6 +2172,7 @@ impl NativeSparqlEngine {
                 &state,
                 Sequencing::Free,
                 &workspace,
+                &mut QueryCoordinates::NotStarted,
             )
             .map(AdmittedGovernedOutcome::into_caller)
         })
@@ -2367,6 +2371,7 @@ impl NativeSparqlEngine {
                 &crate::workspace::SharedWorkspace::from(state.clone()),
                 sequencing,
                 &workspace,
+                &mut QueryCoordinates::NotStarted,
             )
             .map(AdmittedGovernedOutcome::into_caller)
         })
@@ -2386,6 +2391,7 @@ impl NativeSparqlEngine {
         state: &crate::workspace::SharedWorkspace<GovernorState>,
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+        capture: &mut QueryCoordinates,
     ) -> Result<AdmittedGovernedOutcome, EvaluationFailure> {
         substitutions
             .parameters
@@ -2412,6 +2418,12 @@ impl NativeSparqlEngine {
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+        *capture = QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            options.now.is_some(),
+            options.entropy_seed.is_some(),
+        )?;
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         let evaluated = evaluate_governed_with_substitutions(
             prepared,
@@ -2423,6 +2435,7 @@ impl NativeSparqlEngine {
             &mut ctx,
             state,
             core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY),
+            capture.clone(),
         )
         .map(|outcome| AdmittedGovernedOutcome {
             outcome,
@@ -2566,6 +2579,7 @@ impl NativeSparqlEngine {
                 &crate::workspace::SharedWorkspace::from(state.clone()),
                 Sequencing::Free,
                 &workspace,
+                &mut QueryCoordinates::NotStarted,
             )
             .map(AdmittedGovernedOutcome::into_caller)
         })
@@ -2674,6 +2688,7 @@ impl NativeSparqlEngine {
                     &state,
                     Err(error),
                     Some(&reporting.execution()),
+                    &QueryCoordinates::NotStarted,
                 );
             }
         };
@@ -3616,6 +3631,7 @@ impl NativeSparqlEngine {
                 )
                 .map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
             })?;
+        let mut capture = QueryCoordinates::NotStarted;
         let measured = admitted
             .parameters
             .check_admitted(&prepared, options, &workspace.capability())
@@ -3630,6 +3646,7 @@ impl NativeSparqlEngine {
                     options,
                     Sequencing::for_view::<D>(),
                     &workspace,
+                    &mut capture,
                 )
             });
         let measured = measured.and_then(|explanation| {
@@ -3647,16 +3664,25 @@ impl NativeSparqlEngine {
                 dataset,
                 bounded_workspace::AdmissionError::Operational(error),
             )
-            .map_evidence(|view| GovernedEvidence::new(view, state.evidence())));
+            .map_evidence(|view| {
+                GovernedEvidence::new(view, state.evidence()).with_coordinates(capture.clone())
+            }));
         }
         publication
             .finish(
                 finish_fallible_read(dataset, measured, Some(&workspace)),
                 |error| matches!(error, FallibleSparqlError::Query { .. }),
             )
-            .map(|(explanation, view)| (explanation, GovernedEvidence::new(view, state.evidence())))
+            .map(|(explanation, view)| {
+                (
+                    explanation,
+                    GovernedEvidence::new(view, state.evidence()).with_coordinates(capture.clone()),
+                )
+            })
             .map_err(|error| {
-                error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                error.map_evidence(|view| {
+                    GovernedEvidence::new(view, state.evidence()).with_coordinates(capture.clone())
+                })
             })
     }
 
@@ -3720,6 +3746,7 @@ impl NativeSparqlEngine {
                 options,
                 Sequencing::Free,
                 &execution,
+                &mut QueryCoordinates::NotStarted,
             );
             (measured, Some((reporting, Some(execution))))
         })
@@ -3734,6 +3761,7 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d, 'd>,
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+        capture: &mut QueryCoordinates,
     ) -> Result<QueryExplanation, EvaluationFailure> {
         let ExplanationExecution {
             prepared,
@@ -3769,6 +3797,12 @@ impl NativeSparqlEngine {
         let mut ctx = self
             .governed_ctx(dataset, (*state).clone(), options, workspace)?
             .with_charge_ledger(ledger);
+        *capture = QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            options.now.is_some(),
+            options.entropy_seed.is_some(),
+        )?;
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         // Every worker reports to this original admitted owner. Installing it
         // before any fork prevents a worker-local report from being lost.
@@ -3890,6 +3924,7 @@ impl NativeSparqlEngine {
             Err(error) => return Some(Err(error.into())),
         };
         Some(Ok(BudgetExhausted {
+            coordinates: QueryCoordinates::NotStarted,
             tripped,
             evidence: state.evidence(),
             relations: core::mem::replace(identity, RelationIdentity::EMPTY),
@@ -4738,7 +4773,6 @@ impl NativeSparqlEngine {
                     })?;
                 Ok(AdmittedInternedGoverned {
                     outcome: InternedGoverned::BudgetExhausted(exhausted),
-                    coordinates: QueryCoordinates::NotStarted,
                     identity: identity_owner.frame,
                 })
             });
@@ -4774,15 +4808,18 @@ impl NativeSparqlEngine {
                     &mut ctx,
                     state,
                     core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY),
+                    coordinates,
                 )? {
                     GovernedResolution::Complete {
                         outcome,
                         evidence,
                         relations,
+                        coordinates,
                     } => InternedGoverned::Complete {
                         value: visit(borrow_outcome(&outcome, &ctx)),
                         evidence,
                         relations,
+                        coordinates,
                     },
                     GovernedResolution::Exhausted(exhausted) => InternedGoverned::BudgetExhausted(
                         purrdf_lex::allocation::Memory::new(&mut identity_owner.frame)
@@ -4801,7 +4838,6 @@ impl NativeSparqlEngine {
         }
         answer.map(|outcome| AdmittedInternedGoverned {
             outcome,
-            coordinates,
             identity: identity_owner.frame,
         })
     }
@@ -5271,6 +5307,12 @@ impl NativeSparqlEngine {
                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
             }
             let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+            let coordinates = QueryCoordinates::started(
+                &ctx.now,
+                ctx.rng_state,
+                options.now.is_some(),
+                options.entropy_seed.is_some(),
+            )?;
             let evaluated = evaluate_governed_with_substitutions(
                 &prepared,
                 Prebindings::Borrowed(request.substitutions),
@@ -5282,15 +5324,18 @@ impl NativeSparqlEngine {
                     &mut ctx,
                     state,
                     core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY),
+                    coordinates,
                 )? {
                     GovernedResolution::Complete {
                         outcome,
                         evidence,
                         relations,
+                        coordinates,
                     } => InternedGoverned::Complete {
                         value: visit(borrow_outcome(&outcome, &ctx)),
                         evidence,
                         relations,
+                        coordinates,
                     },
                     GovernedResolution::Exhausted(exhausted) => {
                         InternedGoverned::BudgetExhausted(Box::new(exhausted))
@@ -5880,6 +5925,7 @@ fn finish_governed_fallible_query<D>(
     state: &GovernorState,
     evaluation: Result<AdmittedGovernedOutcome, EvaluationFailure>,
     workspace: Option<&crate::workspace::QueryWorkspace<D::ReadError>>,
+    capture: &QueryCoordinates,
 ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
 where
     D: FallibleDatasetView + Sync,
@@ -5890,12 +5936,14 @@ where
             dataset,
             bounded_workspace::AdmissionError::Operational(error),
         )
-        .map_evidence(|evidence| GovernedEvidence::new(evidence, governors.clone())));
+        .map_evidence(|evidence| {
+            GovernedEvidence::new(evidence, governors.clone()).with_coordinates(capture.clone())
+        }));
     }
     match dataset.operation_status() {
         ViewOperationStatus::Failed { error, evidence } => Err(FallibleSparqlError::Operational {
             error,
-            evidence: GovernedEvidence::new(evidence, governors),
+            evidence: GovernedEvidence::new(evidence, governors).with_coordinates(capture.clone()),
         }),
         ViewOperationStatus::Ready { .. } => {
             match evaluation {
@@ -5913,22 +5961,26 @@ where
                     drop(identity);
                     let (result, owner) =
                         retain_query_result(dataset, result, workspace).map_err(|error| {
-                            error
-                                .map_evidence(|view| GovernedEvidence::new(view, governors.clone()))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, governors.clone())
+                                    .with_coordinates(capture.clone())
+                            })
                         })?;
-                    let ((result, _owner), view) = finish_fallible_read(
-                        dataset,
-                        Ok((result, owner)),
-                        workspace,
-                    )
-                    .map_err(|error| {
-                        error.map_evidence(|view| GovernedEvidence::new(view, governors.clone()))
-                    })?;
+                    let ((result, _owner), view) =
+                        finish_fallible_read(dataset, Ok((result, owner)), workspace).map_err(
+                            |error| {
+                                error.map_evidence(|view| {
+                                    GovernedEvidence::new(view, governors.clone())
+                                        .with_coordinates(capture.clone())
+                                })
+                            },
+                        )?;
                     Ok(CompleteSparqlResult {
                         result,
-                        evidence: crate::RetainedEvidence::backend(GovernedEvidence::new(
-                            view, governors,
-                        )),
+                        evidence: crate::RetainedEvidence::backend(
+                            GovernedEvidence::new(view, governors)
+                                .with_coordinates(capture.clone()),
+                        ),
                     })
                 }
                 Ok(AdmittedGovernedOutcome {
@@ -5940,10 +5992,12 @@ where
                         evidence,
                         relations,
                         partial,
+                        coordinates,
                     } = exhausted;
                     drop(relations);
                     drop(identity);
                     let exhausted = BudgetExhausted {
+                        coordinates,
                         tripped,
                         evidence,
                         relations: RelationIdentity::EMPTY,
@@ -5958,6 +6012,7 @@ where
                             .map_err(|error| {
                                 error.map_evidence(|view| {
                                     GovernedEvidence::new(view, governors.clone())
+                                        .with_coordinates(capture.clone())
                                 })
                             })
                     };
@@ -5970,19 +6025,25 @@ where
                     };
                     let (partial, view) = finish_fallible_read(dataset, Ok(partial), workspace)
                         .map_err(|error| {
-                            error
-                                .map_evidence(|view| GovernedEvidence::new(view, governors.clone()))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, governors.clone())
+                                    .with_coordinates(capture.clone())
+                            })
                         })?;
                     Err(FallibleSparqlError::BudgetExhausted {
                         tripped: exhausted.tripped,
                         partial,
-                        evidence: GovernedEvidence::new(view, governors.clone()),
+                        evidence: GovernedEvidence::new(view, governors.clone())
+                            .with_coordinates(capture.clone()),
                     })
                 }
                 Err(diagnostic) => {
                     finish_fallible_read::<D, ()>(dataset, Err(diagnostic), workspace)
                         .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, governors))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, governors)
+                                    .with_coordinates(capture.clone())
+                            })
                         })
                         .map(|_| unreachable!("a failed query cannot publish a complete answer"))
                 }
@@ -7185,7 +7246,6 @@ fn check_plan_matches_registries(
 /// Native callers borrow the outcome; only legacy egress transfers caller storage.
 pub struct AdmittedInternedGoverned<R> {
     outcome: InternedGoverned<R>,
-    coordinates: QueryCoordinates,
     identity: crate::workspace::LexicalFrame,
 }
 purrdf_hash::debug_non_exhaustive!([R: std::fmt::Debug] AdmittedInternedGoverned<R> { outcome });
@@ -7194,7 +7254,7 @@ impl<R> AdmittedInternedGoverned<R> {
     /// before substitution, evaluation or the visitor. Clone this receipt before
     /// consuming the outcome to retain its original timestamp owner separately.
     pub const fn coordinates(&self) -> &QueryCoordinates {
-        &self.coordinates
+        self.outcome.coordinates()
     }
     /// Inspect the receipt while its original identity admission remains live.
     pub const fn outcome(&self) -> &InternedGoverned<R> {
@@ -7207,25 +7267,25 @@ impl<R> AdmittedInternedGoverned<R> {
         complete: impl FnOnce(R, &purrdf_core::GovernorEvidence, &RelationIdentity) -> T,
         exhausted: impl FnOnce(&BudgetExhausted) -> T,
     ) -> T {
-        let Self {
-            outcome,
-            coordinates,
-            identity,
-        } = self;
+        let Self { outcome, identity } = self;
         let result = match outcome {
             InternedGoverned::Complete {
                 value,
                 evidence,
                 relations,
-            } => complete(value, &evidence, &relations),
+                coordinates,
+            } => {
+                let result = complete(value, &evidence, &relations);
+                drop(coordinates);
+                result
+            }
             InternedGoverned::BudgetExhausted(value) => exhausted(&value),
         };
-        drop(coordinates);
         drop(identity);
         result
     }
     fn into_caller(self) -> InternedGoverned<R> {
-        // Legacy egress has no coordinate receipt; its native owner ends here.
+        // The actual outcome retains the original coordinate owner.
         self.outcome
     }
 }
@@ -7549,19 +7609,24 @@ fn materialize_governed<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
+    coordinates: QueryCoordinates,
 ) -> Result<GovernedOutcome, EvaluationFailure> {
-    Ok(match resolve_governed(evaluated, ctx, state, relations)? {
-        GovernedResolution::Complete {
-            outcome,
-            evidence,
-            relations,
-        } => GovernedOutcome::Complete {
-            result: materialize(outcome, ctx)?,
-            evidence,
-            relations,
+    Ok(
+        match resolve_governed(evaluated, ctx, state, relations, coordinates)? {
+            GovernedResolution::Complete {
+                outcome,
+                evidence,
+                relations,
+                coordinates,
+            } => GovernedOutcome::Complete {
+                result: materialize(outcome, ctx)?,
+                evidence,
+                relations,
+                coordinates,
+            },
+            GovernedResolution::Exhausted(exhausted) => GovernedOutcome::BudgetExhausted(exhausted),
         },
-        GovernedResolution::Exhausted(exhausted) => GovernedOutcome::BudgetExhausted(exhausted),
-    })
+    )
 }
 
 /// [`materialize_governed`], stopped one step short of the egress model.
@@ -7593,6 +7658,7 @@ enum GovernedResolution<I: purrdf_core::ViewTermId> {
         /// The registry identity the plan was admitted under, carrying the witness
         /// this execution's relations wrote.
         relations: RelationIdentity,
+        coordinates: QueryCoordinates,
     },
     /// A governor stopped the execution; the partial answers are already resolved.
     Exhausted(BudgetExhausted),
@@ -7605,6 +7671,7 @@ fn resolve_governed<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
+    coordinates: QueryCoordinates,
 ) -> Result<GovernedResolution<D::Id>, EvaluationFailure> {
     let relations = RelationIdentity {
         witness: core::mem::take(&mut ctx.witness),
@@ -7619,11 +7686,13 @@ fn resolve_governed<D: DatasetView + Sync>(
                     outcome,
                     evidence,
                     relations,
+                    coordinates,
                 },
                 Some(tripped) => GovernedResolution::Exhausted(BudgetExhausted {
                     tripped,
                     evidence,
                     relations,
+                    coordinates,
                     partial: certain_partial(materialize(outcome, ctx)?, true),
                 }),
             }
@@ -7659,6 +7728,7 @@ fn resolve_governed<D: DatasetView + Sync>(
                 tripped: certificate.tripped(),
                 evidence: state.evidence(),
                 relations,
+                coordinates,
                 partial,
             })
         }

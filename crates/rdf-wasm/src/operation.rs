@@ -795,9 +795,11 @@ impl OperationInput<'_> {
                             evidence,
                         }
                     }
-                    GovernedOutcome::BudgetExhausted(exhausted) => {
-                        NegotiatedValue::Exhausted(exhausted)
-                    }
+                    GovernedOutcome::BudgetExhausted(exhausted) => NegotiatedValue::Exhausted {
+                        tripped: exhausted.tripped,
+                        evidence: exhausted.evidence,
+                        partial: exhausted.partial,
+                    },
                 };
                 Ok(JobOutcome::Negotiated(Box::new(value)))
             }

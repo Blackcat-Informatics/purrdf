@@ -8,7 +8,7 @@ use crate::{EvalError, WorkspaceCapability};
 use purrdf_lex::allocation::{Memory, SharedOwned};
 use purrdf_xsd::{XsdValue, temporal::DateTime};
 
-/// Supplied coordinates retained by one admitted prepared-query outcome.
+/// Supplied coordinates retained by one native governed query outcome or evidence.
 /// This is not a query, source or snapshot identity. Missing supplied inputs
 /// make no claim about sampled defaults. Clones share the original admitted
 /// timestamp coefficient; they allocate no replacement storage or owner.
@@ -167,6 +167,21 @@ mod tests {
             })
             .unwrap();
             let coordinates = receipt.coordinates().clone();
+            let materialized = without_host_clock_or_entropy(|| {
+                engine.query_governed_view(
+                    &dataset,
+                    purrdf_core::SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::new().with_now(now).with_entropy_seed(seed),
+                    &QueryGovernors::METERED,
+                )
+            })
+            .unwrap();
+            assert_eq!(materialized.coordinates(), &coordinates);
+
             let rows = receipt.consume(|rows, _, _| rows, |_| panic!("metered complete result"));
             (coordinates, rows)
         };
@@ -242,6 +257,36 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(receipt.coordinates(), &expected);
+            let query = "SELECT (1 AS ?value) WHERE {}";
+            let request = purrdf_core::SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            };
+            let materialized = engine
+                .query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
+                .unwrap();
+            assert_eq!(materialized.coordinates(), &expected);
+            let state = std::sync::Arc::new(crate::GovernorState::new(&QueryGovernors::METERED));
+            let interned = engine
+                .query_governed_interned_in_operation(
+                    &dataset,
+                    super::super::InternedRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    options,
+                    &state,
+                    |_| (),
+                )
+                .unwrap();
+            assert_eq!(interned.coordinates(), &expected);
+            let converted = engine
+                .execute_governed_in_operation(&mut prepared, &dataset, options, &state, |_| ())
+                .unwrap();
+            assert_eq!(converted.coordinates(), &expected);
+
             assert_ne!(receipt.coordinates(), &QueryCoordinates::NotStarted);
         }
     }
