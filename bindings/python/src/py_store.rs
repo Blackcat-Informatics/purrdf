@@ -57,6 +57,7 @@ mod store;
 mod term;
 mod xsd;
 
+pub(crate) use env::query_coordinates;
 pub(crate) use io::{PyRdfFormat, parse_quads};
 /// The mutable quad store itself, re-exported for the SHACL surface.
 ///

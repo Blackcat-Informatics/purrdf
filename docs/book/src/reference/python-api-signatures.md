@@ -1210,11 +1210,11 @@ class shapes:
         ...
 
     @staticmethod
-    def entail(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, xpath_regex: str | None=None) -> dict[str, builtins.object]:
+    def entail(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, xpath_regex: str | None=None, now: str | None=None, entropy_seed: int | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def apply_rules(data_nt: str, shapes_ttl: str | None=None, *, srl: str | None=None, shapes_base: str | None=None, srl_base: str | None=None, explain: bool=False, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, xpath_regex: str | None=None) -> dict[str, builtins.object]:
+    def apply_rules(data_nt: str, shapes_ttl: str | None=None, *, srl: str | None=None, shapes_base: str | None=None, srl_base: str | None=None, explain: bool=False, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, xpath_regex: str | None=None, now: str | None=None, entropy_seed: int | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod

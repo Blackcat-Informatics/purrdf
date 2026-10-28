@@ -424,13 +424,32 @@ validation does not redefine that checkpoint.
 
 `shapes.entail` applies a shapes graph's default rule set and returns base plus
 inferred triples. It differs from `purrdf.entail.materialize`, which uses a
-regime's rule table without a shapes graph. `shapes.apply_rules` runs an SRL
+regime's rule table without a shapes graph. `shapes.apply_rules` runs a shapes graph or SRL
 document and returns only the inference graph, with proof text when
 `explain=True`. `check_rules` admits a rule set at the selected checking level:
 `level` accepts `syntax`, `well-formed` or `stratified`; omission selects
 `stratified`. It reports declarations, imports, versions and strata. Stored-fact, join-step,
 generated-term and generating-round controls are explicit keyword arguments;
 exhaustion raises a limit-specific `ValueError`.
+
+`shapes.entail` and `shapes.apply_rules` accept keyword-only `now` and
+`entropy_seed`, including the SHACL and SRL rule sources and the `shacl` aliases.
+They use the same exact `xsd:dateTime` strings and unsigned 64-bit integers as
+query and UPDATE execution. Both inputs are independently optional; zero is a
+valid seed. A supplied time reaches every rule query without losing fractional
+seconds, timezone or negative years. The seed selects a reproducible sequence
+for the rule execution's queries. Repeating identical input documents and
+coordinates repeats the inferred output.
+
+These controls work with the default or an explicitly selected `xpath_regex`
+law. Coordinate decoding follows XPath selection and precedes document/import
+parsing and detached execution. Malformed time raises `ValueError` naming `now`,
+wrong Python types raise `TypeError`, and negative or overflowing seeds raise
+`OverflowError`. The four rule limits and their diagnostic keyword names remain
+in force. Imports, shapes-graph selection, proof output and mandatory diagnostics
+retain their existing contracts. Static `check_rules` refuses these execution
+keywords. These controls do not add execution receipts or extend shape validation,
+node expressions or the separate `purrdf.entail` regime API.
 
 `eval_node_expr` selects exactly one expression: a named IRI/blank label,
 a unique walk from `expr_at` through `expr_via`, or a one-root inline
