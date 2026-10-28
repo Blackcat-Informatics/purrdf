@@ -186,6 +186,52 @@ fn parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal() {
     assert!(replace_ambient_context(AmbientContext::default()).is_idle());
 }
 
+/// The shared host dispatchers preserve both supplied inputs even with native
+/// clock and entropy probes sealed, including the selected XPath scope.
+fn shared_rule_dispatch_preserves_supplied_inputs_without_host_defaults() {
+    let shapes = parse_shapes(
+        r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:s ; sh:rule [
+          a sh:SPARQLRule ; sh:runOnce true ; sh:construct """
+          CONSTRUCT { <http://example.org/s> <http://example.org/time> ?time }
+          WHERE { BIND(NOW() AS ?time) FILTER(REGEX("ok", "^ok$")) } """ ] ."#,
+        None,
+    )
+    .unwrap();
+    let document = srl::parse_and_check(
+        "PREFIX : <http://example.org/> RULE { :s :time ?time }
+         WHERE { SET(?time := NOW()) FILTER(REGEX(\"ok\", \"^ok$\")) }",
+        None,
+    )
+    .unwrap();
+    let data = RdfDatasetBuilder::new().freeze().unwrap();
+    let now = parse_datetime("1969-12-31T23:59:58.123456789012345678901+05:30").unwrap();
+    let expected = [[iri("s"), iri("time"), expected_time(&now)]];
+    let options = RuleOptions::default().with_now(now).with_entropy_seed(0);
+    for source in [
+        purrdf_shapes::RuleSource::Shapes(&shapes),
+        purrdf_shapes::RuleSource::Srl(&document),
+    ] {
+        let ordinary = without_host_clock_or_entropy(|| {
+            purrdf_shapes::run_rules_with_options(source, &data, &options)
+        })
+        .unwrap();
+        assert_eq!(ordinary.inferred(), expected);
+        let xpath = without_host_clock_or_entropy(|| {
+            purrdf_shapes::xpath::run_rules_with_options(
+                source,
+                &data,
+                &options,
+                purrdf_core::xsd_regex::xpath::Profile::Xpath31,
+                purrdf_core::xsd_regex::xpath::Limits::new(),
+            )
+        })
+        .unwrap();
+        assert_eq!(xpath.inferred(), expected);
+    }
+}
+
 fn receipts_preserve_exact_time_representation_and_absent_inputs() {
     let document = srl::parse_and_check(
         "PREFIX : <http://example.org/> RULE { :s :time ?time } WHERE { SET(?time := NOW()) }",
@@ -226,5 +272,6 @@ fn receipts_preserve_exact_time_representation_and_absent_inputs() {
 purrdf_testkit::harness_main!(
     shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes,
     parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal,
+    shared_rule_dispatch_preserves_supplied_inputs_without_host_defaults,
     receipts_preserve_exact_time_representation_and_absent_inputs,
 );

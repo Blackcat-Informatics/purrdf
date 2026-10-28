@@ -50,6 +50,172 @@ const PREFIXES: &str = r"
 @prefix ex: <http://example.org/ns#> .
 ";
 
+/// Both rule frontends carry exact coordinates through the real executable,
+/// independently of the XPath law and without conflating time with entropy.
+#[test]
+fn supplied_rule_coordinates_replay_through_both_frontends() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "empty.nt", "");
+    let shapes = write_file(
+        dir.path(),
+        "coordinates.ttl",
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:S a sh:NodeShape ; sh:targetNode ex:s ; sh:rule ex:r .
+ex:r a sh:SPARQLRule ; sh:runOnce true ; sh:construct """
+ PREFIX ex: <http://example.org/>
+ CONSTRUCT { $this ex:time ?time ; ex:random ?random ; ex:uuid ?uuid ; ex:str ?str }
+ WHERE {
+   BIND(NOW() AS ?time) BIND(RAND() AS ?random)
+   BIND(UUID() AS ?uuid) BIND(STRUUID() AS ?str)
+   FILTER(REGEX("ok", "^ok$"))
+ } """ .
+"#,
+    );
+    let srl = write_file(
+        dir.path(),
+        "coordinates.srl",
+        r#"
+PREFIX ex: <http://example.org/>
+RULE { ex:s ex:time ?time ; ex:uuid ?uuid ; ex:str ?str }
+WHERE {
+ SET(?time := NOW()) SET(?uuid := UUID()) SET(?str := STRUUID())
+ FILTER(REGEX("ok", "^ok$"))
+}
+"#,
+    );
+    let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
+    let other_time = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
+    for (flag, source, predicates) in [
+        ("--shapes", &shapes, &["time", "random", "uuid", "str"][..]),
+        ("--srl", &srl, &["time", "uuid", "str"][..]),
+    ] {
+        let answer = |now: Option<&str>, seed: Option<&str>, law: Option<&str>| {
+            let mut args = vec!["rules", flag, source, "--to", "ntriples", "--explain"];
+            if let Some(now) = now {
+                args.extend(["--now", now]);
+            }
+            if let Some(seed) = seed {
+                args.extend(["--entropy-seed", seed]);
+            }
+            if let Some(law) = law {
+                args.extend(["--xpath-regex", law]);
+            }
+            args.push(&data);
+            let out = run(&args);
+            assert_eq!(code(&out), 0, "{flag}: {}", stderr(&out));
+            let body = stdout(&out);
+            assert_eq!(body.lines().count(), predicates.len(), "{body}");
+            assert!(stderr(&out).contains("derived "), "{}", stderr(&out));
+            predicates
+                .iter()
+                .map(|predicate| {
+                    body.lines()
+                        .find(|line| line.contains(&format!("<http://example.org/{predicate}>")))
+                        .expect("inferred predicate")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = answer(Some(time), Some("0"), None);
+        assert!(first[0].contains(time), "exact time: {first:?}");
+        assert_eq!(first, answer(Some(time), Some("0"), None));
+        for law in ["xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21"] {
+            assert_eq!(first, answer(Some(time), Some("0"), Some(law)));
+        }
+        let changed_time = answer(Some(other_time), Some("0"), None);
+        assert!(changed_time[0].contains(other_time));
+        assert_eq!(changed_time[1..], first[1..]);
+        let changed_seed = answer(Some(time), Some("1"), None);
+        assert_eq!(changed_seed[0], first[0]);
+        for index in 1..predicates.len() {
+            assert_ne!(changed_seed[index], first[index]);
+        }
+        assert_eq!(answer(Some(time), None, None)[0], first[0]);
+        assert_eq!(answer(None, Some("0"), None)[1..], first[1..]);
+        assert_eq!(answer(None, None, None).len(), predicates.len());
+    }
+}
+
+/// Coordinates fail before source reads, cannot configure a check-only run,
+/// and never suppress a native rule limit or extend the SRL grammar.
+#[test]
+fn supplied_rule_coordinates_preserve_usage_and_runtime_refusals() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "empty.nt", "");
+    let missing = dir.path().join("missing.nt");
+    let missing = missing.to_str().expect("utf8 path");
+    for source_flag in ["--shapes", "--srl"] {
+        for (flag, value) in [
+            ("--now", "not-a-date"),
+            ("--entropy-seed", "-1"),
+            ("--entropy-seed", "18446744073709551616"),
+        ] {
+            let out = run(&["rules", source_flag, missing, flag, value, missing]);
+            assert_eq!(code(&out), 2, "{}", stderr(&out));
+            assert!(stderr(&out).contains(flag));
+            assert!(!stderr(&out).contains("missing.nt"));
+            assert_eq!(out.stdout, [] as [u8; 0]);
+        }
+    }
+    let srl = write_file(
+        dir.path(),
+        "time.srl",
+        "PREFIX ex: <http://example.org/> RULE { ex:s ex:time ?time } WHERE { SET(?time := NOW()) }",
+    );
+    let time = "2020-01-02T03:04:05Z";
+    for extra in [["--now", time], ["--entropy-seed", "0"]] {
+        let out = run(&["rules", "--srl", &srl, "--check", extra[0], extra[1]]);
+        assert_eq!(code(&out), 2, "{}", stderr(&out));
+        assert!(stderr(&out).contains("--check"));
+    }
+    assert_eq!(code(&run(&["rules", "--srl", &srl, "--check"])), 0);
+    for law in [None, Some("xpath-3.1-2017-03-21")] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            &srl,
+            "--now",
+            time,
+            "--entropy-seed",
+            "0",
+            "--to",
+            "ntriples",
+            "--max-stored-facts",
+            "0",
+        ];
+        if let Some(law) = law {
+            args.extend(["--xpath-regex", law]);
+        }
+        args.push(&data);
+        let out = run(&args);
+        assert_eq!(code(&out), 1, "{}", stderr(&out));
+        assert!(stderr(&out).contains("--max-stored-facts"));
+        assert_eq!(out.stdout, [] as [u8; 0]);
+    }
+    let refused = write_file(
+        dir.path(),
+        "random.srl",
+        "PREFIX ex: <http://example.org/> RULE { ex:s ex:random ?r } WHERE { SET(?r := RAND()) }",
+    );
+    let out = run(&[
+        "rules",
+        "--srl",
+        &refused,
+        "--now",
+        time,
+        "--entropy-seed",
+        "0",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(stderr(&out).contains("RAND"));
+    assert_eq!(out.stdout, [] as [u8; 0]);
+}
+
 /// A `sh:sparqlExpr` expression node naming `ex:yes` through `sh:prefixes` (`ex:Tag`), a
 /// labelled `shnex:var` expression (`_:suffix`), a rule tagging every `ex:Item` through
 /// the same expression, and a counter rule that steps `ex:n` to 5 — exactly four
