@@ -319,8 +319,15 @@
  * `entropy_seed` inputs after governors and before the first output. Rebuild C
  * callers against the new header. Exact time and the copied unsigned seed are
  * owned for the request; NULL independently retains a fresh native default.
+ *
+ * # `0.14.0` → `0.15.0`: supplied rule execution coordinates
+ *
+ * Both entailment and rule-application entries, including their XPath variants,
+ * gain nullable `now` and `entropy_seed` inputs immediately before their first
+ * output. Callers must rebuild. Rule application covers both SHACL and SRL;
+ * owned inputs retain exact time and the unsigned seed while preserving request limits.
  */
-#define PURRDF_ABI_MINOR 14
+#define PURRDF_ABI_MINOR 15
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -3882,6 +3889,18 @@ int32_t purrdf_shacl_validate_changes_to_sarif_xpath_regex(const char *shapes_tt
  * `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
  * readable; `out_buffer` must be a writable pointer; `out_diagnostics` and `out_error`
  * must each be null or writable.
+ *
+ * `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+ * time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+ * The seed selects the reproducible sequence of the rule execution's queries.
+ * Omitted inputs retain native defaults. Invalid time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ * Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+ * XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+ * Successful buffers own their values after input storage is released.
+ *
+ * The coordinate pointers must be null or live for this call: `now` points to a
+ * NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *shapes_base_iri,
@@ -3894,6 +3913,8 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const uint64_t *max_generated_terms,
                                         const uint64_t *max_stored_facts,
                                         const uint64_t *max_join_steps,
+                                        const char *now,
+                                        const uint64_t *entropy_seed,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfBuffer **out_diagnostics,
                                         PurrdfError **out_error);
@@ -3927,6 +3948,8 @@ int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
                                                     const uint64_t *max_stored_facts,
                                                     const uint64_t *max_join_steps,
                                                     const char *regex_profile,
+                                                    const char *now,
+                                                    const uint64_t *entropy_seed,
                                                     PurrdfBuffer **out_buffer,
                                                     PurrdfBuffer **out_diagnostics,
                                                     PurrdfError **out_error);
@@ -3991,6 +4014,18 @@ int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
  * Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
  * space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
  * second, the field order every host's structured value (`{rule, shape}`) carries.
+ *
+ * `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+ * time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+ * The seed selects the reproducible sequence of the rule execution's queries.
+ * Omitted inputs retain native defaults. Invalid time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ * Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+ * XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+ * Successful buffers own their values after input storage is released.
+ *
+ * The coordinate pointers must be null or live for this call: `now` points to a
+ * NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
  */
 int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *shapes_ttl,
@@ -4005,6 +4040,8 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *const *import_iris,
                                  const char *const *import_documents,
                                  size_t import_count,
+                                 const char *now,
+                                 const uint64_t *entropy_seed,
                                  PurrdfBuffer **out_inferred,
                                  PurrdfBuffer **out_proof,
                                  PurrdfBuffer **out_diagnostics,
@@ -4042,6 +4079,8 @@ int32_t purrdf_shacl_apply_rules_xpath_regex(const char *data_nt,
                                              const char *const *import_documents,
                                              size_t import_count,
                                              const char *regex_profile,
+                                             const char *now,
+                                             const uint64_t *entropy_seed,
                                              PurrdfBuffer **out_inferred,
                                              PurrdfBuffer **out_proof,
                                              PurrdfBuffer **out_diagnostics,

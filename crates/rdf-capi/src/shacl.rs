@@ -86,7 +86,7 @@ use purrdf_validate::{
     ChangeScope, ConformanceDisallows, EntailOutcome, EntailRequest, ExprSelector, LintReport,
     NodeExprRequest, RuleLimits, RulesOutcome, RulesRequest, SarifOptions, SelectedProductError,
     ShapesError, ShapesProductRefusal, ValidationOptions, XPathValidationError,
-    apply_rules_to_ntriples_with_xpath_regex, check_rules, entail_to_ntriples_with_xpath_regex,
+    apply_rules_to_ntriples_with_coordinates, check_rules, entail_to_ntriples_with_coordinates,
     eval_node_expr_with_xpath_regex, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
     validate_changes_to_sarif_string_with_shapes_graph,
     validate_changes_to_sarif_string_with_xpath_regex, validate_to_sarif_string_with_shapes_graph,
@@ -787,9 +787,13 @@ unsafe fn validate_changes_entry(
 /// (base graph plus every SHACL-AF rule inference) as canonical N-Triples, and the shapes
 /// graph's mandatory diagnostics. Native-testable, pointer-free core.
 ///
-/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_with_xpath_regex`],
+/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_with_coordinates`],
 /// under the caller's dated XPath law or (`None`) the compatibility regular expressions;
 /// the exported symbols only add the C-ABI buffer framing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entailment inputs, passed through to the shared native request"
+)]
 fn entail_outcome(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -798,8 +802,9 @@ fn entail_outcome(
     imports: &[(&str, &str)],
     limits: RuleLimits,
     regex: Option<Profile>,
+    coordinates: purrdf_validate::query::CoordinateInputs,
 ) -> Result<EntailOutcome, PurrdfError> {
-    entail_to_ntriples_with_xpath_regex(
+    entail_to_ntriples_with_coordinates(
         &EntailRequest {
             shapes_ttl,
             shapes_base,
@@ -813,6 +818,7 @@ fn entail_outcome(
             host: purrdf_validate::RulesHost::CAbi,
         },
         regex,
+        coordinates,
     )
     .map_err(law_error)
 }
@@ -873,6 +879,18 @@ fn diagnostic_text(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Stri
 /// `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
 /// readable; `out_buffer` must be a writable pointer; `out_diagnostics` and `out_error`
 /// must each be null or writable.
+///
+/// `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+/// time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+/// The seed selects the reproducible sequence of the rule execution's queries.
+/// Omitted inputs retain native defaults. Invalid time returns
+/// `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+/// Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+/// XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+/// Successful buffers own their values after input storage is released.
+///
+/// The coordinate pointers must be null or live for this call: `now` points to a
+/// NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     shapes_ttl: *const c_char,
@@ -886,6 +904,8 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     max_generated_terms: *const u64,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -908,6 +928,8 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
                     max_join_steps,
                 ],
                 std::ptr::null(),
+                now,
+                entropy_seed,
                 out_buffer,
                 out_diagnostics,
             )
@@ -944,6 +966,8 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples_xpath_regex(
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -966,6 +990,8 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples_xpath_regex(
                     max_join_steps,
                 ],
                 regex_profile,
+                now,
+                entropy_seed,
                 out_buffer,
                 out_diagnostics,
             )
@@ -1007,6 +1033,8 @@ unsafe fn entail_entry(
     import_count: usize,
     limits: [*const u64; 4],
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
@@ -1024,7 +1052,17 @@ unsafe fn entail_entry(
         let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
         let limits = rule_limits(limits);
         let regex = decode_regex_profile(regex_profile)?;
-        let outcome = entail_outcome(shapes, base, shapes_graph, data, &imports, limits, regex)?;
+        let coordinates = crate::query::decode_coordinates(now, entropy_seed)?;
+        let outcome = entail_outcome(
+            shapes,
+            base,
+            shapes_graph,
+            data,
+            &imports,
+            limits,
+            regex,
+            coordinates,
+        )?;
         if !out_diagnostics.is_null() {
             *out_diagnostics = into_handle(PurrdfBuffer(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
@@ -1041,13 +1079,14 @@ unsafe fn entail_entry(
 
 /// Run a rule set over a data graph. Native-testable, pointer-free core of
 /// [`purrdf_shacl_apply_rules`] and its `_xpath_regex` twin: the work is
-/// [`apply_rules_to_ntriples_with_xpath_regex`], under the caller's dated XPath law or
+/// [`apply_rules_to_ntriples_with_coordinates`], under the caller's dated XPath law or
 /// (`None`) the compatibility regular expressions.
 fn apply_rules_outcome(
     request: &RulesRequest<'_>,
     regex: Option<Profile>,
+    coordinates: purrdf_validate::query::CoordinateInputs,
 ) -> Result<RulesOutcome, PurrdfError> {
-    apply_rules_to_ntriples_with_xpath_regex(request, regex).map_err(law_error)
+    apply_rules_to_ntriples_with_coordinates(request, regex, coordinates).map_err(law_error)
 }
 
 /// Run a rule set over a data graph (N-Triples) and write the INFERENCE GRAPH — the
@@ -1109,6 +1148,18 @@ fn apply_rules_outcome(
 /// Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
 /// space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
 /// second, the field order every host's structured value (`{rule, shape}`) carries.
+///
+/// `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+/// time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+/// The seed selects the reproducible sequence of the rule execution's queries.
+/// Omitted inputs retain native defaults. Invalid time returns
+/// `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+/// Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+/// XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+/// Successful buffers own their values after input storage is released.
+///
+/// The coordinate pointers must be null or live for this call: `now` points to a
+/// NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     data_nt: *const c_char,
@@ -1124,6 +1175,8 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
@@ -1151,6 +1204,8 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 import_documents,
                 import_count,
                 std::ptr::null(),
+                now,
+                entropy_seed,
                 [out_inferred, out_proof, out_diagnostics],
             )
         })
@@ -1189,6 +1244,8 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
     import_documents: *const *const c_char,
     import_count: usize,
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
@@ -1216,6 +1273,8 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
                 import_documents,
                 import_count,
                 regex_profile,
+                now,
+                entropy_seed,
                 [out_inferred, out_proof, out_diagnostics],
             )
         })
@@ -1239,6 +1298,8 @@ unsafe fn apply_rules_entry(
     import_documents: *const *const c_char,
     import_count: usize,
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
     outputs: [*mut *mut PurrdfBuffer; 3],
 ) -> Result<PurrdfStatus, PurrdfError> {
     let [
@@ -1275,7 +1336,8 @@ unsafe fn apply_rules_entry(
             host: purrdf_validate::RulesHost::CAbi,
         };
         let regex = decode_regex_profile(regex_profile)?;
-        let outcome = apply_rules_outcome(&request, regex)?;
+        let coordinates = crate::query::decode_coordinates(now, entropy_seed)?;
+        let outcome = apply_rules_outcome(&request, regex, coordinates)?;
         if let Some(proof) = outcome.proof {
             *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
         }
@@ -3154,6 +3216,7 @@ ex:StatusShape a sh:NodeShape ;
             &[],
             RuleLimits::default(),
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("entailment produced");
         let text = bytes.ntriples;
@@ -3177,6 +3240,7 @@ ex:StatusShape a sh:NodeShape ;
                 &[],
                 RuleLimits::default(),
                 None,
+                purrdf_validate::query::CoordinateInputs::default(),
             )
             .is_err()
         );
@@ -3647,6 +3711,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut entailed,
                     &raw mut entail_diagnostics,
                     &raw mut error,
@@ -3666,6 +3732,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     &raw mut rules_diagnostics,
@@ -3740,6 +3808,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     pointer(&limits[1]),
                     pointer(&limits[2]),
                     pointer(&limits[3]),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     &raw mut error,
@@ -3832,6 +3902,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -3857,6 +3929,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
@@ -3932,6 +4006,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut inferred,
                     if explain {
                         &raw mut proof
@@ -4012,6 +4088,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4068,6 +4146,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4155,6 +4235,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     iris.as_ptr(),
                     documents.as_ptr(),
                     count,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -5048,6 +5130,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     &raw mut error,
@@ -5073,6 +5157,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_iris,
                     import_documents,
                     import_count,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),

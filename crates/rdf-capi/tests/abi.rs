@@ -8,6 +8,9 @@
 
 use std::ffi::CString;
 
+#[path = "abi/rule_coordinates.rs"]
+mod rule_coordinates;
+
 use sha2::{Digest, Sha256};
 
 use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
@@ -174,7 +177,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 14, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 15, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.

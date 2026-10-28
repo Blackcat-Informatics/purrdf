@@ -53,7 +53,7 @@ const KIND_NONE: i32 = -1;
 /// # Safety
 /// `now` must be null or a NUL-terminated C string live for the call.
 /// `entropy_seed` must be null or point to a readable, aligned `u64`.
-unsafe fn decode_coordinates(
+pub(crate) unsafe fn decode_coordinates(
     now: *const c_char,
     entropy_seed: *const u64,
 ) -> Result<CoordinateInputs, PurrdfError> {

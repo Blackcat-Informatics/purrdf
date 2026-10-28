@@ -137,7 +137,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.14.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.15.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -268,6 +268,14 @@ the IRI failure without parsing English. The error message and the record's
   Invalid coordinates preserve the dataset and untouched
   outcome/evidence outputs; budget exhaustion still publishes nothing. Caller
   input memory is not retained by the resulting dataset.
+
+  `0.14.0` → `0.15.0` adds independently nullable `now` and `entropy_seed`
+  pointers before the first output on both rule execution APIs and their XPath
+  variants. Rule application accepts either SHACL or SRL. Supplied time stays
+  exact, and the seed selects a reproducible sequence for the rule queries.
+  Outputs own their values; malformed coordinates leave non-error output slots untouched.
+  All four limits, import handling, proofs and diagnostics retain their contracts.
+  Static rule checking, validation and node-expression APIs are unchanged.
 
 ## Shapes-graph tools
 
