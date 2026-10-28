@@ -454,7 +454,7 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// [`ChaseError::BudgetExhausted`](purrdf_datalog::chase::ChaseError::BudgetExhausted)
     /// — carrying an accurate report. The one refusal that is about the CALCULUS rather
     /// than the input is
-    /// [`ChaseError::NonTerminating`](purrdf_datalog::chase::ChaseError::NonTerminating):
+    /// [`ChaseError::Termination`](purrdf_datalog::chase::ChaseError::Termination):
     /// the chase computes its own termination class from the clause set and runs only a
     /// program it certified, so a rule set whose position dependency graph puts an
     /// existential edge in a cycle is named rather than looped on. Neither declared lane

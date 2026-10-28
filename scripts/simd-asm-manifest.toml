@@ -3062,12 +3062,12 @@ summary = "`gallop_lower_bound` (in `Batch::subject_run`) and the owned `cycle::
 
 [[site]]
 id = "datalog.chase"
-summary = "`chase::chase_with`, the shared chase fixpoint reached by `chase_until`"
+summary = "`chase::execute`, the shared restricted-chase fixpoint reached by ordinary and prepared admission"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_datalog"
-  symbol = "purrdf_datalog::chase::chase_with"
+  symbol = "purrdf_datalog::chase::execute"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

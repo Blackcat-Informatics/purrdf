@@ -98,7 +98,7 @@ use std::sync::Arc;
 
 use purrdf_core::{BlankScope, DatasetView, RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::StopSignal;
-use purrdf_datalog::chase::{ChaseError, certify, chase_until};
+use purrdf_datalog::chase::{AnalysisLimits, ChaseError, TerminationError, certify_with};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
 use purrdf_datalog::store::RelationStore;
 
@@ -261,7 +261,7 @@ pub struct CombinedMaterialization {
 ///
 /// Propagates [`EntailError`] from the underlying reverse mapping or the restricted chase
 /// (an inconsistent knowledge base, a malformed class-expression graph, or — unreachable in
-/// practice since [`certify`] gates every call — a chase budget refusal).
+/// practice since [`certify_with`] gates every call — a chase budget refusal).
 pub fn materialize_combined<D: DatasetView>(
     ds: &D,
     query_bgp: &[QTriple],
@@ -290,92 +290,117 @@ pub fn materialize_combined_until<D: DatasetView>(
         let Some(clauses) = lower_horn_tbox(ds)? else {
             return Ok(None);
         };
-        if !certify(&clauses).is_certified() {
-            return Ok(None);
-        }
+        let certificate = match certify_with(
+            &clauses,
+            purrdf_lex::allocation::Resident,
+            AnalysisLimits::default(),
+            stop.map(|stop| &**stop as &dyn StopSignal),
+        ) {
+            Ok(certificate) => certificate,
+            Err(TerminationError::Uncertified(_)) => return Ok(None),
+            Err(error) => return Err(super::engine::chase_error(ChaseError::Termination(error))),
+        };
+        let prepared = certificate
+            .prepare(
+                &clauses,
+                AnalysisLimits::default(),
+                stop.map(|stop| &**stop as &dyn StopSignal),
+            )
+            .map_err(|error| super::engine::chase_error(ChaseError::Termination(error)))?;
 
-        // The whole-vocabulary augmentation of the NAMED part is unchanged: it is already
-        // proven exact for the distinguished-only decomposition, so it is reused rather than
-        // reimplemented. Its own report (regime, boundaries, budget) is reused as the combined
-        // report too, because the chase step below is a STRICT EXTENSION within a fragment this
-        // function already certified terminating — it adds facts, it never revokes the
-        // named-part guarantee the reused report already states.
-        let (named_dataset, report) = materialize_dl_reported_until(ds, query_bgp, stop)?;
+        let result = (|| {
+            // The whole-vocabulary augmentation of the NAMED part is unchanged: it is already
+            // proven exact for the distinguished-only decomposition, so it is reused rather than
+            // reimplemented. Its own report (regime, boundaries, budget) is reused as the combined
+            // report too, because the chase step below is a STRICT EXTENSION within a fragment this
+            // function already certified terminating — it adds facts, it never revokes the
+            // named-part guarantee the reused report already states.
+            let (named_dataset, report) = materialize_dl_reported_until(ds, query_bgp, stop)?;
 
-        if clauses.is_empty() {
-            // No existential axiom at all: there is nothing for the chase to add.
-            return Ok(Some(CombinedMaterialization {
-                dataset: named_dataset,
-                report,
-                surrogates: BTreeSet::new(),
-            }));
-        }
-
-        // Seed the restricted chase from the dataset's own default-graph facts, recording the
-        // surface -> value dictionary this run needs to read a NAMED term back afterward (a
-        // witness surface is looked up nowhere in it — see `resolve_surface`).
-        let mut by_surface: BTreeMap<String, TermValue> = BTreeMap::new();
-        let mut edb = RelationStore::new();
-        for quad in ds.quads() {
-            if quad.g.is_some() {
-                continue;
+            if clauses.is_empty() {
+                // No existential axiom at all: there is nothing for the chase to add.
+                return Ok(Some(CombinedMaterialization {
+                    dataset: named_dataset,
+                    report,
+                    surrogates: BTreeSet::new(),
+                }));
             }
-            let (s, p, o) = (
-                ds.term_value(quad.s)?,
-                ds.term_value(quad.p)?,
-                ds.term_value(quad.o)?,
-            );
-            let (ss, ps, os) = (surface_of(&s), surface_of(&p), surface_of(&o));
-            by_surface.entry(ss.clone()).or_insert(s);
-            by_surface.entry(ps.clone()).or_insert(p);
-            by_surface.entry(os.clone()).or_insert(o);
-            let _ = edb.insert(&ss, &ps, &os, RelationStore::DEFAULT_GRAPH);
-        }
 
-        let outcome = chase_until(&clauses, edb, stop.map(|stop| &**stop as &dyn StopSignal))
-            .map_err(|error| match error {
+            // Seed the restricted chase from the dataset's own default-graph facts, recording the
+            // surface -> value dictionary this run needs to read a NAMED term back afterward (a
+            // witness surface is looked up nowhere in it — see `resolve_surface`).
+            let mut by_surface: BTreeMap<String, TermValue> = BTreeMap::new();
+            let mut edb = RelationStore::new();
+            for quad in ds.quads() {
+                if quad.g.is_some() {
+                    continue;
+                }
+                let (s, p, o) = (
+                    ds.term_value(quad.s)?,
+                    ds.term_value(quad.p)?,
+                    ds.term_value(quad.o)?,
+                );
+                let (ss, ps, os) = (surface_of(&s), surface_of(&p), surface_of(&o));
+                by_surface.entry(ss.clone()).or_insert(s);
+                by_surface.entry(ps.clone()).or_insert(p);
+                by_surface.entry(os.clone()).or_insert(o);
+                let _ = edb.insert(&ss, &ps, &os, RelationStore::DEFAULT_GRAPH);
+            }
+
+            let outcome = prepared.chase_with(
+                edb,
+                &purrdf_datalog::seminaive::EvalOptions::default(),
+                stop.map(|stop| &**stop as &dyn StopSignal),
+            );
+            let outcome = outcome.map_err(|error| match error {
                 ChaseError::Stopped { .. } => EntailError::Stopped,
                 other => EntailError::Chase(other),
             })?;
-        let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
+            let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
 
-        let mut b = RdfDatasetBuilder::new();
-        b.push_dataset(&named_dataset)?;
-        let mut surrogates: BTreeSet<String> = BTreeSet::new();
-        let mut witness_terms: BTreeMap<String, TermValue> = BTreeMap::new();
+            let mut b = RdfDatasetBuilder::new();
+            b.push_dataset(&named_dataset)?;
+            let mut surrogates: BTreeSet<String> = BTreeSet::new();
+            let mut witness_terms: BTreeMap<String, TermValue> = BTreeMap::new();
 
-        for derivation in outcome.derivations() {
-            let fact = derivation.fact();
-            // A fact that touches no witness is already covered by `materialize_dl_reported`'s
-            // own (complete, tableau-backed) realization/classification injections over the
-            // named part — restating it here would be redundant, not wrong, but the whole point
-            // of this pass is the witness-bearing facts the named augmentation cannot state.
-            let touches_witness = [&fact.subject, &fact.predicate, &fact.object]
-                .into_iter()
-                .any(|s| witnesses.contains(s.as_str()));
-            if !touches_witness {
-                continue;
-            }
-            let s = resolve_surface(&fact.subject, &witnesses, &by_surface, &mut witness_terms);
-            let p = resolve_surface(&fact.predicate, &witnesses, &by_surface, &mut witness_terms);
-            let o = resolve_surface(&fact.object, &witnesses, &by_surface, &mut witness_terms);
-            for surface in [&fact.subject, &fact.object] {
-                if witnesses.contains(surface.as_str()) {
-                    surrogates.insert(witness_label(surface));
+            for derivation in outcome.derivations() {
+                let fact = derivation.fact();
+                // A fact that touches no witness is already covered by `materialize_dl_reported`'s
+                // own (complete, tableau-backed) realization/classification injections over the
+                // named part — restating it here would be redundant, not wrong, but the whole point
+                // of this pass is the witness-bearing facts the named augmentation cannot state.
+                let touches_witness = [&fact.subject, &fact.predicate, &fact.object]
+                    .into_iter()
+                    .any(|s| witnesses.contains(s.as_str()));
+                if !touches_witness {
+                    continue;
                 }
+                let s = resolve_surface(&fact.subject, &witnesses, &by_surface, &mut witness_terms);
+                let p =
+                    resolve_surface(&fact.predicate, &witnesses, &by_surface, &mut witness_terms);
+                let o = resolve_surface(&fact.object, &witnesses, &by_surface, &mut witness_terms);
+                for surface in [&fact.subject, &fact.object] {
+                    if witnesses.contains(surface.as_str()) {
+                        surrogates.insert(witness_label(surface));
+                    }
+                }
+                let s_id = intern_into(&mut b, &s)?;
+                let p_id = intern_into(&mut b, &p)?;
+                let o_id = intern_into(&mut b, &o)?;
+                b.push_quad(s_id, p_id, o_id, None)?;
             }
-            let s_id = intern_into(&mut b, &s)?;
-            let p_id = intern_into(&mut b, &p)?;
-            let o_id = intern_into(&mut b, &o)?;
-            b.push_quad(s_id, p_id, o_id, None)?;
-        }
 
-        let dataset = b.freeze().map_err(EntailError::from)?;
-        Ok(Some(CombinedMaterialization {
-            dataset,
-            report,
-            surrogates,
-        }))
+            let dataset = b.freeze().map_err(EntailError::from)?;
+            Ok(Some(CombinedMaterialization {
+                dataset,
+                report,
+                surrogates,
+            }))
+        })();
+        prepared
+            .close()
+            .map_err(|error| super::engine::chase_error(ChaseError::Termination(error)))?;
+        result
     })
     .map_err(EntailError::source_read)?
 }
@@ -639,7 +664,7 @@ mod tests {
             .expect("source read")
             .expect("recognized shape");
         assert_eq!(clauses.len(), 1);
-        assert!(certify(&clauses).is_certified());
+        assert!(purrdf_datalog::chase::certify(&clauses).is_ok());
     }
 
     /// The chase mints a witness typed `B` and `r`-related to `a` — the anonymous element
@@ -735,7 +760,7 @@ mod tests {
         let clauses = lower_horn_tbox(&ds)
             .expect("source read")
             .expect("syntactically recognized");
-        assert!(!certify(&clauses).is_certified());
+        assert!(purrdf_datalog::chase::certify(&clauses).is_err());
         assert!(
             materialize_combined(&ds, &[])
                 .expect("no chase error")

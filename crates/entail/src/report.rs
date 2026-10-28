@@ -81,10 +81,10 @@ use crate::rules::{RuleId, extensions, implemented, rules};
 ///
 /// `purrdf_datalog::chase::ChaseTermination` has two variants and only one of them can
 /// reach a report: an uncertified program is
-/// `ChaseError::NonTerminating` and produces no run at all. Storing that enum here would
+/// `ChaseError::Termination` and produces no run at all. Storing that enum here would
 /// put a variant in a report that no run can carry — the same unrepresentable-state
 /// question [`Completeness`] answers by deriving rather than storing — so the report
-/// carries the certified case's two numbers and there is no `Unbounded` value to read. Its
+/// carries the certified case's two numbers and there is no `Uncertified` value to read. Its
 /// fields are private and its one (crate-internal) constructor refuses the other variant,
 /// so an uncertified verdict has no way in even from inside this crate.
 ///
@@ -126,8 +126,8 @@ impl TerminationCertificate {
     /// The certificate `termination` states, or `None` if it certified nothing.
     ///
     /// The refusal case is unreachable from a completed run — `chase` returns
-    /// `ChaseError::NonTerminating` for it rather than an outcome — so this returning
-    /// `None` for `Unbounded` is what makes the type's invariant hold by construction
+    /// `ChaseError::Termination` for it rather than an outcome — so this returning
+    /// `None` for `Uncertified` is what makes the type's invariant hold by construction
     /// rather than by convention.
     pub(crate) const fn of_chase(termination: &ChaseTermination) -> Option<Self> {
         match termination {
@@ -138,7 +138,7 @@ impl TerminationCertificate {
                 positions: *positions,
                 existential_edges: *existential_edges,
             }),
-            ChaseTermination::Unbounded { .. } => None,
+            ChaseTermination::Uncertified { .. } => None,
         }
     }
 
@@ -1724,7 +1724,7 @@ impl ReasoningReport {
     /// # It can only ever be a certificate, and it is not always the same one
     ///
     /// The uncertified verdict never reaches here — an existential edge in a cycle is
-    /// `ChaseError::NonTerminating`, so the run produces no report to carry it — which is
+    /// `ChaseError::Termination`, so the run produces no report to carry it — which is
     /// why [`TerminationCertificate`] holds the certified case's numbers and no variant
     /// for the other. What the numbers say still varies: the certificate is a function of
     /// the CLAUSE SET, so the `RDF` lane's differs from the `RDFS` lane's, and a rule
