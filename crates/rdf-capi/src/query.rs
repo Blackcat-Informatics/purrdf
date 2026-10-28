@@ -1560,7 +1560,7 @@ unsafe fn update_governed_entry(
             )
             .map_err(|diagnostic| query_error(&diagnostic))?;
         match outcome {
-            GovernedUpdateOutcome::Applied { evidence } => {
+            GovernedUpdateOutcome::Applied { evidence, .. } => {
                 *out_outcome = PurrdfUpdateOutcomeKind::Applied as i32;
                 *out_evidence = encode_evidence(&evidence);
             }

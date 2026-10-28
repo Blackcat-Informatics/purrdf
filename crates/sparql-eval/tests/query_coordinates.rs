@@ -11,7 +11,8 @@ use purrdf_core::{
     TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions,
+    CancellationFlag, GovernedOutcome, NativeSparqlEngine, QueryCoordinates, QueryGovernors,
+    QueryOptions,
 };
 use purrdf_testkit::harness::without_host_clock_or_entropy;
 use purrdf_xsd::{XsdDatatype, XsdValue};
@@ -336,6 +337,14 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
         result.solutions().unwrap().1.to_vec()
     };
     let mut expected = None;
+    let check_receipt = |outcome: GovernedUpdateOutcome| {
+        assert!(outcome.is_applied());
+        let QueryCoordinates::Started(inputs) = outcome.coordinates() else {
+            panic!("the first WHERE constructed its context")
+        };
+        assert!(inputs.now().unwrap().same_representation(&now));
+        assert_eq!(inputs.entropy_seed(), Some(0));
+    };
     for lane in 0..3 {
         for _ in 0..2 {
             let mut dataset = Arc::clone(&original);
@@ -343,25 +352,23 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
                 0 => engine
                     .update_with_options(&mut dataset, request, options)
                     .unwrap(),
-                1 => assert!(matches!(
+                1 => check_receipt(
                     engine
                         .update_governed(&mut dataset, request, options, &QueryGovernors::METERED)
                         .unwrap(),
-                    GovernedUpdateOutcome::Applied { .. }
-                )),
+                ),
                 _ => {
                     let mut handle: purrdf_core::DatasetHandle = Arc::clone(&dataset).into();
-                    assert!(matches!(
+                    check_receipt(
                         engine
                             .update_governed_handle(
                                 &mut handle,
                                 request,
                                 options,
-                                &QueryGovernors::METERED
+                                &QueryGovernors::METERED,
                             )
                             .unwrap(),
-                        GovernedUpdateOutcome::Applied { .. }
-                    ));
+                    );
                     // Materialize only for inspection; the update has already published.
                     let mut builder = RdfDatasetBuilder::new();
                     builder.push_dataset(handle.as_ref()).unwrap();
@@ -434,6 +441,7 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
         )
     })
     .unwrap();
+    assert_eq!(stopped.coordinates(), &QueryCoordinates::NotStarted);
     assert!(matches!(
         stopped,
         GovernedUpdateOutcome::BudgetExhausted {
@@ -446,10 +454,116 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
     assert!(Arc::ptr_eq(&dataset, &original));
 }
 
+/// Receipt state follows actual WHERE construction, independently of mutation
+/// or whether each optional input was supplied.
+fn update_receipts_distinguish_contexts_and_independent_inputs() {
+    let now = purrdf_xsd::temporal::parse_datetime("-0001-02-03T04:05:06.125-04:00").unwrap();
+    for options in [
+        QueryOptions::EMPTY,
+        QueryOptions::EMPTY.with_now(&now),
+        QueryOptions::EMPTY.with_entropy_seed(0),
+    ] {
+        for (update, started) in [
+            (
+                "INSERT DATA { <https://example.org/s> <https://example.org/p> 1 }",
+                false,
+            ),
+            (
+                "CREATE GRAPH <https://example.org/g>; CLEAR ALL; LOAD SILENT <https://example.org/missing>",
+                false,
+            ),
+            (
+                "INSERT { <https://example.org/s> <https://example.org/p> ?o } WHERE { ?s ?p ?o }",
+                true,
+            ),
+            (
+                "INSERT { <https://example.org/s> <https://example.org/p> 1 } WHERE {}",
+                true,
+            ),
+        ] {
+            let mut dataset = RdfDatasetBuilder::new().freeze().unwrap();
+            let outcome = NativeSparqlEngine::new()
+                .update_governed(
+                    &mut dataset,
+                    SparqlRequest {
+                        query: update,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    options,
+                    &QueryGovernors::METERED,
+                )
+                .unwrap();
+            assert!(outcome.is_applied());
+            match outcome.coordinates() {
+                QueryCoordinates::NotStarted => assert!(!started),
+                QueryCoordinates::Started(inputs) => {
+                    assert!(started);
+                    assert_eq!(inputs.entropy_seed(), options.entropy_seed);
+                    assert_eq!(inputs.now().is_some(), options.now.is_some());
+                    if let Some(actual) = inputs.now() {
+                        assert!(actual.same_representation(&now));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// UPDATE's resident coordinate owner survives every producer and is physically
+/// released by the last receipt; it is not an external source admission claim.
+fn update_receipts_release_the_resident_owner_after_the_last_clone() {
+    let execute = || {
+        let now = purrdf_xsd::temporal::parse_datetime(&format!(
+            "-0001-02-03T04:05:06.{}-04:00",
+            "7".repeat(4096)
+        ))
+        .unwrap();
+        let mut dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let engine = NativeSparqlEngine::new();
+        let outcome = without_host_clock_or_entropy(|| engine.update_governed(
+            &mut dataset,
+            SparqlRequest {
+                query: "INSERT { <https://example.org/s> <https://example.org/p> ?r } WHERE { BIND(RAND() AS ?r) }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0),
+            &QueryGovernors::METERED,
+        )).unwrap();
+        let coordinates = outcome.coordinates().clone();
+        let QueryCoordinates::Started(inputs) = &coordinates else {
+            panic!("WHERE context")
+        };
+        assert!(inputs.now().unwrap().same_representation(&now));
+        assert_eq!(inputs.entropy_seed(), Some(0));
+        coordinates
+    };
+    // Initialize shared runtime machinery outside the measured lifecycle.
+    drop(execute());
+    for _ in 0..3 {
+        let lifecycle = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let coordinates = execute();
+        let held = lifecycle.close().retained_bytes;
+        assert!(held > 0);
+        let cloning = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let last = coordinates.clone();
+        let measured = cloning.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        drop(coordinates);
+        let release = purrdf_alloc_probe::CurrentThreadWindow::open();
+        drop(last);
+        assert_eq!(release.close().retained_bytes, -held);
+    }
+}
+
 purrdf_testkit::harness_main!(
     supplied_inputs_repeat_complete_results_without_host_reads,
     supplied_large_fraction_and_timezone_survive_repeated_now,
     prepared_executions_select_fresh_inputs_without_changing_the_plan,
     bounded_coordinate_owners_price_real_allocations_and_release_after_last_output,
     supplied_update_coordinates_replay_and_preserve_atomic_publication,
+    update_receipts_distinguish_contexts_and_independent_inputs,
+    update_receipts_release_the_resident_owner_after_the_last_clone,
 );

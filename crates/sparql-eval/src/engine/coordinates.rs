@@ -8,7 +8,9 @@ use crate::{EvalError, WorkspaceCapability};
 use purrdf_lex::allocation::{Memory, SharedOwned};
 use purrdf_xsd::{XsdValue, temporal::DateTime};
 
-/// Supplied coordinates retained by one native governed query outcome or evidence.
+/// Supplied coordinates retained by one native governed query or UPDATE outcome,
+/// or query evidence. UPDATE records its first constructed WHERE context;
+/// operations without a WHERE context do not start this receipt.
 /// This is not a query, source or snapshot identity. Missing supplied inputs
 /// make no claim about sampled defaults. Clones share the original admitted
 /// timestamp coefficient; they allocate no replacement storage or owner.
@@ -53,7 +55,7 @@ impl PartialEq for SuppliedQueryCoordinates {
 impl Eq for SuppliedQueryCoordinates {}
 
 impl QueryCoordinates {
-    pub(super) fn started(
+    pub(crate) fn started(
         now: &XsdValue,
         seed: u64,
         supplied_now: bool,

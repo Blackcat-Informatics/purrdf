@@ -29,7 +29,17 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
-## Native governed query coordinates
+## Native governed query and UPDATE coordinates
+
+`GovernedUpdateOutcome::Applied` and `BudgetExhausted` also carry
+`coordinates: QueryCoordinates`, exposed by `coordinates()`. Update exhaustive
+patterns. The receipt captures the first constructed WHERE context's exact
+supplied time and initial request seed, before any random draws; later operations
+do not replace it with the advanced stream. It survives rollback and the final
+publication stop. Data-only, LOAD and graph operations do not construct a WHERE
+context, so their receipt is `NotStarted`, even when coordinates were supplied.
+UPDATE retains its resident timestamp owner; it makes no external source-admission
+claim. Bare diagnostics and host output formats retain their existing contracts.
 
 `GovernedOutcome::Complete`, `InternedGoverned::Complete`, `BudgetExhausted`
 and `GovernedEvidence` now carry `coordinates: QueryCoordinates`. Update

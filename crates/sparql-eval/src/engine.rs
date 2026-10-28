@@ -2856,7 +2856,14 @@ impl NativeSparqlEngine {
             governors: Some(&state),
             options,
         };
-        let tripped = match eval_update(&update, &mut m, self.load_resolver(options), &cfg) {
+        let mut coordinates = QueryCoordinates::NotStarted;
+        let tripped = match eval_update(
+            &update,
+            &mut m,
+            self.load_resolver(options),
+            &cfg,
+            Some(&mut coordinates),
+        ) {
             // A request that ran to the end still does not publish while a trip is latched
             // on the state. The two are normally the same fact — every site that observes a
             // governor also aborts the request — but "normally" is the wrong strength for
@@ -2886,11 +2893,13 @@ impl NativeSparqlEngine {
                     return Ok(GovernedUpdateOutcome::BudgetExhausted {
                         tripped,
                         evidence: state.evidence(),
+                        coordinates,
                     });
                 }
                 publish(frozen);
                 Ok(GovernedUpdateOutcome::Applied {
                     evidence: state.evidence(),
+                    coordinates,
                 })
             }
             Some(tripped) => {
@@ -2900,6 +2909,7 @@ impl NativeSparqlEngine {
                 Ok(GovernedUpdateOutcome::BudgetExhausted {
                     tripped,
                     evidence: state.evidence(),
+                    coordinates,
                 })
             }
         }
@@ -2973,7 +2983,7 @@ impl NativeSparqlEngine {
             governors: None,
             options,
         };
-        match eval_update(&update, &mut m, self.load_resolver(options), &cfg) {
+        match eval_update(&update, &mut m, self.load_resolver(options), &cfg, None) {
             Ok(()) => {}
             Err(UpdateAbort::Failed(diagnostic)) => {
                 return publication.finish(Err(diagnostic), |_| true);
