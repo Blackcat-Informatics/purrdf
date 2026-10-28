@@ -258,7 +258,6 @@ function normalizeProvenanceNamespace(value) {
 }
 
 function normalizeQueryOptions(options) {
-  refuseSynchronousCoordinates(options);
   if (options == null) {
     return {
       base: undefined,
@@ -294,11 +293,12 @@ function normalizeQueryOptions(options) {
     provenancePrefix,
     provenanceIri,
     xpathRegex: normalizeXpathRegex(options.xpathRegex),
+    now: options.now ?? undefined,
+    entropySeed: options.entropySeed ?? undefined,
   };
 }
 
 function normalizeGovernedOptions(options) {
-  refuseSynchronousCoordinates(options);
   if (options == null) {
     return { base: undefined, aggregateNamespace: undefined, xpathRegex: undefined };
   }
@@ -313,6 +313,8 @@ function normalizeGovernedOptions(options) {
     base: options.base ?? undefined,
     aggregateNamespace: normalizeAggregateNamespace(options.aggregateNamespace),
     xpathRegex: normalizeXpathRegex(options.xpathRegex),
+    now: options.now ?? undefined,
+    entropySeed: options.entropySeed ?? undefined,
     fuel: governorCeiling(options.fuel, "fuel"),
     deadlineMs: governorCeiling(options.deadlineMs, "deadlineMs"),
     maxAnswers: governorCeiling(options.maxAnswers, "maxAnswers"),
@@ -329,12 +331,22 @@ function normalizeGovernedOptions(options) {
   };
 }
 
-function refuseSynchronousCoordinates(options) {
+function refuseUpdateCoordinates(options) {
   for (const key of ["now", "entropySeed"]) {
     if (options?.[key] != null) {
-      throw new TypeError(`query option ${key} is supported only by asynchronous query calls`);
+      throw new TypeError(`UPDATE option ${key} is not supported`);
     }
   }
+}
+
+function normalizeUpdateOptions(options) {
+  refuseUpdateCoordinates(options);
+  return normalizeQueryOptions(options);
+}
+
+function normalizeGovernedUpdateOptions(options) {
+  refuseUpdateCoordinates(options);
+  return normalizeGovernedOptions(options);
 }
 
 function normalizeEntailmentGovernedOptions(options) {
@@ -1249,32 +1261,32 @@ export async function ready(wasmBytesOrUrl) {
       wasmSetGeoSession.call(this, session);
     };
     QueryEngine.prototype.query = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
-      return queryResultToObject(wasmQuery.call(this, dataset, sparql, base, xpathRegex));
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      return queryResultToObject(wasmQuery.call(this, dataset, sparql, base, xpathRegex, now, entropySeed));
     };
     QueryEngine.prototype.select = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
-      return selectResultToObject(wasmSelect.call(this, dataset, sparql, base, xpathRegex));
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      return selectResultToObject(wasmSelect.call(this, dataset, sparql, base, xpathRegex, now, entropySeed));
     };
     QueryEngine.prototype.ask = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
-      return wasmAsk.call(this, dataset, sparql, base, xpathRegex);
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      return wasmAsk.call(this, dataset, sparql, base, xpathRegex, now, entropySeed);
     };
     QueryEngine.prototype.construct = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
-      return wasmConstruct.call(this, dataset, sparql, base, xpathRegex);
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      return wasmConstruct.call(this, dataset, sparql, base, xpathRegex, now, entropySeed);
     };
     QueryEngine.prototype.describe = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
-      return wasmDescribe.call(this, dataset, sparql, base, xpathRegex);
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      return wasmDescribe.call(this, dataset, sparql, base, xpathRegex, now, entropySeed);
     };
     QueryEngine.prototype.update = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
+      const { base, xpathRegex } = normalizeUpdateOptions(options);
       wasmUpdate.call(this, dataset, sparql, base, xpathRegex);
       return dataset;
     };
     QueryEngine.prototype.queryRaw = function (dataset, sparql, options) {
-      const { base, format, provenancePrefix, provenanceIri, xpathRegex } =
+      const { base, format, provenancePrefix, provenanceIri, xpathRegex, now, entropySeed } =
         normalizeQueryOptions(options);
       return wasmQueryRaw.call(
         this,
@@ -1285,6 +1297,8 @@ export async function ready(wasmBytesOrUrl) {
         provenancePrefix,
         provenanceIri,
         xpathRegex,
+        now,
+        entropySeed,
       );
     };
     QueryEngine.prototype.queryGoverned = function (dataset, sparql, options) {
@@ -1305,6 +1319,8 @@ export async function ready(wasmBytesOrUrl) {
           o.cancel,
           o.noCeiling,
           o.xpathRegex,
+          o.now,
+          o.entropySeed,
         ),
       );
     };
@@ -1339,6 +1355,8 @@ export async function ready(wasmBytesOrUrl) {
           o.cancel,
           o.noCeiling,
           o.xpathRegex,
+          o.now,
+          o.entropySeed,
         ),
       );
     };
@@ -1346,7 +1364,7 @@ export async function ready(wasmBytesOrUrl) {
       // `maxAnswers` is forwarded rather than dropped: an UPDATE has no answer sequence to
       // bound, and Rust refuses it by name. Silently ignoring it here would be a ceiling
       // the caller believes they set.
-      const o = normalizeGovernedOptions(options);
+      const o = normalizeGovernedUpdateOptions(options);
       return updateOutcomeToObject(
         wasmUpdateGoverned.call(
           this,
@@ -1367,8 +1385,8 @@ export async function ready(wasmBytesOrUrl) {
       );
     };
     QueryEngine.prototype.explainQuery = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeQueryOptions(options);
-      return wasmExplainQuery.call(this, dataset, sparql, base, xpathRegex);
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      return wasmExplainQuery.call(this, dataset, sparql, base, xpathRegex, now, entropySeed);
     };
     QueryEngine.prototype.__purrdfPackageRootApi = true;
   }

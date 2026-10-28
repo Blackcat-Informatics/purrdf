@@ -16,7 +16,6 @@ engine.queryEntailmentGovernedAsync(dataset, "SELECT * WHERE {}", "rdfs", coordi
 engine.explainQueryAsync(dataset, "SELECT * WHERE {}", coordinates);
 dataset.queryAsync("SELECT * WHERE {}", coordinates);
 handleSparqlRequest(new Request("https://example.org/query"), { engine, dataset, governors: { deadlineMs: 1000 }, ...coordinates });
-// @ts-expect-error Synchronous queries do not advertise coordinate inputs yet.
 engine.query(dataset, "SELECT * WHERE {}", { entropySeed: 0n });
 // @ts-expect-error UPDATE coordinates are outside the async query interface.
 engine.updateGovernedAsync(dataset, "INSERT DATA {}", { now: "2000-01-01T00:00:00Z" });

@@ -3606,7 +3606,7 @@ impl OptionsError {
         }
     }
 
-    fn to_js(&self) -> JsValue {
+    pub(crate) fn to_js(&self) -> JsValue {
         if self.type_error {
             coded_type_error(&self.message, OPTIONS_CODE)
         } else {
@@ -3713,9 +3713,7 @@ fn read_option(
                 "query option {key} must be a boolean when supplied"
             ))
         }),
-        OptionShape::Text => value.as_string().map(OptionValue::Text).ok_or_else(|| {
-            OptionsError::type_error(format!("query option {key} must be a string when supplied"))
-        }),
+        OptionShape::Text => read_text(key, value).map(OptionValue::Text),
         OptionShape::Count => value.as_f64().map(OptionValue::Count).ok_or_else(|| {
             OptionsError::type_error(format!("query option {key} must be a number when supplied"))
         }),
@@ -3818,9 +3816,16 @@ fn read_text_list(key: &str, value: &JsValue) -> Result<Vec<String>, OptionsErro
         .collect()
 }
 
+/// Read a string option without invoking JavaScript coercion.
+pub(crate) fn read_text(key: &str, value: &JsValue) -> Result<String, OptionsError> {
+    value.as_string().ok_or_else(|| {
+        OptionsError::type_error(format!("query option {key} must be a string when supplied"))
+    })
+}
+
 /// Read an evaluation-limit option: a non-negative integer as a `bigint`, or as a `number`
 /// widened exactly.
-fn read_limit(key: &str, value: &JsValue) -> Result<u64, OptionsError> {
+pub(crate) fn read_limit(key: &str, value: &JsValue) -> Result<u64, OptionsError> {
     let refused = || {
         OptionsError::type_error(format!(
             "query option {key} must be a non-negative integer (bigint or number)"
@@ -6530,7 +6535,7 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         assert!(job.is_finished());
         let expected = engine
-            .query_raw(&dataset, SELECT, None, None, None, None, None)
+            .query_raw(&dataset, SELECT, None, None, None, None, None, None, None)
             .expect("sync twin");
         assert_eq!(raw_text(&job), expected);
         let evidence = job.take_evidence();
@@ -6692,7 +6697,7 @@ mod tests {
         );
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
-            .query_raw(&dataset, &silent, None, None, None, None, None)
+            .query_raw(&dataset, &silent, None, None, None, None, None, None, None)
             .expect("sync twin");
         assert_eq!(
             raw_text(&job),
@@ -6809,7 +6814,7 @@ mod tests {
         );
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
-            .explain_query(&dataset, SELECT, None, None)
+            .explain_query(&dataset, SELECT, None, None, None, None)
             .expect("sync twin");
         assert_eq!(raw_text(&job), expected);
         assert!(
@@ -8141,7 +8146,9 @@ mod tests {
                             None,
                             None,
                             None,
-                            law.map(str::to_owned)
+                            law.map(str::to_owned),
+                            None,
+                            None
                         )
                         .expect("sync twin"),
                     "raw {what}"

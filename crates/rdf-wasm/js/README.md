@@ -232,17 +232,20 @@ ownership, and all limits. Complete examples are in
   Kept scope labels are deterministic: inserting the returned terms into a new
   dataset, serializing and parsing preserves the same blank identity, including
   blank nodes inside quoted triple terms.
-- Asynchronous query coordinates — `now` accepts an exact native `xsd:dateTime`
+- Query coordinates — `now` accepts an exact native `xsd:dateTime`
   string, retaining fractional seconds and its declared timezone. `entropySeed`
   accepts an unsigned 64-bit `bigint` or a non-negative safe integral `number`;
   zero is a supplied seed. Each omitted field selects a fresh native default per
-  begun job. These inputs reach every async query, raw/context, governed,
-  entailment, negotiated and explain route, including `Dataset.queryAsync`.
+  execution. These inputs reach synchronous and async query, raw/context, governed,
+  entailment and explain routes, and async negotiated output. `Dataset.query` takes
+  `now` and `entropySeed` after its existing base and XPath arguments;
+  `queryRawConfigured` and `queryRawWithContext` also append these two arguments.
+  `Dataset.queryAsync` takes them in its options object. The playground Worker
+  query message forwards both controls without changing its synchronous execution.
   A suspended job retains its inputs and random stream independently of other
   jobs. The Cloudflare handler accepts the same options for queries and returns
   status 400 for UPDATE requests when query coordinates are configured.
-  Synchronous package query calls and async UPDATE/SHACL calls refuse these
-  controls. The inputs do not add an execution receipt or change provenance.
+  UPDATE and asynchronous SHACL calls refuse these controls. The inputs do not add an execution receipt or change provenance.
 - `xpathRegex` — every evaluating `QueryEngine` method and its asynchronous twin accept
   this option: the stable name of the dated native XPath law `REGEX` and `REPLACE`
   evaluate under, `"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"` (typed as

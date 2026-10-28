@@ -31,6 +31,26 @@ has three input statements; native Rust owns capacity-scale correctness.
 
 ## Audited focused execution
 
+The optimized package's `sync-coordinates.test.mjs` selects three host-interface
+cases, and the assembled playground selects its named Worker case:
+
+| Exact case | Concrete host obligation |
+| --- | --- |
+| `synchronous coordinates cross every query export and package output` | Every synchronous wrapper and direct positional signature transports exact strings and unsigned seeds through wasm-bindgen; supplied seeds avoid the host entropy import |
+| `synchronous positional coordinates are checked and UPDATE controls are refused` | Every raw query export checks JavaScript strings and BigInt/number values through shared host readers; errors retain their host type/code and unsupported UPDATE options are refused |
+| `synchronous omitted coordinates use fresh independent host defaults` | Omitted and null controls reach actual host clock/entropy imports per execution; independently supplied inputs suppress only their own default |
+| `playground synchronous query messages forward exact coordinates and errors` | The assembled Worker's structured-clone message carries BigInts and exact strings into the synchronous package and returns host exceptions without mutating its dataset |
+
+Run the three named package cases with `node --test --test-name-pattern` against
+fresh `make wasm-pkg` output. Run only the named Worker case from
+`docs/playground/smoke/sync-coordinates.test.mjs`, with `PLAYGROUND_OUT` naming the
+`make playground` assembly, or a local host-test fixture containing unchanged
+`engine.worker.mjs` and the actual package's `index.mjs`, `package.json` and `pkg/`
+in the same copy layout. That fixture proves the Worker interface, not site
+packaging or compiler/license provenance; the hosted Docs job must still pass
+the complete playground gates. `sync-coordinates.types.ts` checks query signatures
+and UPDATE exclusions without executing native semantics on WASM.
+
 The optimized package's `async-coordinates.test.mjs` selects these host-interface
 cases exactly; native Rust retains timestamp parsing and random-stream semantics:
 

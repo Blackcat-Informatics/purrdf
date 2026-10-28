@@ -129,7 +129,10 @@ export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
  */
 export type ShaclLaw = "shacl-rec-2017-07-20" | "shacl-wd-2026-09-18" | "shacl-ed-2026-10-16";
 
-export interface QueryOptions {
+export interface QueryOptions extends UpdateOptions, QueryCoordinateOptions {}
+
+/** Options supported by synchronous UPDATE calls. */
+export interface UpdateOptions {
   readonly base?: string | null;
   /**
    * The dated native XPath law `REGEX` and `REPLACE` evaluate under, by its stable name.
@@ -184,6 +187,9 @@ export interface GovernedQueryOptions
   extends QueryOptions,
     GovernorOptions,
     AggregateNamespaceOption {}
+
+export interface GovernedUpdateOptions
+  extends UpdateOptions, GovernorOptions, AggregateNamespaceOption {}
 
 export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
@@ -791,7 +797,7 @@ export class Dataset implements Iterable<Quad> {
    * `xpathRegex` selects the dated native XPath law `REGEX`/`REPLACE` evaluate under, as
    * {@link QueryOptions.xpathRegex} does.
    */
-  query(sparql: string, base?: string | null, xpathRegex?: XPathRegexLaw | null): string;
+  query(sparql: string, base?: string | null, xpathRegex?: XPathRegexLaw | null, now?: string | null, entropySeed?: bigint | number | null): string;
   /**
    * The asynchronous twin of `query`: the same document (SPARQL Results JSON for
    * SELECT/ASK, Turtle — TriG for a result carrying a named graph — for
@@ -1131,7 +1137,7 @@ export class QueryEngine {
   ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): boolean;
   construct(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
   describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
-  update(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
+  update(dataset: Dataset, sparql: string, options?: UpdateOptions | null): Dataset;
   queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): string;
   /**
    * Run a SPARQL query under caller-supplied execution governors.
@@ -1183,7 +1189,7 @@ export class QueryEngine {
   updateGoverned(
     dataset: Dataset,
     sparql: string,
-    options?: GovernedQueryOptions | null,
+    options?: GovernedUpdateOptions | null,
   ): UpdateOutcome;
   /**
    * The engine's charge ledger for a query, rendered as text: the join orders it chose,
@@ -1199,6 +1205,8 @@ export class QueryEngine {
     format: "jsonld" | "yamlld" | string,
     optionsJson: string,
     xpathRegex?: XPathRegexLaw | null,
+    now?: string | null,
+    entropySeed?: bigint | number | null,
   ): string;
   queryRawWithContext(
     dataset: Dataset,
@@ -1208,6 +1216,8 @@ export class QueryEngine {
     context: CompiledJsonLdContext,
     yamlSchemaUrl?: string | null,
     xpathRegex?: XPathRegexLaw | null,
+    now?: string | null,
+    entropySeed?: bigint | number | null,
   ): string;
 
   // The asynchronous twins. Each runs the operation its synchronous twin runs, over a
@@ -1746,7 +1756,7 @@ export interface AsyncHostOptions {
   readonly cancel?: never;
 }
 
-/** Caller inputs for an asynchronous query; omitted fields select fresh native defaults per job. */
+/** Caller inputs for a query; omitted fields select fresh native defaults per execution. */
 export interface QueryCoordinateOptions {
   /** Exact native xsd:dateTime, including fractional seconds and the declared timezone. */
   readonly now?: string | null;
@@ -1793,7 +1803,7 @@ export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
   readonly maxTermArenaBytes?: bigint | number | null;
 }
 
-export interface AsyncUpdateOptions extends QueryOptions, AsyncHostOptions {}
+export interface AsyncUpdateOptions extends UpdateOptions, AsyncHostOptions {}
 
 export interface AsyncNegotiatedQueryOptions extends AsyncGovernedQueryOptions {
   /** The client's `Accept` header; absent means the SPARQL Protocol defaults. */
