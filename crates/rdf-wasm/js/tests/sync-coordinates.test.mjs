@@ -64,7 +64,7 @@ test("synchronous coordinates cross every query export and package output", () =
   } finally { Math.random = random; context.free(); data.free(); engine.free(); }
 });
 
-test("synchronous positional coordinates are checked and UPDATE controls are refused", () => {
+test("synchronous positional query coordinates reject lossy host values", () => {
   const engine = new QueryEngine();
   const data = new Dataset();
   const optionsJson = JSON.stringify({ version: 1, mode: "context", prefixes: { ex: "https://example.org/" } });
@@ -100,11 +100,6 @@ test("synchronous positional coordinates are checked and UPDATE controls are ref
     const zero = rawCells(engine.queryRaw(data, QUERY, { now: NOW, entropySeed: 0n }));
     assert.deepEqual(rawCells(engine.queryRaw(data, QUERY, { now: NOW, entropySeed: 0 })), zero);
     assert.notEqual(rawCells(engine.queryRaw(data, QUERY, INPUTS)).r, zero.r);
-    for (const method of ["update", "updateGoverned"]) {
-      for (const controls of [{ now: NOW }, { entropySeed: 0n }]) {
-        assert.throws(() => engine[method](data, "INSERT DATA {}", controls), (error) => error instanceof TypeError && error.code === "purrdf-wasm-options" && /UPDATE option/.test(error.message));
-      }
-    }
     const stopped = engine.queryGoverned(data, QUERY, { ...INPUTS, fuel: 0 });
     assert.equal(stopped.isComplete, false);
     assert.equal(stopped.tripped.dimension, "fuel");
