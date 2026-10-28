@@ -2307,3 +2307,26 @@ non-pass is a typed, ledgered expected-failure. See
 [Conformance & Testing](../project/conformance.md) and
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)
 for the live matrix.
+
+## Supplied query time and entropy
+
+The CLI accepts `purrdf query --now XSD_DATE_TIME --entropy-seed U64`.
+`--now` supplies the value of `NOW()`, retaining exact fractional seconds and
+the declared timezone under the native `xsd:dateTime` contract.
+`--entropy-seed` supplies the unsigned 64-bit seed for `RAND()`, `UUID()` and
+`STRUUID()`; zero is valid. Either flag may be omitted, leaving that input to
+the native host clock or entropy source. Repeating a seed alone does not fix
+the query time.
+
+Both controls apply to ordinary, governed, `--explain` and `--entailment`
+queries over text and pack sources. Invalid inputs are usage errors before
+query data, imports or rules are read; global profile and JSON-LD setup retain
+their existing precedence. Governor limits and partial-result behavior remain
+in force.
+
+These are supplied execution inputs, not a returned execution receipt. The
+optional provenance `query_hash` continues to identify only the exact query
+text, independently of these inputs and the dataset. Hosts decode the strings
+through `purrdf_validate::query::CoordinateInputs`; applying that owner replaces
+both coordinate selections, clears omitted selections to native defaults and
+preserves unrelated query options.

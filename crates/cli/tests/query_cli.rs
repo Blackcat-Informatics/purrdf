@@ -3262,3 +3262,176 @@ fn parse_refusals_render_each_condition_in_its_exact_words() {
         assert!(out.status.success(), "{query}: {}", stderr(&out));
     }
 }
+
+/// Supplied inputs reach the real executable and remain independent across views
+/// and execution routes, including the reasoner's options rebinding.
+#[test]
+fn supplied_coordinates_replay_across_query_routes_and_sources() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let ttl = write_file(dir.path(), "coordinates.ttl", DATA_TTL);
+    let pack = write_file(dir.path(), "coordinates.purrpck", "");
+    let built = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
+    let other_time = "2021-02-03T04:05:06.98765432109876543210987654321-04:00";
+    let query = "SELECT (NOW() AS ?now) (RAND() AS ?rand) (UUID() AS ?uuid) \
+                 (STRUUID() AS ?str) WHERE { ?s <http://example.org/knows> ?o }";
+    let answer = |source: &str, now: Option<&str>, seed: Option<&str>, lane: &[&str]| {
+        let mut args = vec!["query", "--data", source, "--results-format", "tsv"];
+        if let Some(now) = now {
+            args.extend(["--now", now]);
+        }
+        if let Some(seed) = seed {
+            args.extend(["--entropy-seed", seed]);
+        }
+        args.extend_from_slice(lane);
+        args.push(query);
+        let out = run(&args);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let body = stdout(&out);
+        let lines: Vec<_> = body.lines().collect();
+        assert_eq!(lines.len(), 2, "one real source row: {body}");
+        lines[1].split('\t').map(str::to_owned).collect::<Vec<_>>()
+    };
+    let first = answer(&ttl, Some(time), Some("0"), &[]);
+    assert_eq!(first.len(), 4);
+    assert!(first[0].contains(time), "exact time: {first:?}");
+    assert!(first[2].contains("urn:uuid:"));
+    for source in [&ttl, &pack] {
+        for lane in [
+            &[][..],
+            &["--fuel", "1000000"][..],
+            &["--entailment", "rdfs"][..],
+        ] {
+            assert_eq!(answer(source, Some(time), Some("0"), lane), first);
+        }
+    }
+    let changed_time = answer(&ttl, Some(other_time), Some("0"), &[]);
+    assert!(changed_time[0].contains(other_time));
+    assert_eq!(changed_time[1..], first[1..]);
+    let changed_seed = answer(&ttl, Some(time), Some("1"), &[]);
+    assert_eq!(changed_seed[0], first[0]);
+    for column in 1..4 {
+        assert_ne!(changed_seed[column], first[column]);
+    }
+    let time_only = answer(&ttl, Some(time), None, &[]);
+    assert_eq!(time_only[0], first[0]);
+    assert!(time_only.iter().all(|cell| !cell.is_empty()));
+    let seed_only = answer(&ttl, None, Some("0"), &[]);
+    assert_eq!(seed_only[1..], first[1..]);
+    assert!(!seed_only[0].is_empty());
+
+    // EXPLAIN executes the same filter. Its actual rows observe both inputs,
+    // rather than merely accepting flags or including them in plan text.
+    let random = first[1].split('"').nth(1).expect("typed RAND literal");
+    let explain_query = format!(
+        "SELECT ?s WHERE {{ ?s <http://example.org/knows> ?o \
+         FILTER(NOW() = \"{time}\"^^<http://www.w3.org/2001/XMLSchema#dateTime> \
+         && RAND() = {random}) }}"
+    );
+    for (now, seed, rows) in [(time, "0", "1"), (other_time, "0", "0"), (time, "1", "0")] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--explain",
+            "--now",
+            now,
+            "--entropy-seed",
+            seed,
+            &explain_query,
+        ]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let body = stdout(&out);
+        let filter = body
+            .lines()
+            .find(|line| line.contains(" Filter "))
+            .expect("executed filter ledger");
+        assert!(filter.contains(&format!(" rows={rows} ")), "{body}");
+    }
+}
+
+/// Invalid supplied inputs fail by flag before query data is opened. Coordinate
+/// controls do not suppress a governor refusal or change query-text provenance.
+#[test]
+fn supplied_coordinates_preserve_errors_governors_and_query_text_identity() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let missing = dir.path().join("missing.ttl");
+    let missing = missing.to_str().expect("utf8 path");
+    for (flag, value) in [
+        ("--now", "not-a-date"),
+        ("--entropy-seed", "-1"),
+        ("--entropy-seed", "18446744073709551616"),
+    ] {
+        let out = run(&["query", "--data", missing, flag, value, "ASK {}"]);
+        assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+        assert!(stderr(&out).contains(flag));
+        assert!(!stderr(&out).contains("missing.ttl"));
+    }
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let query = "SELECT (NOW() AS ?now) (RAND() AS ?rand) WHERE { ?s ?p ?o }";
+    let refused = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--now",
+        "2020-01-01T00:00:00Z",
+        "--entropy-seed",
+        "0",
+        "--fuel",
+        "0",
+        query,
+    ]);
+    assert_eq!(refused.status.code(), Some(3), "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("fuel-exhausted"));
+    let full_args = [
+        "query",
+        "--data",
+        &ttl,
+        "--now",
+        "2020-01-01T00:00:00Z",
+        "--entropy-seed",
+        "0",
+        "--results-format",
+        "tsv",
+        query,
+    ];
+    let whole = run(&full_args);
+    assert!(whole.status.success(), "{}", stderr(&whole));
+    let mut capped_args = full_args[..full_args.len() - 1].to_vec();
+    capped_args.extend(["--max-answers", "1", query]);
+    let capped = run(&capped_args);
+    assert_eq!(capped.status.code(), Some(3), "{}", stderr(&capped));
+    let whole_body = stdout(&whole);
+    assert_eq!(whole_body.lines().count(), 3, "two source rows");
+    assert_eq!(
+        stdout(&capped).lines().collect::<Vec<_>>(),
+        whole_body.lines().take(2).collect::<Vec<_>>()
+    );
+    let report = stderr(&capped);
+    assert!(report.contains("tripped answer-cap-exhausted"));
+    assert!(report.contains("answers certain") && report.contains("positional-prefix true"));
+    let namespace =
+        purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("namespace");
+    let mut hashes = Vec::new();
+    for (now, seed) in [("2020-01-01T00:00:00Z", "0"), ("2021-01-01T00:00:00Z", "1")] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--now",
+            now,
+            "--entropy-seed",
+            seed,
+            "--provenance-namespace",
+            "prov=https://example.org/ns/prov#",
+            query,
+        ]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let provenance = purrdf_sparql_results::provenance_from_json(&out.stdout, &namespace)
+            .expect("provenance");
+        hashes.push(provenance.query_hash.expect("query-text hash"));
+    }
+    assert_eq!(hashes[0], hashes[1]);
+}

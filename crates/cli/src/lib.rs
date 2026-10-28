@@ -361,6 +361,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             path_relation,
             xpath_regex,
             division,
+            now,
+            entropy_seed,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -395,6 +397,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 path_relations: path_relation,
                 xpath_regex: *xpath_regex,
                 division: division.unwrap_or_default(),
+                now: now.as_deref(),
+                entropy_seed: entropy_seed.as_deref(),
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),

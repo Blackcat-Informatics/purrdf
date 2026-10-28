@@ -727,6 +727,14 @@ pub(crate) enum Command {
         /// Omitted, exact when terminating or eighteen digits rounded half to even.
         #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
         division: Option<purrdf_sparql_eval::DivisionPolicy>,
+        /// Supply the exact `xsd:dateTime` returned by NOW(), including its fraction
+        /// and timezone. Omitted, execution samples the host clock.
+        #[arg(long, value_name = "XSD_DATE_TIME")]
+        now: Option<String>,
+        /// Supply the unsigned 64-bit seed for RAND(), UUID() and STRUUID().
+        /// Zero is valid. Omitted, execution samples host entropy.
+        #[arg(long, value_name = "U64", allow_hyphen_values = true)]
+        entropy_seed: Option<String>,
         /// The SPARQL query text.
         query: String,
     },
