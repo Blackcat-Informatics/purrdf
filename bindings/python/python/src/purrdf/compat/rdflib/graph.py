@@ -1205,6 +1205,8 @@ class Graph:
         extension_namespaces: list[str] | None = None,
         standpoint_predicates: tuple[str, str] | None = None,
         xpath_regex: str | None = None,
+        now: str | None = None,
+        entropy_seed: int | None = None,
         **kwargs: object,
     ) -> None:
         """Run a SPARQL UPDATE against this graph.
@@ -1217,6 +1219,9 @@ class Graph:
         ``xpath_regex`` are the native engine configuration knobs (see
         ``Store.update``) and are forwarded verbatim. Any other keyword is a param the native surface
         genuinely cannot honor, so it raises rather than being swallowed.
+        ``now`` and ``entropy_seed`` select exact request coordinates. Native
+        decoding precedes snapshots and execution, after the nonmutating prefix
+        and bindings preprocessing above.
         """
         if kwargs:
             raise TypeError(
@@ -1232,6 +1237,8 @@ class Graph:
             extension_namespaces=extension_namespaces,
             standpoint_predicates=standpoint_predicates,
             xpath_regex=xpath_regex,
+            now=now,
+            entropy_seed=entropy_seed,
         )
         self._reconcile_literal_terms()
 
