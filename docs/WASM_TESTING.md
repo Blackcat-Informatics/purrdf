@@ -31,6 +31,21 @@ has three input statements; native Rust owns capacity-scale correctness.
 
 ## Audited focused execution
 
+The optimized package's `async-coordinates.test.mjs` selects these host-interface
+cases exactly; native Rust retains timestamp parsing and random-stream semantics:
+
+| Exact package case | Concrete host obligation |
+| --- | --- |
+| `async coordinates cross every query kind and output alias` | JavaScript options reach all seven async operation kinds and typed/raw/context aliases; exact strings and unsigned BigInts cross wasm-bindgen; supplied seeds avoid the actual host entropy import |
+| `async coordinates reject lossy host inputs and unsupported routes` | Checked JavaScript number/BigInt transport, host exceptions and explicit unsupported-interface refusal |
+| `async coordinate owners survive real suspension and interleaved jobs` | JSPI suspension retains owned coordinates after options handles are freed and another job runs |
+| `async jobs select omitted coordinates anew when validated options are reused` | Real host clock/entropy imports remain per-job defaults rather than retained validated-option state |
+| `Cloudflare query coordinates reach negotiated output and refuse UPDATE` | The shipped Worker request adapter forwards query options and rejects unsupported UPDATE configuration |
+
+Run these named cases with `node --test --test-name-pattern` against the actual
+`make wasm-pkg` output. The type-only `async-coordinates.types.ts` checks the
+declarations without executing query semantics on WASM.
+
 The 2026-10-23 audit examined every Makefile WASM invocation and the direct
 workflow, qualification-driver, runner, package and Worker entry points,
 regardless of origin. It removed 312 of 359 Makefile case executions, retaining

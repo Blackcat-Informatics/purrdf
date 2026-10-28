@@ -258,6 +258,7 @@ function normalizeProvenanceNamespace(value) {
 }
 
 function normalizeQueryOptions(options) {
+  refuseSynchronousCoordinates(options);
   if (options == null) {
     return {
       base: undefined,
@@ -297,6 +298,7 @@ function normalizeQueryOptions(options) {
 }
 
 function normalizeGovernedOptions(options) {
+  refuseSynchronousCoordinates(options);
   if (options == null) {
     return { base: undefined, aggregateNamespace: undefined, xpathRegex: undefined };
   }
@@ -325,6 +327,14 @@ function normalizeGovernedOptions(options) {
     // usable across the whole sequence of calls it governs.
     cancel: options.cancel == null ? undefined : options.cancel.share(),
   };
+}
+
+function refuseSynchronousCoordinates(options) {
+  for (const key of ["now", "entropySeed"]) {
+    if (options?.[key] != null) {
+      throw new TypeError(`query option ${key} is supported only by asynchronous query calls`);
+    }
+  }
 }
 
 function normalizeEntailmentGovernedOptions(options) {
