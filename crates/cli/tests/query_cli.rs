@@ -3273,7 +3273,7 @@ fn supplied_coordinates_replay_across_query_routes_and_sources() {
     let built = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
     assert!(built.status.success(), "{}", stderr(&built));
     let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
-    let other_time = "2021-02-03T04:05:06.98765432109876543210987654321-04:00";
+    let other_time = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
     let query = "SELECT (NOW() AS ?now) (RAND() AS ?rand) (UUID() AS ?uuid) \
                  (STRUUID() AS ?str) WHERE { ?s <http://example.org/knows> ?o }";
     let answer = |source: &str, now: Option<&str>, seed: Option<&str>, lane: &[&str]| {
@@ -3319,7 +3319,7 @@ fn supplied_coordinates_replay_across_query_routes_and_sources() {
     assert!(time_only.iter().all(|cell| !cell.is_empty()));
     let seed_only = answer(&ttl, None, Some("0"), &[]);
     assert_eq!(seed_only[1..], first[1..]);
-    assert!(!seed_only[0].is_empty());
+    assert_ne!(seed_only[0], "");
 
     // EXPLAIN executes the same filter. Its actual rows observe both inputs,
     // rather than merely accepting flags or including them in plan text.

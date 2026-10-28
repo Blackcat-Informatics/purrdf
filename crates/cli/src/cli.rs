@@ -729,7 +729,7 @@ pub(crate) enum Command {
         division: Option<purrdf_sparql_eval::DivisionPolicy>,
         /// Supply the exact `xsd:dateTime` returned by NOW(), including its fraction
         /// and timezone. Omitted, execution samples the host clock.
-        #[arg(long, value_name = "XSD_DATE_TIME")]
+        #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
         now: Option<String>,
         /// Supply the unsigned 64-bit seed for RAND(), UUID() and STRUUID().
         /// Zero is valid. Omitted, execution samples host entropy.
