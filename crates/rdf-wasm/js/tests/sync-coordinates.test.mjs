@@ -102,7 +102,7 @@ test("synchronous positional coordinates are checked and UPDATE controls are ref
     assert.notEqual(rawCells(engine.queryRaw(data, QUERY, INPUTS)).r, zero.r);
     for (const method of ["update", "updateGoverned"]) {
       for (const controls of [{ now: NOW }, { entropySeed: 0n }]) {
-        assert.throws(() => engine[method](data, "INSERT DATA {}", controls), /UPDATE option/);
+        assert.throws(() => engine[method](data, "INSERT DATA {}", controls), (error) => error instanceof TypeError && error.code === "purrdf-wasm-options" && /UPDATE option/.test(error.message));
       }
     }
     const stopped = engine.queryGoverned(data, QUERY, { ...INPUTS, fuel: 0 });

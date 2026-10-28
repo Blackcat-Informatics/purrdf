@@ -19,6 +19,14 @@ engine.explainQuery(dataset, "SELECT * {}", coordinates);
 engine.queryRawConfigured(dataset, "CONSTRUCT {} WHERE {}", undefined, "jsonld", "{}", undefined, coordinates.now, coordinates.entropySeed);
 engine.queryRawWithContext(dataset, "CONSTRUCT {} WHERE {}", undefined, "jsonld", context, undefined, undefined, coordinates.now, coordinates.entropySeed);
 dataset.query("SELECT * {}", undefined, undefined, coordinates.now, coordinates.entropySeed);
+// @ts-expect-error Coordinate-bearing variables cannot be passed to UPDATE.
+engine.update(dataset, "INSERT DATA {}", coordinates);
+// @ts-expect-error Governed UPDATE also excludes coordinate-bearing variables.
+engine.updateGoverned(dataset, "INSERT DATA {}", coordinates);
+// @ts-expect-error Async UPDATE also excludes coordinate-bearing variables.
+engine.updateAsync(dataset, "INSERT DATA {}", coordinates);
+// @ts-expect-error Governed async UPDATE also excludes coordinate-bearing variables.
+engine.updateGovernedAsync(dataset, "INSERT DATA {}", coordinates);
 // @ts-expect-error UPDATE does not support query coordinates.
 engine.update(dataset, "INSERT DATA {}", { now: "2000-01-01T00:00:00Z" });
 // @ts-expect-error Governed UPDATE does not support query coordinates.

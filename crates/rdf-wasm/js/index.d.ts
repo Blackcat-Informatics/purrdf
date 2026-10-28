@@ -129,10 +129,7 @@ export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
  */
 export type ShaclLaw = "shacl-rec-2017-07-20" | "shacl-wd-2026-09-18" | "shacl-ed-2026-10-16";
 
-export interface QueryOptions extends UpdateOptions, QueryCoordinateOptions {}
-
-/** Options supported by synchronous UPDATE calls. */
-export interface UpdateOptions {
+interface EvaluationOptions {
   readonly base?: string | null;
   /**
    * The dated native XPath law `REGEX` and `REPLACE` evaluate under, by its stable name.
@@ -144,6 +141,14 @@ export interface UpdateOptions {
    * becomes an unbound, `false` or partial answer.
    */
   readonly xpathRegex?: XPathRegexLaw | null;
+}
+
+export interface QueryOptions extends EvaluationOptions, QueryCoordinateOptions {}
+
+/** UPDATE options exclude query coordinates, including on predeclared variables. */
+export interface UpdateOptions extends EvaluationOptions {
+  readonly now?: never;
+  readonly entropySeed?: never;
 }
 
 /**
@@ -1365,7 +1370,7 @@ export class QueryEngine {
   updateGovernedAsync(
     dataset: Dataset,
     sparql: string,
-    options?: Omit<AsyncGovernedQueryOptions, keyof QueryCoordinateOptions> | null,
+    options?: (GovernedUpdateOptions & AsyncHostOptions) | null,
   ): Promise<AsyncUpdateOutcome>;
   free(): void;
 }

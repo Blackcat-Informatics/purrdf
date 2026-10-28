@@ -334,7 +334,9 @@ function normalizeGovernedOptions(options) {
 function refuseUpdateCoordinates(options) {
   for (const key of ["now", "entropySeed"]) {
     if (options?.[key] != null) {
-      throw new TypeError(`UPDATE option ${key} is not supported`);
+      const error = new TypeError(`UPDATE option ${key} is not supported`);
+      error.code = "purrdf-wasm-options";
+      throw error;
     }
   }
 }
