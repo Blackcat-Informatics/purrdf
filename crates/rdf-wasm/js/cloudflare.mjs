@@ -953,15 +953,10 @@ export async function handleSparqlRequest(request, options) {
         signal: request.signal,
       };
       if (operation.kind === "update") {
-        if (isPresent(o.coordinates.now) || isPresent(o.coordinates.entropySeed)) {
-          return problem(400, "now and entropySeed configure queries, not UPDATE", {
-            code: "purrdf-wasm-options",
-          }, headers);
-        }
         const { maxAnswers: _queryOnly, ...governors } = o.governors;
         let outcome;
         try {
-          outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
+          outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...o.coordinates, ...host });
         } catch (error) {
           return failureResponse(error, request.signal, headers, internal, hostFault()?.correlationId);
         }

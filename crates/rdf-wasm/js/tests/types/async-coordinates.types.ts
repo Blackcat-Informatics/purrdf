@@ -17,7 +17,6 @@ engine.explainQueryAsync(dataset, "SELECT * WHERE {}", coordinates);
 dataset.queryAsync("SELECT * WHERE {}", coordinates);
 handleSparqlRequest(new Request("https://example.org/query"), { engine, dataset, governors: { deadlineMs: 1000 }, ...coordinates });
 engine.query(dataset, "SELECT * WHERE {}", { entropySeed: 0n });
-// @ts-expect-error UPDATE coordinates are outside the async query interface.
 engine.updateGovernedAsync(dataset, "INSERT DATA {}", { now: "2000-01-01T00:00:00Z" });
 // @ts-expect-error Seed strings are not a checked JavaScript integer interface.
 engine.queryAsync(dataset, "SELECT * WHERE {}", { entropySeed: "7" });

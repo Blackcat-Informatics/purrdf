@@ -3542,7 +3542,7 @@ impl AsyncOperationKind {
         }
     }
 
-    /// Query coordinates are accepted only by the complete asynchronous query family.
+    /// Execution coordinates belong to queries and UPDATE, not SHACL operations.
     const fn coordinate_keys(self) -> &'static [&'static str] {
         match self {
             Self::Query
@@ -3551,8 +3551,10 @@ impl AsyncOperationKind {
             | Self::Governed
             | Self::EntailmentGoverned
             | Self::Negotiated
-            | Self::Explain => &["now", "entropySeed"],
-            Self::Update | Self::UpdateGoverned | Self::Shacl => &[],
+            | Self::Explain
+            | Self::Update
+            | Self::UpdateGoverned => &["now", "entropySeed"],
+            Self::Shacl => &[],
         }
     }
 
@@ -7050,7 +7052,7 @@ mod tests {
             .update(
                 &mut dataset,
                 "INSERT DATA { <http://example.org/m> <http://example.org/p> <http://example.org/o> }",
-                None, None,
+                None, None, None, None,
             )
             .expect("a synchronous mutation meanwhile");
         let error = job

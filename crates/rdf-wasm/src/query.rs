@@ -53,14 +53,15 @@
 //! evaluated; a native resource refusal throws as the query's evaluation failure, with the
 //! resource's own code, and never becomes an unbound, `false` or partial answer.
 //!
-//! ## Query coordinates
+//! ## Execution coordinates
 //!
-//! Every query export takes independently optional `now` and `entropySeed` inputs.
+//! Every query and UPDATE export takes independently optional `now` and `entropySeed` inputs.
 //! `now` retains the exact native `xsd:dateTime` value; the seed is an unsigned BigInt
 //! or a safe nonnegative integral number. Both are decoded before dataset freeze and
 //! owned by the operation. Omitted inputs select fresh native defaults per execution.
-//! The package exposes them in query options; configured/context output and
-//! `Dataset.query` retain positional arguments. UPDATE does not accept these controls.
+//! The package exposes them in query and UPDATE options; configured/context output and
+//! `Dataset.query` retain positional arguments. A supplied time spans the UPDATE request;
+//! its supplied random stream advances across operations without restarting.
 //!
 //! ## The governed lane
 //!
@@ -1533,6 +1534,8 @@ impl QueryEngine {
         sparql: &str,
         base: Option<String>,
         xpath_regex: Option<String>,
+        now: Option<JsValue>,
+        entropy_seed: Option<JsValue>,
     ) -> Result<(), JsValue> {
         let input = self.input(
             dataset,
@@ -1540,7 +1543,7 @@ impl QueryEngine {
             sparql,
             base.as_deref(),
             xpath_regex.as_deref(),
-            (None, None),
+            (now.as_ref(), entropy_seed.as_ref()),
         )?;
         match input.run_offline(None)? {
             JobOutcome::Updated(frozen) => {
@@ -1858,6 +1861,8 @@ impl QueryEngine {
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
         xpath_regex: Option<String>,
+        now: Option<JsValue>,
+        entropy_seed: Option<JsValue>,
     ) -> Result<UpdateOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1876,7 +1881,7 @@ impl QueryEngine {
             sparql,
             base.as_deref(),
             xpath_regex.as_deref(),
-            (None, None),
+            (now.as_ref(), entropy_seed.as_ref()),
         )?;
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
@@ -2632,12 +2637,14 @@ mod tests {
                             None,
                             Some(true),
                             None,
+                            None,
+                            None,
                         )
                         .expect("governed CLEAR");
                     assert!(outcome.is_applied());
                 } else {
                     engine
-                        .update(&mut dataset, update, None, None)
+                        .update(&mut dataset, update, None, None, None, None)
                         .expect("CLEAR");
                 }
                 assert_eq!(dataset.size(), 0);
@@ -2651,6 +2658,8 @@ mod tests {
                     .update(
                         &mut snapshot,
                         "CREATE GRAPH <https://example.org/h>",
+                        None,
+                        None,
                         None,
                         None,
                     )
