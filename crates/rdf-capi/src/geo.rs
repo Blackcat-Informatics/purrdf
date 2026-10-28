@@ -408,6 +408,8 @@ mod tests {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     response,
                     error,
                 )

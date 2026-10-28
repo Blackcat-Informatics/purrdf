@@ -23,11 +23,25 @@ Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 - Developer-schema compilations cached under an earlier `SchemaCompilation.key`.
 
 Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
-C ABI 0.12.0. Several defaults change behavior without a signature change:
+C ABI 0.13.0. Several defaults change behavior without a signature change:
 remembered empty named graphs, model-only Datalog output, exact decimal
 division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewrite and specific
 SPARQL diagnostic codes.
 Each has its own section below.
+
+## C query time and entropy
+
+All twelve existing C query entries now take `const char *now` and
+`const uint64_t *entropy_seed` immediately before their first output parameter.
+This includes ordinary, JSON, governed and entailment queries and each XPath or
+geographic variant. Rebuild callers against ABI 0.13.0; passing `NULL, NULL`
+preserves native clock and entropy defaults. Each pointer is independently
+optional, and a pointer to zero supplies seed zero.
+
+Time is an exact `xsd:dateTime` lexical form, including negative years, fractional
+seconds and timezone. The call owns the parsed time and copies the seed before
+execution; returned results retain no caller memory. Invalid UTF-8 and malformed
+time retain the C argument-error status conventions. UPDATE signatures are unchanged.
 
 ## WKT and GeoJSON parsing resource policies
 
