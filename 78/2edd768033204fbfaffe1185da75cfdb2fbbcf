@@ -1,0 +1,18 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: f47cde18e3ad1d3733a496bbb447a77fa5d91969
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 837
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/837
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: a3f2f16eb13af2b0e33ea45fe0a06cdb25e71d6c
+GhpRsq-Head-Ref: paudley/833-supply-exact-time-and-entropy-to-native
+GhpRsq-Head-OID: f47cde18e3ad1d3733a496bbb447a77fa5d91969
+GhpRsq-Result-Tree: a634e46a51fa259fc59844b80a17ccc42b3ddda8
+GhpRsq-Result-Commit: 782edd768033204fbfaffe1185da75cfdb2fbbcf
+GhpRsq-Parent-Hashes: f47cde18e3ad1d3733a496bbb447a77fa5d91969
+GhpRsq-Squash-Notes-SHA256: 1cee081707739090096e5c0f8b7df12c713bc1af63d9cf3a64aa495a8d20ae8a
+GhpRsq-Stage-Evidence: none
