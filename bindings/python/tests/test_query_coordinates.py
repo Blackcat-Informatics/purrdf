@@ -146,5 +146,5 @@ def test_coordinates_preserve_python_governor_outcomes_and_opaque_provenance():
     result = rdflib.Graph().query(f"SELECT {PROJECTION} {{}}", **coordinates)
     namespace = ("prov", f"{EX}provenance#")
     encoded = result.serialize(format="json", provenance_namespace=namespace, query_hash="caller-identity")
-    decoded = purrdf.provenance_from_json(encoded, *namespace)
+    decoded = purrdf.provenance_from_json(encoded.encode(), *namespace)
     assert decoded["query_hash"] == "caller-identity"
