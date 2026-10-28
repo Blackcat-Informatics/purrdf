@@ -208,17 +208,23 @@ const HANDLERS = {
     return { kind: "turtle", turtle: out };
   },
 
-  shaclValidate({ shapes }) {
+  shaclValidate({ shapes, now, entropySeed }) {
+    if (now != null || entropySeed != null) {
+      const error = new TypeError("now and entropySeed apply only to rule execution");
+      error.code = "purrdf-wasm-options";
+      throw error;
+    }
     const ds = requireCurrent();
     const dataNt = ds.serialize("ntriples");
     const sarif = JSON.parse(shaclValidateToSarif(shapes, dataNt));
     return { sarif };
   },
 
-  shaclEntail({ shapes }) {
+  shaclEntail({ shapes, xpathRegex, now, entropySeed }) {
     const ds = requireCurrent();
     const dataNt = ds.serialize("ntriples");
-    const entailed = shaclEntail(shapes, dataNt);
+    const entailed = shaclEntail(shapes, dataNt, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, xpathRegex, now, entropySeed);
     const ntriples = entailed.ntriples;
     const diagnostics = entailed.diagnostics;
     entailed.free();

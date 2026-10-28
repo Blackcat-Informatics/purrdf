@@ -2019,23 +2019,7 @@ impl QueryEngine {
     ) -> Result<OperationInput<'a>, JsValue> {
         let xpath_regex = crate::xpath_regex::parse(xpath_regex)
             .map_err(|message| coded_error(&message, OPTIONS_CODE))?;
-        let now = coordinates
-            .0
-            .filter(|value| !value.is_null())
-            .map(|value| crate::async_query::read_text("now", value).map_err(|error| error.to_js()))
-            .transpose()?;
-        let seed = coordinates
-            .1
-            .filter(|value| !value.is_null())
-            .map(|value| {
-                crate::async_query::read_limit("entropySeed", value).map_err(|error| error.to_js())
-            })
-            .transpose()?;
-        let coordinates =
-            purrdf_validate::query::CoordinateInputs::from_time_and_seed(now.as_deref(), seed)
-                .map_err(|error| {
-                    coded_error(&format!("query option now: {error}"), OPTIONS_CODE)
-                })?;
+        let coordinates = Self::coordinate_inputs(coordinates.0, coordinates.1)?;
         let frozen = dataset.view().freeze().map_err(diagnostic_to_js)?;
         let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
         input.coordinates = coordinates;
@@ -2044,6 +2028,25 @@ impl QueryEngine {
         input.graph_existence = dataset.graph_existence();
         input.geo = self.geo_profile();
         Ok(input)
+    }
+
+    /// Decode and own execution coordinates before a host request parses its documents.
+    pub(crate) fn coordinate_inputs(
+        now: Option<&JsValue>,
+        entropy_seed: Option<&JsValue>,
+    ) -> Result<purrdf_validate::query::CoordinateInputs, JsValue> {
+        let now = now
+            .filter(|value| !value.is_null())
+            .map(|value| crate::async_query::read_text("now", value).map_err(|error| error.to_js()))
+            .transpose()?;
+        let seed = entropy_seed
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                crate::async_query::read_limit("entropySeed", value).map_err(|error| error.to_js())
+            })
+            .transpose()?;
+        purrdf_validate::query::CoordinateInputs::from_time_and_seed(now.as_deref(), seed)
+            .map_err(|error| coded_error(&format!("query option now: {error}"), OPTIONS_CODE))
     }
 
     /// A CONSTRUCT or DESCRIBE query's result dataset.

@@ -90,11 +90,6 @@ test("async coordinates reject lossy host inputs and unsupported routes", async 
     assert.deepEqual(cells(await engine.queryAsync(data, QUERY, { now: NOW, entropySeed: 0 })), zero);
     const maximum = cells(await engine.queryAsync(data, QUERY, INPUTS));
     assert.notEqual(maximum.r, zero.r);
-    for (const kind of [AsyncOperationKind.Shacl]) {
-      for (const controls of [{ now: NOW }, { entropySeed: 0n }]) {
-        assert.throws(() => AsyncJobOptions.fromJs(kind, controls, undefined, false, undefined), /unknown query option/);
-      }
-    }
     assert.equal(data.size, 0);
     const stopped = await engine.queryGovernedAsync(data, QUERY, { ...INPUTS, fuel: 0 });
     assert.equal(stopped.isComplete, false);

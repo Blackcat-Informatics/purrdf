@@ -66,6 +66,27 @@ Run these named cases with `node --test --test-name-pattern` against the actual
 `make wasm-pkg` output. The type-only `async-coordinates.types.ts` checks the
 declarations without executing query semantics on WASM.
 
+The optimized package's `rule-coordinates.test.mjs` selects these host-interface
+cases. Native rule suites own inference semantics; these selections verify only
+JavaScript transport, ownership and JSPI behavior against the actual release package.
+
+| Exact case | Host obligation |
+| --- | --- |
+| `rule coordinates cross synchronous async and low-level positional routes` | Raw and package rule exports carry checked coordinates through both rule carriers and dated XPath selections; constructors retain 10 and 13 arguments and async options retain their positions |
+| `rule host coordinate refusals precede document parsing and preserve reuse` | Wrong JavaScript values fail at the boundary without poisoning the module; actual unsupported request variants reject coordinates before registration |
+| `rule coordinate owners survive actual JSPI yields and interleaving` | Freed option handles and mutated JavaScript objects cannot change owned inputs across a measured nonzero JSPI yield or another job |
+| `rule omitted coordinates retain independent host defaults` | Actual clock and entropy imports remain independent defaults; supplied zero suppresses host entropy |
+| `rule supplied coordinates preserve signal cancellation and subsequent reuse` | AbortSignal interruption releases rule jobs and preserves subsequent execution |
+| `playground rule messages forward coordinates and preserve dataset ownership` | The assembled Worker's structured-clone messages forward exact strings and BigInts, return refusals, and retain the dataset |
+
+The existing `wasm-package` job executes the five package cases and
+`rule-coordinates.types.ts`; the existing Docs job executes the named Worker
+case in `docs/playground/smoke/rule-coordinates.test.mjs` with `PLAYGROUND_OUT`
+pointing at its assembled Worker. Qualification requires those exact cases to
+execute with nonzero counts and no skips against the current source artifact.
+No additional package build or workflow is required. TypeScript checks the two
+rule option positions and rejects coordinate-bearing validation/product options.
+
 The optimized package's `update-coordinates.test.mjs` selects these six concrete
 host-interface cases. Native UPDATE coverage owns random-stream algorithms,
 timestamp semantics and transactional correctness; these cases verify the host

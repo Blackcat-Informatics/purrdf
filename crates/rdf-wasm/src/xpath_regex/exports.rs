@@ -764,6 +764,7 @@ fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [ToolVerdict;
             None,
             None,
             owned(law),
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .map(|entailment| entailment.ntriples().contains(hit))
         .map_err(message),
@@ -782,6 +783,7 @@ fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [ToolVerdict;
             None,
             None,
             owned(law),
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .map(|inference| inference.inferred().contains(hit))
         .map_err(message),
