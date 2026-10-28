@@ -157,7 +157,7 @@ impl<'a> Prebindings<'a> {
     /// unbound — which
     /// [`NativeSparqlEngine::execute`](crate::NativeSparqlEngine::execute) refuses
     /// before it reaches this.
-    fn ground_with_memory(
+    pub(crate) fn ground_with_memory(
         self,
         index: usize,
         memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,

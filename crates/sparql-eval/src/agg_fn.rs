@@ -1404,7 +1404,7 @@ pub fn content_fingerprint(aggregates: &AggregateRegistry) -> Result<ContentDige
     )
 }
 
-fn content_fingerprint_with_memory(
+pub(crate) fn content_fingerprint_with_memory(
     aggregates: &AggregateRegistry,
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {

@@ -197,6 +197,16 @@ impl SegmentedStackQuery<'_> {
         stream: Stream,
         pattern: ProbePattern<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.physical_rows_range(origin, stream, pattern, None)
+    }
+
+    fn physical_rows_range<'a>(
+        &'a self,
+        origin: SegmentedStackSource,
+        stream: Stream,
+        pattern: ProbePattern<GlobalTermId>,
+        values: Option<&'a crate::AnnotationValueRange<'a>>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
         let session = match origin {
             SegmentedStackSource::Layer(index) => self.sessions.get(index),
             _ => None,
@@ -213,9 +223,10 @@ impl SegmentedStackQuery<'_> {
                     source,
                     origin,
                     move |pattern| {
-                        source.stream(
+                        source.stream_range(
                             stream as usize,
                             (pattern.s, pattern.p, pattern.o, pattern.g),
+                            values,
                         )
                     },
                     pattern,
@@ -384,6 +395,16 @@ impl SegmentedStackQuery<'_> {
         pattern: ProbePattern<GlobalTermId>,
         sources: usize,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.logical_rows_to_range(kind, pattern, sources, None)
+    }
+
+    fn logical_rows_to_range<'a>(
+        &'a self,
+        kind: Option<StatementKind>,
+        pattern: ProbePattern<GlobalTermId>,
+        sources: usize,
+        values: Option<&'a crate::AnnotationValueRange<'a>>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
         let mut seen = Seen::new(&self.operation);
         let end = sources.saturating_sub(1);
         (0..sources)
@@ -392,7 +413,7 @@ impl SegmentedStackQuery<'_> {
                 [Stream::Annotation, Stream::Ordinary]
                     .into_iter()
                     .flat_map(move |stream| {
-                        self.physical_rows(self.source_at(layer), stream, pattern)
+                        self.physical_rows_range(self.source_at(layer), stream, pattern, values)
                             .map(move |row| (layer, stream, row))
                     })
             })
@@ -539,6 +560,11 @@ impl DatasetView for SegmentedStackQuery<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        self.check_ready()?;
+        Ok(Some(self.snapshot.content_identity()))
+    }
 
     fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
         self.capture_source_version()
@@ -818,6 +844,26 @@ impl DatasetView for SegmentedStackQuery<'_> {
                 o: None,
                 g,
             },
+        )
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        self.logical_rows_to_range(
+            Some(StatementKind::Annotation),
+            ProbePattern {
+                s: None,
+                p: predicate,
+                o: object,
+                g: graph,
+            },
+            self.source_count(),
+            Some(range),
         )
     }
 

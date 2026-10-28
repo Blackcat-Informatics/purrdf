@@ -22,7 +22,7 @@ test("dataset identities and mutation generations use exact bigint transport", (
   assert.notEqual(dataset.id, snapshot.id);
   assert.equal(dataset.generation, 0n);
   const identity = dataset.id;
-  new QueryEngine().update(dataset, "INSERT DATA { <https://example.org/s> <https://example.org/p> <https://example.org/o> }");
+  new QueryEngine().update(dataset, "INSERT DATA { <https://example.org/s> <https://example.org/p> <https://example.org/o> }").dataset;
   assert.equal(dataset.id, identity);
   assert.equal(dataset.generation, 1n);
   assert.equal(snapshot.generation, 0n);

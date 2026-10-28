@@ -81,6 +81,44 @@ impl FrozenTerms {
         Ok(())
     }
 
+    /// Bind every retained lexical owner, including unused blank names consulted
+    /// by deterministic mint collision checks. Triple references name entries in
+    /// this complete ordered dictionary; they never stand in for absent content.
+    /// This linear representation seal avoids expanding nested triples once for
+    /// every ancestor in the dictionary.
+    pub(super) fn snapshot_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<[u8; 32], purrdf_lex::allocation::StorageError> {
+        const DICTIONARY: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/snapshot/dictionary/v1");
+        let mut hash = purrdf_hash::blake3::RecordHasher::new();
+        hash.update(DICTIONARY.as_bytes());
+        hash.update(&(self.terms.len() as u64).to_le_bytes());
+        memory.try_scope(|memory| {
+            let mut pending = Vec::new();
+            for (index, term) in self.terms.iter().enumerate() {
+                if let TermRef::Triple { s, p, o } = self.resolve_interned(term) {
+                    super::term::CanonicalNode::Triple.visit_bytes(&mut |bytes| {
+                        hash.update(bytes);
+                    });
+                    for child in [s, p, o] {
+                        hash.update(&(child.index() as u32).to_le_bytes());
+                    }
+                } else {
+                    let id = TermId::from_index(
+                        u32::try_from(index)
+                            .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?,
+                    )?;
+                    self.visit_canonical_bytes(id, &mut pending, memory, |bytes| {
+                        hash.update(bytes);
+                    })?;
+                }
+            }
+            Ok::<_, purrdf_lex::allocation::StorageError>(*hash.finalize().as_bytes())
+        })
+    }
+
     /// Reifier targets have already passed the frozen triple-term validation.
     pub(super) fn triple_components(&self, target: TermId) -> [TermId; 3] {
         match self.terms[target.index()] {

@@ -86,6 +86,11 @@ pub(crate) fn validation_error(
     shapes: impl FnOnce(ShapesError) -> PurrdfError,
 ) -> PurrdfError {
     match error {
+        XPathValidationError::RuleExecution { cause, coordinates } => {
+            validation_error(*cause, shapes).with_execution_receipt(
+                &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            )
+        }
         XPathValidationError::Shapes(error) => shapes(error),
         XPathValidationError::Pattern(error) if error.is_operational() => {
             PurrdfError::new(PurrdfStatus::RegexResourceError, error.to_string())

@@ -107,7 +107,7 @@ for (const expected of QUERY_CASES) {
     assert.equal(sync.code, "native-sparql-query-parse");
     assert.equal(sync.message, `error native-sparql-query-parse: ${expected.english}`);
     assertPresentation(sync, expected);
-    const viaDataset = thrown(() => ds.query(expected.query));
+    const viaDataset = thrown(() => ds.query(expected.query).body);
     assert.equal(viaDataset.message, sync.message);
     assert.deepEqual(viaDataset.presentation, sync.presentation);
     const async = await rejection(engine.queryAsync(ds, expected.query));
@@ -129,17 +129,17 @@ test("a relative IRI without a base names its typed cause", () => {
 test("a refused update carries its typed presentation on both lanes", async () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(DATA, "ntriples");
-  const sync = thrown(() => engine.update(ds, "DELETE WHERE {"));
+  const sync = thrown(() => engine.update(ds, "DELETE WHERE {").dataset);
   assert.equal(sync.code, "native-sparql-update-parse");
   assert.equal(
     sync.message,
     "error native-sparql-update-parse: SPARQL syntax error at byte 14: expected an RDF term, found None",
   );
   assertPresentation(sync, { messageId: "sparql-parse-syntax", parameters: { at: unsigned("14") } });
-  const async = await rejection(engine.updateAsync(ds, "DELETE WHERE {"));
+  const async = await rejection(engine.updateAsync(ds, "DELETE WHERE {").then(result => result.dataset));
   assert.equal(async.message, sync.message);
   assert.deepEqual(async.presentation, sync.presentation);
-  const iri = thrown(() => engine.update(ds, `INSERT DATA { <${EX}%zz> <${EX}p> 1 }`));
+  const iri = thrown(() => engine.update(ds, `INSERT DATA { <${EX}%zz> <${EX}p> 1 }`).dataset);
   assertPresentation(iri, {
     messageId: "sparql-parse-iri",
     parameters: {},

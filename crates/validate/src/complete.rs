@@ -67,21 +67,25 @@ pub fn complete_validation_status(
     outcome: &Result<CompleteValidationReport, CompleteValidationError>,
 ) -> CompleteValidationStatus {
     use CompleteValidationStatus as Status;
-    match outcome {
-        Ok(report) if report.legacy().conforms => Status::Conforms,
-        Ok(_) => Status::Nonconforms,
-        Err(CompleteValidationError::Admission(_) | CompleteValidationError::XPathProfile(_)) => {
+    let mut error = match outcome {
+        Ok(report) if report.legacy().conforms => return Status::Conforms,
+        Ok(_) => return Status::Nonconforms,
+        Err(error) => error,
+    };
+    while let CompleteValidationError::RuleExecution { cause, .. } = error {
+        error = cause;
+    }
+    match error {
+        CompleteValidationError::Admission(_) | CompleteValidationError::XPathProfile(_) => {
             Status::AdmissionRefused
         }
-        Err(
-            CompleteValidationError::SourceConstraint(_)
-            | CompleteValidationError::QuerySource(_)
-            | CompleteValidationError::SourceContext(_),
-        ) => Status::SourceRefused,
-        Err(CompleteValidationError::Semantic(_)) => Status::SemanticFailure,
-        Err(CompleteValidationError::Resource(_)) => Status::ResourceRefused,
-        Err(CompleteValidationError::Preparation(_)) => Status::ProductRefused,
-        Err(CompleteValidationError::XPath(error)) => match error.as_ref() {
+        CompleteValidationError::SourceConstraint(_)
+        | CompleteValidationError::QuerySource(_)
+        | CompleteValidationError::SourceContext(_) => Status::SourceRefused,
+        CompleteValidationError::Semantic(_) => Status::SemanticFailure,
+        CompleteValidationError::Resource(_) => Status::ResourceRefused,
+        CompleteValidationError::Preparation(_) => Status::ProductRefused,
+        CompleteValidationError::XPath(error) => match error.as_ref() {
             purrdf_shapes::xpath::XPathValidationError::Pattern(
                 purrdf_core::xsd_regex::xpath::Error::Resource(_)
                 | purrdf_core::xsd_regex::xpath::Error::Allocation { .. },
@@ -104,7 +108,7 @@ pub fn complete_validation_status(
             }
             _ => Status::NativeXPathRefused,
         },
-        Err(_) => Status::ExecutionFailure,
+        _ => Status::ExecutionFailure,
     }
 }
 

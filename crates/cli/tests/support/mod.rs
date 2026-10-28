@@ -47,6 +47,33 @@ pub(super) fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// Check the native receipt separately from byte-deterministic diagnostics.
+pub(super) fn execution_diagnostics(out: &Output, state: &str) -> String {
+    let mut diagnostics = String::new();
+    let mut receipt = None;
+    for line in stderr(out).split_inclusive('\n') {
+        if let Some(json) = line.strip_prefix("purrdf-execution ") {
+            assert!(receipt.is_none(), "one execution receipt per invocation");
+            receipt = Some(purrdf_lex::json::read(json).expect("native receipt JSON"));
+        } else {
+            diagnostics.push_str(line);
+        }
+    }
+    let receipt = receipt.expect("native execution receipt");
+    assert_eq!(receipt["state"].as_str(), Some(state));
+    if state == "started" {
+        assert_ne!(receipt["now"].as_str().unwrap(), "");
+        assert!(
+            receipt["entropySeed"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .is_ok()
+        );
+    }
+    diagnostics
+}
+
 /// The exit code of an [`Output`].
 pub(super) fn code(out: &Output) -> i32 {
     out.status.code().expect("the process exited normally")

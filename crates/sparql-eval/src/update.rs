@@ -152,6 +152,19 @@ purrdf_lex::variant_from!(UpdateAbort {
 /// well-formed request cannot reach this. It is still checked rather than assumed:
 /// `INSERT DATA` is a genuine ingress into the store, and the absoluteness invariant
 /// is enforced where terms ENTER the store, not where we believe they came from.
+fn execution_abort(
+    error: &crate::EvalError,
+    governors: Option<&Arc<GovernorState>>,
+) -> UpdateAbort {
+    if let Some(tripped) = governors.and_then(|state| state.tripped()) {
+        return UpdateAbort::Tripped(tripped);
+    }
+    UpdateAbort::Failed(RdfDiagnostic::error(
+        crate::engine::eval_diagnostic_code(error, "native-sparql-update-eval"),
+        error.to_string(),
+    ))
+}
+
 fn insertion_abort(error: purrdf_iri::IriReadError) -> UpdateAbort {
     let diagnostic = match error {
         purrdf_iri::IriReadError::Lexical(err) => RdfDiagnostic::error(
@@ -421,6 +434,7 @@ pub(crate) fn eval_update(
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
+    mut coordinates: Option<&mut crate::QueryCoordinates>,
 ) -> Result<(), UpdateAbort> {
     admit_version(AdmittedRequest::Update(update)).map_err(|e| {
         RdfDiagnostic::error(
@@ -441,12 +455,51 @@ pub(crate) fn eval_update(
     // Only a supplied seed owns a request-wide stream. Absence preserves the
     // existing fresh host seed for each WHERE context.
     let mut supplied_rng = cfg.options.entropy_seed;
-    for op in &update.operations {
-        apply_operation(op, m, resolver, cfg, &mut bnode_counter, &mut supplied_rng)?;
+    let capability = cfg
+        .governors
+        .map_or_else(crate::WorkspaceCapability::resident, |state| {
+            state.workspace_capability().clone()
+        });
+    let program = {
+        let mut frame = crate::workspace::LexicalFrame::new(&capability);
+        purrdf_sparql_algebra::identity::update_with_memory(
+            update,
+            &mut purrdf_lex::allocation::Memory::new(&mut frame),
+        )
+        .map_err(|error| {
+            execution_abort(
+                &frame.storage_error(error, "update identity"),
+                cfg.governors,
+            )
+        })?
+    };
+    for (index, op) in update.operations.iter().enumerate() {
+        apply_operation(
+            op,
+            m,
+            resolver,
+            cfg,
+            &mut bnode_counter,
+            &mut supplied_rng,
+            UpdateReceipt {
+                program: &program,
+                operation: index as u64,
+                external_source: resolver.is_some(),
+                first: coordinates.as_deref_mut(),
+            },
+        )?;
         // Close the single-operation terminal hole as well as the gap between operations.
         check_stop(cfg.governors)?;
     }
     Ok(())
+}
+
+/// Original program and operation ordinal beside the first-context output slot.
+struct UpdateReceipt<'a> {
+    program: &'a purrdf_hash::hex::Digest32,
+    operation: u64,
+    external_source: bool,
+    first: Option<&'a mut crate::QueryCoordinates>,
 }
 
 /// Apply one update operation to `m`. `bnode_counter` is the request-wide monotonic
@@ -467,6 +520,7 @@ fn apply_operation(
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
     supplied_rng: &mut Option<u64>,
+    receipt: UpdateReceipt<'_>,
 ) -> Result<(), UpdateAbort> {
     check_stop(cfg.governors)?;
     match op {
@@ -494,6 +548,7 @@ fn apply_operation(
             cfg,
             bnode_counter,
             supplied_rng,
+            receipt,
         ),
         GraphUpdateOperation::Load {
             silent,
@@ -608,6 +663,7 @@ fn delete_insert(
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
     supplied_rng: &mut Option<u64>,
+    mut receipt: UpdateReceipt<'_>,
 ) -> Result<(), UpdateAbort> {
     let DeleteInsertSpec {
         delete,
@@ -702,14 +758,6 @@ fn delete_insert(
         })?;
     }
 
-    ctx.reserve_concrete_blank_inputs(pattern)
-        .map_err(|error| {
-            RdfDiagnostic::error(
-                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
-                error.to_string(),
-            )
-        })?;
-
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
     // default graph; otherwise the dataset under mutation. An absent USING/WITH graph
@@ -721,6 +769,53 @@ fn delete_insert(
     } else {
         ActiveDataset::store_default()
     };
+
+    // Each WHERE observes the actual snapshot after prior operations. The full
+    // program and ordinal distinguish identical bodies in different operations;
+    // observers receive every context while governed results retain the first.
+    const UPDATE_CONTEXT: purrdf_hash::Domain =
+        purrdf_hash::Domain::new(b"purrdf-sparql-eval/update-context/v1");
+    let mut request = purrdf_hash::blake3::Streaming::<1024>::new();
+    request.update(UPDATE_CONTEXT.as_bytes());
+    request.update(receipt.program.as_bytes());
+    request.update(&receipt.operation.to_le_bytes());
+    request.update(&ctx.bnode_counter.to_le_bytes());
+    let capture_first = receipt
+        .first
+        .as_deref()
+        .is_some_and(|value| matches!(value, crate::QueryCoordinates::NotStarted));
+    if capture_first && let Some(first) = receipt.first.as_deref_mut() {
+        *first = crate::QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            cfg.options.now.is_some(),
+            cfg.options.entropy_seed.is_some(),
+        )
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
+    }
+    let captured = crate::engine::coordinates::capture_request(
+        &ctx,
+        *request.finalize().as_bytes(),
+        cfg.options,
+        receipt.external_source,
+    )
+    .map_err(|error| execution_abort(&error, cfg.governors))?;
+    if capture_first && let Some(first) = receipt.first {
+        *first = captured;
+    }
+
+    ctx.reserve_concrete_blank_inputs(pattern)
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
 
     admit_where(
         pattern,
@@ -1743,7 +1838,7 @@ mod tests {
     fn run(text: &str, m: &mut MutableDataset) {
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        eval_update(&parse(text), m, None, &cfg).expect("update applies");
+        eval_update(&parse(text), m, None, &cfg, None).expect("update applies");
     }
 
     #[test]
@@ -1797,7 +1892,8 @@ mod tests {
                 let cache = BoundedOrderCache::default();
                 let mut config = ungoverned(&cache);
                 config.options = config.options.with_bnode_mint_prefix(prefix);
-                eval_update(&update, &mut target, None, &config).expect("raw late VALUES UPDATE");
+                eval_update(&update, &mut target, None, &config, None)
+                    .expect("raw late VALUES UPDATE");
                 assert_eq!(
                     quad_set(&target).len(),
                     expected,
@@ -2210,7 +2306,7 @@ mod tests {
         };
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg, None).unwrap_err());
         assert_eq!(code, "native-sparql-update-bad-destination");
         // The base is untouched (the error aborts before any mutation lands here, and
         // the engine seam's branch/freeze guarantees atomicity at the request level).
@@ -2231,6 +2327,7 @@ mod tests {
                 &mut m,
                 None,
                 &cfg,
+                None,
             )
             .unwrap_err(),
         );
@@ -2253,6 +2350,7 @@ mod tests {
                 &mut m,
                 None,
                 &cfg,
+                None,
             )
             .unwrap_or_else(|_| panic!("VERSION {version:?} must apply"));
             assert_eq!(quad_set(&m).len(), 1);
@@ -2273,6 +2371,7 @@ mod tests {
                 &mut m,
                 None,
                 &cfg,
+                None,
             )
             .unwrap_err(),
         );
@@ -2292,6 +2391,7 @@ mod tests {
             &mut m,
             None,
             &cfg,
+            None,
         )
         .expect("a within-profile update must still apply");
         assert_eq!(quad_set(&m).len(), 1);
@@ -2323,7 +2423,7 @@ mod tests {
         let resolver = TestResolver { ds: loadable() };
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        eval_update(&parse("LOAD ex:doc"), &mut m, Some(&resolver), &cfg).expect("load");
+        eval_update(&parse("LOAD ex:doc"), &mut m, Some(&resolver), &cfg, None).expect("load");
         let frozen = m.freeze().expect("freeze");
         assert_eq!(frozen.quad_count(), 1);
         assert!(frozen.term_id_by_value(&iri("loaded")).is_some());
@@ -2340,6 +2440,7 @@ mod tests {
             &mut m,
             Some(&resolver),
             &cfg,
+            None,
         )
         .expect("load into");
         let all = m.quads_for_pattern(None, None, None, GraphMatchValue::Any);
@@ -2357,7 +2458,7 @@ mod tests {
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         let code =
-            failure_code(eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg).unwrap_err());
+            failure_code(eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg, None).unwrap_err());
         assert_eq!(code, "native-sparql-load-no-resolver");
     }
 
@@ -2366,7 +2467,8 @@ mod tests {
         let mut m = mut_with(&[("a", "p", "b")]);
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
+        eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg, None)
+            .expect("silent load no-ops");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
     }
 
@@ -2425,7 +2527,7 @@ mod tests {
             governors: Some(&state),
             options: QueryOptions::EMPTY,
         };
-        let outcome = eval_update(&parse(update), &mut m, resolver, &cfg);
+        let outcome = eval_update(&parse(update), &mut m, resolver, &cfg, None);
         let silenced = state
             .evidence()
             .silenced()
@@ -2637,7 +2739,7 @@ mod tests {
                  WHERE { ex:s ex:val ?v } GROUP BY ?v \
              }",
         );
-        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg, None).unwrap_err());
         assert_eq!(code, "native-sparql-aggregate-function");
         // Nothing applied.
         assert_eq!(
@@ -2696,7 +2798,7 @@ mod tests {
                 &parser_options,
             )
             .expect("update parses: the namespace claims the predicate as a call node");
-        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg, None).unwrap_err());
         assert_eq!(code, "native-sparql-property-function");
     }
 
@@ -2729,7 +2831,7 @@ mod tests {
                  WHERE { ex:s ex:val ?v . ex:s ex:val2 ?w } GROUP BY ?v ?w \
              }",
         );
-        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg, None).unwrap_err());
         assert_eq!(code, "native-sparql-aggregate-function");
     }
 }

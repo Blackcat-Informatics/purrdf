@@ -391,6 +391,7 @@ impl SegmentedImage {
             header.streams[2],
             header.graphs,
             header.summaries,
+            header.value_ranges,
             header.statistics[0],
             header.statistics[1],
             header.statistics[2],
@@ -592,6 +593,7 @@ fn encode_dataset(
         block_bytes,
     )?;
     let mut summaries = Vec::new();
+    let mut value_ranges = Vec::new();
     let mut streams = [Stream::default(); 3];
     for (table, rows) in [
         dataset.quads().collect::<Vec<_>>(),
@@ -607,8 +609,27 @@ fn encode_dataset(
             .collect();
         rows.sort_by_key(|q| (q.s, q.p, q.o, q.g));
         rows.dedup();
-        streams[table] =
-            append_quads(&mut blocks, &rows, table as u8, block_bytes, &mut summaries)?;
+        streams[table] = append_quads(
+            &mut blocks,
+            &rows,
+            table as u8,
+            block_bytes,
+            &mut summaries,
+            &mut value_ranges,
+            |id| {
+                let index = id
+                    .index()
+                    .checked_sub(limits.first_term_index)
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                let local = TermId::from_index(
+                    u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?,
+                )
+                .map_err(purrdf_lex::allocation::StorageError::from)?;
+                Ok(dataset
+                    .resolve(local)
+                    .map_ids(|id| map_id(id, limits.first_term_index)))
+            },
+        )?;
     }
     let mut graphs: Vec<_> = dataset
         .named_graphs()
@@ -646,6 +667,18 @@ fn encode_dataset(
         summary_rows,
         format::SUMMARIES,
         format::SUMMARY_BYTES,
+        block_bytes,
+    )?;
+    let value_range_rows =
+        u64::try_from(value_ranges.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    let value_ranges = append_fixed(
+        &mut blocks,
+        value_ranges
+            .chunks((block_bytes - 9) / format::VALUE_RANGE_BYTES)
+            .map(<[Vec<u8>]>::concat),
+        value_range_rows,
+        format::VALUE_RANGES,
+        format::VALUE_RANGE_BYTES,
         block_bytes,
     )?;
     let statistics = append_statistics(dataset, limits.first_term_index, &mut blocks, block_bytes)?;
@@ -699,6 +732,7 @@ fn encode_dataset(
         streams,
         graphs,
         summaries,
+        value_ranges,
         statistics,
         effective_directory,
         source_checkpoints,
@@ -877,12 +911,14 @@ fn append_fixed<C: AsRef<[u8]>>(
         rows,
     })
 }
-fn append_quads(
+fn append_quads<'a>(
     blocks: &mut Vec<Vec<u8>>,
     rows: &[QuadIds<GlobalTermId>],
     table: u8,
     block_bytes: usize,
     summaries: &mut Vec<Vec<u8>>,
+    value_ranges: &mut Vec<Vec<u8>>,
+    resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
 ) -> Result<Stream, SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
     for chunk in rows.chunks((block_bytes - 9) / 32) {
@@ -891,7 +927,8 @@ fn append_quads(
             format::encode_quad(q, &mut bytes);
         }
         let slot = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        summaries.push(summary(chunk, slot, table)?);
+        let (first_range, range_count) = append_value_ranges(value_ranges, chunk, &resolve)?;
+        summaries.push(summary(chunk, slot, table, first_range, range_count)?);
         append_fixed(
             blocks,
             std::iter::once(bytes),
@@ -911,6 +948,8 @@ pub(super) fn summary(
     rows: &[QuadIds<GlobalTermId>],
     slot: u64,
     table: u8,
+    first_range: u64,
+    range_count: u64,
 ) -> Result<Vec<u8>, SegmentedError> {
     let mut bytes = Vec::with_capacity(format::SUMMARY_BYTES);
     bytes.extend_from_slice(&slot.to_le_bytes());
@@ -931,7 +970,30 @@ pub(super) fn summary(
         bytes.extend_from_slice(&values.clone().min().unwrap_or(0).to_le_bytes());
         bytes.extend_from_slice(&values.max().unwrap_or(0).to_le_bytes());
     }
+    bytes.extend_from_slice(&first_range.to_le_bytes());
+    bytes.extend_from_slice(&range_count.to_le_bytes());
     Ok(bytes)
+}
+
+fn append_value_ranges<'a>(
+    output: &mut Vec<Vec<u8>>,
+    rows: &[QuadIds<GlobalTermId>],
+    resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
+) -> Result<(u64, u64), SegmentedError> {
+    let start = u64::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    for interval in crate::annotation_range::seal_intervals_with(rows.iter().copied(), resolve)? {
+        let mut encoded = Vec::with_capacity(format::VALUE_RANGE_BYTES);
+        format::push_id(&mut encoded, interval.predicate);
+        for endpoint in [
+            interval.endpoints.map(|(low, _)| low),
+            interval.endpoints.map(|(_, high)| high),
+        ] {
+            encoded.extend_from_slice(&endpoint.map_or(0, |id| id.index() + 1).to_le_bytes());
+        }
+        output.push(encoded);
+    }
+    let end = u64::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    Ok((start, end - start))
 }
 fn make_tree(
     bytes: &[u8],
@@ -1156,6 +1218,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             ))
     };
     let mut expected_summaries = Vec::new();
+    let mut expected_value_ranges = Vec::new();
     let mut referenced_graphs = std::collections::BTreeSet::new();
     for (table, stream) in header.streams.iter().enumerate() {
         let mut previous = None;
@@ -1191,7 +1254,20 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                     _ => builder.push_annotation_in_graph(s, p, o, g),
                 }?;
             }
-            expected_summaries.push(summary(&rows, slot, table as u8)?);
+            let (first_range, range_count) =
+                append_value_ranges(&mut expected_value_ranges, &rows, |id| {
+                    let ordinal = id
+                        .index()
+                        .checked_sub(header.first_term_index)
+                        .ok_or(SegmentedError::AddressExhausted)?;
+                    let index =
+                        usize::try_from(ordinal).map_err(|_| SegmentedError::AddressExhausted)?;
+                    let key = keys.get(index).ok_or(SegmentedError::Corrupt(
+                        "value interval refers outside the dictionary",
+                    ))?;
+                    format::decode_term(key)
+                })?;
+            expected_summaries.push(summary(&rows, slot, table as u8, first_range, range_count)?);
         }
         if count != stream.rows {
             return Err(SegmentedError::Corrupt("quad stream count is false"));
@@ -1283,6 +1359,42 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
     {
         return Err(SegmentedError::Corrupt(
             "capability claims disagree with RDF streams",
+        ));
+    }
+    let mut range_index = 0;
+    for slot in header.value_ranges.first..header.value_ranges.first + header.value_ranges.blocks {
+        let records = fixed_records(
+            block(bytes, header, slot)?,
+            format::VALUE_RANGES,
+            format::VALUE_RANGE_BYTES,
+        )?;
+        let remaining = expected_value_ranges
+            .len()
+            .checked_sub(range_index)
+            .ok_or(SegmentedError::Corrupt("extra annotation value intervals"))?;
+        if records.len() / format::VALUE_RANGE_BYTES
+            != remaining.min((header.block_bytes as usize - 9) / format::VALUE_RANGE_BYTES)
+        {
+            return Err(SegmentedError::Corrupt(
+                "annotation value interval packing is false",
+            ));
+        }
+        for encoded in records.as_chunks::<{ format::VALUE_RANGE_BYTES }>().0 {
+            if expected_value_ranges
+                .get(range_index)
+                .is_none_or(|expected| expected.as_slice() != encoded)
+            {
+                return Err(SegmentedError::Corrupt(
+                    "annotation value intervals hide or invent candidates",
+                ));
+            }
+            range_index += 1;
+        }
+    }
+    if range_index != expected_value_ranges.len() || range_index as u64 != header.value_ranges.rows
+    {
+        return Err(SegmentedError::Corrupt(
+            "annotation value interval directory is incomplete",
         ));
     }
     if header.max_owned_term_bytes

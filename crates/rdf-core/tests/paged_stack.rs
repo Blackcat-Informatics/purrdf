@@ -220,10 +220,29 @@ fn historical_prefixes_match_eager_seals_and_exclude_pending_head() {
         vec![base.clone(), a.clone(), b],
         vec![base, a],
     ];
+    let mut identities = BTreeSet::new();
     for (count, rows) in expected.iter().enumerate() {
         let snapshot = stack.snapshot_at(count).unwrap();
         assert_eq!(snapshot.sealed_depth(), count + 1);
         let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+        let identity = view
+            .snapshot_identity()
+            .unwrap()
+            .expect("sealed prefix identity");
+        assert!(identities.insert(identity));
+        assert!(
+            evidence(&view).pages.requested_pages.is_empty(),
+            "identity never scans historical payload"
+        );
+        let retained = stack.snapshot_at(count).unwrap();
+        assert_eq!(
+            identity,
+            retained
+                .query_view(PagedQueryLimits::UNBOUNDED)
+                .snapshot_identity()
+                .unwrap()
+                .unwrap()
+        );
         let eager = canonical_paged_seal(page(rows).as_ref(), bound(1)).unwrap();
         assert_eq!(
             surface(&view),

@@ -105,8 +105,16 @@ fn governed_run(
 /// Cancellation preserves the original native error and its complete usage record.
 fn stopped_usage(error: &SrlError) -> purrdf_datalog::seminaive::BudgetReport {
     use purrdf_datalog::seminaive::EvalError;
-    assert!(std::error::Error::source(error).unwrap().is::<EvalError>());
-    let SrlError::Stopped { cause } = error else {
+    let SrlError::Execution(execution) = error else {
+        panic!("execution receipt: {error:?}")
+    };
+    let original = execution.cause.as_ref();
+    assert!(
+        std::error::Error::source(original)
+            .unwrap()
+            .is::<EvalError>()
+    );
+    let purrdf_shapes::rules::RulesError::Stopped { cause } = original else {
         panic!("expected a stopped inference, got {error:?}");
     };
     let EvalError::Stopped { report } = cause.as_ref() else {
@@ -147,7 +155,10 @@ fn governed_inference_preserves_usage_and_distinguishes_stop() {
                 graph_free,
             )
             .unwrap_err();
-            let SrlError::LimitExceeded(limit) = error else {
+            let SrlError::Execution(execution) = error else {
+                panic!("execution receipt")
+            };
+            let purrdf_shapes::rules::RulesError::LimitExceeded(limit) = *execution.cause else {
                 panic!("initial admission must precede cancellation");
             };
             assert_eq!(limit.usage().observed_stored_facts(), 1);
@@ -234,10 +245,14 @@ fn governed_limits_keep_the_complete_usage_report() {
             ),
         ] {
             let error = governed_run(&document, &source, &options, None, graph_free).unwrap_err();
-            let SrlError::LimitExceeded(limit) = &error else {
+            let SrlError::Execution(execution) = &error else {
+                panic!("execution receipt: {error:?}")
+            };
+            let original = execution.cause.as_ref();
+            let purrdf_shapes::rules::RulesError::LimitExceeded(limit) = original else {
                 panic!("expected original limit refusal, got {error:?}");
             };
-            let cause = std::error::Error::source(&error)
+            let cause = std::error::Error::source(original)
                 .unwrap()
                 .downcast_ref::<purrdf_shapes::rules::RuleLimitExceeded>()
                 .expect("the original limit payload remains the direct native source");
@@ -686,10 +701,16 @@ fn data_block_blank_nodes_are_standardized_apart() {
 fn a_non_rdf_head_instantiation_is_refused() {
     let rule = "RULE { ?o :inverse ?s } WHERE { ?s :p ?o }";
     let error = infer(rule, ":a :p \"lit\" .").expect_err("literal subject");
+    let SrlError::Execution(execution) = &error else {
+        panic!("execution receipt: {error}")
+    };
     assert!(
-        matches!(&error, SrlError::Evaluation { message } if message.contains("not an RDF triple")),
+        matches!(execution.cause.as_ref(), purrdf_shapes::rules::RulesError::Failed(message)
+            if message.contains("not an RDF triple")),
         "{error}"
     );
+    assert!(execution.coordinates.program_identity().is_some());
+    assert!(execution.coordinates.snapshot_identity().is_some());
     assert_eq!(
         infer(rule, ":a :p :b .").expect("ok"),
         [[iri("b"), iri("inverse"), iri("a")]]

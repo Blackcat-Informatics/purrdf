@@ -124,6 +124,7 @@ struct SharedIndex {
 #[derive(Debug, Clone)]
 pub(crate) struct ClassMembershipView {
     base: Arc<ShaclDatasetView>,
+    snapshot: Option<purrdf_hash::hex::Digest32>,
     rdf_type: Option<TermId>,
     subclass_of: Option<TermId>,
     /// The supplementary `(subclass, superclass)` edges, sorted and deduplicated;
@@ -161,8 +162,10 @@ impl ClassMembershipView {
             .collect();
         edges.sort_unstable();
         edges.dedup();
+        let snapshot = class_snapshot(&base, &edges);
         Self {
             base,
+            snapshot,
             rdf_type,
             subclass_of,
             supplement: (!edges.is_empty()).then(|| edges.into()),
@@ -474,6 +477,40 @@ impl ClassMembershipView {
     }
 }
 
+/// Bind the asserted-subclass law and its supplementary IRI edges once, without
+/// building or scanning the lazy membership index.
+fn class_snapshot(
+    base: &ShaclDatasetView,
+    edges: &[(TermId, TermId)],
+) -> Option<purrdf_hash::hex::Digest32> {
+    const DOMAIN: purrdf_hash::Domain =
+        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-snapshot/v1");
+    let source = base
+        .snapshot_identity()
+        .unwrap_or_else(|never| match never {})?;
+    let mut members = purrdf_hash::multiset::Multiset256::default();
+    for &edge in edges {
+        let mut member = purrdf_hash::blake3::Streaming::<1024>::new();
+        for id in <[TermId; 2]>::from(edge) {
+            let purrdf_core::TermRef::Iri(iri) = base.resolve_term(id) else {
+                return None;
+            };
+            purrdf_hash::frame::frame_le_with(iri.as_bytes(), &mut |bytes| {
+                member.update(bytes);
+            });
+        }
+        // There are at most usize::MAX resident edges, which fits the u64 population.
+        members
+            .insert(*member.finalize().as_bytes())
+            .expect("resident edge count fits fingerprint population");
+    }
+    let mut hash = purrdf_hash::blake3::Streaming::<1024>::new();
+    hash.update(DOMAIN.as_bytes());
+    hash.update(source.as_bytes());
+    hash.update(&members.fingerprint(DOMAIN));
+    Some(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+}
+
 #[cfg(test)]
 pub(crate) fn reset_thread_index_builds() {
     THREAD_INDEX_BUILDS.with(|builds| builds.set(0));
@@ -702,6 +739,10 @@ impl DatasetView for ClassMembershipView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(self.snapshot)
+    }
 
     fn reserve_owned_workspace(
         &self,
@@ -1126,10 +1167,20 @@ mod tests {
     #[test]
     fn bound_membership_is_transitive_unique_and_built_once() {
         let (view, [rdf_type, _, sub, mid, top, _, alice, _]) = fixture();
+        let snapshot = view.snapshot_identity().unwrap().expect("native identity");
+        assert_eq!(view.build_count(), 0);
+        let supplemented = ClassMembershipView::from_view_with_supplement(
+            Arc::clone(&view.base),
+            &[(format!("{EX}Other"), format!("{EX}Top"))],
+        );
+        assert_ne!(supplemented.snapshot_identity().unwrap(), Some(snapshot));
+        assert_eq!(supplemented.build_count(), 0);
         assert!(view.is_instance(alice, sub));
         assert!(view.is_instance(alice, mid));
         assert!(view.is_instance(alice, top));
         assert_eq!(view.build_count(), 1);
+
+        assert_eq!(view.snapshot_identity().unwrap(), Some(snapshot));
 
         assert_eq!(
             view.quads_for_pattern(Some(alice), Some(rdf_type), Some(top), GraphMatch::Default)

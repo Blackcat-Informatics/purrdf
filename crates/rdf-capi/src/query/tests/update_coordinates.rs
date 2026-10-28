@@ -41,6 +41,7 @@ fn apply(
                 &raw const governors,
                 now,
                 seed,
+                &mut crate::receipt::Output::default().0,
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -55,6 +56,7 @@ fn apply(
                 &raw const governors,
                 now,
                 seed,
+                &mut crate::receipt::Output::default().0,
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -70,6 +72,7 @@ fn apply(
                 &raw const governors,
                 now,
                 seed,
+                &mut crate::receipt::Output::default().0,
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -115,7 +118,7 @@ fn inserted(route: usize, time: Option<&str>, seed: Option<u64>) -> Vec<(String,
         unsafe {
             purrdf_query_json(dataset,
         c"SELECT ?clock ?random WHERE { ?s <urn:clock> ?clock; <urn:random> ?random } ORDER BY ?s".as_ptr(),
-        null(), null(), null(), null(), null(), &raw mut buffer, &raw mut error)
+        null(), null(), null(), null(), null(), &mut crate::receipt::Output::default().0, &raw mut buffer, &raw mut error)
         },
         0
     );

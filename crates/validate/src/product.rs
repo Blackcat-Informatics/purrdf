@@ -119,7 +119,8 @@ impl ShapesProductRefusal {
         match self {
             Self::Shapes(ShapesError::Invalid(message)) => message.as_str().into(),
             Self::Shapes(
-                error @ (ShapesError::Imports(_)
+                error @ (ShapesError::RuleExecution(_)
+                | ShapesError::Imports(_)
                 | ShapesError::Recursion(_)
                 | ShapesError::Preparation(_)
                 | ShapesError::Storage(_)

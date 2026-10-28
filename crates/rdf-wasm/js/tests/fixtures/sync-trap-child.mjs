@@ -60,10 +60,10 @@ report.queryError = await settle(() => engine.query(data, "SELECT ?s WHERE {"));
 report.queryErrorAgain = await settle(() => engine.query(data, "SELECT ?s WHERE {"));
 // After them, every lane answers exactly on the same objects: a synchronous update
 // commits, and both lanes see it.
-report.updateBefore = await settle(() => engine.update(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`));
+report.updateBefore = await settle(() => engine.update(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`).dataset);
 report.syncBefore = await settle(() => engine.query(data, SHALLOW));
 report.asyncBefore = await settle(() => engine.queryAsync(data, SHALLOW));
-report.asyncUpdateBefore = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}c> <${EX}p> <${EX}o> }`));
+report.asyncUpdateBefore = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}c> <${EX}p> <${EX}o> }`).then(result => result.dataset));
 report.asyncAfterUpdate = await settle(() => engine.queryAsync(data, SHALLOW));
 // A job started from inside a synchronous sink callback — JavaScript running inside a
 // wasm call, which the gate counts as an outbound import call — begins and answers.

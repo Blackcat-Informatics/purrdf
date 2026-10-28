@@ -86,18 +86,18 @@ const select = engine.select(
 assert.equal(select.kind, "select");
 assert.equal(select.rows.take(0).msg.direction, "rtl");
 assert.equal(
-  engine.ask(reparsed, "PREFIX ex: <https://example.org/> ASK { ex:stmt ex:says ?msg }"),
+  engine.ask(reparsed, "PREFIX ex: <https://example.org/> ASK { ex:stmt ex:says ?msg }").boolean,
   true,
 );
 const graph = engine.construct(
   reparsed,
   "PREFIX ex: <https://example.org/> CONSTRUCT { ex:copy ex:says ?msg } WHERE { ex:stmt ex:says ?msg }",
-);
+).dataset;
 assert.equal(graph.size, 1);
 assert.match(
   engine.queryRaw(reparsed, "PREFIX ex: <https://example.org/> ASK { ex:stmt ex:says ?msg }", {
     format: "xml",
-  }),
+  }).body,
   /^<\?xml/,
 );
 
@@ -105,14 +105,14 @@ const mutable = new Dataset();
 engine.update(
   mutable,
   "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
-);
+).dataset;
 assert.equal(mutable.size, 1);
 const beforeFailedUpdate = mutable.canonicalize();
 assert.throws(() =>
   engine.update(
     mutable,
     "INSERT DATA { <https://example.org/x> <https://example.org/p> <https://example.org/y> } ; LOAD <https://example.org/doc>",
-  ),
+  ).dataset,
 );
 assert.equal(mutable.canonicalize(), beforeFailedUpdate);
 

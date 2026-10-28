@@ -18,6 +18,7 @@ use crate::status::PurrdfStatus;
 /// boundary that has one — a named DIMENSION. Opaque to C.
 #[derive(Debug)]
 pub struct PurrdfError {
+    execution_receipt: Option<CString>,
     pub(crate) code: PurrdfStatus,
     pub(crate) message: CString,
     /// The prepared-shapes-product admission dimension this refusal names, when it
@@ -56,6 +57,7 @@ impl PurrdfError {
     /// fails.
     pub(crate) fn new(code: PurrdfStatus, message: impl Into<String>) -> Self {
         Self {
+            execution_receipt: None,
             code,
             message: sanitized(&message.into()),
             dimension: None,
@@ -70,6 +72,16 @@ impl PurrdfError {
     /// as a `ParseError` with the engine's message.
     pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
         match error {
+            purrdf_validate::ShapesError::RuleExecution(error) => {
+                let receipt =
+                    purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+                let cause = error.into_cause();
+                let error = match cause {
+                    purrdf_rs::shapes::rules::RulesError::Shapes(error) => Self::shapes(error),
+                    other => Self::new(PurrdfStatus::ParseError, other.to_string()),
+                };
+                error.with_execution_receipt(&receipt)
+            }
             purrdf_validate::ShapesError::Storage(error) => {
                 Self::from_diagnostic(PurrdfStatus::StorageError, &error.into())
             }
@@ -107,6 +119,7 @@ impl PurrdfError {
     /// The [`PurrdfStatus::ShapesImportError`] for `error`.
     pub(crate) fn shapes_import(error: &purrdf_validate::ShapesImportError) -> Self {
         Self {
+            execution_receipt: None,
             code: PurrdfStatus::ShapesImportError,
             message: sanitized(&error.to_string()),
             dimension: None,
@@ -126,6 +139,7 @@ impl PurrdfError {
     /// exactly how a renamed dimension would reach C hosts under its old name.
     pub(crate) fn product(dimension: Option<&'static str>, message: impl Into<String>) -> Self {
         Self {
+            execution_receipt: None,
             code: PurrdfStatus::ShapesProductError,
             message: sanitized(&message.into()),
             dimension: dimension.map(sanitized),
@@ -143,6 +157,28 @@ impl PurrdfError {
         );
         error.diagnostic = Some(sanitized(&diagnostic.to_json().to_string()));
         error
+    }
+
+    /// Attach the actual native receipt to the original classified failure.
+    pub(crate) fn with_execution_receipt(mut self, receipt: &str) -> Self {
+        self.execution_receipt = Some(sanitized(receipt));
+        self
+    }
+}
+
+/// Borrow a failed execution's JSON receipt, or null when no execution was attempted.
+///
+/// # Safety
+/// `error` must be null or a live error handle; the returned text lives with it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_execution_receipt_json(
+    error: *const PurrdfError,
+) -> *const c_char {
+    unsafe {
+        error
+            .as_ref()
+            .and_then(|error| error.execution_receipt.as_ref())
+            .map_or(std::ptr::null(), |receipt| receipt.as_ptr())
     }
 }
 

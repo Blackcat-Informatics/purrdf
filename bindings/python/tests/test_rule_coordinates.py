@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
+import json
 import pytest
-
 import purrdf
 
 EX = "http://example.org/"
@@ -40,7 +40,7 @@ def _run(route, law, **coordinates):
         result = purrdf.shapes.apply_rules("", **source, explain=True, **options)
         text = result["inferred"]
         assert result["proof"] and "derived" in result["proof"]
-    assert result["diagnostics"] == []
+    assert result["diagnostics"] == [] and len(json.loads(result["execution_receipt_json"])["programIdentity"]) == 64
     store = purrdf.Store()
     store.load(text, purrdf.RdfFormat.N_TRIPLES)
     rows = list(store.query(f"SELECT ?p ?o {{ <{EX}s> ?p ?o }} ORDER BY ?p"))

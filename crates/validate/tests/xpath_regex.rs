@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Every `*_with_xpath_regex` entry point of the shared host boundary: `None` is its
-//! compatibility twin's exact answer, each dated law shows a behaviour only it has, and a
+//! compatibility twin's exact RDF, proof and diagnostic answer (sampled receipts belong
+//! to each request), each dated law shows a behaviour only it has, and a
 //! resource the law withholds refuses the request beside the admitted neighbour at the
 //! bound.
 
@@ -323,7 +324,11 @@ fn entail(
     };
     let selected = entail_to_ntriples_with_xpath_regex(&request, law)?;
     if law.is_none() {
-        assert_eq!(selected, entail_to_ntriples(&request).unwrap());
+        let compatibility = entail_to_ntriples(&request).unwrap();
+        assert_eq!(
+            (&selected.ntriples, &selected.diagnostics),
+            (&compatibility.ntriples, &compatibility.diagnostics),
+        );
     }
     Ok(selected.ntriples)
 }
@@ -346,7 +351,19 @@ fn rules(
     };
     let selected = apply_rules_to_ntriples_with_xpath_regex(&request, law)?;
     if law.is_none() {
-        assert_eq!(selected, apply_rules_to_ntriples(&request).unwrap());
+        let compatibility = apply_rules_to_ntriples(&request).unwrap();
+        assert_eq!(
+            (
+                &selected.inferred_ntriples,
+                &selected.proof,
+                &selected.diagnostics
+            ),
+            (
+                &compatibility.inferred_ntriples,
+                &compatibility.proof,
+                &compatibility.diagnostics,
+            ),
+        );
     }
     Ok(selected.inferred_ntriples)
 }
@@ -423,11 +440,15 @@ fn a_rules_or_expression_resource_refusal_answers_nothing_and_the_neighbour_answ
             rules(&over, "a", false, Some(law)).map(|_| ()),
             rules(&over, "a", true, Some(law)).map(|_| ()),
         ] {
-            assert!(matches!(
-                refused,
-                Err(XPathValidationError::Query(diagnostic))
-                    if diagnostic.code == Resource::PatternBytes.code()
-            ));
+            assert!(
+                matches!(&refused,
+                    Err(XPathValidationError::RuleExecution { cause, coordinates })
+                        if matches!(cause.as_ref(), XPathValidationError::Query(diagnostic)
+                            if diagnostic.code == Resource::PatternBytes.code())
+                            && coordinates.program_identity().is_some()
+                            && coordinates.snapshot_identity().is_some()),
+                "{refused:?}"
+            );
         }
         assert!(matches!(
             node_expr(&over, "a", Some(law)),

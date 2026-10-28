@@ -130,8 +130,8 @@ pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use protocol::SparqlProtocolRequest;
 pub use query::{
     CancellationToken, EntailmentQueryOutcome, GovernorEvidence, NegotiatedOutcome, PartialAnswers,
-    ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow,
-    SilencedInvocation, TrippedGovernor, UpdateOutcome, expression_error_codes,
+    ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, RawQueryResult, SelectResult,
+    SelectRow, SilencedInvocation, TrippedGovernor, UpdateOutcome, expression_error_codes,
     governor_dimensions, provenance_from_json, provenance_from_xml,
 };
 pub use stream::Sink;

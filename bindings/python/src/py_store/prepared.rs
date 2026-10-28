@@ -348,6 +348,8 @@ impl PyPreparedQuery {
         // exactly as the evaluation is, and a relation on this surface is data rather
         // than a Python callable precisely so nothing here can re-enter the
         // interpreter.
+        let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+        let capture_ref = &capture;
         let result = py.detach(move || {
             // The engine is built HERE rather than held, because it is deliberately
             // `!Sync` — its plan cache is a `RefCell` — so it cannot live in a Python
@@ -409,15 +411,26 @@ impl PyPreparedQuery {
                 purrdf_sparql_eval::QueryOptions::new()
                     .with_geo(&self.geo)
                     .with_env(&self.env)
-                    .with_division(self.division),
+                    .with_division(self.division)
+                    .with_coordinate_observer(capture_ref),
             );
             engine
                 .execute(&mut self.execution, &*dataset, options, |outcome| {
                     materialize_interned(&outcome)
                 })
                 .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
+        });
+        let receipt = capture
+            .into_coordinates()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let result = result.map_err(|error| {
+            presentation::with_execution_receipt(
+                py,
+                error,
+                purrdf_validate::query::execution_receipt_json(&receipt),
+            )
         })?;
-        materialize_results(py, result)
+        materialize_results(py, result, Some(&receipt))
     }
 
     fn __repr__(&self) -> String {

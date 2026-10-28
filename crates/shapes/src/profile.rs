@@ -392,7 +392,10 @@ impl Request {
             if let Some(state) = crate::sparql::current_governors()
                 && let Some(error) = crate::report::CompleteValidationError::resource(&state)
             {
-                return Err(error);
+                return Err(match outcome {
+                    Err(original) => error.with_rule_coordinates(original),
+                    Ok(_) => error,
+                });
             }
             let failure = scope
                 .runtime
@@ -400,14 +403,11 @@ impl Request {
                 .and_then(|runtime| runtime.take_failure());
             match outcome {
                 Ok(value) => failure.map_or(Ok(value), |failure| Err(failure.into_public())),
-                Err(error) => Err(match error {
-                    crate::report::CompleteValidationError::Execution(_)
-                    | crate::report::CompleteValidationError::Shapes(
-                        crate::error::ShapesError::Invalid(_)
-                        | crate::error::ShapesError::Processor(_),
-                    ) => failure.map_or(error, crate::report::ReportFailure::into_public),
-                    error => error,
+                Err(error) if error.is_generic_execution() => Err(match failure {
+                    Some(failure) => failure.into_public().with_rule_coordinates(error),
+                    None => error,
                 }),
+                Err(error) => Err(error),
             }
         };
         match &self.native {

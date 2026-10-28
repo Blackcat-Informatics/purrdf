@@ -52,7 +52,7 @@ function sha3Select(spell = (name) => name) {
 // The one solution row of `sha3Select(spell)`, from the raw JSON surface.
 function sha3Row(spell) {
   const ds = Dataset.parse(DATA, "ntriples");
-  const json = JSON.parse(ds.query(sha3Select(spell)));
+  const json = JSON.parse(ds.query(sha3Select(spell)).body);
   assert.equal(json.results.bindings.length, 1, "the fixture binds exactly one row");
   return json.results.bindings[0];
 }
@@ -96,7 +96,7 @@ test("the SHA-3 hyphen is part of the name, and a spaced hyphen still subtracts"
   // `SHA3` alone is no function: the spaced form is a hard parse failure that throws
   // into JavaScript rather than answering something else.
   assert.throws(() =>
-    ds.query("PREFIX ex: <https://example.org/> SELECT (SHA3 - 256 AS ?h) WHERE { ?s ex:message ?m }"),
+    ds.query("PREFIX ex: <https://example.org/> SELECT (SHA3 - 256 AS ?h) WHERE { ?s ex:message ?m }").body,
   );
 
   // And a genuine subtraction beside a SHA-3 call is still a subtraction: 64 - 4.
@@ -104,7 +104,7 @@ test("the SHA-3 hyphen is part of the name, and a spaced hyphen still subtracts"
     ds.query(
       "PREFIX ex: <https://example.org/> " +
         "SELECT (STRLEN(SHA3-256(?m)) - 4 AS ?n) WHERE { ?s ex:message ?m }",
-    ),
+    ).body,
   );
   assert.equal(json.results.bindings[0].n.value, "60");
 });

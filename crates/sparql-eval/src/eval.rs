@@ -530,6 +530,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) evidence_verdict: Option<purrdf_core::evidence::AnswerRequest>,
     /// The exact verdict which stopped the original answer producer, if any.
     pub(crate) evidence_stop: Option<purrdf_core::evidence::WitnessVerdict>,
+    pub(crate) annotation_range: Option<crate::expr::AnnotationRanges>,
     /// Original query-owned reverse identities, shared only over this same view.
     term_lookup: TermLookup<D::Id>,
     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
@@ -1342,6 +1343,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_search: None,
             evidence_verdict: None,
             evidence_stop: None,
+            annotation_range: None,
             term_lookup: TermLookup::default(),
             scratch: ScratchInterner::default(),
             computed_admission: Vec::new(),
@@ -2841,6 +2843,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_search: None,
             evidence_verdict: None,
             evidence_stop: None,
+            annotation_range: self.annotation_range.clone(),
             term_lookup: if self.growth.is_bounded() {
                 self.term_lookup.fork_admitted(&self.growth)?
             } else {
@@ -3231,6 +3234,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_search: None,
             evidence_verdict: None,
             evidence_stop: None,
+            annotation_range: None,
             term_lookup: if self.growth.is_bounded() {
                 self.term_lookup.fork_admitted(&self.growth)?
             } else {
@@ -3998,6 +4002,30 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     );
                 }
                 Ok(None) => {}
+            }
+            if let GraphPattern::Filter { expr, inner } = current_pattern
+                && matches!(inner.as_ref(), GraphPattern::Bgp { .. })
+            {
+                let ranges = crate::expr::annotation_range_constraint(expr, &runner.ctx.growth);
+                let evaluated = match ranges {
+                    Ok(Some(ranges)) => Some(crate::expr::eval_filter_range(
+                        current_pattern,
+                        expr,
+                        inner,
+                        Some(ranges),
+                        runner.ctx,
+                    )),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                };
+                if let Some(evaluated) = evaluated {
+                    break finish_ordinary_active(
+                        &mut runner.active,
+                        &mut *runner.ctx,
+                        current_pattern,
+                        evaluated,
+                    );
+                }
             }
             let after = match current_pattern {
                 GraphPattern::LeftJoin { .. } => Ok(Some(OrdinaryAfter::OptionalLeft)),

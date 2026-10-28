@@ -791,6 +791,16 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         Self: 'a;
     type ProbePlan = ();
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        const RESIDUE: Domain = Domain::new(b"purrdf-core/residue-snapshot/v1");
+        Ok(self.0.snapshot_identity()?.map(|identity| {
+            let mut hash = purrdf_hash::blake3::Hasher::new();
+            hash.update(RESIDUE.as_bytes());
+            hash.update(identity.as_bytes());
+            purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+        }))
+    }
+
     fn reserve_workspace(
         &self,
         bytes: u64,
@@ -869,6 +879,18 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.0.reifier_quads().filter(|q| self.keeps(q.g))
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        self.0
+            .annotation_quads_for_range(predicate, object, graph, range)
+            .filter(|quad| self.keeps(quad.g))
     }
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {

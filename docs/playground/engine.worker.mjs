@@ -193,19 +193,19 @@ const HANDLERS = {
     const out = ds.query(sparql, undefined, undefined, now, entropySeed); // throws on SERVICE/LOAD/parse/eval error
     let parsed = null;
     try {
-      parsed = JSON.parse(out);
+      parsed = JSON.parse(out.body);
     } catch {
       parsed = null;
     }
     if (parsed && (Object.hasOwn(parsed, "head") || Object.hasOwn(parsed, "boolean"))) {
-      return { kind: "srj", srj: parsed };
+      return { kind: "srj", srj: parsed, executionReceipt: out.executionReceipt };
     }
     // CONSTRUCT / DESCRIBE → Turtle text, or TriG when the result carries a named
     // graph (a quad template — a first-party extension, not a SPARQL 1.2 feature):
     // Turtle has no `GRAPH` construct, so the
     // engine widens to Turtle's dataset superset rather than rendering the answer as
     // an empty document. Both are Turtle-family text and display identically.
-    return { kind: "turtle", turtle: out };
+    return { kind: "turtle", turtle: out.body, executionReceipt: out.executionReceipt };
   },
 
   shaclValidate({ shapes, now, entropySeed }) {

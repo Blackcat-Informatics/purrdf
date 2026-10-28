@@ -351,6 +351,10 @@ class _QuerySolutionIterator:
 class QuerySolutions:
 
     @property
+    def execution_receipt_json(self) -> str | None:
+        ...
+
+    @property
     def variables(self) -> list[Variable]:
         ...
 
@@ -365,6 +369,10 @@ class QuerySolutions:
 
 class QueryTriples:
 
+    @property
+    def execution_receipt_json(self) -> str | None:
+        ...
+
     def __iter__(self) -> QueryTriples:
         ...
 
@@ -378,6 +386,10 @@ class QueryTriples:
         ...
 
 class QueryQuads:
+
+    @property
+    def execution_receipt_json(self) -> str | None:
+        ...
 
     def __iter__(self) -> QueryQuads:
         ...
@@ -418,6 +430,10 @@ class SerializeLoss:
         ...
 
 class QueryBoolean:
+
+    @property
+    def execution_receipt_json(self) -> str | None:
+        ...
 
     def __bool__(self) -> bool:
         ...
@@ -527,6 +543,10 @@ class RelationAttestations(TypedDict):
 class QueryOutcome:
 
     @property
+    def execution_receipt_json(self) -> str:
+        ...
+
+    @property
     def is_complete(self) -> bool:
         ...
 
@@ -575,6 +595,10 @@ class EntailmentQueryOutcome:
 class UpdateOutcome:
 
     @property
+    def execution_receipt_json(self) -> str:
+        ...
+
+    @property
     def is_applied(self) -> bool:
         ...
 
@@ -583,7 +607,7 @@ class UpdateOutcome:
         ...
 
     @property
-    def evidence(self) -> GovernorEvidence:
+    def evidence(self) -> GovernorEvidence | None:
         ...
 
 class PreparedQuery:
@@ -626,7 +650,7 @@ class _QuadStore:
     def query_entailment_governed(self, query: str, entailment: str, *, program: str=..., imports: Sequence[tuple[str, str]] | None=..., premise_iris: Sequence[str] | None=..., max_stored_facts: int | None=..., max_join_steps: int | None=..., max_term_arena_bytes: int | None=..., substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> EntailmentQueryOutcome:
         ...
 
-    def update(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=...) -> None:
+    def update(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=...) -> UpdateOutcome:
         ...
 
     def update_governed(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> UpdateOutcome:

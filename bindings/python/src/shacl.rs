@@ -292,6 +292,13 @@ fn requested_law(
 /// SPARQL method's is ([`crate::py_store::presentation::refusal_value_error`]).
 fn xpath_error(py: Python<'_>, error: XPathValidationError) -> PyErr {
     match error {
+        XPathValidationError::RuleExecution { cause, coordinates } => {
+            crate::py_store::presentation::with_execution_receipt(
+                py,
+                xpath_error(py, *cause),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            )
+        }
         XPathValidationError::Shapes(error) => shapes_error(py, error),
         other => match purrdf_validate::xpath_regex::validation_refusal_code(&other) {
             Some(code) => {
@@ -461,6 +468,10 @@ fn entail(
         })
         .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
+    out.set_item(
+        "execution_receipt_json",
+        purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates),
+    )?;
     out.set_item("ntriples", outcome.ntriples)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
     Ok(out.into_any().unbind())
@@ -577,6 +588,10 @@ fn apply_rules(
         })
         .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
+    out.set_item(
+        "execution_receipt_json",
+        purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates),
+    )?;
     out.set_item("inferred", outcome.inferred_ntriples)?;
     out.set_item("proof", outcome.proof)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
@@ -1947,6 +1962,14 @@ create_exception!(
 /// `.kind` and `.iris` always present, and `ValueError` for anything else.
 fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
+        purrdf_validate::ShapesError::RuleExecution(error) => {
+            let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+            let raised = match error.into_cause() {
+                purrdf_shapes::rules::RulesError::Shapes(error) => shapes_error(py, error),
+                other => pyo3::exceptions::PyValueError::new_err(other.to_string()),
+            };
+            crate::py_store::presentation::with_execution_receipt(py, raised, receipt)
+        }
         purrdf_validate::ShapesError::Storage(error) => crate::py_store::storage_value_error(error),
         purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
         purrdf_validate::ShapesError::Recursion(refusal) => {

@@ -86,7 +86,9 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
             assert_eq!(
                 engine
                     .ask(&dataset, query, None, owned(law), None, None)
-                    .expect(&what),
+                    .expect(&what)
+                    .boolean()
+                    .expect("ASK payload"),
                 expected,
                 "ask {what}"
             );
@@ -113,6 +115,7 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
                             None
                         )
                         .expect(&what)
+                        .body()
                 ),
                 expected,
                 "queryRaw {what}"
@@ -122,6 +125,7 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
                     &dataset
                         .query(query, None, owned(law), None, None)
                         .expect(&what)
+                        .body()
                 ),
                 expected,
                 "Dataset.query {what}"
@@ -202,6 +206,8 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
             engine
                 .select(&dataset, SELECT_BACKREFERENCE, None, owned(law), None, None)
                 .expect(&what)
+                .take_select()
+                .expect("SELECT payload")
                 .row_count(),
             rows,
             "select {what}"
@@ -209,6 +215,8 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
         let replaced = engine
             .select(&dataset, SELECT_REPLACE, None, owned(law), None, None)
             .expect(&what)
+            .take_select()
+            .expect("SELECT payload")
             .next_row()
             .expect("one row")
             .get("r");
@@ -228,6 +236,8 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
                     None
                 )
                 .expect(&what)
+                .take_dataset()
+                .expect("graph payload")
                 .size(),
             rows,
             "construct {what}"
@@ -243,6 +253,8 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
                     None
                 )
                 .expect(&what)
+                .take_dataset()
+                .expect("graph payload")
                 .size()
                 > 0,
             non_capturing,
@@ -259,7 +271,8 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
                 None,
                 None,
             )
-            .expect(&what);
+            .expect(&what)
+            .body();
         assert_eq!(
             configured.contains("ex:matched"),
             backreference,
@@ -278,11 +291,13 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
                 None,
                 None,
             )
-            .expect(&what);
+            .expect(&what)
+            .body();
         assert_eq!(contextual, configured, "queryRawWithContext {what}");
         let explained = engine
             .explain_query(&dataset, SELECT_BACKREFERENCE, None, owned(law), None, None)
-            .expect(&what);
+            .expect(&what)
+            .body();
         let filter = explained
             .lines()
             .find(|line| line.contains(" Filter fuel="))
@@ -373,7 +388,12 @@ fn a_native_resource_refusal_is_the_operation_s_error() {
                 refused.rendered()
             );
             match run(ask(64 * 1024)) {
-                Ok(JobOutcome::Query(_) | JobOutcome::Raw(_) | JobOutcome::Governed(_)) => {}
+                Ok(
+                    JobOutcome::Query(..)
+                    | JobOutcome::QueryRaw { .. }
+                    | JobOutcome::Raw(_)
+                    | JobOutcome::Governed(_),
+                ) => {}
                 other => panic!("{law} {kind:?}: the bounded pattern answers, got {other:?}"),
             }
         }
@@ -938,7 +958,8 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
                 None,
                 None,
             )
-            .unwrap_or_else(|_| panic!("{law:?}: the query answers"));
+            .unwrap_or_else(|_| panic!("{law:?}: the query answers"))
+            .body();
         let document = purrdf_lex::json::read(&srj).expect("SRJ parses");
         (0..)
             .map_while(|index| document.pointer(&format!("/results/bindings/{index}/r/value")))
@@ -982,6 +1003,7 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
                     None,
                 )
                 .unwrap_or_else(|_| panic!("{law:?}: the replacement answers"))
+                .body()
         };
         let expected = replaced(None);
         assert!(expected.contains("[a]"), "{pattern}");
@@ -1067,7 +1089,8 @@ fn large_counts_of_one_class_or_one_group_answer_at_the_production_defaults() {
                 None,
                 None,
             )
-            .unwrap_or_else(|_| panic!("{law}: the query answers"));
+            .unwrap_or_else(|_| panic!("{law}: the query answers"))
+            .body();
         let document = purrdf_lex::json::read(&srj).expect("SRJ parses");
         (0..)
             .map_while(|index| document.pointer(&format!("/results/bindings/{index}/r/value")))

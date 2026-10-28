@@ -688,17 +688,17 @@ graph <https://example.org/g> { ex:c ex:knows ex:a . }
 
   // SERVICE SILENT and LOAD SILENT succeed with nothing fetched.
   const ds = Dataset.parse("@prefix ex: <https://example.org/> . ex:a ex:p ex:b .", "turtle");
-  assert.throws(() => ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }"));
+  assert.throws(() => ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }").body);
   const json = JSON.parse(
-    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }").body,
   );
   assert.equal(json.results.bindings.length, 1);
   assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
   assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
   const engine = new QueryEngine();
   const before = ds.canonicalize();
-  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>"));
-  engine.update(ds, "LOAD SILENT <https://example.org/doc>");
+  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>").dataset);
+  engine.update(ds, "LOAD SILENT <https://example.org/doc>").dataset;
   assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
 
   // A genuine query error still throws on the governed lane.
@@ -743,55 +743,55 @@ test("every async twin evaluates", async () => {
   assert.deepEqual(select.variables, selectSync.variables);
   assert.deepEqual(rowsOf(select), rowsOf(selectSync));
 
-  assert.equal(await engine.askAsync(data, ASK), true);
-  assert.equal(await engine.askAsync(data, `ASK { ?s <${EX}absent> ?o }`), false);
-  assert.equal(engine.ask(data, ASK), true);
+  assert.equal(await engine.askAsync(data, ASK).then(result => result.boolean), true);
+  assert.equal(await engine.askAsync(data, `ASK { ?s <${EX}absent> ?o }`).then(result => result.boolean), false);
+  assert.equal(engine.ask(data, ASK).boolean, true);
 
-  const constructed = await engine.constructAsync(data, CONSTRUCT);
+  const constructed = await engine.constructAsync(data, CONSTRUCT).then(result => result.dataset);
   assert.ok(constructed instanceof Dataset);
   assert.equal(constructed.size, 2);
-  assert.ok(constructed.isomorphic(engine.construct(data, CONSTRUCT)));
+  assert.ok(constructed.isomorphic(engine.construct(data, CONSTRUCT).dataset));
 
-  const described = await engine.describeAsync(data, DESCRIBE);
-  const describedSync = engine.describe(data, DESCRIBE);
+  const described = await engine.describeAsync(data, DESCRIBE).then(result => result.dataset);
+  const describedSync = engine.describe(data, DESCRIBE).dataset;
   assert.ok(described.size > 0);
   assert.ok(described.isomorphic(describedSync));
 
   // queryRawAsync: JSON and Turtle, the default format, and a provenance namespace.
-  assert.equal(await engine.queryRawAsync(data, SELECT, { format: "json" }), engine.queryRaw(data, SELECT, { format: "json" }));
-  const turtle = await engine.queryRawAsync(data, CONSTRUCT, { format: "turtle" });
-  assert.equal(turtle, engine.queryRaw(data, CONSTRUCT, { format: "turtle" }));
+  assert.equal(await engine.queryRawAsync(data, SELECT, { format: "json" }).then(result => result.body), engine.queryRaw(data, SELECT, { format: "json" }).body);
+  const turtle = await engine.queryRawAsync(data, CONSTRUCT, { format: "turtle" }).then(result => result.body);
+  assert.equal(turtle, engine.queryRaw(data, CONSTRUCT, { format: "turtle" }).body);
   assert.match(turtle, /back/);
-  assert.equal(await engine.queryRawAsync(data, SELECT), engine.queryRaw(data, SELECT));
+  assert.equal(await engine.queryRawAsync(data, SELECT).then(result => result.body), engine.queryRaw(data, SELECT).body);
   const provenanceNamespace = { prefix: "prov", iri: `${EX}ns/prov#` };
   assert.equal(
-    await engine.queryRawAsync(data, ASK, { format: "json", provenanceNamespace }),
-    engine.queryRaw(data, ASK, { format: "json", provenanceNamespace }),
+    await engine.queryRawAsync(data, ASK, { format: "json", provenanceNamespace }).then(result => result.body),
+    engine.queryRaw(data, ASK, { format: "json", provenanceNamespace }).body,
   );
 
   // queryRawBytesAsync: the UTF-8 of the string.
-  const json = await engine.queryRawAsync(data, SELECT, { format: "json" });
-  const bytes = await engine.queryRawBytesAsync(data, SELECT, { format: "json" });
+  const json = await engine.queryRawAsync(data, SELECT, { format: "json" }).then(result => result.body);
+  const bytes = await engine.queryRawBytesAsync(data, SELECT, { format: "json" }).then(result => result.body);
   assert.ok(bytes instanceof Uint8Array);
   assert.deepEqual(bytes, encoder.encode(json));
 
   // The configured and compiled-context JSON-LD lanes.
   const optionsJson = JSON.stringify({ version: 1, mode: "context", prefixes: { ex: EX } });
   assert.equal(
-    await engine.queryRawAsync(data, CONSTRUCT, { format: "jsonld", optionsJson }),
-    engine.queryRawConfigured(data, CONSTRUCT, undefined, "jsonld", optionsJson),
+    await engine.queryRawAsync(data, CONSTRUCT, { format: "jsonld", optionsJson }).then(result => result.body),
+    engine.queryRawConfigured(data, CONSTRUCT, undefined, "jsonld", optionsJson).body,
   );
   const context = new CompiledJsonLdContext(optionsJson);
   assert.equal(
-    await engine.queryRawWithContextAsync(data, CONSTRUCT, "jsonld", context),
-    engine.queryRawWithContext(data, CONSTRUCT, undefined, "jsonld", context),
+    await engine.queryRawWithContextAsync(data, CONSTRUCT, "jsonld", context).then(result => result.body),
+    engine.queryRawWithContext(data, CONSTRUCT, undefined, "jsonld", context).body,
   );
 
   // Dataset#queryAsync, with and without a base.
-  assert.equal(await data.queryAsync(SELECT), data.query(SELECT));
+  assert.equal(await data.queryAsync(SELECT).then(result => result.body), data.query(SELECT).body);
   assert.equal(
-    await data.queryAsync("SELECT ?s WHERE { ?s <p> ?o }", { base: EX }),
-    data.query("SELECT ?s WHERE { ?s <p> ?o }", EX),
+    await data.queryAsync("SELECT ?s WHERE { ?s <p> ?o }", { base: EX }).then(result => result.body),
+    data.query("SELECT ?s WHERE { ?s <p> ?o }", EX).body,
   );
 
   // The governed query twin: equal answers, the async evidence attached.
@@ -824,8 +824,8 @@ test("every async twin evaluates", async () => {
   const INSERT = `INSERT { ?o <${EX}inv> ?s } WHERE { ?s <${EX}p> ?o }`;
   const target = twinData();
   const generation = target.generation;
-  assert.equal(await engine.updateAsync(target, INSERT), target);
-  const control = engine.update(twinData(), INSERT);
+  assert.equal(await engine.updateAsync(target, INSERT).then(result => result.dataset), target);
+  const control = engine.update(twinData(), INSERT).dataset;
   assert.ok(target.isomorphic(control));
   assert.equal(target.size, 6);
   assert.equal(target.generation, generation + 1n);
@@ -845,9 +845,9 @@ test("every async twin evaluates", async () => {
   // Kind mismatches and parse errors carry the synchronous messages.
   for (const [asyncCall, syncCall] of [
     [() => engine.selectAsync(data, ASK), () => engine.select(data, ASK)],
-    [() => engine.askAsync(data, SELECT), () => engine.ask(data, SELECT)],
-    [() => engine.constructAsync(data, SELECT), () => engine.construct(data, SELECT)],
-    [() => engine.describeAsync(data, SELECT), () => engine.describe(data, SELECT)],
+    [() => engine.askAsync(data, SELECT).then(result => result.boolean), () => engine.ask(data, SELECT).boolean],
+    [() => engine.constructAsync(data, SELECT).then(result => result.dataset), () => engine.construct(data, SELECT).dataset],
+    [() => engine.describeAsync(data, SELECT).then(result => result.dataset), () => engine.describe(data, SELECT).dataset],
     [() => engine.queryAsync(data, "SELEKT"), () => engine.query(data, "SELEKT")],
   ]) {
     const asyncError = await rejection(asyncCall());
@@ -942,7 +942,7 @@ test("AbortSignal cancels a running query", async () => {
   setTimeout(() => controller.abort(), 20);
   const error = await rejection(engine.queryAsync(wide, ENDLESS_COUNT, { signal: controller.signal, yieldEveryPolls: 1024 }));
   assert.equal(error.name, "AbortError");
-  assert.equal(error, controller.signal.reason);
+  assert.equal(error.cause, controller.signal.reason);
 
   // Governed: the trip is an outcome carrying certain rows.
   const governedController = new AbortController();
@@ -1219,7 +1219,7 @@ test("LOAD resolves through resolveLoad", async () => {
         requests.push({ request, signal: ctx.signal });
         return answer();
       },
-    });
+    }).then(result => result.dataset);
     assert.equal(returned, target);
     assert.equal(requests.length, 1, shape);
     const { accept, ...request } = requests[0].request;
@@ -1242,19 +1242,19 @@ test("LOAD without resolveLoad fails unless SILENT", async () => {
   const engine = new QueryEngine();
   const target = Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads");
   const before = target.canonicalize();
-  const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`));
-  const syncError = syncThrow(() => engine.update(Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"), `LOAD <${DOC}>`));
+  const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`).then(result => result.dataset));
+  const syncError = syncThrow(() => engine.update(Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"), `LOAD <${DOC}>`).dataset);
   assert.equal(error.message, syncError.message);
   assert.match(error.message, /^error native-sparql-load-no-resolver: /);
   assert.equal(target.canonicalize(), before);
   // The neighbour: LOAD SILENT succeeds with nothing fetched.
-  assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`), target);
+  assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`).then(result => result.dataset), target);
   assert.equal(target.canonicalize(), before);
   // And with a resolveLoad whose document cannot be fetched, the same.
   const resolveLoad = async () => ({ kind: "transport", message: "the example.org host is down" });
-  assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`, { resolveLoad }), target);
+  assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`, { resolveLoad }).then(result => result.dataset), target);
   assert.equal(target.canonicalize(), before);
-  await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }));
+  await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }).then(result => result.dataset));
 });
 
 test("LOAD: a host policy denial reads distinctly from a catalog capability denial, and LOAD SILENT loads nothing over either", async () => {
@@ -1263,13 +1263,13 @@ test("LOAD: a host policy denial reads distinctly from a catalog capability deni
   // A bare host denial: no catalog anywhere, the host's own resolveLoad decides on its
   // own. It never invents a catalog-capability cause, and carries its own code.
   const hostDenial = { resolveLoad: async () => ({ kind: "denied", message: "tenant may not fetch" }) };
-  const error = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, hostDenial));
+  const error = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, hostDenial).then(result => result.dataset));
   assert.match(error.message, /LOAD <http:\/\/example\.org\/doc>: the host denied the request: tenant may not fetch/);
   assert.doesNotMatch(error.message, /withholds the .* capability/);
   assert.equal(error.code, "native-sparql-load-host-denied");
   // LOAD SILENT succeeds over the denial with nothing loaded.
   const silentTarget = new Dataset();
-  assert.equal(await engine.updateAsync(silentTarget, `LOAD SILENT <${DOC}>`, hostDenial), silentTarget);
+  assert.equal(await engine.updateAsync(silentTarget, `LOAD SILENT <${DOC}>`, hostDenial).then(result => result.dataset), silentTarget);
   assert.equal(silentTarget.size, 0);
 
   // The neighbour: a real catalog refusal, decided in Rust before the host is asked —
@@ -1282,11 +1282,11 @@ test("LOAD: a host policy denial reads distinctly from a catalog capability deni
     asked.push(request.iri);
     return { text: `<${EX}s> <${EX}p> "loaded" .`, mediaType: "text/turtle" };
   };
-  const catalogError = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }));
+  const catalogError = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset));
   assert.match(catalogError.message, /withholds the network capability/);
   assert.equal(catalogError.code, "native-sparql-load-denied");
   const catalogTarget = new Dataset();
-  assert.equal(await engine.updateAsync(catalogTarget, `LOAD SILENT <${DOC}>`, { resolveLoad, catalog }), catalogTarget);
+  assert.equal(await engine.updateAsync(catalogTarget, `LOAD SILENT <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset), catalogTarget);
   assert.equal(catalogTarget.size, 0);
   assert.deepEqual(asked, [], "a source the catalog refuses is never fetched");
   // A source the same catalog grants `network` is fetched and loaded.
@@ -1299,7 +1299,7 @@ test("LOAD: a host policy denial reads distinctly from a catalog capability deni
       return resolveLoad(request, ctx);
     },
     catalog,
-  });
+  }).then(result => result.dataset);
   assert.equal(loaded.size, 1);
   assert.deepEqual(seen.headers, [["X-Tenant", "a"]], "the profile's headers are the fetch's");
 });
@@ -1320,7 +1320,7 @@ test("LOAD redirect: every hop is resolved and authorized in Rust, with its own 
     return { text: `<${EX}s> <${EX}p> <rel> .`, mediaType: "text/turtle", base: request.iri };
   };
   const target = new Dataset();
-  await engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  await engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset);
   assert.deepEqual(hops, [
     { iri: DOC, headers: [["X-Key", "source"]] },
     { iri: `${EX}moved/doc`, headers: [["X-Mirror", "m"]] },
@@ -1337,7 +1337,7 @@ test("LOAD redirect: every hop is resolved and authorized in Rust, with its own 
     unlisted.push(request.iri);
     return { kind: "redirect", location: "https://elsewhere.example.org/doc" };
   };
-  const denied = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: toUnlisted, catalog }));
+  const denied = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: toUnlisted, catalog }).then(result => result.dataset));
   assert.equal(denied.code, "native-sparql-load-denied");
   assert.deepEqual(unlisted, [DOC], "the unlisted location is never fetched");
 
@@ -1347,7 +1347,7 @@ test("LOAD redirect: every hop is resolved and authorized in Rust, with its own 
     loop.push(request.iri);
     return { kind: "redirect", location: request.iri };
   };
-  const exceeded = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: looping, catalog }));
+  const exceeded = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: looping, catalog }).then(result => result.dataset));
   assert.equal(exceeded.code, "native-sparql-load-failed");
   assert.match(exceeded.message, /exceeded 5 redirect hops/);
   assert.equal(loop.length, 6, "the source and five followed hops");
@@ -1357,13 +1357,13 @@ test("a LOAD parse error is the LOAD's decode failure", async () => {
   const engine = new QueryEngine();
   const resolveLoad = async () => ({ text: "this is not turtle", mediaType: "text/turtle" });
   const target = new Dataset();
-  const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }));
+  const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }).then(result => result.dataset));
   assert.match(error.message, /native-sparql-load-decode: LOAD <http:\/\/example\.org\/doc>: .*native-codec-parse/);
   assert.equal(error.code, "native-sparql-load-decode");
   assert.equal(target.size, 0);
   // The SILENT neighbour: the same unparseable document is swallowed — a no-op.
   const silentTarget = new Dataset();
-  assert.equal(await engine.updateAsync(silentTarget, `LOAD SILENT <${DOC}>`, { resolveLoad }), silentTarget);
+  assert.equal(await engine.updateAsync(silentTarget, `LOAD SILENT <${DOC}>`, { resolveLoad }).then(result => result.dataset), silentTarget);
   assert.equal(silentTarget.size, 0);
   assert.equal(silentTarget.generation, 1n, "the SILENT update committed (an empty change)");
 });
@@ -1376,13 +1376,13 @@ test("INSERT WHERE federates through resolveService", async () => {
     target,
     `INSERT { ?s <${EX}x> ?x } WHERE { ?s <${EX}p> ?o . SERVICE <${EX}sparql> { ?o <${EX}q> ?x } }`,
     { resolveService: mock.resolveService },
-  );
+  ).then(result => result.dataset);
   assert.equal(mock.calls.length, 1);
   assert.match(mock.calls[0].request.queryText, /^SELECT/);
   assert.deepEqual(rowsOf(engine.select(target, `SELECT ?s ?x WHERE { ?s <${EX}x> ?x }`)), JOINED);
   // The neighbour: the synchronous update has no source and refuses.
   const syncError = syncThrow(() =>
-    engine.update(local(), `INSERT { ?s <${EX}x> ?x } WHERE { ?s <${EX}p> ?o . SERVICE <${EX}sparql> { ?o <${EX}q> ?x } }`),
+    engine.update(local(), `INSERT { ?s <${EX}x> ?x } WHERE { ?s <${EX}p> ?o . SERVICE <${EX}sparql> { ?o <${EX}q> ?x } }`).dataset,
   );
   assert.match(syncError.message, /no remote query source configured/);
 });
@@ -1393,7 +1393,7 @@ test("dataset mutation during an async update is refused", async () => {
   const engine = new QueryEngine();
   const target = local();
   const deferred = deferredResolver();
-  const pending = engine.updateAsync(target, FEDERATED_INSERT, { resolveService: deferred.resolveService });
+  const pending = engine.updateAsync(target, FEDERATED_INSERT, { resolveService: deferred.resolveService }).then(result => result.dataset);
   await turnUntil(() => deferred.pending.length === 1, "the update suspending on its SERVICE");
   target.delete(target.quads()[0]);
   assert.equal(target.generation, 1n);
@@ -1412,7 +1412,7 @@ test("dataset mutation during an async update is refused", async () => {
   const neighbourDeferred = deferredResolver();
   const neighbourPending = engine.updateAsync(untouched, FEDERATED_INSERT, {
     resolveService: neighbourDeferred.resolveService,
-  });
+  }).then(result => result.dataset);
   await turnUntil(() => neighbourDeferred.pending.length === 1, "the neighbour suspending");
   untouched.add(untouched.quads()[0]);
   assert.equal(untouched.generation, 0n);
@@ -1477,7 +1477,7 @@ test("refusal pair: an update begun while another update of the dataset is in fl
   const shared = local();
   const first = deferredResolver();
   const second = deferredResolver();
-  const firstPending = engine.updateAsync(shared, insertAs("first"), { resolveService: first.resolveService });
+  const firstPending = engine.updateAsync(shared, insertAs("first"), { resolveService: first.resolveService }).then(result => result.dataset);
   await turnUntil(() => first.pending.length === 1, "the first update suspending");
   const refused = await rejection(
     engine.updateGovernedAsync(shared, insertAs("second"), { resolveService: second.resolveService }),
@@ -1493,7 +1493,7 @@ test("refusal pair: an update begun while another update of the dataset is in fl
   assert.equal(shared.size, 4);
 
   // The neighbour: the same update, begun once the first has finished, applies.
-  const sequential = engine.updateAsync(shared, insertAs("second"), { resolveService: second.resolveService });
+  const sequential = engine.updateAsync(shared, insertAs("second"), { resolveService: second.resolveService }).then(result => result.dataset);
   await turnUntil(() => second.pending.length === 1, "the sequential update suspending");
   second.pending[0].resolve(REMOTE_OX);
   assert.equal(await sequential, shared);
@@ -1506,8 +1506,8 @@ test("refusal pair: an update begun while another update of the dataset is in fl
   const onLeft = deferredResolver();
   const onRight = deferredResolver();
   const pair = [
-    engine.updateAsync(left, insertAs("first"), { resolveService: onLeft.resolveService }),
-    engine.updateAsync(right, insertAs("second"), { resolveService: onRight.resolveService }),
+    engine.updateAsync(left, insertAs("first"), { resolveService: onLeft.resolveService }).then(result => result.dataset),
+    engine.updateAsync(right, insertAs("second"), { resolveService: onRight.resolveService }).then(result => result.dataset),
   ];
   await turnUntil(
     () => onLeft.pending.length === 1 && onRight.pending.length === 1,
@@ -1777,13 +1777,13 @@ test("refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads",
   const text = `<${EX}s> <${EX}p> "loaded" .`;
   const unknownTarget = new Dataset();
   const refused = await rejection(
-    engine.updateAsync(unknownTarget, `LOAD <${DOC}>`, { resolveLoad: async () => ({ text, mediaType: "text/x-unknown" }) }),
+    engine.updateAsync(unknownTarget, `LOAD <${DOC}>`, { resolveLoad: async () => ({ text, mediaType: "text/x-unknown" }) }).then(result => result.dataset),
   );
   assert.match(refused.message, /native-sparql-load-decode: LOAD <http:\/\/example\.org\/doc>: unsupported RDF format "text\/x-unknown"/);
   assert.equal(refused.code, "native-sparql-load-decode");
   assert.equal(unknownTarget.size, 0);
   const turtleTarget = new Dataset();
-  await engine.updateAsync(turtleTarget, `LOAD <${DOC}>`, { resolveLoad: async () => ({ text, mediaType: "text/turtle" }) });
+  await engine.updateAsync(turtleTarget, `LOAD <${DOC}>`, { resolveLoad: async () => ({ text, mediaType: "text/turtle" }) }).then(result => result.dataset);
   assert.equal(turtleTarget.size, 1);
 });
 

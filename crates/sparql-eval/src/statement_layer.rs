@@ -99,6 +99,15 @@ pub(crate) struct StatementProbe<I: ViewTermId> {
 pub(crate) fn visit_quads<D: DatasetView>(
     dataset: &D,
     probe: StatementProbe<D::Id>,
+    emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
+) {
+    visit_quads_range(dataset, probe, None, emit);
+}
+
+pub(crate) fn visit_quads_range<D: DatasetView>(
+    dataset: &D,
+    probe: StatementProbe<D::Id>,
+    range: Option<purrdf_core::AnnotationValueRange<'_>>,
     mut emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
 ) {
     let StatementProbe {
@@ -173,6 +182,14 @@ pub(crate) fn visit_quads<D: DatasetView>(
     }
 
     // ── annotation rows: (reifier, predicate, object) ───────────────────────
+    if let Some(range) = range.as_ref() {
+        for quad in dataset.annotation_quads_for_range(p, o, graph, range) {
+            if s.is_none_or(|subject| quad.s == subject) && emit(quad).is_break() {
+                return;
+            }
+        }
+        return;
+    }
     match s {
         Some(reifier) => {
             for quad in dataset

@@ -97,6 +97,211 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
     crate::vm::Linked::link(program, expr, schema, ctx).ebv(Some(expr), row, schema, ctx)
 }
 
+/// The existing lexical owner and numeric meter admit the same transient work.
+pub(crate) struct AnnotationRangeMemory<'a, 'd, D: DatasetView + Sync> {
+    frame: std::sync::Mutex<crate::workspace::LexicalFrame>,
+    context: &'a EvalCtx<'d, D>,
+    stopped: std::sync::atomic::AtomicBool,
+}
+impl<D: DatasetView + Sync> std::fmt::Debug for AnnotationRangeMemory<'_, '_, D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnnotationRangeMemory")
+            .finish_non_exhaustive()
+    }
+}
+impl<'a, 'd, D: DatasetView + Sync> AnnotationRangeMemory<'a, 'd, D> {
+    pub(crate) fn new(context: &'a EvalCtx<'d, D>) -> Self {
+        Self {
+            frame: std::sync::Mutex::new(crate::workspace::LexicalFrame::new(&context.growth)),
+            context,
+            stopped: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    pub(crate) fn take_failure(&self) -> Option<EvalError> {
+        self.frame
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take_failure()
+    }
+}
+impl<D: DatasetView + Sync> purrdf_core::AnnotationRangeWorkspace
+    for AnnotationRangeMemory<'_, '_, D>
+{
+    fn resize(&self, bytes: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.frame
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .resize_live(bytes)
+            .map_err(|_| purrdf_lex::allocation::StorageError::AdmissionFailed)
+    }
+    fn admit_transient(&self, bytes: usize) -> bool {
+        if self.stopped() {
+            return false;
+        }
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        match self
+            .context
+            .charge_exact_numeric(purrdf_xsd::exact::Cost::new(0, bytes))
+        {
+            Ok(()) => true,
+            Err(tripped) => {
+                self.context.record_barrier(tripped);
+                self.stopped
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                false
+            }
+        }
+    }
+    fn stopped(&self) -> bool {
+        self.stopped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn record_failure(&self, error: purrdf_lex::allocation::StorageError) {
+        if self.stopped() {
+            return;
+        }
+        let mut frame = self
+            .frame
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let error = frame.storage_error(error, "annotation range scratch");
+        frame.latch_failure(error);
+    }
+}
+
+/// A pure conjunctive restriction retained only while its direct BGP runs.
+/// Parsed endpoints retain their original admitted owners; the exact FILTER
+/// remains the authority for every returned candidate.
+#[derive(Debug, Clone)]
+pub(crate) struct AnnotationRangeConstraint {
+    variable: Variable,
+    lower: Option<(AnnotationBoundValue, bool)>,
+    upper: Option<(AnnotationBoundValue, bool)>,
+}
+
+#[derive(Debug, Clone)]
+enum AnnotationBoundValue {
+    Parsed(crate::parsed_value::ParsedValue),
+    Now,
+}
+
+impl AnnotationRangeConstraint {
+    pub(crate) fn matches(&self, variable: &Variable) -> bool {
+        self.variable == *variable
+    }
+
+    pub(crate) fn range<'a>(
+        &'a self,
+        now: &'a XsdValue,
+        workspace: &'a dyn purrdf_core::AnnotationRangeWorkspace,
+    ) -> purrdf_core::AnnotationValueRange<'a> {
+        fn bound<'a>(
+            endpoint: &'a (AnnotationBoundValue, bool),
+            now: &'a XsdValue,
+        ) -> purrdf_core::AnnotationValueBound<'a> {
+            purrdf_core::AnnotationValueBound {
+                value: match &endpoint.0 {
+                    AnnotationBoundValue::Parsed(value) => value,
+                    AnnotationBoundValue::Now => now,
+                },
+                inclusive: endpoint.1,
+            }
+        }
+        purrdf_core::AnnotationValueRange {
+            workspace: Some(workspace),
+            lower: self.lower.as_ref().map(|value| bound(value, now)),
+            upper: self.upper.as_ref().map(|value| bound(value, now)),
+        }
+    }
+}
+
+pub(crate) type AnnotationRanges =
+    crate::workspace::NativeSharedWorkspace<crate::AdmittedVec<AnnotationRangeConstraint>>;
+
+pub(crate) fn annotation_range_constraint(
+    expression: &Expression,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<AnnotationRanges>, EvalError> {
+    fn collect(
+        expression: &Expression,
+        remaining: usize,
+        output: &mut crate::AdmittedVec<AnnotationRangeConstraint>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, EvalError> {
+        if remaining == 0 {
+            return Ok(false);
+        }
+        if let Expression::And(operands) = expression {
+            for operand in operands {
+                if !collect(operand, remaining - 1, output, workspace)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        let (left, right, mut lower, inclusive) = match expression {
+            Expression::Greater(a, b) => (a, b, true, false),
+            Expression::GreaterOrEqual(a, b) => (a, b, true, true),
+            Expression::Less(a, b) => (a, b, false, false),
+            Expression::LessOrEqual(a, b) => (a, b, false, true),
+            _ => return Ok(false),
+        };
+        let (variable, constant) = match (left.as_ref(), right.as_ref()) {
+            (Expression::Variable(variable), constant) => (variable, constant),
+            (constant, Expression::Variable(variable)) => {
+                lower = !lower;
+                (variable, constant)
+            }
+            _ => return Ok(false),
+        };
+        let value = match constant {
+            Expression::FunctionCall(Function::Now, arguments) if arguments.is_empty() => {
+                AnnotationBoundValue::Now
+            }
+            Expression::Literal(literal) if literal.language().is_none() => {
+                let Some(datatype) = XsdDatatype::from_iri(literal.datatype().as_str()) else {
+                    return Ok(false);
+                };
+                let Some(value) = crate::parsed_value::ParsedValue::parse(
+                    literal.value(),
+                    datatype,
+                    false,
+                    workspace,
+                )?
+                else {
+                    return Ok(false);
+                };
+                AnnotationBoundValue::Parsed(value)
+            }
+            _ => return Ok(false),
+        };
+        let index = match output.iter().position(|range| range.matches(variable)) {
+            Some(index) => index,
+            None => {
+                let index = output.len();
+                output.push(AnnotationRangeConstraint {
+                    variable: variable.clone(),
+                    lower: None,
+                    upper: None,
+                })?;
+                index
+            }
+        };
+        // Each retained conjunct is necessary, even if an earlier bound is tighter.
+        if lower {
+            output[index].lower = Some((value, inclusive));
+        } else {
+            output[index].upper = Some((value, inclusive));
+        }
+        Ok(true)
+    }
+    let mut ranges = crate::AdmittedVec::new(workspace);
+    if collect(expression, 64, &mut ranges, workspace)? && !ranges.is_empty() {
+        crate::workspace::NativeSharedWorkspace::new_admitted(ranges, workspace).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 /// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
 /// `true`; an error/unbound (or `false`) drops the row.
 ///
@@ -126,9 +331,28 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    let range = if matches!(inner, GraphPattern::Bgp { .. }) {
+        annotation_range_constraint(expr, &ctx.growth)?
+    } else {
+        None
+    };
+    eval_filter_range(node, expr, inner, range, ctx)
+}
+
+/// Execute a direct FILTER using already admitted range constraints. The ordinary
+/// worklist only takes this path for a nonempty range, whose grammar excludes EXISTS.
+pub(crate) fn eval_filter_range<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &Expression,
+    inner: &GraphPattern,
+    range: Option<AnnotationRanges>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
-    let child = eval_evaluated(inner, ctx)?;
-    finish_filter_child(node, expr, lift, child, ctx)
+    let previous = std::mem::replace(&mut ctx.annotation_range, range);
+    let child = eval_evaluated(inner, ctx);
+    ctx.annotation_range = previous;
+    finish_filter_child(node, expr, lift, child?, ctx)
 }
 
 /// The ordinary FILTER continuation after its graph child returns. Its
@@ -200,7 +424,13 @@ pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDeliver
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if M::ACTIVE {
-        crate::eval::yield_transform(
+        let range = if matches!(inner, GraphPattern::Bgp { .. }) {
+            annotation_range_constraint(expr, &ctx.growth)?
+        } else {
+            None
+        };
+        let previous = std::mem::replace(&mut ctx.annotation_range, range);
+        let result = crate::eval::yield_transform(
             node,
             inner,
             delivery,
@@ -208,7 +438,9 @@ pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDeliver
                 eval_filter_sequence(node, expr, seq, Lift::at_admitted(node, &ctx.growth)?, ctx)
             },
             ctx,
-        )
+        );
+        ctx.annotation_range = previous;
+        result
     } else {
         eval_filter(node, expr, inner, ctx)
     }

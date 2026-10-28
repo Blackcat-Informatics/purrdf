@@ -26,6 +26,32 @@ once, solutions are a single integer compare apart, and computed FILTER/BIND
 values that already exist in the dataset are promoted to the interned id at
 mint time.
 
+Execution coordinates are actual context values. `QueryOptions::with_now` and
+`with_entropy_seed` select reproducible inputs; omitted inputs retain the native
+sampling behavior. `QueryCoordinates::Started` exposes `effective_now()` and
+`effective_entropy_seed()` alongside the supplied-input getters. Cloning a receipt
+retains its original timestamp owner. `with_coordinate_observer` publishes the
+receipt before evaluation, including on a later failure. Governed outcomes and
+EXPLAIN also retain it directly; UPDATE retains its first WHERE context, while
+observers receive every WHERE context.
+
+An execution identity binds the full typed query or ordered UPDATE program,
+parameters, immutable snapshot, effective coordinates and declared environment.
+Prepared queries cache their immutable algebra identity. Source identities are
+sealed by the carrier, so obtaining a receipt does not scan query payload pages.
+A custom `DatasetView` without a certified snapshot reports absent snapshot and
+execution identities explicitly. Opaque callbacks and external producers likewise
+have no complete execution digest unless the caller supplies
+`with_implementation_identity`, certifying both their implementations and captured
+source snapshots. Declaration fingerprints alone cannot certify callback behavior.
+Typed rule programs supply that certificate for their generated scalar bodies;
+remote response bytes still require the caller's own certification.
+
+The host receipt JSON carries exact time text, a decimal-string `entropySeed`,
+supplied-input flags, and hexadecimal execution and snapshot identities. CLI
+receipts go to stderr alongside the existing result stream. Language bindings
+retain receipts on result objects and execution failures.
+
 For repeated work, retain an `Arc<PreparedQuery>` from `prepare_query` or
 `prepare_algebra` and pass data through substitutions. Compiler-produced algebra
 goes directly through structural and registry admission without rendering or parsing

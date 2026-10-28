@@ -116,7 +116,15 @@ pub(crate) fn run(
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;
-        match engine.update_governed(&mut dataset, request, query_options, &governors)? {
+        let outcome = crate::query::with_execution_receipt(|capture| {
+            Ok(engine.update_governed(
+                &mut dataset,
+                request,
+                query_options.with_coordinate_observer(capture),
+                &governors,
+            )?)
+        })?;
+        match outcome {
             // A governed request names the F&O errors its expressions absorbed into
             // unbound values on stderr, as a governed query does.
             GovernedUpdateOutcome::Applied { evidence, .. } => {
@@ -135,7 +143,13 @@ pub(crate) fn run(
         // `SparqlEngine::update` this call replaces, byte-for-byte (see
         // `NativeSparqlEngine`'s `SparqlEngine` impl) — switching to it unconditionally
         // does not change behaviour when `aggregates` is `None`.
-        engine.update_with_options(&mut dataset, request, query_options)?;
+        crate::query::with_execution_receipt(|capture| {
+            Ok(engine.update_with_options(
+                &mut dataset,
+                request,
+                query_options.with_coordinate_observer(capture),
+            )?)
+        })?;
     }
 
     let loss = sink::write_rdf(

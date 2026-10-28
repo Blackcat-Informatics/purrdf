@@ -111,7 +111,7 @@ test("a job stopped while it waits abandons only itself; the host's signal waits
 
   const reason = new Error("the first caller gave up");
   stopFirst.abort(reason);
-  assert.equal(await rejection(first), reason, "the stopped job rejects with its own signal's reason");
+  assert.equal((await rejection(first)).cause, reason, "the stopped job rejects with its own signal's reason");
   assert.equal(hostSignal.aborted, false, "one job still waits, so the host's call goes on");
 
   host.calls[0].answer(remote("kept"));

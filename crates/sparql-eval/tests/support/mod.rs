@@ -392,6 +392,11 @@ impl PollCountdown {
             latched: AtomicBool::new(false),
         })
     }
+
+    /// Polls observed before the signal latched, including its firing poll.
+    pub fn polls(&self) -> usize {
+        self.polls.load(Ordering::Relaxed)
+    }
 }
 
 impl StopSignal for PollCountdown {

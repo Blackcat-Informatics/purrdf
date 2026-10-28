@@ -4176,7 +4176,7 @@ pub fn content_fingerprint(
     content_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
 }
 
-fn content_fingerprint_with_memory(
+pub(crate) fn content_fingerprint_with_memory(
     relations: &PropertyFunctionRegistry<'_>,
     memory: &mut Memory<'_, LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {

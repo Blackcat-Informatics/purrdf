@@ -155,9 +155,12 @@ fn parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal() {
         );
     }
     let refusal = run(&options.clone().with_max_stored_facts(0)).unwrap_err();
+    let SrlError::Execution(refusal) = refusal else {
+        panic!("receipt-bearing refusal")
+    };
     assert!(matches!(
-        refusal,
-        SrlError::LimitExceeded(limit) if limit.limit() == RuleLimit::StoredFacts
+        *refusal.cause,
+        purrdf_shapes::rules::RulesError::LimitExceeded(limit) if limit.limit() == RuleLimit::StoredFacts
     ));
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -169,7 +172,13 @@ fn parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal() {
             }
         }
         let stopped = srl::infer_until(&document, &source, &options, Some(&Cancelled)).unwrap_err();
-        assert!(matches!(stopped, SrlError::Stopped { .. }));
+        let SrlError::Execution(stopped) = stopped else {
+            panic!("receipt-bearing cancellation")
+        };
+        assert!(matches!(
+            *stopped.cause,
+            purrdf_shapes::rules::RulesError::Stopped { .. }
+        ));
     }
     assert!(replace_ambient_context(AmbientContext::default()).is_idle());
     let repeated = run(&options).unwrap();
@@ -182,7 +191,23 @@ fn parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal() {
         without_host_clock_or_entropy(|| srl::infer_triples(&document, &read, &options)).unwrap();
     assert_eq!(actual.inferred(), expected);
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(actual.coordinates(), first.coordinates());
+    {
+        let actual = actual.coordinates();
+        let first = first.coordinates();
+        assert!(
+            actual
+                .now()
+                .unwrap()
+                .same_representation(first.now().unwrap())
+        );
+        assert_eq!(actual.entropy_seed(), first.entropy_seed());
+        assert_eq!(actual.program_identity(), first.program_identity());
+        assert_eq!(actual.snapshot_identity(), first.snapshot_identity());
+        assert_eq!(actual.executions(), first.executions());
+        // Three-position and four-position clause stores have different compiled
+        // contracts, even though their query contexts and inferred facts agree.
+        assert_ne!(actual.execution_identity(), first.execution_identity());
+    }
     assert!(replace_ambient_context(AmbientContext::default()).is_idle());
 }
 

@@ -859,6 +859,7 @@ impl SegmentedOperation {
                 streams: [Stream::default(); 3],
                 graphs: Stream::default(),
                 summaries: Stream::default(),
+                value_ranges: Stream::default(),
                 statistics: [Stream::default(); 4],
                 effective_directory: Stream::default(),
                 source_checkpoints: Stream::default(),
@@ -1692,6 +1693,15 @@ impl SegmentedSession {
         table: usize,
         pattern: Pattern,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.stream_range(table, pattern, None)
+    }
+
+    pub(super) fn stream_range<'a>(
+        &'a self,
+        table: usize,
+        pattern: Pattern,
+        values: Option<&'a crate::AnnotationValueRange<'a>>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
         QuadIter {
             session: self,
             table,
@@ -1699,7 +1709,85 @@ impl SegmentedSession {
             rows: None,
             row: 0..0,
             pattern,
+            values,
         }
+    }
+
+    fn summary_values_may_match(
+        &self,
+        summary: &[u8],
+        predicate: Option<GlobalTermId>,
+        values: crate::AnnotationValueRange<'_>,
+    ) -> Result<bool, SegmentedError> {
+        let first = crate::bytes::read_u64_le(summary, 88)
+            .ok_or(SegmentedError::Corrupt("value range start is missing"))?;
+        let count = crate::bytes::read_u64_le(summary, 96)
+            .ok_or(SegmentedError::Corrupt("value range count is missing"))?;
+        let end = first
+            .checked_add(count)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        if end > self.header.value_ranges.rows {
+            return Err(SegmentedError::Corrupt(
+                "value range escapes certified directory",
+            ));
+        }
+        let per = (u64::from(self.header.block_bytes) - 9) / format::VALUE_RANGE_BYTES as u64;
+        for ordinal in first..end {
+            // Copy only one fixed metadata record, then unpin the metadata before
+            // any dictionary endpoint read. One-slot caches remain usable.
+            let encoded: [u8; format::VALUE_RANGE_BYTES] = {
+                let block = self.block(self.header.value_ranges.first + ordinal / per)?;
+                let rows = fixed_records(
+                    &block.encoded,
+                    format::VALUE_RANGES,
+                    format::VALUE_RANGE_BYTES,
+                )?;
+                let offset = (ordinal % per) as usize * format::VALUE_RANGE_BYTES;
+                rows.get(offset..offset + format::VALUE_RANGE_BYTES)
+                    .and_then(|bytes| bytes.try_into().ok())
+                    .ok_or(SegmentedError::Corrupt("missing value interval"))?
+            };
+            let p = Reader::at(&encoded, 0).id()?;
+            if predicate.is_some_and(|predicate| p != predicate) {
+                continue;
+            }
+            let low = crate::bytes::read_u64_le(&encoded, 8).expect("fixed interval width");
+            let high = crate::bytes::read_u64_le(&encoded, 16).expect("fixed interval width");
+            let endpoints = match (low, high) {
+                (0, 0) => None,
+                (0, _) | (_, 0) => return Err(SegmentedError::Corrupt("half-open value summary")),
+                _ => Some((
+                    GlobalTermId::from_index(low - 1).map_err(StorageError::from)?,
+                    GlobalTermId::from_index(high - 1).map_err(StorageError::from)?,
+                )),
+            };
+            let mut storage = super::query::QueryStorage {
+                reservation: self.reserve_workspace(0)?,
+                cause: None,
+            };
+            let matches = storage.run(|memory| {
+                crate::annotation_range::interval_may_match(self, endpoints, values, memory)
+                    .map_err(|error| match error {
+                        crate::annotation_range::RangeReadError::Read(error) => error,
+                        crate::annotation_range::RangeReadError::Storage(error) => error.into(),
+                    })
+            });
+            let matches = match matches {
+                Ok(matches) => matches,
+                Err(_)
+                    if values
+                        .workspace
+                        .is_some_and(crate::AnnotationRangeWorkspace::stopped) =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            };
+            if matches {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     /// Current exact checkpoint evidence. Its request-prefix access performs no clone.
     #[must_use]
@@ -1818,11 +1906,19 @@ struct QuadIter<'a> {
     rows: Option<Arc<CachedBlock>>,
     row: core::ops::Range<usize>,
     pattern: Pattern,
+    values: Option<&'a crate::AnnotationValueRange<'a>>,
 }
 impl Iterator for QuadIter<'_> {
     type Item = QuadIds<GlobalTermId>;
     fn next(&mut self) -> Option<Self::Item> {
         loop {
+            if self.values.is_some_and(|range| {
+                range
+                    .workspace
+                    .is_some_and(crate::AnnotationRangeWorkspace::stopped)
+            }) {
+                return None;
+            }
             if let Some(block) = &self.rows {
                 while self.row.start < self.row.end {
                     let index = self.row.start;
@@ -1879,6 +1975,19 @@ impl Iterator for QuadIter<'_> {
             }
             let page =
                 crate::bytes::read_u64_le(&summary, 0).expect("certified summary block position");
+            if let Some(values) = self.values {
+                match self
+                    .session
+                    .summary_values_may_match(&summary, self.pattern.1, *values)
+                {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        let _ = self.session.fail::<()>(error);
+                        return None;
+                    }
+                }
+            }
             let Ok(block) = self.session.block(page) else {
                 return None;
             };
@@ -1928,6 +2037,13 @@ impl DatasetView for SegmentedSession {
     type ReadError = SegmentedError;
     type TermGuard<'a> = SegmentedTermGuard;
     type ProbePlan = ();
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        self.ready()?;
+        Ok(Some(purrdf_hash::hex::Digest32::new(
+            *self.receipt.snapshot.as_bytes(),
+        )))
+    }
+
     fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
         self.ready()?;
         Ok(Some(
@@ -2137,6 +2253,16 @@ impl DatasetView for SegmentedSession {
         graph: GraphMatch<Self::Id>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.stream(2, (None, None, None, graph))
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        self.stream_range(2, (None, predicate, object, graph), Some(range))
     }
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         (0..self.header.graphs.rows).map_while(move |index| self.named_graph_at(index))

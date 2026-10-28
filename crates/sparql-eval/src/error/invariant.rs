@@ -86,6 +86,10 @@ macro_rules! invariants {
 }
 
 invariants! {
+    CoordinateEnvironmentChanged => "eval-invariant-coordinate-environment-changed", "one execution changed its certified implementation identity";
+    CoordinateIdentityFormatting => "eval-invariant-coordinate-identity-formatting", "an execution coordinate identity could not be formatted";
+    CoordinateFocusIdentityMissing => "eval-invariant-coordinate-focus-identity-missing", "an immutable focus graph has no snapshot identity";
+    CoordinateObserverPoisoned => "eval-invariant-coordinate-observer-poisoned", "the execution coordinate observer was poisoned";
     QueryClockNotDateTime => "eval-invariant-query-clock-not-datetime", "an admitted query context lost its dateTime clock coordinate";
     VmEvidenceOperandsOutsideStack => "eval-invariant-vm-evidence-operands-outside-stack", "VM evidence operands exceed the original value stack";
     VmEvidenceResultSlotMissing => "eval-invariant-vm-evidence-result-slot-missing", "VM evidence result has no original value slot";

@@ -528,11 +528,12 @@ static int check_shapes_graph_iri(void) {
  * with `*status` and hands back an error and no rows, -2 on a broken contract. */
 static int count_regex_rows(const PurrdfDataset *dataset, const char *query,
                             const char *profile, int32_t *status) {
+    PurrdfBuffer *receipt = NULL;
     int32_t kind = -1;
     PurrdfRowCursor *rows = NULL;
     PurrdfError *error = NULL;
-    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, NULL, NULL, &kind, &rows, NULL, NULL,
-                                       &error);
+    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, NULL, NULL, &receipt, &kind, &rows, NULL, NULL,
+                                       &error); purrdf_buffer_free(receipt); receipt = NULL;
     if (*status != PURRDF_STATUS_OK) {
         if (error == NULL || rows != NULL || purrdf_error_code(error) != *status) {
             return -2;
@@ -820,6 +821,7 @@ static int check_srl_rules(void) {
  * past i128 answers its exact lexical form, and each refusal sits beside the valid
  * neighbour it must keep. */
 static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
+    PurrdfBuffer *receipt = NULL;
     const char *xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
     const char *xsd_decimal = "http://www.w3.org/2001/XMLSchema#decimal";
     const char *xsd_double = "http://www.w3.org/2001/XMLSchema#double";
@@ -882,7 +884,7 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
     rc = purrdf_query_json(dataset,
                            "SELECT ?n WHERE { BIND(170141183460469231731687303715884105727 + 1 "
                            "AS ?n) }",
-                           NULL, NULL, NULL, NULL, NULL, &results, &error);
+                           NULL, NULL, NULL, NULL, NULL, &receipt, &results, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && results != NULL, "a SPARQL sum past i128");
     purrdf_buffer_data(results, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"170141183460469231731687303715884105728\""),
@@ -898,6 +900,7 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
  * changes nothing, and a governed 1/0 is counted at PURRDF_EXPRESSION_ERROR_CODE_FOAR0001
  * while its valid neighbour counts nothing. The policy is restored before returning. */
 static int check_division_policy(PurrdfDataset *dataset) {
+    PurrdfBuffer *receipt = NULL;
     PurrdfError *error = NULL;
     PurrdfBuffer *buffer = NULL;
     const uint8_t *bytes = NULL;
@@ -912,7 +915,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (1/1048576 AS ?x) {}", NULL, NULL, NULL,
-                           NULL, NULL, &buffer, &error);
+                           NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default terminating quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.00000095367431640625\""),
@@ -921,7 +924,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
-                           NULL, NULL, &buffer, &error);
+                           NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default repeating quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.666666666666666667\""),
@@ -932,7 +935,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_query_json(dataset,
                            "SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^"
                            "<http://www.w3.org/2001/XMLSchema#dateTime>) AS ?x) {}",
-                           NULL, NULL, NULL, NULL, NULL, &buffer, &error);
+                           NULL, NULL, NULL, NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"05.123456789012345678901\""),
@@ -948,16 +951,16 @@ static int check_division_policy(PurrdfDataset *dataset) {
     error = NULL;
 
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact 1/8 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.125\""), "exact 1/8 is 0.125");
     purrdf_buffer_free(buffer);
 
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL,
           "the refused policy left exact in force: 1/3 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
@@ -967,8 +970,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_dataset_set_division_policy(dataset, "5:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 5:half-even");
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "5:half-even 2/3 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.66667\""), "5:half-even 2/3 is 0.66667");
@@ -977,8 +980,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_dataset_set_division_policy(dataset, "2:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 2:half-even for an exact tie");
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "half-even tie answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.38\""), "3/8 ties upward to an even cent");
@@ -988,7 +991,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     CHECK(rc == PURRDF_STATUS_OK, "set bare scale policy");
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
-                           NULL, NULL, &buffer, &error);
+                           NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "bare scale quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.66\""), "bare scale truncates toward zero");
@@ -1005,8 +1008,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
         PurrdfGovernorEvidence evidence;
         PurrdfPartialCertificate partial;
         rc = purrdf_query_governed(dataset, queries[query], NULL, NULL, &governors,
-                                   NULL, NULL, &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
-                                   &error);
+                                   NULL, NULL, &receipt, &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
+                                   &error); purrdf_buffer_free(receipt); receipt = NULL;
         CHECK(rc == PURRDF_STATUS_OK && outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
               "a governed division completes");
         for (size_t code = 0; code < PURRDF_EXPRESSION_ERROR_CODE_COUNT; code += 1) {
@@ -1027,6 +1030,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 /* Opaque geographic handles must work from the installed C declaration, including
  * the distinct semantic/operational error channels and a retained child index. */
 static int check_geo_handles(const PurrdfDataset *dataset) {
+    PurrdfBuffer *receipt = NULL;
     const char *distance =
         "{\"version\":1,\"operation\":\"distance\","
         "\"a\":{\"longitude\":\"0\",\"latitude\":\"0\"},"
@@ -1106,10 +1110,10 @@ static int check_geo_handles(const PurrdfDataset *dataset) {
     uint8_t boolean = 0;
     int32_t kind = -1;
     CHECK(purrdf_query_with_geo(NULL, dataset, axes_query, NULL, NULL,
-              NULL, NULL, &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
+              NULL, NULL, &receipt, &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
               error != NULL && rows == NULL && graph == NULL &&
               strstr(purrdf_error_message(error), "unregistered") != NULL,
-          "C query refuses undeclared geographic axes");
+          "C query refuses undeclared geographic axes"); purrdf_buffer_free(receipt); receipt = NULL;
     purrdf_error_free(error);
     error = NULL;
     CHECK(purrdf_geo_session_create(
@@ -1119,16 +1123,17 @@ static int check_geo_handles(const PurrdfDataset *dataset) {
               &session, &error) == PURRDF_STATUS_OK && error == NULL,
           "C query geographic profile creation");
     CHECK(purrdf_query_with_geo(session, dataset, axes_query, NULL, NULL,
-              NULL, NULL, &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
+              NULL, NULL, &receipt, &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
               error == NULL && rows == NULL && graph == NULL &&
               kind == PURRDF_RESULT_KIND_BOOLEAN && boolean == 1,
-          "C query forwards the declared geographic axes");
+          "C query forwards the declared geographic axes"); purrdf_buffer_free(receipt); receipt = NULL;
     purrdf_geo_session_free(session);
     printf("geo: session, typed refusals, retained index and query profile passed\n");
     return 0;
 }
 
 int main(int argc, char **argv) {
+    PurrdfBuffer *receipt = NULL;
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
           "vendored webont-imports-011 documents");
@@ -1142,7 +1147,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.15.0` is pinned in tests/abi.rs. */
+     * literal `0.16.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1504,7 +1509,7 @@ int main(int argc, char **argv) {
     const uint64_t query_seed = 0;
     const char *query_now = "2020-01-02T03:04:05.123456789+05:30";
     rc = purrdf_query_json(dataset, "SELECT ?s (NOW() AS ?clock) WHERE { ?s ?p ?o }", NULL, NULL,
-                           NULL, query_now, &query_seed, &json, &error);
+                           NULL, query_now, &query_seed, &receipt, &json, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && json != NULL, "query_json");
     const uint8_t *jbytes = NULL;
     size_t jlen = 0;
@@ -1515,7 +1520,7 @@ int main(int argc, char **argv) {
     /* `provenance_prefix`/`provenance_iri` anchor the additive purrdf extension. */
     PurrdfBuffer *prov_json = NULL;
     rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, "prov",
-                           "https://example.org/ns/prov#", NULL, NULL, &prov_json, &error);
+                           "https://example.org/ns/prov#", NULL, NULL, &receipt, &prov_json, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && prov_json != NULL, "query_json with provenance");
     const uint8_t *pbytes = NULL;
     size_t plen = 0;
@@ -1542,8 +1547,8 @@ int main(int argc, char **argv) {
     PurrdfPartialCertificate partial_certificate;
     rc = purrdf_query_governed(
         dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL, &governors,
-        NULL, NULL, &query_outcome, &result_kind, &partial_rows, &partial_graph,
-        &partial_boolean, &query_evidence, &partial_certificate, &error);
+        NULL, NULL, &receipt, &query_outcome, &result_kind, &partial_rows, &partial_graph,
+        &partial_boolean, &query_evidence, &partial_certificate, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
     CHECK(query_outcome == PURRDF_QUERY_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed query is typed exhaustion");
@@ -1587,9 +1592,9 @@ int main(int argc, char **argv) {
         median_dataset,
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) "
         "WHERE { ?s <http://example.org/value> ?v }",
-        NULL, "https://example.org/agg#", &governors, NULL, NULL, &median_outcome,
+        NULL, "https://example.org/agg#", &governors, NULL, NULL, &receipt, &median_outcome,
         &median_kind, &median_rows, NULL, NULL, &median_evidence,
-        &median_partial, &error);
+        &median_partial, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "aggregate_namespace query runs");
     CHECK(median_outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
           "aggregate_namespace query completes");
@@ -1619,9 +1624,9 @@ int main(int argc, char **argv) {
     rc = purrdf_query_entailment_governed(
         dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
         0, NULL, NULL, NULL, NULL, &governors,
-        NULL, NULL, &entailment_outcome, &entailment_kind, NULL, NULL,
+        NULL, NULL, &receipt, &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
-        &entailment_report, &error);
+        &entailment_report, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
           "governed entailment query outcome");
     CHECK(entailment_outcome == PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE &&
@@ -1675,9 +1680,9 @@ int main(int argc, char **argv) {
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
         NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, NULL, "https://example.org/agg#",
         &governors,
-        NULL, NULL, &entailed_median_outcome, &entailed_median_kind,
+        NULL, NULL, &receipt, &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
-        &entailed_median_partial, &entailed_median_report, &error);
+        &entailed_median_partial, &entailed_median_report, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
           "aggregate_namespace query over an entailed closure runs");
     CHECK(entailed_median_outcome ==
@@ -1717,9 +1722,9 @@ int main(int argc, char **argv) {
         rc = purrdf_query_entailment_governed(
             entailed_median_dataset, "ASK { ?s ?p ?o }", NULL, "rdfs", "",
             NULL, NULL, 0, NULL, 0, NULL, NULL, &arena_limits[arena_case], NULL,
-            &governors, NULL, NULL, &entailment_outcome, &entailment_kind, NULL, NULL,
+            &governors, NULL, NULL, &receipt, &entailment_outcome, &entailment_kind, NULL, NULL,
             &entailment_boolean, &entailment_evidence, &entailment_partial,
-            &entailed_median_report, &error);
+            &entailed_median_report, &error); purrdf_buffer_free(receipt); receipt = NULL;
         if (arena_case == 0) {
             CHECK(rc != PURRDF_STATUS_OK && error != NULL &&
                       entailed_median_report == NULL,
@@ -1764,7 +1769,7 @@ int main(int argc, char **argv) {
     rc = purrdf_update_governed(
         dataset,
         "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
-        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
+        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
     CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed update is typed exhaustion");
@@ -1787,7 +1792,7 @@ int main(int argc, char **argv) {
         "INSERT { <urn:s> <urn:clock> ?clock; <urn:random> ?random } "
         "WHERE { BIND(NOW() AS ?clock) BIND(RAND() AS ?random) }",
         NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors,
-        query_now, &query_seed, &update_outcome, &update_evidence, &error);
+        query_now, &query_seed, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
               update_outcome == PURRDF_UPDATE_OUTCOME_KIND_APPLIED,
           "supplied UPDATE coordinates apply");
@@ -1795,7 +1800,7 @@ int main(int argc, char **argv) {
     rc = purrdf_query_json(coordinate_dataset,
         "SELECT ?clock ?random WHERE { "
         "<urn:s> <urn:clock> ?clock; <urn:random> ?random FILTER(?random = RAND()) }",
-        NULL, NULL, NULL, NULL, &query_seed, &coordinate_json, &error);
+        NULL, NULL, NULL, NULL, &query_seed, &receipt, &coordinate_json, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && coordinate_json != NULL,
           "read inserted coordinate values");
     const uint8_t *coordinate_bytes = NULL;
@@ -1824,22 +1829,22 @@ int main(int argc, char **argv) {
         PurrdfBuffer *rule_diagnostics = NULL;
         if (entry == 0) {
             rc = purrdf_shacl_entail_to_ntriples(coordinate_shapes, NULL, NULL, "",
-                NULL, NULL, 0, NULL, NULL, NULL, NULL, query_now, &query_seed,
-                &rule_result, &rule_diagnostics, &error);
+                NULL, NULL, 0, NULL, NULL, NULL, NULL, query_now, &query_seed, &receipt,
+                &rule_result, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
         } else if (entry == 1) {
             rc = purrdf_shacl_entail_to_ntriples_xpath_regex(coordinate_shapes,
                 NULL, NULL, "", NULL, NULL, 0, NULL, NULL, NULL, NULL,
-                "xpath-3.1-2017-03-21", query_now, &query_seed,
-                &rule_result, &rule_diagnostics, &error);
+                "xpath-3.1-2017-03-21", query_now, &query_seed, &receipt,
+                &rule_result, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
         } else if (entry == 2) {
             rc = purrdf_shacl_apply_rules("", coordinate_shapes, NULL, NULL, NULL,
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, query_now, &query_seed,
-                &rule_result, &rule_proof, &rule_diagnostics, &error);
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, query_now, &query_seed, &receipt,
+                &rule_result, &rule_proof, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
         } else {
             rc = purrdf_shacl_apply_rules_xpath_regex("", NULL, NULL, NULL,
                 coordinate_srl, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0,
-                "xpath-3.1-2017-03-21", query_now, &query_seed,
-                &rule_result, &rule_proof, &rule_diagnostics, &error);
+                "xpath-3.1-2017-03-21", query_now, &query_seed, &receipt,
+                &rule_result, &rule_proof, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
         }
         CHECK(rc == PURRDF_STATUS_OK && error == NULL,
               "supplied coordinates cross each linked rule entry");
@@ -1885,17 +1890,17 @@ int main(int argc, char **argv) {
                 rc = purrdf_update_governed_with_geo(
                     NULL, lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
-                    &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
-                    &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else {
                 rc = purrdf_update_governed(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
-                    NULL, NULL, lifetime_modes[mode_index], &governors, NULL, NULL,
-                    &update_outcome, &update_evidence, &error);
+                    NULL, NULL, lifetime_modes[mode_index], &governors, NULL, NULL, &receipt,
+                    &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             }
             CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
                       update_outcome == PURRDF_UPDATE_OUTCOME_KIND_APPLIED,
@@ -1909,17 +1914,17 @@ int main(int argc, char **argv) {
             if (entry == 2) {
                 rc = purrdf_update_governed_with_geo(
                     NULL, lifetime_dataset, "DELETE WHERE {", NULL, NULL,
-                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL,
-                    &update_outcome, &update_evidence, &error);
+                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL, &receipt,
+                    &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL,
-                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL,
-                    &update_outcome, &update_evidence, &error);
+                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL, &receipt,
+                    &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else {
                 rc = purrdf_update_governed(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL, 2,
-                    &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             }
             CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && error != NULL &&
                       update_outcome == -1 &&
@@ -1974,8 +1979,8 @@ int main(int argc, char **argv) {
     PurrdfDataset *parse_graph = NULL;
     uint8_t parse_boolean = 0;
     bad_error = NULL;
-    rc = purrdf_query(dataset, "ASK {", NULL, NULL, NULL, &parse_kind, &parse_rows,
-                      &parse_graph, &parse_boolean, &bad_error);
+    rc = purrdf_query(dataset, "ASK {", NULL, NULL, NULL, &receipt, &parse_kind, &parse_rows,
+                      &parse_graph, &parse_boolean, &bad_error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed query refused");
     const char *query_record = purrdf_error_presentation_json(bad_error);
@@ -1988,8 +1993,8 @@ int main(int argc, char **argv) {
 
     bad_error = NULL;
     rc = purrdf_query(dataset, "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
-                      NULL, NULL, NULL, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
-                      &bad_error);
+                      NULL, NULL, NULL, &receipt, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
+                      &bad_error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "query with a malformed IRI refused");
     query_record = purrdf_error_presentation_json(bad_error);
@@ -2006,8 +2011,8 @@ int main(int argc, char **argv) {
     int32_t parse_outcome = -1;
     PurrdfGovernorEvidence parse_evidence;
     bad_error = NULL;
-    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL,
-                                &parse_outcome, &parse_evidence, &bad_error);
+    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL, &receipt,
+                                &parse_outcome, &parse_evidence, &bad_error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed governed update refused");
     const char *update_record = purrdf_error_presentation_json(bad_error);

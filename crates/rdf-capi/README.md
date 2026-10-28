@@ -137,7 +137,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.15.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.16.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -276,6 +276,18 @@ the IRI failure without parsing English. The error message and the record's
   Outputs own their values; malformed coordinates leave non-error output slots untouched.
   All four limits, import handling, proofs and diagnostics retain their contracts.
   Static rule checking, validation and node-expression APIs are unchanged.
+
+  `0.15.0` → `0.16.0` inserts required `PurrdfBuffer **out_receipt` immediately
+  after `entropy_seed` on all query, governed UPDATE and rule execution entries,
+  including XPath and geographic variants. Recompile every affected caller.
+  Initialize a separate receipt pointer to `NULL`, pass its address, read its JSON
+  through `purrdf_buffer_data` on success, and release it with `purrdf_buffer_free`.
+  The payload buffer or result handle and receipt buffer are independent owners.
+  The receipt slot is written only on success; read a failed execution's receipt with
+  `purrdf_error_execution_receipt_json(error)`, borrowed until `purrdf_error_free`.
+  No context means `state: "not-started"`; an UPDATE without a WHERE context can
+  still apply. The effective seed is a decimal string and unavailable identities
+  are explicit JSON nulls. Rule receipts include ordered query contexts.
 
 ## Shapes-graph tools
 

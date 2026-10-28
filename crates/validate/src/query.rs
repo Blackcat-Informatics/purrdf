@@ -15,6 +15,71 @@ use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
 use purrdf_xsd::temporal::{DateTime, parse_datetime};
 use sha2::{Digest as _, Sha256};
 
+/// Captures native observations for a host whose ordinary result has no receipt field.
+/// The observer owns the first started native receipt rather than re-reading inputs.
+/// Later UPDATE WHERE invocations do not replace the operation's initial receipt.
+#[derive(Debug)]
+pub struct ExecutionReceiptCapture(std::sync::Mutex<purrdf_sparql_eval::QueryCoordinates>);
+
+impl Default for ExecutionReceiptCapture {
+    fn default() -> Self {
+        Self(std::sync::Mutex::new(
+            purrdf_sparql_eval::QueryCoordinates::NotStarted,
+        ))
+    }
+}
+
+impl ExecutionReceiptCapture {
+    /// Borrow and retain the actual observation for a failure published before return.
+    ///
+    /// # Errors
+    /// A poisoned observer is a typed execution invariant failure.
+    pub fn coordinates(
+        &self,
+    ) -> Result<purrdf_sparql_eval::QueryCoordinates, purrdf_sparql_eval::EvalError> {
+        self.0
+            .lock()
+            .map(|coordinates| coordinates.clone())
+            .map_err(|_| {
+                purrdf_sparql_eval::EvalError::Invariant(
+                    purrdf_sparql_eval::EvaluatorInvariant::CoordinateObserverPoisoned,
+                )
+            })
+    }
+
+    /// Transfer the observed execution receipt to its public result or failure.
+    ///
+    /// # Errors
+    /// A poisoned capture is an execution invariant failure, never an absent receipt.
+    pub fn into_coordinates(
+        self,
+    ) -> Result<purrdf_sparql_eval::QueryCoordinates, purrdf_sparql_eval::EvalError> {
+        self.0.into_inner().map_err(|_| {
+            purrdf_sparql_eval::EvalError::Invariant(
+                purrdf_sparql_eval::EvaluatorInvariant::CoordinateObserverPoisoned,
+            )
+        })
+    }
+}
+
+impl purrdf_sparql_eval::ExecutionCoordinateObserver for ExecutionReceiptCapture {
+    fn observe(
+        &self,
+        coordinates: &purrdf_sparql_eval::QueryCoordinates,
+    ) -> Result<(), purrdf_sparql_eval::EvalError> {
+        let mut captured = self.0.lock().map_err(|_| {
+            purrdf_sparql_eval::EvalError::Invariant(
+                purrdf_sparql_eval::EvaluatorInvariant::CoordinateObserverPoisoned,
+            )
+        })?;
+        if matches!(*captured, purrdf_sparql_eval::QueryCoordinates::NotStarted) {
+            *captured = coordinates.clone();
+        }
+        drop(captured);
+        Ok(())
+    }
+}
+
 /// Caller-supplied query or rule time and entropy, decoded once at a host boundary.
 ///
 /// This owns request inputs, not a receipt of execution or sampled defaults.
@@ -174,6 +239,107 @@ pub fn provenance(namespace: Option<&ProvenanceNamespace>, query: &str) -> Resul
         engine: Some(ENGINE_LABEL.to_owned()),
         solutions: Vec::new(),
     }
+}
+
+/// Render an actual native execution receipt without reconstructing it from inputs.
+/// Exact timestamp spelling and the initial unsigned seed survive every host's
+/// number representation. A missing identity is explicit, never inferred from a
+/// query string or from the result rows.
+#[must_use]
+pub fn execution_receipt_value(
+    coordinates: &purrdf_sparql_eval::QueryCoordinates,
+) -> purrdf_lex::json::Value {
+    use purrdf_lex::json::{Object, Value};
+    match coordinates {
+        purrdf_sparql_eval::QueryCoordinates::NotStarted => {
+            Object::new().with("state", "not-started").into()
+        }
+        purrdf_sparql_eval::QueryCoordinates::Started(started) => Object::new()
+            .with("state", "started")
+            .with("now", started.effective_now().to_string())
+            .with("entropySeed", started.effective_entropy_seed().to_string())
+            .with("suppliedNow", started.now().is_some())
+            .with("suppliedEntropySeed", started.entropy_seed().is_some())
+            .with(
+                "executionIdentity",
+                started
+                    .execution_identity()
+                    .map_or(Value::Null, |identity| Value::from(identity.to_string())),
+            )
+            .with(
+                "snapshotIdentity",
+                started
+                    .snapshot_identity()
+                    .map_or(Value::Null, |identity| Value::from(identity.to_string())),
+            )
+            .into(),
+    }
+}
+
+/// The shared JSON transport of an actual native execution receipt.
+#[must_use]
+pub fn execution_receipt_json(coordinates: &purrdf_sparql_eval::QueryCoordinates) -> String {
+    purrdf_lex::json::write_compact(&execution_receipt_value(coordinates))
+}
+
+/// The actual nested executions of a rule request, beside its supplied scope.
+#[must_use]
+pub fn rule_execution_receipt_value(
+    coordinates: &purrdf_shapes::RuleCoordinates,
+) -> purrdf_lex::json::Value {
+    use purrdf_lex::json::{Object, Value};
+    Object::new()
+        .with(
+            "programIdentity",
+            coordinates
+                .program_identity()
+                .map_or(Value::Null, |value| Value::from(value.to_string())),
+        )
+        .with(
+            "snapshotIdentity",
+            coordinates
+                .snapshot_identity()
+                .map_or(Value::Null, |value| Value::from(value.to_string())),
+        )
+        .with(
+            "shapesIdentity",
+            coordinates
+                .shapes_identity()
+                .map_or(Value::Null, |value| Value::from(value.to_string())),
+        )
+        .with(
+            "executionIdentity",
+            coordinates
+                .execution_identity()
+                .map_or(Value::Null, |value| Value::from(value.to_string())),
+        )
+        .with(
+            "now",
+            coordinates
+                .now()
+                .map_or(Value::Null, |now| Value::from(now.to_string())),
+        )
+        .with(
+            "entropySeed",
+            coordinates
+                .entropy_seed()
+                .map_or(Value::Null, |seed| Value::from(seed.to_string())),
+        )
+        .with(
+            "executions",
+            coordinates
+                .executions()
+                .iter()
+                .map(execution_receipt_value)
+                .collect::<Vec<_>>(),
+        )
+        .into()
+}
+
+/// Shared JSON transport for successful and refused rule execution receipts.
+#[must_use]
+pub fn rule_execution_receipt_json(coordinates: &purrdf_shapes::RuleCoordinates) -> String {
+    purrdf_lex::json::write_compact(&rule_execution_receipt_value(coordinates))
 }
 
 #[cfg(test)]

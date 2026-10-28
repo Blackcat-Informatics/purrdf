@@ -30,6 +30,7 @@ mod document;
 #[cfg(test)]
 mod equivalence_tests;
 pub(crate) mod eval;
+mod identity;
 mod lower;
 pub(crate) mod reads;
 pub(crate) mod sparql_rule;

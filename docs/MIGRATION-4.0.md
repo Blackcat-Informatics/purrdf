@@ -23,42 +23,77 @@ Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 - Developer-schema compilations cached under an earlier `SchemaCompilation.key`.
 
 Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
-C ABI 0.13.0. Several defaults change behavior without a signature change:
+C ABI 0.16.0. Several defaults change behavior without a signature change:
 remembered empty named graphs, model-only Datalog output, exact decimal
 division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewrite and specific
 SPARQL diagnostic codes.
 Each has its own section below.
 
-## Native governed query coordinates
+## Execution coordinates and receipt migration
 
-`GovernedOutcome::Complete`, `InternedGoverned::Complete`, `BudgetExhausted`
-and `GovernedEvidence` now carry `coordinates: QueryCoordinates`. Update
-exhaustive patterns and preserve this field when reconstructing an outcome.
-The two outcome enums expose `coordinates()`; `AdmittedInternedGoverned`
-delegates to its contained outcome, so conversion retains the same receipt.
+`QueryCoordinates::Started` retains the actual context time and initial entropy
+seed, including sampled defaults. Use `effective_now()` and
+`effective_entropy_seed()` for those values; `now()` and `entropy_seed()` still
+identify independently supplied inputs. Clones share the original admitted
+exact timestamp owner. `NotStarted` means no evaluation context was constructed,
+not that preparation or storage reads did no work.
 
-`NotStarted` means no evaluation context was constructed. `Started` retains
-independently optional supplied time and the initial entropy seed, including
-on exhaustion or a later typed operational failure. Governed EXPLAIN reports
-its actual context even when its forecast prevents evaluation. Missing inputs
-make no claim about sampled defaults. Timestamp clones share the original
-admitted coefficient owner, retaining exact fractional seconds and timezone.
-Bare diagnostic errors keep their existing contracts. These receipts do not
-change query-text identity or add a complete execution or snapshot identity.
+`GovernedOutcome::Complete`, `InternedGoverned::Complete`, `BudgetExhausted`,
+`GovernedEvidence`, and both `GovernedUpdateOutcome` arms carry
+`coordinates: QueryCoordinates`. Preserve that field when reconstructing an
+outcome. Ordinary and prepared callers can install an
+`ExecutionCoordinateObserver` through `QueryOptions::with_coordinate_observer`
+to retain the actual receipt on success or failure. EXPLAIN uses the same capture.
 
-## C query time and entropy
+UPDATE captures its first WHERE context before random draws and retains that
+receipt across rollback. Observers see each context in program order. Data-only,
+LOAD and graph operations do not construct WHERE contexts, so an UPDATE may
+apply with `NotStarted`. Rule receipts bind the typed program, shapes and data
+snapshots, execution options, and ordered query-context receipts.
 
-All twelve existing C query entries now take `const char *now` and
-`const uint64_t *entropy_seed` immediately before their first output parameter.
-This includes ordinary, JSON, governed and entailment queries and each XPath or
-geographic variant. Rebuild callers against ABI 0.13.0; passing `NULL, NULL`
-preserves native clock and entropy defaults. Each pointer is independently
-optional, and a pointer to zero supplies seed zero.
+Execution identities bind the request, effective coordinates, source snapshot,
+and known execution policies. Opaque callbacks, producers and external sources
+leave the execution identity absent unless the Rust caller certifies their code
+and captured sources with `QueryOptions::with_implementation_identity`. Native
+snapshot identities include retained dictionary content because blank-name
+collision avoidance observes unused terms. Missing identity is explicit; it is
+never inferred from output bytes. Query-text provenance remains separate.
 
-Time is an exact `xsd:dateTime` lexical form, including negative years, fractional
-seconds and timezone. The call owns the parsed time and copies the seed before
-execution; returned results retain no caller memory. Invalid UTF-8 and malformed
-time retain the C argument-error status conventions. UPDATE signatures are unchanged.
+JavaScript package results own `executionReceipt`. `ask` returns an object with
+`boolean`; `construct` and `describe` return an object with `dataset`; `update`
+returns `{ dataset, executionReceipt }`. Raw query methods, `Dataset.query` and
+EXPLAIN return `{ body, executionReceipt }`; async twins use the same envelopes.
+`queryRawBytesAsync` places bytes in `body`. Low-level handles expose
+`executionReceiptJson`; serialized jobs use `takeRawResult()` instead of
+`takeRawBytes()`. Free that result handle after reading it. Running async jobs
+reject cancellation with an error carrying the original signal reason as
+`cause`, beside the receipt and evidence. An already-aborted signal still
+rejects before job creation with its original reason.
+
+Python query results and outcomes expose `execution_receipt_json`.
+`MutableDataset.update` now returns an owned `UpdateOutcome` instead of `None`;
+its ordinary ungoverned lane has `evidence is None`. Rule dictionaries carry
+`execution_receipt_json`. Failed executions retain receipts on their original
+exception classes. CLI execution records use stderr, leaving RDF stdout intact.
+
+## C query, UPDATE and rule coordinates
+
+ABI 0.16.0 requires a separate `PurrdfBuffer **out_receipt` immediately after
+`entropy_seed` on ordinary, JSON, governed and entailment queries, governed
+UPDATE, and rule execution, including their XPath and geographic variants.
+Recompile all affected callers. Initialize a receipt pointer to `NULL`, pass its
+address, inspect the returned JSON with `purrdf_buffer_data`, and release it
+with `purrdf_buffer_free`. Payload and receipt have independent ownership.
+The receipt slot is written only on success. Use
+`purrdf_error_execution_receipt_json(error)` after failure for a receipt borrowed until the
+error handle is freed.
+
+The preceding `now` and `entropy_seed` inputs remain independently nullable.
+Time accepts an exact `xsd:dateTime` lexical form, including negative years,
+fractional seconds and timezone. A pointer to zero supplies seed zero. Each
+call owns its parsed inputs before evaluation; outputs retain no caller memory.
+Effective seeds cross receipt JSON as decimal strings and unavailable identities
+as JSON nulls. Malformed coordinates keep the existing argument-error classes.
 
 ## WKT and GeoJSON parsing resource policies
 
@@ -493,9 +528,11 @@ list. A consumer that needs such a list can clone the shared view's names at
 that boundary; expanding every nested wildcard snapshot recreates the repeated
 prefix work the compact representation avoids.
 
-## Segmented data profile 6
+## Segmented data profile 7
 
-Segmented stores use data profile 6 (`PURRSEG6`). The reverse index stores
+Segmented stores use data profile 7 (`PURRSEG7`). Authenticated annotation
+value intervals extend the block summaries to 104 bytes and the header to
+456 bytes, so range scans can reject payload blocks before admission. The reverse index stores
 identifiers into the forward dictionary, dictionary blocks read their first key
 from the record instead of a second stored fence, source directories use sparse
 authenticated prefixes, and oversized terms live in authenticated overflow

@@ -150,9 +150,8 @@ impl<D> Clone for Inference<D> {
 }
 
 impl<D> Inference<D> {
-    /// Effective supplied time and starting query-seed state for this inference.
-    /// Independent of the clause program's [`Self::contract_hash`]; absent inputs
-    /// do not identify sampled host values or the evaluated dataset snapshot.
+    /// Supplied controls, actual nested contexts and certified execution identities.
+    /// The clause program's [`Self::contract_hash`] remains a separate identity.
     #[must_use]
     pub const fn coordinates(&self) -> &rules::RuleCoordinates {
         &self.coordinates
@@ -318,6 +317,9 @@ pub(crate) fn evaluate_with(
         let base = data.core_arc()?;
         let triples = rules::base_triples(&base);
         Ok(PreparedRuleSource {
+            snapshot: base
+                .snapshot_identity()
+                .unwrap_or_else(|never| match never {}),
             data: Some(data),
             base: Some(Arc::clone(&base)),
             triples,
@@ -373,6 +375,9 @@ pub(crate) fn evaluate_triples(
                 triples.push(triple);
             }
             Ok(PreparedRuleSource {
+                snapshot: base.snapshot_identity().map_err(|error| {
+                    crate::error::ShapesError::from(purrdf_core::RdfDiagnostic::from(error))
+                })?,
                 data: None,
                 base: None,
                 triples,
@@ -388,6 +393,7 @@ pub(crate) fn evaluate_triples(
 
 /// Input and publication owners prepared only after rule/program validation.
 struct PreparedRuleSource<'a, F> {
+    snapshot: Option<purrdf_hash::hex::Digest32>,
     data: Option<&'a ShaclData>,
     base: Option<Arc<RdfDataset>>,
     triples: Vec<[Term; 3]>,
@@ -412,230 +418,266 @@ where
     ) -> Result<Arc<D>, crate::error::ShapesError>,
 {
     let _coordinates = options.coordinate_scope();
-    let coordinates = crate::sparql::coordinates::snapshot();
-    let source_rules = options.source_rules();
-    let governors = options
-        .eval_options()
-        .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record);
-    for rule in &set.rules {
-        if let IrRuleBody::Elements(element_rule) = &rule.body {
-            element_rule
-                .check_well_formed()
-                .map_err(|e| format!("rule {} is not well formed: {e}", rule.id))?;
+    let mut coordinates = crate::sparql::coordinates::snapshot();
+    coordinates.shapes = shapes
+        .shapes_dataset
+        .snapshot_identity()
+        .unwrap_or_else(|never| match never {});
+    let recording = crate::sparql::coordinates::RecordingScope::enter();
+    let outcome = (|| {
+        let program_identity = super::identity::program(set, shapes)?;
+        coordinates.program = Some(program_identity);
+        recording
+            .bind_implementation(program_identity)
+            .map_err(|error| {
+                rules::RulesError::Shapes(crate::error::ShapesError::internal(error.to_string()))
+            })?;
+        let source_rules = options.source_rules();
+        coordinates.source_rules = source_rules;
+        let governors = options
+            .eval_options()
+            .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record);
+        for rule in &set.rules {
+            if let IrRuleBody::Elements(element_rule) = &rule.body {
+                element_rule
+                    .check_well_formed()
+                    .map_err(|e| format!("rule {} is not well formed: {e}", rule.id))?;
+            }
         }
-    }
-    let empty = empty_data()?;
-    let now = if lower::uses_now(set) {
-        Some(capture_now(&empty)?)
-    } else {
-        None
-    };
-    let lowered = lower::lower::<N>(set, now.as_ref());
-    let schedule = match set.scheduling {
-        Scheduling::Declared => declared_schedule(set),
-        Scheduling::Stratified => super::depend::stratify(set).map_err(|e| describe(&e, set))?,
-    };
-    let expectations: Vec<Vec<String>> = schedule
-        .layers()
-        .iter()
-        .map(|layer| {
-            let mut predicates: Vec<String> = layer
-                .once()
+        let empty = empty_data()?;
+        let now = if lower::uses_now(set) {
+            Some(capture_now(&empty)?)
+        } else {
+            None
+        };
+        let lowered = lower::lower::<N>(set, now.as_ref());
+        let schedule = match set.scheduling {
+            Scheduling::Declared => declared_schedule(set),
+            Scheduling::Stratified => {
+                super::depend::stratify(set).map_err(|e| describe(&e, set))?
+            }
+        };
+        let expectations: Vec<Vec<String>> = schedule
+            .layers()
+            .iter()
+            .map(|layer| {
+                let mut predicates: Vec<String> = layer
+                    .once()
+                    .iter()
+                    .chain(layer.iterating())
+                    .flatten()
+                    .flat_map(|&index| set.rules[index].expected_predicates.iter())
+                    .map(|p| p.as_str().to_owned())
+                    .collect();
+                predicates.sort();
+                predicates.dedup();
+                predicates
+            })
+            .collect();
+        let program = schedule::compile_scheduled(lowered.clauses, schedule)
+            .map_err(|e| describe(&e, set))?;
+        coordinates.contract = Some(purrdf_hash::hex::Digest32::from(
+            *program.contract_hash(&governors).digest(),
+        ));
+
+        let PreparedRuleSource {
+            snapshot,
+            data,
+            base,
+            triples: base_triples,
+            finish,
+        } = prepare()?;
+        coordinates.snapshot = snapshot;
+
+        // Every label this evaluation mints — a head blank node, a blank node an assignment
+        // computes, a data block's blank node standardized apart from the base graph ("rdf
+        // merge") — starts with a prefix no base-graph or data-block label starts with.
+        let mint_prefix = unused_label_prefix(
+            base_triples
                 .iter()
-                .chain(layer.iterating())
-                .flatten()
-                .flat_map(|&index| set.rules[index].expected_predicates.iter())
-                .map(|p| p.as_str().to_owned())
-                .collect();
-            predicates.sort();
-            predicates.dedup();
-            predicates
-        })
-        .collect();
-    let program =
-        schedule::compile_scheduled(lowered.clauses, schedule).map_err(|e| describe(&e, set))?;
-
-    let PreparedRuleSource {
-        data,
-        base,
-        triples: base_triples,
-        finish,
-    } = prepare()?;
-
-    // Every label this evaluation mints — a head blank node, a blank node an assignment
-    // computes, a data block's blank node standardized apart from the base graph ("rdf
-    // merge") — starts with a prefix no base-graph or data-block label starts with.
-    let mint_prefix = unused_label_prefix(
-        base_triples
-            .iter()
-            .chain(&set.data)
-            .flat_map(|triple| triple.iter()),
-    );
-    let shapes_graph_iri = data
-        .and_then(ShaclData::shapes_graph_iri)
-        .map(ToOwned::to_owned)
-        .or_else(|| shapes.shapes_graph.clone())
-        .filter(|_| shapes.shapes_dataset.quad_count() > 0);
-    let mut engine = Engine::<N> {
-        shape: std::marker::PhantomData,
-        codec: Codec::default(),
-        guards: lowered.guards,
-        base,
-        originals: FastSet::default(),
-        shapes,
-        class_supplement: crate::engine::request_subclasses(shapes),
-        shapes_graph_iri,
-        empty,
-        view: RefCell::new(None),
-        generation: Cell::new(0),
-        mints: Cell::new(0),
-        mint_prefix,
-        expectations,
-        reexecution,
-        records: RefCell::new(FastMap::default()),
-    };
-    // Every constant a clause mentions enters the store through its head or a probe, so
-    // each is registered with the codec first.
-    for rule in &set.rules {
-        if let IrRuleBody::Elements(element_rule) = &rule.body {
-            register_constants(&engine.codec, element_rule);
+                .chain(&set.data)
+                .flat_map(|triple| triple.iter()),
+        );
+        let shapes_graph_iri = data
+            .and_then(ShaclData::shapes_graph_iri)
+            .map(ToOwned::to_owned)
+            .or_else(|| shapes.shapes_graph.clone())
+            .filter(|_| shapes.shapes_dataset.quad_count() > 0);
+        let mut engine = Engine::<N> {
+            shape: std::marker::PhantomData,
+            codec: Codec::default(),
+            guards: lowered.guards,
+            base,
+            originals: FastSet::default(),
+            shapes,
+            class_supplement: crate::engine::request_subclasses(shapes),
+            shapes_graph_iri,
+            empty,
+            view: RefCell::new(None),
+            generation: Cell::new(0),
+            mints: Cell::new(0),
+            mint_prefix,
+            expectations,
+            reexecution,
+            records: RefCell::new(FastMap::default()),
+        };
+        // Every constant a clause mentions enters the store through its head or a probe, so
+        // each is registered with the codec first.
+        for rule in &set.rules {
+            if let IrRuleBody::Elements(element_rule) = &rule.body {
+                register_constants(&engine.codec, element_rule);
+            }
         }
-    }
-    let mut edb = RuleStore::<N>::with_dictionary(TermInterner::default());
-    for triple in base_triples {
-        let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
-        edb.insert_row(Arity::<N>::surface_row([
-            s.as_str(),
-            p.as_str(),
-            o.as_str(),
-        ]))
-        .map_err(crate::error::ShapesError::from)?;
+        let mut edb = RuleStore::<N>::with_dictionary(TermInterner::default());
+        for triple in base_triples {
+            let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
+            edb.insert_row(Arity::<N>::surface_row([
+                s.as_str(),
+                p.as_str(),
+                o.as_str(),
+            ]))
+            .map_err(crate::error::ShapesError::from)?;
+            if lowered.uses_base {
+                Arity::<N>::seed_base(&mut edb, [&s, &p, &o])
+                    .map_err(crate::error::ShapesError::from)?;
+            }
+            engine.originals.insert(triple);
+        }
         if lowered.uses_base {
-            Arity::<N>::seed_base(&mut edb, [&s, &p, &o])
-                .map_err(crate::error::ShapesError::from)?;
+            edb = Arity::<N>::capture_base(edb).map_err(crate::error::ShapesError::from)?;
         }
-        engine.originals.insert(triple);
-    }
-    if lowered.uses_base {
-        edb = Arity::<N>::capture_base(edb).map_err(crate::error::ShapesError::from)?;
-    }
-    for triple in &set.data {
-        let triple = triple
-            .each_ref()
-            .map(|term| data_block_term(term, &engine.mint_prefix));
-        let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
-        edb.insert_row(Arity::<N>::surface_row([
-            s.as_str(),
-            p.as_str(),
-            o.as_str(),
-        ]))
-        .map_err(crate::error::ShapesError::from)?;
-    }
+        for triple in &set.data {
+            let triple = triple
+                .each_ref()
+                .map(|term| data_block_term(term, &engine.mint_prefix));
+            let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
+            edb.insert_row(Arity::<N>::surface_row([
+                s.as_str(),
+                p.as_str(),
+                o.as_str(),
+            ]))
+            .map_err(crate::error::ShapesError::from)?;
+        }
 
-    let evaluation = schedule::evaluate_scheduled(
-        &program,
-        edb,
-        &engine,
-        &mut Hooks { engine: &engine },
-        &governors,
-        stop,
-    )
-    .map_err(|e| refusal(&e, set, options.limit_knobs()))?;
-    let usage = evaluation.budget();
-    check_stop(stop, &usage)?;
-
-    // The inference graph: every default-graph fact that is not a base triple.
-    let facts = engine.model_facts(evaluation.facts())?;
-    let mut inferred: Vec<[Term; 3]> = facts
-        .iter()
-        .filter(|triple| !engine.originals.contains(*triple))
-        .cloned()
-        .collect();
-    inferred.sort_by_cached_key(|triple| triple.each_ref().map(ToString::to_string));
-
-    let mut explanations: FastMap<[Term; 3], Explanation> = FastMap::default();
-    for derivation in evaluation
-        .derivations()
-        .expect("SHACL rules requested derivation recording")
-    {
+        let evaluation = schedule::evaluate_scheduled(
+            &program,
+            edb,
+            &engine,
+            &mut Hooks { engine: &engine },
+            &governors,
+            stop,
+        )
+        .map_err(|e| refusal(&e, set, options.limit_knobs()))?;
+        let usage = evaluation.budget();
         check_stop(stop, &usage)?;
-        if !Arity::<N>::is_output(derivation.fact()) {
-            continue;
-        }
-        let triple = engine.decode_fact(derivation.fact())?;
-        let premises = derivation
-            .sources()
+
+        // The inference graph: every default-graph fact that is not a base triple.
+        let facts = engine.model_facts(evaluation.facts())?;
+        let mut inferred: Vec<[Term; 3]> = facts
             .iter()
-            .map(|fact| engine.decode_fact(fact))
-            .collect::<Result<Vec<_>, _>>()?;
-        explanations.entry(triple).or_insert_with(|| Explanation {
-            rule: set.rules[derivation.rule()].id.clone(),
-            premises,
-        });
-    }
+            .filter(|triple| !engine.originals.contains(*triple))
+            .cloned()
+            .collect();
+        inferred.sort_by_cached_key(|triple| triple.each_ref().map(ToString::to_string));
 
-    // SPARQL 1.2 RL: "An inference graph is an RDF Graph". A head instantiated with a
-    // literal subject or a non-IRI predicate, or a data-block triple spelled that way
-    // (the data-block grammar admits "symmetric" literal subjects), is not an RDF triple,
-    // and is refused by name rather than dropped from the graph.
-    for triple in &inferred {
-        check_stop(stop, &usage)?;
-        if let Err(why) = rdf_triple_check(triple) {
-            let source = explanations.get(triple).map_or_else(
-                || "a data block".to_owned(),
-                |explanation| format!("rule {}", explanation.rule),
-            );
-            let [s, p, o] = triple;
-            return Err(format!(
-                "{source} put `{s} {p} {o}` in the inference graph, which is not an RDF \
-                 triple: {why}"
-            )
-            .into());
-        }
-    }
-
-    let mut all: Vec<&[Term; 3]> = facts.iter().collect();
-    let mut sources: Vec<[Term; 3]> = Vec::new();
-    if source_rules {
-        for (index, triple) in inferred.iter().enumerate() {
+        let mut explanations: FastMap<[Term; 3], Explanation> = FastMap::default();
+        for derivation in evaluation
+            .derivations()
+            .expect("SHACL rules requested derivation recording")
+        {
             check_stop(stop, &usage)?;
-            let Some(explanation) = explanations.get(triple) else {
+            if !Arity::<N>::is_output(derivation.fact()) {
                 continue;
-            };
-            let reifier = Term::blank(format!("s-x{index}_rule"));
-            let [s, p, o] = triple.clone();
-            let Term::NamedNode(predicate) = p else {
-                continue;
-            };
-            sources.push([
-                reifier.clone(),
-                Term::NamedNode(NamedNode::from(rdf::REIFIES)),
-                Term::Triple(Box::new(Triple {
-                    subject: s,
-                    predicate,
-                    object: o,
-                })),
-            ]);
-            sources.push([
-                reifier,
-                Term::NamedNode(NamedNode::from(sh::SOURCE_RULE)),
-                explanation.rule.clone(),
-            ]);
+            }
+            let triple = engine.decode_fact(derivation.fact())?;
+            let premises = derivation
+                .sources()
+                .iter()
+                .map(|fact| engine.decode_fact(fact))
+                .collect::<Result<Vec<_>, _>>()?;
+            explanations.entry(triple).or_insert_with(|| Explanation {
+                rule: set.rules[derivation.rule()].id.clone(),
+                premises,
+            });
         }
-        all.extend(sources.iter());
-    }
-    let reifiers = rules::reifier_subjects(all.iter().copied());
-    check_stop(stop, &usage)?;
-    let dataset = finish(&inferred, &sources, &reifiers)?;
-    check_stop(stop, &usage)?;
-    Ok(Inference {
-        coordinates,
-        usage,
-        dataset,
-        inferred,
-        explanations,
-        contract: program.contract_hash(&governors).to_hex(),
-    })
+
+        // SPARQL 1.2 RL: "An inference graph is an RDF Graph". A head instantiated with a
+        // literal subject or a non-IRI predicate, or a data-block triple spelled that way
+        // (the data-block grammar admits "symmetric" literal subjects), is not an RDF triple,
+        // and is refused by name rather than dropped from the graph.
+        for triple in &inferred {
+            check_stop(stop, &usage)?;
+            if let Err(why) = rdf_triple_check(triple) {
+                let source = explanations.get(triple).map_or_else(
+                    || "a data block".to_owned(),
+                    |explanation| format!("rule {}", explanation.rule),
+                );
+                let [s, p, o] = triple;
+                return Err(format!(
+                    "{source} put `{s} {p} {o}` in the inference graph, which is not an RDF \
+                 triple: {why}"
+                )
+                .into());
+            }
+        }
+
+        let mut all: Vec<&[Term; 3]> = facts.iter().collect();
+        let mut sources: Vec<[Term; 3]> = Vec::new();
+        if source_rules {
+            for (index, triple) in inferred.iter().enumerate() {
+                check_stop(stop, &usage)?;
+                let Some(explanation) = explanations.get(triple) else {
+                    continue;
+                };
+                let reifier = Term::blank(format!("s-x{index}_rule"));
+                let [s, p, o] = triple.clone();
+                let Term::NamedNode(predicate) = p else {
+                    continue;
+                };
+                sources.push([
+                    reifier.clone(),
+                    Term::NamedNode(NamedNode::from(rdf::REIFIES)),
+                    Term::Triple(Box::new(Triple {
+                        subject: s,
+                        predicate,
+                        object: o,
+                    })),
+                ]);
+                sources.push([
+                    reifier,
+                    Term::NamedNode(NamedNode::from(sh::SOURCE_RULE)),
+                    explanation.rule.clone(),
+                ]);
+            }
+            all.extend(sources.iter());
+        }
+        let reifiers = rules::reifier_subjects(all.iter().copied());
+        check_stop(stop, &usage)?;
+        let dataset = finish(&inferred, &sources, &reifiers)?;
+        check_stop(stop, &usage)?;
+        Ok(Inference {
+            coordinates: coordinates.clone(),
+            usage,
+            dataset,
+            inferred,
+            explanations,
+            contract: program.contract_hash(&governors).to_hex(),
+        })
+    })();
+    let coordinates = recording.finish(coordinates).map_err(|error| {
+        rules::RulesError::Shapes(crate::error::ShapesError::internal(error.to_string()))
+    })?;
+    outcome
+        .map(|mut inference| {
+            inference.coordinates = coordinates.clone();
+            inference
+        })
+        .map_err(|cause| {
+            rules::RulesError::Execution(Box::new(rules::RuleExecutionError {
+                cause: Box::new(cause),
+                coordinates,
+            }))
+        })
 }
 
 /// Keep publication cancellation on the same native stopped-error path.

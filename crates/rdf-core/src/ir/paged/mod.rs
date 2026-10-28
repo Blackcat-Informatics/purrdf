@@ -373,6 +373,7 @@ pub struct PagedDataset {
 
 #[derive(Debug)]
 pub(super) struct PagedStatistics {
+    snapshot_identity: purrdf_hash::hex::Digest32,
     identities: Box<[Arc<()>]>,
     values: LocalStatistics<GlobalTermId>,
 }
@@ -401,7 +402,16 @@ fn seal_statistics(pages: &mut [PageSlot]) -> Result<Arc<PagedStatistics>, Stati
         &mut memory,
     )?;
     let identities = memory.collect(pages.iter().map(|slot| slot.translation.identity.clone()))?;
+    const SNAPSHOT: purrdf_hash::Domain =
+        purrdf_hash::Domain::new(b"purrdf-core/paged-snapshot/v1");
+    let mut hash = purrdf_hash::blake3::Hasher::new();
+    hash.update(SNAPSHOT.as_bytes());
+    hash.update(&(pages.len() as u64).to_le_bytes());
+    for page in pages.iter() {
+        hash.update(page.translation.summary().snapshot_identity.as_bytes());
+    }
     let statistics = Arc::new(PagedStatistics {
+        snapshot_identity: purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()),
         identities: memory.boxed_slice(identities)?,
         values,
     });
@@ -409,6 +419,60 @@ fn seal_statistics(pages: &mut [PageSlot]) -> Result<Arc<PagedStatistics>, Stati
         slot.translation.statistics_bundle = Some(statistics.clone());
     }
     Ok(statistics)
+}
+
+impl PagedDataset {
+    fn range_may_match(
+        &self,
+        slot: &PageSlot,
+        stream: PageStream,
+        predicate: Option<GlobalTermId>,
+        range: crate::AnnotationValueRange<'_>,
+    ) -> Result<bool, purrdf_lex::allocation::StorageError> {
+        let Some(workspace) = range.workspace else {
+            return Ok(true);
+        };
+        if workspace.stopped() {
+            return Ok(false);
+        }
+        let index = match stream {
+            PageStream::Base => 0,
+            PageStream::Annotation => 1,
+            PageStream::Reifier => return Ok(true),
+        };
+        for interval in &slot.translation.summary().intervals[index] {
+            if predicate.is_some_and(|predicate| {
+                slot.translation.to_global(interval.predicate) != predicate
+            }) {
+                continue;
+            }
+            let mut storage = crate::annotation_range::RangeMemory(workspace);
+            let endpoints = interval.endpoints.map(|(low, high)| {
+                (
+                    slot.translation.to_global(low),
+                    slot.translation.to_global(high),
+                )
+            });
+            match crate::annotation_range::interval_may_match(
+                self,
+                endpoints,
+                range,
+                &mut Memory::new(&mut storage),
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(crate::annotation_range::RangeReadError::Storage(error)) => {
+                    if workspace.stopped() {
+                        return Ok(false);
+                    }
+                    workspace.record_failure(error);
+                    return Err(error);
+                }
+                Err(crate::annotation_range::RangeReadError::Read(error)) => match error {},
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl std::fmt::Debug for PagedDataset {
@@ -1130,6 +1194,16 @@ impl PagedDataset {
                 summary_drift_message(slot.translation.summary(), digest, &materialization.dataset),
             ));
         }
+        // Match query admission: diagnose structural drift first, then refuse
+        // remaining content changes even when every summary count is unchanged.
+        if materialization.dataset.frozen_snapshot_identity()
+            != slot.translation.summary().snapshot_identity
+        {
+            return Err(PageFault::invalid_data(
+                id,
+                "page content identity changed after sealing",
+            ));
+        }
         let _ = slot.resident.set(materialization.dataset);
         Ok(slot
             .resident
@@ -1258,6 +1332,10 @@ impl DatasetView for PagedDataset {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.statistics.snapshot_identity))
+    }
 
     fn reserve_owned_workspace(
         &self,
@@ -1567,6 +1645,41 @@ impl DatasetView for PagedDataset {
             page.annotation_quads()
                 .map(move |q| q.map_ids(|id| slot.translation.to_global(id)))
                 .filter(move |q| g.matches(q.g))
+        })
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        admission::candidate_pages_for_stream(
+            self.graph_index(),
+            self.page_count(),
+            graph,
+            PageStream::Annotation,
+        )
+        .map(move |id| &self.pages[id.0 as usize])
+        .take_while(move |_| range.workspace.is_none_or(|workspace| !workspace.stopped()))
+        .filter(move |slot| {
+            // The original caller owner retains failures and must inspect them
+            // before publishing results; no rows escape after refusal.
+            self.range_may_match(slot, PageStream::Annotation, predicate, *range)
+                .unwrap_or_default()
+        })
+        .flat_map(move |slot| {
+            let page = self
+                .page(slot.id)
+                .expect("sealed page must re-materialize deterministically");
+            page.annotation_quads()
+                .map(move |row| row.map_ids(|id| slot.translation.to_global(id)))
+                .filter(move |row| {
+                    graph.matches(row.g)
+                        && predicate.is_none_or(|id| id == row.p)
+                        && object.is_none_or(|id| id == row.o)
+                })
         })
     }
 

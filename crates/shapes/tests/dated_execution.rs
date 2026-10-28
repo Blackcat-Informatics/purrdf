@@ -733,8 +733,13 @@ fn public_global_rule_execution_audits_original_query_even_for_an_empty_join() {
             if profile == ShaclProfile::REC_20170720 {
                 assert!(
                     matches!(&outcome,
-                    Err(CompleteValidationError::Admission(refusal)) if refusal.reason() == AdmissionReason::Minus
-                        && refusal.purpose() == QueryPurpose::GlobalConstructRule),
+                    Err(CompleteValidationError::RuleExecution { cause, coordinates })
+                        if matches!(cause.as_ref(), CompleteValidationError::Admission(refusal)
+                            if refusal.reason() == AdmissionReason::Minus
+                                && refusal.purpose() == QueryPurpose::GlobalConstructRule)
+                            && coordinates.program_identity().is_some()
+                            && coordinates.snapshot_identity().is_some()
+                            && coordinates.executions().is_empty()),
                     "the REC source audit must run even for an empty join: {outcome:?}"
                 );
             } else {

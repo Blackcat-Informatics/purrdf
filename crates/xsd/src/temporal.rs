@@ -4754,6 +4754,38 @@ impl DateTime {
             && self.tz == other.tz
     }
 
+    /// Content identity of the exact calendar and timezone representation.
+    ///
+    /// Equal normalized seconds share an identity. Equal instants with different
+    /// declared offsets remain distinct, as their RDF lexical values differ.
+    /// Reads the original coefficient limbs without formatting or allocation.
+    #[must_use]
+    pub fn representation_identity(&self) -> purrdf_hash::hex::Digest32 {
+        const REPRESENTATION: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-xsd/date-time-representation/v1");
+        let mut digest = purrdf_hash::blake3::Streaming::<1024>::new();
+        digest.update(REPRESENTATION.as_bytes());
+        digest.update(&self.year.to_le_bytes());
+        digest.update(&[self.month, self.day, self.hour, self.minute]);
+        digest.update(&self.second.scale().to_le_bytes());
+        let coefficient = self.second.unscaled().bigint_operand();
+        digest.update(&coefficient.signum().to_le_bytes());
+        digest.update(&(coefficient.limbs().len() as u64).to_le_bytes());
+        for limb in coefficient.limbs() {
+            digest.update(&limb.to_le_bytes());
+        }
+        match self.tz {
+            Some(zone) => {
+                digest.update(&[1]);
+                digest.update(&zone.to_le_bytes());
+            }
+            None => {
+                digest.update(&[0]);
+            }
+        }
+        purrdf_hash::hex::Digest32::new(*digest.finalize().as_bytes())
+    }
+
     /// Heap retained by the exact seconds component.
     #[must_use]
     pub fn owned_heap_bytes(&self) -> u64 {

@@ -33,8 +33,8 @@ async function rejection(promise) {
 
 // An ordinary asynchronous call is refused with the one clear message.
 report.queryAsync = await rejection(engine.queryAsync(data, `SELECT ?s WHERE { ?s <${EX}p> ?o }`));
-report.updateAsync = await rejection(engine.updateAsync(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`));
-report.datasetQueryAsync = await rejection(data.queryAsync(`SELECT ?s WHERE { ?s <${EX}p> ?o }`));
+report.updateAsync = await rejection(engine.updateAsync(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`).then(result => result.dataset));
+report.datasetQueryAsync = await rejection(data.queryAsync(`SELECT ?s WHERE { ?s <${EX}p> ?o }`).then(result => result.body));
 // A call whose arguments wasm itself would refuse — a dataset that is not a Dataset —
 // is still refused for the missing JSPI: the check runs before anything touches wasm.
 report.beforeWasm = await rejection(engine.queryAsync({ notADataset: true }, "SELECT * WHERE { ?s ?p ?o }"));

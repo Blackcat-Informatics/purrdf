@@ -71,6 +71,8 @@ pub struct EntailRequest<'a> {
 /// What a SHACL entailment run produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntailOutcome {
+    /// Original supplied rule coordinates and the executed query coordinate record.
+    pub coordinates: purrdf_shapes::RuleCoordinates,
     /// The materialized dataset — the base graph plus every inferred triple — as canonical
     /// N-Triples.
     pub ntriples: String,
@@ -161,6 +163,7 @@ fn entail_with<E: From<ShapesError>>(
     let options = coordinates.into_rule_options(&limits, request.host.entail_limit_knobs());
     let inference = run(RuleSource::Shapes(&shapes), data.as_ref(), &options)?;
     Ok(EntailOutcome {
+        coordinates: inference.coordinates().clone(),
         ntriples: canonical_ntriples(inference.dataset())?,
         diagnostics: shapes.mandatory_diagnostics().to_vec(),
     })

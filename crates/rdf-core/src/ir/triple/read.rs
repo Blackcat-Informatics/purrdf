@@ -341,6 +341,13 @@ impl DatasetView for TripleRead<'_> {
         Self: 'a;
     type ProbePlan = TripleOrder;
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(Some(self.dataset.snapshot_identity))
+    }
+
     fn read_error(&self) -> Option<Self::ReadError> {
         if !self.failure.failed.load(Ordering::Acquire) {
             return None;

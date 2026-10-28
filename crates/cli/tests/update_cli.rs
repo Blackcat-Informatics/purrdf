@@ -207,7 +207,7 @@ fn update_applies_then_serializes_the_committed_dataset() {
     let output = run(&["update", "--data", &input, "--to", "ntriples", INSERT]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stderr, [] as [_; 0]);
+    assert_eq!(support::execution_diagnostics(&output, "not-started"), "");
     let body = String::from_utf8(output.stdout).expect("UTF-8 output");
     assert!(body.contains("<http://example.org/old>"), "{body}");
     assert!(body.contains("<http://example.org/new>"), "{body}");
@@ -229,7 +229,7 @@ fn governed_update_trip_writes_no_dataset_and_exits_three() {
         "a tripped mutation emits no dataset"
     );
     assert!(!std::path::Path::new(target).exists());
-    let report = String::from_utf8(output.stderr).expect("UTF-8 report");
+    let report = support::execution_diagnostics(&output, "not-started");
     assert!(report.starts_with("purrdf-governor-report 1\n"), "{report}");
     assert!(report.contains("\noperation update\n"), "{report}");
     assert!(report.contains("\ntripped fuel-exhausted\n"), "{report}");

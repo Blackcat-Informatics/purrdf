@@ -16,6 +16,20 @@ const TRIPLE_ROW: Domain = Domain::new(b"purrdf/triples/source-row/v1");
 const RECORD: Domain = Domain::new(b"purrdf/source-record/v1");
 const SOURCE_VERSION: Domain = Domain::new(b"purrdf/source-version/v1");
 
+pub(crate) fn resident_snapshot(
+    records: Multiset256,
+    graphs: Multiset256,
+    dictionary: [u8; 32],
+) -> purrdf_hash::hex::Digest32 {
+    const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v1");
+    const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v1");
+    let mut hash = purrdf_hash::blake3::RecordHasher::new();
+    hash.update(&records.fingerprint(ROWS));
+    hash.update(&graphs.fingerprint(GRAPHS));
+    hash.update(&dictionary);
+    purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+}
+
 pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 32]) -> [u8; 32] {
     use crate::ir::statistics::Relation;
     let mut record = Hasher::new();

@@ -605,6 +605,12 @@ impl GraphSelector {
 ///   silently drops the layer it was told to expect, and reports success. Claim what
 ///   the view enumerates, and enumerate what it claims.
 pub trait DatasetView {
+    /// Immutable snapshot identity when the view carries a certified content or
+    /// representation binding. Unknown identity is explicit, never an address,
+    /// statistics fingerprint or session-local term identifier.
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(None)
+    }
     /// The dataset-local id type this view mints and reads in (C0.8). For the
     /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies
     /// its own id, which is meaningful only within this view.
@@ -1307,6 +1313,20 @@ pub trait DatasetView {
         })
     }
 
+    /// Conservative annotation candidates for an ordered object FILTER. Storage
+    /// implementations may skip certified non-overlapping pages before payload
+    /// admission; the caller must still evaluate its original FILTER exactly.
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        let _ = range;
+        self.annotation_quads_for_pattern(predicate, object, graph)
+    }
+
     /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
     /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
     /// slot. Capability-gated: a backend with no annotation layer yields nothing.
@@ -1896,6 +1916,10 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.frozen_snapshot_identity()))
+    }
+
     fn reserve_owned_workspace(
         &self,
         _: u64,
@@ -2127,6 +2151,19 @@ impl DatasetView for RdfDataset {
 /// and RDF 1.2 side-tables — is forwarded, so no default (e.g. an empty reifier layer)
 /// can silently diverge from the inner view.
 impl<T: DatasetView> DatasetView for Arc<T> {
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        (**self).snapshot_identity()
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        (**self).annotation_quads_for_range(predicate, object, graph, range)
+    }
     type Id = T::Id;
     type ReadError = T::ReadError;
     type TermGuard<'a>

@@ -530,7 +530,12 @@ fn contextual_nested_numeric_groups_keep_ordered_worker_refusals() {
     let query = format!(
         "SELECT ?outer WHERE {{ VALUES ?outer {{ {drivers} }} FILTER EXISTS {{ SELECT (AVG(?v) AS ?mean) WHERE {{ VALUES ?x {{1 2 3}} BIND(?x / 3 AS ?v) }} }} }}"
     );
-    let options = QueryOptions::EMPTY.with_division("2:half-even".parse().unwrap());
+    // Compare whole receipts at the same coordinates across every worker pool.
+    let now = purrdf_xsd::temporal::parse_datetime("2024-02-29T12:34:56Z").unwrap();
+    let options = QueryOptions::EMPTY
+        .with_division("2:half-even".parse().unwrap())
+        .with_now(&now)
+        .with_entropy_seed(7);
     let run = |governors: &QueryGovernors| {
         let engine = NativeSparqlEngine::new();
         let plan = engine

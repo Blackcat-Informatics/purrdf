@@ -1047,6 +1047,7 @@ impl ViewTermId for CompositeViewId {
 /// identities. Graph projection is explicit. No pointer or work counter affects RDF.
 #[derive(Debug, Clone)]
 pub struct CompositeDatasetView {
+    snapshot_identity: purrdf_hash::hex::Digest32,
     sources: Arc<[CompositeSource]>,
     mappings: Arc<[Arc<AliasMap>]>,
     reverse: Arc<[Arc<ReverseMap>]>,
@@ -1084,6 +1085,68 @@ struct PrefixState {
 }
 
 impl CompositeDatasetView {
+    fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, RdfDiagnostic> {
+        const SNAPSHOT: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/composite-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        hash.update(SNAPSHOT.as_bytes());
+        hash.update(&(self.sources.len() as u64).to_le_bytes());
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        for (source, scopes) in self.sources.iter().zip(self.scopes.iter()) {
+            match &source.carrier {
+                Carrier::Native(dataset) => {
+                    hash.update(&[0]);
+                    hash.update(dataset.frozen_snapshot_identity().as_bytes());
+                }
+                Carrier::Delta(view) => {
+                    hash.update(&[1]);
+                    hash.update(view.frozen_snapshot_identity().as_bytes());
+                }
+                Carrier::Selected(selection) => {
+                    hash.update(&[2]);
+                    hash.update(selection.view.snapshot_identity.as_bytes());
+                    hash.update(&(selection.names.len() as u64).to_le_bytes());
+                    for name in selection.names.iter() {
+                        name.visit_canonical_bytes_with_memory(
+                            |bytes| {
+                                hash.update(bytes);
+                            },
+                            &mut memory,
+                        )?;
+                    }
+                }
+            }
+            hash.update(&[match source.binding {
+                ScopeBinding::Independent => 0,
+                ScopeBinding::Shared => 1,
+            }]);
+            hash.update(&(scopes.len() as u64).to_le_bytes());
+            for (original, assigned) in scopes {
+                hash.update(&original.ordinal().to_le_bytes());
+                hash.update(&assigned.ordinal().to_le_bytes());
+            }
+            match &source.placement {
+                GraphPlacement::Preserve => {
+                    hash.update(&[0]);
+                }
+                GraphPlacement::Default => {
+                    hash.update(&[1]);
+                }
+                GraphPlacement::Named(name) => {
+                    hash.update(&[2]);
+                    name.visit_canonical_bytes_with_memory(
+                        |bytes| {
+                            hash.update(bytes);
+                        },
+                        &mut memory,
+                    )?;
+                }
+            }
+        }
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    }
+
     /// Compose independently parsed documents, standardizing blanks apart.
     /// # Errors
     /// Refuses invalid graph names, exhausted scope IDs or retention ceilings.
@@ -1696,6 +1759,7 @@ impl Prefix {
             unique_terms += alias_last(&sources, &scopes, &mut mappings, &mut reverse, &mut work)?;
         }
         let mut view = CompositeDatasetView {
+            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
             sources: sources.into(),
             mappings: mappings.into(),
             reverse: reverse.into(),
@@ -1728,6 +1792,7 @@ impl Prefix {
             });
         }
         view.placement = placement.into();
+        view.snapshot_identity = view.seal_content_identity()?;
         // One charge, and it already includes the derived dictionary's freeze.
         view.work.add(work);
         Ok(view)
@@ -1823,6 +1888,10 @@ impl DatasetView for CompositeDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.snapshot_identity))
+    }
 
     fn reserve_owned_workspace(
         &self,

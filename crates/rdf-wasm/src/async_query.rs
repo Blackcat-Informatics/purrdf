@@ -258,9 +258,9 @@ use crate::operation::{
 };
 use crate::query::{
     EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, QueryEngine, QueryOutcome,
-    QueryResult, UpdateOutcome, entailment_query_outcome_from_native, kind_mismatch,
-    negotiated_outcome_from_value, query_outcome_from_governed, query_result_from_sparql,
-    update_outcome_from_governed,
+    QueryResult, RawQueryResult, UpdateOutcome, entailment_query_outcome_from_native,
+    kind_mismatch, negotiated_outcome_from_value, query_outcome_from_governed,
+    query_result_from_execution, update_outcome_from_governed,
 };
 use crate::shacl::{
     ShaclChangeValidation, ShaclEntailment, ShaclImportError, ShaclJobRequest,
@@ -2249,7 +2249,7 @@ pub enum AsyncOperationKind {
     /// shape is known. The asynchronous lane's own: a SPARQL Protocol endpoint's query.
     Negotiated = 7,
     /// `explainQuery`: the rendered charge ledger, taken through
-    /// [`AsyncJob::take_raw_bytes`]. EXPLAIN evaluates the query to measure it, so its
+    /// [`AsyncJob::take_raw_result`]. EXPLAIN evaluates the query to measure it, so its
     /// measuring run suspends on `SERVICE`, yields and stops exactly as a query does.
     Explain = 8,
     /// A SHACL entry that can evaluate SPARQL — validation to SARIF, change validation,
@@ -2496,15 +2496,18 @@ impl JobInner {
                 RunStatus::Error
             }
             JobOutcome::Refused(refusal) => {
-                *self.error.borrow_mut() = Some(JobError::message(
-                    refusal.code(SHACL_REFUSAL_CODE),
-                    refusal.to_js_string(),
-                ));
+                let mut error =
+                    JobError::message(refusal.code(SHACL_REFUSAL_CODE), refusal.to_js_string());
+                if let Some(receipt) = refusal.execution_receipt() {
+                    error = error.with_execution_receipt(receipt.to_owned());
+                }
+                *self.error.borrow_mut() = Some(error);
                 *self.refusal.borrow_mut() = Some(refusal);
                 RunStatus::Error
             }
-            JobOutcome::Updated(frozen) => {
-                *self.pending_commit.borrow_mut() = Some(frozen);
+            JobOutcome::Updated(frozen, coordinates) => {
+                *self.pending_commit.borrow_mut() = Some(Arc::clone(&frozen));
+                *self.outcome.borrow_mut() = Some(JobOutcome::Updated(frozen, coordinates));
                 RunStatus::Outcome
             }
             JobOutcome::UpdateGoverned { outcome, frozen } => {
@@ -2822,6 +2825,16 @@ impl AsyncJob {
             .and_then(JobError::diagnostic_json)
     }
 
+    /// Execution receipt retained by a failed operation.
+    #[wasm_bindgen(getter, js_name = errorExecutionReceiptJson)]
+    pub fn error_execution_receipt_json(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::execution_receipt_json)
+    }
+
     /// The effect the job is suspended on, once; `undefined` when there is none.
     #[wasm_bindgen(js_name = takeEffect)]
     pub fn take_effect(&self) -> Option<AsyncEffect> {
@@ -3078,7 +3091,7 @@ impl AsyncJob {
                 )));
             }
         };
-        let JobOutcome::Query(result) =
+        let JobOutcome::Query(result, coordinates) =
             self.take("takeQueryResult", &[AsyncOperationKind::Query])?
         else {
             return Err(usage_error(
@@ -3093,25 +3106,38 @@ impl AsyncJob {
                     | ("CONSTRUCT/DESCRIBE graph", SparqlResult::Graph(_))
             );
             if !matches {
-                return Err(kind_mismatch(expected, &result).into());
+                return Err(crate::operation::attach_execution_receipt(
+                    kind_mismatch(expected, &result).into(),
+                    &purrdf_validate::query::execution_receipt_json(&coordinates),
+                ));
             }
         }
-        query_result_from_sparql(result, self.inner.blank_scope)
+        query_result_from_execution(result, coordinates, self.inner.blank_scope)
     }
 
-    /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's
-    /// SARIF log or entailed N-Triples (UTF-8 text).
-    #[wasm_bindgen(js_name = takeRawBytes)]
-    pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsValue> {
+    /// A serialized query or explanation and its actual native execution receipt.
+    #[wasm_bindgen(js_name = takeRawResult)]
+    pub fn take_raw_result(&self) -> Result<RawQueryResult, JsValue> {
         match self.take(
-            "takeRawBytes",
+            "takeRawResult",
             &[
                 AsyncOperationKind::Raw,
                 AsyncOperationKind::RawWithContext,
                 AsyncOperationKind::Explain,
-                AsyncOperationKind::Shacl,
             ],
         )? {
+            JobOutcome::QueryRaw { body, coordinates } => Ok(RawQueryResult { body, coordinates }),
+            _ => Err(usage_error(
+                "takeRawResult: the job holds no serialized query result",
+            )),
+        }
+    }
+
+    /// A SHACL job's
+    /// SARIF log or entailed N-Triples (UTF-8 text).
+    #[wasm_bindgen(js_name = takeRawBytes)]
+    pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        match self.take("takeRawBytes", &[AsyncOperationKind::Shacl])? {
             JobOutcome::Raw(text) => Ok(text.into_bytes()),
             _ => Err(usage_error("takeRawBytes: the job holds no raw result")),
         }
@@ -3229,7 +3255,7 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeShaclRefusal)]
     pub fn take_shacl_refusal(&self) -> Option<ShaclProductRefusal> {
         let mut refusal = self.inner.refusal.borrow_mut();
-        match refusal.take() {
+        match refusal.take().map(ShaclRefusal::into_cause) {
             Some(ShaclRefusal::Product(product)) => Some(product),
             other => {
                 *refusal = other;
@@ -3243,7 +3269,7 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeShaclImportError)]
     pub fn take_shacl_import_error(&self) -> Option<ShaclImportError> {
         let mut refusal = self.inner.refusal.borrow_mut();
-        match refusal.take() {
+        match refusal.take().map(ShaclRefusal::into_cause) {
             Some(ShaclRefusal::Import(error)) => Some(error),
             other => {
                 *refusal = other;
@@ -3260,6 +3286,17 @@ impl AsyncJob {
             .slots
             .counters
             .snapshot(self.inner.region.bounds().top)
+    }
+
+    /// Take the ordinary UPDATE execution receipt after completion.
+    #[wasm_bindgen(js_name = takeUpdateReceiptJson)]
+    pub fn take_update_receipt_json(&self) -> Result<String, JsValue> {
+        match self.take("takeUpdateReceiptJson", &[AsyncOperationKind::Update])? {
+            JobOutcome::Updated(_, coordinates) => {
+                Ok(purrdf_validate::query::execution_receipt_json(&coordinates))
+            }
+            _ => Err(usage_error("job holds no ordinary UPDATE receipt")),
+        }
     }
 
     /// Apply a finished update's result to `dataset` — refused, with the dataset left
@@ -4836,7 +4873,11 @@ mod tests {
     }
 
     fn raw_text(job: &AsyncJob) -> String {
-        String::from_utf8(job.take_raw_bytes().expect("raw bytes")).expect("UTF-8")
+        if job.inner.kind == AsyncOperationKind::Shacl {
+            String::from_utf8(job.take_raw_bytes().expect("raw bytes")).expect("UTF-8")
+        } else {
+            job.take_raw_result().expect("raw query result").body()
+        }
     }
 
     fn slots() -> JobSlots {
@@ -6546,7 +6587,8 @@ mod tests {
         assert!(job.is_finished());
         let expected = engine
             .query_raw(&dataset, SELECT, None, None, None, None, None, None, None)
-            .expect("sync twin");
+            .expect("sync twin")
+            .body();
         assert_eq!(raw_text(&job), expected);
         let evidence = job.take_evidence();
         assert!(
@@ -6558,10 +6600,10 @@ mod tests {
         assert!(evidence.evaluate_ms() >= 0.0 && evidence.serialize_ms() >= 0.0);
         assert_eq!(
             job.inner
-                .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
+                .take_outcome("takeRawResult", &[AsyncOperationKind::Raw])
                 .expect_err("an outcome is taken once")
                 .rendered(),
-            "takeRawBytes: the outcome was already taken"
+            "takeRawResult: the outcome was already taken"
         );
         assert_eq!(run_job(job.id()), RunStatus::AlreadyStarted);
         assert_eq!(job.finish(), 0);
@@ -6708,7 +6750,8 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
             .query_raw(&dataset, &silent, None, None, None, None, None, None, None)
-            .expect("sync twin");
+            .expect("sync twin")
+            .body();
         assert_eq!(
             raw_text(&job),
             expected,
@@ -6825,7 +6868,8 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
             .explain_query(&dataset, SELECT, None, None, None, None)
-            .expect("sync twin");
+            .expect("sync twin")
+            .body();
         assert_eq!(raw_text(&job), expected);
         assert!(
             job.take_evidence().polls() > 0.0,
@@ -6936,10 +6980,10 @@ mod tests {
         assert!(outcome.take_tripped().is_some());
         assert_eq!(
             job.inner
-                .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
+                .take_outcome("takeRawResult", &[AsyncOperationKind::Raw])
                 .expect_err("a take of the wrong kind is refused")
                 .rendered(),
-            "takeRawBytes is not available on a governed job"
+            "takeRawResult is not available on a governed job"
         );
         job.finish();
     }
@@ -8190,7 +8234,8 @@ mod tests {
                             None,
                             None
                         )
-                        .expect("sync twin"),
+                        .expect("sync twin")
+                        .body(),
                     "raw {what}"
                 );
                 job.finish();

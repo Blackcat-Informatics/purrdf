@@ -989,7 +989,7 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
     };
 
     let (metered_ds, metered) = run(&QueryGovernors::METERED);
-    let GovernedUpdateOutcome::Applied { evidence } = metered else {
+    let GovernedUpdateOutcome::Applied { evidence, .. } = metered else {
         panic!("METERED bounds nothing, so this must apply");
     };
     assert_eq!(

@@ -101,7 +101,7 @@ test("an ungoverned query is unchanged: same rows, and no governor vocabulary re
   const after = engine.select(ds, NAMES).rows.toArray().map((row) => row.name.value);
   assert.deepEqual(after, before);
   assert.deepEqual(
-    JSON.parse(ds.query(NAMES)).results.bindings.map((b) => b.name.value),
+    JSON.parse(ds.query(NAMES).body).results.bindings.map((b) => b.name.value),
     ["Ann", "Bob"],
   );
 });
@@ -120,7 +120,7 @@ test("an ungoverned entry refuses a governor option rather than ignoring it", ()
   ]) {
     assert.throws(() => engine.select(ds, NAMES, options), TypeError);
     assert.throws(() => engine.query(ds, NAMES, options), TypeError);
-    assert.throws(() => engine.queryRaw(ds, NAMES, options), TypeError);
+    assert.throws(() => engine.queryRaw(ds, NAMES, options).body, TypeError);
   }
 });
 
@@ -630,7 +630,7 @@ test("updateGoverned refuses maxAnswers rather than ignoring a ceiling the calle
 test("explainQuery renders the charge ledger a budget is sized from", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const explanation = engine.explainQuery(ds, NAMES);
+  const explanation = engine.explainQuery(ds, NAMES).body;
 
   assert.match(explanation, /^profile purrdf-sparql-governors v\d+ digest [0-9a-f]+ /);
   assert.match(explanation, /\nschedule\n/);
@@ -640,5 +640,5 @@ test("explainQuery renders the charge ledger a budget is sized from", () => {
   assert.match(explanation, /\n {2}fuel\t\d+\n/);
 
   // Deterministic: a ledger with a clock or an address in it would not repeat.
-  assert.equal(engine.explainQuery(ds, NAMES), explanation);
+  assert.equal(engine.explainQuery(ds, NAMES).body, explanation);
 });

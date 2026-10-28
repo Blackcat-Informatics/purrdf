@@ -262,7 +262,7 @@ fn a_deadline_stops_the_query_and_names_the_stop_cause() {
     );
     assert!(stdout(&ample).contains("http://example.org/dave"));
     assert!(
-        stderr(&ample).is_empty(),
+        support::execution_diagnostics(&ample, "started").is_empty(),
         "a complete run prints no governor report; got:\n{}",
         stderr(&ample)
     );
@@ -344,7 +344,7 @@ fn a_trip_exits_3_and_prints_the_certified_partial_answers() {
         "the certified rows must be the whole answer's first rows, in order"
     );
 
-    let report = stderr(&capped);
+    let report = support::execution_diagnostics(&capped, "started");
     assert!(report.starts_with("purrdf-governor-report 1\n"), "{report}");
     assert!(report.contains("\noutcome budget-exhausted\n"), "{report}");
     assert!(
@@ -505,21 +505,21 @@ fn a_complete_governed_run_exits_0_and_answers_identically() {
         "a ceiling nothing reaches must not change one byte of the answer"
     );
     assert!(
-        stderr(&governed).is_empty(),
+        support::execution_diagnostics(&governed, "started").is_empty(),
         "a complete run says nothing about governors; got:\n{}",
         stderr(&governed)
     );
 }
 
-/// AN UNGOVERNED INVOCATION IS UNCHANGED: exit 0, the answers on stdout, nothing on stderr,
-/// and no governor vocabulary anywhere.
+/// An ungoverned invocation keeps exit 0 and its answers on stdout, with the native
+/// execution receipt on stderr and no governor report.
 #[test]
 fn an_ungoverned_invocation_is_unchanged() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let out = run(&["query", "--data", &ttl, "--results-format", "tsv", KNOWS]);
     assert_eq!(code(&out), 0, "stderr:\n{}", stderr(&out));
-    assert!(stderr(&out).is_empty(), "stderr:\n{}", stderr(&out));
+    assert_eq!(support::execution_diagnostics(&out, "started"), "");
     let body = stdout(&out);
     assert_eq!(body.lines().count(), 4, "header plus three rows: {body}");
     for row in ["bob", "carol", "dave"] {
@@ -595,7 +595,7 @@ fn the_metered_default_refuses_an_over_cap_query_and_no_ceiling_answers_it() {
         );
         assert_eq!(unbounded.stdout, whole.stdout, "{extra:?}");
         assert!(
-            stderr(&unbounded).is_empty(),
+            support::execution_diagnostics(&unbounded, "started").is_empty(),
             "{extra:?}: {}",
             stderr(&unbounded)
         );
@@ -1190,7 +1190,11 @@ fn a_governed_query_over_a_pack_trips_identically() {
     assert_eq!(code(&text), 3, "stderr:\n{}", stderr(&text));
     assert_eq!(code(&packed), 3, "stderr:\n{}", stderr(&packed));
     assert_eq!(text.stdout, packed.stdout, "the certified rows must match");
-    assert_eq!(text.stderr, packed.stderr, "the governor report must match");
+    assert_eq!(
+        support::execution_diagnostics(&text, "started"),
+        support::execution_diagnostics(&packed, "started"),
+        "the governor report must match"
+    );
 }
 
 /// THE GOVERNOR REPORT IS BYTE-DETERMINISTIC across two identical runs.
@@ -1217,6 +1221,10 @@ fn the_governor_report_is_byte_identical_across_runs() {
     let first = capped();
     let second = capped();
     assert_eq!(code(&first), 3, "stderr:\n{}", stderr(&first));
-    assert_eq!(first.stderr, second.stderr, "the report must be stable");
+    assert_eq!(
+        support::execution_diagnostics(&first, "started"),
+        support::execution_diagnostics(&second, "started"),
+        "the report must be stable"
+    );
     assert_eq!(first.stdout, second.stdout, "the rows must be stable");
 }

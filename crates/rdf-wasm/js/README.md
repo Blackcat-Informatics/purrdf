@@ -215,7 +215,7 @@ ownership, and all limits. Complete examples are in
   and `queryRaw` serialization for SPARQL Results JSON/XML/CSV/TSV plus graph
   formats. SELECT `rows` are a single-owner iterable; use `take(index)`,
   `toArray()`, or iteration, and call `free()` when abandoning unconsumed rows.
-  `Dataset.query(...)` remains as the compatibility raw-string helper. With no
+  `Dataset.query(...)` returns the serialized document in `body`, beside its execution receipt. With no
   `format`, a graph result is Turtle — or TriG when it carries a named graph, since
   Turtle has no `GRAPH` construct and would otherwise render a quad-template
   `CONSTRUCT` as an empty document. Naming a single-graph syntax for such a result
@@ -254,7 +254,8 @@ ownership, and all limits. Complete examples are in
   `AsyncJob.beginShacl` admits them only for entailment and rule requests;
   validation, product and node-expression requests refuse them. The playground
   `shaclEntail` message forwards both controls and retains its current dataset.
-  The inputs do not add an execution receipt or change provenance.
+  Each execution returns its actual receipt separately from the serialized payload;
+  see [Execution receipt migration](#execution-receipt-migration).
 - `xpathRegex` — every evaluating `QueryEngine` method and its asynchronous twin accept
   this option: the stable name of the dated native XPath law `REGEX` and `REPLACE`
   evaluate under, `"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"` (typed as
@@ -503,6 +504,37 @@ promotes statements only when they need identity. Incidence mode exposes exact
 subject/predicate/object ports. Table mode scales statement inspection without
 discarding the same underlying model.
 
+## Execution receipt migration
+
+Query outputs now own an `executionReceipt` describing the native context that ran.
+The receipt records the effective time and decimal-string entropy seed, whether each
+input was supplied, and nullable snapshot and execution identities. An unavailable
+identity is `null`. A context that never started reports `{ state: "not-started" }`;
+an UPDATE without a WHERE context has that state even when it applies successfully.
+
+| Package call | Read its payload | Read its receipt |
+| --- | --- | --- |
+| `query` or `select` | Existing typed result fields and SELECT rows | `result.executionReceipt` |
+| `ask` | `result.boolean` | `result.executionReceipt` |
+| `construct` or `describe` | `result.dataset` | `result.executionReceipt` |
+| `update` | `result.dataset` (the supplied dataset) | `result.executionReceipt` |
+| `queryRaw`, configured/context variants, `Dataset.query`, or `explainQuery` | `result.body` | `result.executionReceipt` |
+| Governed query or UPDATE | Existing outcome fields | `outcome.executionReceipt` |
+
+Async twins return the same envelopes. `queryRawBytesAsync` puts UTF-8 bytes in
+`body`. For example, replace `JSON.parse(engine.queryRaw(data, query))` with
+`JSON.parse(engine.queryRaw(data, query).body)`. Free a returned graph dataset and
+unconsumed SELECT rows as before; the receipt is a plain JavaScript object.
+
+Raw wasm-bindgen handles expose `executionReceiptJson`. Low-level serialized jobs
+use `takeRawResult()` and free that returned handle after reading `body` and
+`executionReceiptJson`; ordinary UPDATE jobs expose `takeUpdateReceiptJson()`.
+Rule result handles also expose `executionReceiptJson`, including the ordered
+query contexts and rule program identities. Errors after evaluation retain the
+observed receipt: synchronous errors expose `executionReceiptJson`, while async
+errors expose parsed `executionReceipt`. Cloudflare responses carry the JSON in
+`Purrdf-Execution-Receipt`, leaving the SPARQL or RDF response body unchanged.
+
 ## Asynchronous queries, federation and the Cloudflare adapter
 
 The synchronous methods are the offline lane: they install no `SERVICE` or `LOAD`
@@ -557,7 +589,9 @@ an engine diagnostic's own (`native-sparql-query-parse`, `native-sparql-load-den
 `native-sparql-not-acceptable`, `native-sparql-update-in-flight`,
 `native-sparql-host-fault`), or one of the package's own refusals
 (`purrdf-wasm-options`, `purrdf-wasm-usage`, …). Switch on `code`, never on the
-message. A cancellation with a `signal.reason` rejects with that reason itself.
+message. A running job's cancellation carries `signal.reason` as `error.cause`,
+beside its receipt and evidence. A signal already aborted before the job starts
+retains its original rejection reason.
 
 A SPARQL parse failure also carries its typed condition as `error.presentation`: a
 stable `messageId` (`sparql-parse-lex`, `sparql-parse-syntax`,
@@ -777,8 +811,8 @@ the result after are linear passes that run to completion. `evidence.async` repo
 what each phase cost (`freezeMs`, `evaluateMs`, `serializeMs`).
 
 `signal: AbortSignal` cancels a job. The job observes it at the next yield or host
-effect, and the twin rejects with `signal.reason` (an `AbortError` when the signal has no
-reason). A governed twin reports the cancellation as a tripped governor instead. Passing
+effect, and the twin rejects with an `AbortError` carrying `signal.reason` as its
+`cause`; a timeout signal retains the `TimeoutError` name. A governed twin reports the cancellation as a tripped governor instead. Passing
 `cancel` (a `CancellationToken`) to a twin is a `TypeError` that names `signal`. On the
 governed twins, `deadlineMs` includes the time spent waiting for the handlers as well as
 evaluation. The job checks it at every yield and every host effect, and every effect

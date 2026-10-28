@@ -33,28 +33,28 @@ test("async coordinates cross every query kind and output alias", async () => {
   let hostDraws = 0;
   Math.random = () => { hostDraws += 1; return 0.25; };
   try {
-    const expected = cells(await engine.queryAsync(data, QUERY, INPUTS));
+    const result = await engine.queryAsync(data, QUERY, INPUTS); const expected = cells(result); assert.equal(result.executionReceipt.now, NOW); assert.equal(result.executionReceipt.entropySeed, String(INPUTS.entropySeed));
     assert.equal(expected.t, NOW);
     assert.deepEqual(cells(await engine.selectAsync(data, QUERY, INPUTS)), expected);
-    assert.equal(await engine.askAsync(data, `ASK { FILTER(NOW() = "${NOW}"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }`, INPUTS), true);
+    assert.equal(await engine.askAsync(data, `ASK { FILTER(NOW() = "${NOW}"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }`, INPUTS).then(result => result.boolean), true);
     for (const method of ["constructAsync", "describeAsync"]) {
       const query = method === "constructAsync" ? GRAPH : `DESCRIBE <https://example.org/s> WHERE { FILTER(NOW() = "${NOW}"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }`;
       const source = method === "constructAsync" ? data : Dataset.parse('<https://example.org/s> <https://example.org/time> "present" .', "ntriples");
-      const graph = await engine[method](source, query, INPUTS);
+      const graph = (await engine[method](source, query, INPUTS)).dataset;
       assert.equal(graph.size, 1);
       if (method === "constructAsync") assert.ok(graph.serialize("ntriples").includes(NOW));
       graph.free();
       if (source !== data) source.free();
     }
-    assert.deepEqual(rawCells(await engine.queryRawAsync(data, QUERY, INPUTS)), expected);
-    assert.deepEqual(rawCells(decoder.decode(await engine.queryRawBytesAsync(data, QUERY, INPUTS))), expected);
-    assert.deepEqual(rawCells(await data.queryAsync(QUERY, INPUTS)), expected);
+    assert.deepEqual(rawCells(await engine.queryRawAsync(data, QUERY, INPUTS).then(result => result.body)), expected);
+    assert.deepEqual(rawCells(decoder.decode(await engine.queryRawBytesAsync(data, QUERY, INPUTS).then(result => result.body))), expected);
+    assert.deepEqual(rawCells(await data.queryAsync(QUERY, INPUTS).then(result => result.body)), expected);
     const provenanceNamespace = { prefix: "prov", iri: "https://example.org/provenance#" };
-    const raw = await engine.queryRawAsync(data, QUERY, { ...INPUTS, provenanceNamespace });
+    const raw = await engine.queryRawAsync(data, QUERY, { ...INPUTS, provenanceNamespace }).then(result => result.body);
     assert.deepEqual(rawCells(raw), expected);
     assert.ok(raw.includes("https://example.org/provenance#"));
-    const configured = await engine.queryRawAsync(data, GRAPH, { ...INPUTS, format: "jsonld", optionsJson });
-    const contextual = await engine.queryRawWithContextAsync(data, GRAPH, "jsonld", context, INPUTS);
+    const configured = await engine.queryRawAsync(data, GRAPH, { ...INPUTS, format: "jsonld", optionsJson }).then(result => result.body);
+    const contextual = await engine.queryRawWithContextAsync(data, GRAPH, "jsonld", context, INPUTS).then(result => result.body);
     assert.equal(configured, contextual);
     assert.ok(configured.includes(NOW));
     const governed = await engine.queryGovernedAsync(data, QUERY, { ...INPUTS, fuel: 100000 });
@@ -67,7 +67,7 @@ test("async coordinates cross every query kind and output alias", async () => {
     const negotiated = await engine.queryGovernedNegotiatedAsync(data, QUERY, INPUTS);
     assert.equal(negotiated.isComplete, true);
     assert.deepEqual(rawCells(decoder.decode(negotiated.body.bytes)), expected);
-    const explanation = await engine.explainQueryAsync(data, `SELECT ?t WHERE { BIND(NOW() AS ?t) FILTER(?t = "${NOW}"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }`, INPUTS);
+    const explanation = await engine.explainQueryAsync(data, `SELECT ?t WHERE { BIND(NOW() AS ?t) FILTER(?t = "${NOW}"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }`, INPUTS).then(result => result.body);
     assert.match(explanation, /Filter fuel=\d+ rows=1 /);
     assert.equal(hostDraws, 0, "supplied seeds never call the host entropy import");
   } finally {
@@ -115,12 +115,12 @@ test("async coordinate owners survive real suspension and interleaved jobs", asy
   const pending = runJob(job, { resolveService: () => new Promise((resolve) => { release = resolve; entered(); }) });
   try {
     await suspended;
-    const other = rawCells(await engine.queryRawAsync(data, query, { ...controls, resolveService: async () => answer }));
+    const other = rawCells(await engine.queryRawAsync(data, query, { ...controls, resolveService: async () => answer }).then(result => result.body));
     assert.equal(other.t, controls.now);
     release(answer);
     assert.equal(await pending, RunStatus.Outcome);
-    const result = rawCells(decoder.decode(job.takeRawBytes()));
-    const replay = rawCells(await engine.queryRawAsync(data, query, { ...INPUTS, resolveService: async () => answer }));
+    const raw = job.takeRawResult(); const result = rawCells(raw.body); assert.equal(JSON.parse(raw.executionReceiptJson).state, "started"); raw.free();
+    const replay = rawCells(await engine.queryRawAsync(data, query, { ...INPUTS, resolveService: async () => answer }).then(result => result.body));
     assert.deepEqual(result, replay);
     assert.equal(result.t, NOW);
     assert.notEqual(result.before, result.after);
@@ -145,7 +145,7 @@ test("async jobs select omitted coordinates anew when validated options are reus
     const job = engine.beginAsync(data, AsyncOperationKind.Raw, QUERY, options);
     try {
       assert.equal(await runJob(job, {}), RunStatus.Outcome);
-      return rawCells(decoder.decode(job.takeRawBytes()));
+      const raw = job.takeRawResult(); try { return rawCells(raw.body); } finally { raw.free(); }
     } finally { job.finish(); job.free(); }
   };
   try {
@@ -168,8 +168,8 @@ test("Cloudflare query coordinates reach negotiated output", async () => {
   const request = (text, type) => new Request("https://example.org/sparql", { method: "POST", headers: { "Content-Type": type }, body: text });
   try {
     const response = await handleSparqlRequest(request(QUERY, "application/sparql-query"), options);
-    assert.equal(response.status, 200);
-    assert.deepEqual(rawCells(await response.text()), rawCells(await engine.queryRawAsync(dataset, QUERY, INPUTS)));
+    assert.equal(response.status, 200); assert.equal(JSON.parse(response.headers.get("Purrdf-Execution-Receipt")).state, "started");
+    assert.deepEqual(rawCells(await response.text()), rawCells(await engine.queryRawAsync(dataset, QUERY, INPUTS).then(result => result.body)));
     assert.equal(dataset.size, 0);
   } finally { dataset.free(); engine.free(); }
 });

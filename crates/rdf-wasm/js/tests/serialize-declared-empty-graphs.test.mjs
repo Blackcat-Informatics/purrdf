@@ -26,7 +26,7 @@ const EMPTY_GRAPH = "https://example.org/empty";
 // enumerating `GRAPH ?g` — compared by exact IRI, never by substring.
 function graphNames(text, format) {
   const parsed = Dataset.parse(text, format);
-  const json = JSON.parse(parsed.query("SELECT ?g WHERE { GRAPH ?g { } }"));
+  const json = JSON.parse(parsed.query("SELECT ?g WHERE { GRAPH ?g { } }").body);
   parsed.free();
   return json.results.bindings.map((b) => b.g.value);
 }

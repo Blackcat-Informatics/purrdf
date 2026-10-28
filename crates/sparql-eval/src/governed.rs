@@ -44,6 +44,7 @@ use purrdf_core::{
     TrippedGovernor,
 };
 
+use crate::QueryCoordinates;
 use crate::governor::NonMonotoneBarrier;
 use crate::witness::RelationWitness;
 
@@ -69,7 +70,7 @@ pub enum GovernedOutcome {
         /// See [`RelationIdentity`].
         relations: RelationIdentity,
         /// Supplied coordinates captured before evaluation begins.
-        coordinates: crate::QueryCoordinates,
+        coordinates: QueryCoordinates,
     },
     /// A governor stopped the execution before it finished. See [`BudgetExhausted`].
     BudgetExhausted(BudgetExhausted),
@@ -78,7 +79,7 @@ pub enum GovernedOutcome {
 impl GovernedOutcome {
     /// Supplied coordinates, or a refusal before context construction.
     #[must_use]
-    pub const fn coordinates(&self) -> &crate::QueryCoordinates {
+    pub const fn coordinates(&self) -> &QueryCoordinates {
         self.receipts().2
     }
 
@@ -101,13 +102,7 @@ impl GovernedOutcome {
     }
 
     /// Borrow all receipts through the same outcome projection.
-    const fn receipts(
-        &self,
-    ) -> (
-        &GovernorEvidence,
-        &RelationIdentity,
-        &crate::QueryCoordinates,
-    ) {
+    const fn receipts(&self) -> (&GovernorEvidence, &RelationIdentity, &QueryCoordinates) {
         match self {
             Self::Complete {
                 evidence,
@@ -208,6 +203,8 @@ pub enum GovernedUpdateOutcome {
     Applied {
         /// This request's consumption, ceilings, and (here, always absent) trip.
         evidence: GovernorEvidence,
+        /// Supplied inputs at the first constructed WHERE context, before any draws.
+        coordinates: QueryCoordinates,
     },
     /// A governor stopped the request, and **no operation of it was applied**.
     ///
@@ -219,6 +216,8 @@ pub enum GovernedUpdateOutcome {
         tripped: TrippedGovernor,
         /// This request's consumption, ceilings, and trip.
         evidence: GovernorEvidence,
+        /// First WHERE context's supplied inputs, or no context before the stop.
+        coordinates: QueryCoordinates,
     },
 }
 
@@ -227,7 +226,19 @@ impl GovernedUpdateOutcome {
     #[must_use]
     pub const fn evidence(&self) -> &GovernorEvidence {
         match self {
-            Self::Applied { evidence } | Self::BudgetExhausted { evidence, .. } => evidence,
+            Self::Applied { evidence, .. } | Self::BudgetExhausted { evidence, .. } => evidence,
+        }
+    }
+
+    /// Supplied inputs at this request's first WHERE context. Later operations do
+    /// not replace the original seed with the advanced request stream. A request
+    /// containing only data, LOAD or graph operations has no such context.
+    #[must_use]
+    pub const fn coordinates(&self) -> &QueryCoordinates {
+        match self {
+            Self::Applied { coordinates, .. } | Self::BudgetExhausted { coordinates, .. } => {
+                coordinates
+            }
         }
     }
 
@@ -258,7 +269,7 @@ impl GovernedUpdateOutcome {
 #[derive(Debug, Clone)]
 pub struct BudgetExhausted {
     /// Supplied coordinates retained even when evaluation stops partway.
-    pub coordinates: crate::QueryCoordinates,
+    pub coordinates: QueryCoordinates,
     /// The governor that stopped the execution.
     pub tripped: TrippedGovernor,
     /// This execution's consumption, ceilings, and trip.
@@ -702,7 +713,7 @@ fn dataset_without_withheld_blank_nodes(
 #[derive(Debug, Clone)]
 pub struct GovernedEvidence<Evidence> {
     /// Coordinates captured by this operation, including failed publication.
-    pub coordinates: crate::QueryCoordinates,
+    pub coordinates: QueryCoordinates,
     /// The view's deterministic operational evidence at the reporting checkpoint.
     pub view: Evidence,
     /// This execution's consumption, ceilings, and trip.
@@ -711,7 +722,7 @@ pub struct GovernedEvidence<Evidence> {
 
 impl<Evidence> GovernedEvidence<Evidence> {
     /// Attach the original context capture without replacing its timestamp owner.
-    pub(crate) fn with_coordinates(mut self, coordinates: crate::QueryCoordinates) -> Self {
+    pub(crate) fn with_coordinates(mut self, coordinates: QueryCoordinates) -> Self {
         self.coordinates = coordinates;
         self
     }
@@ -722,7 +733,7 @@ impl<Evidence> GovernedEvidence<Evidence> {
         Self {
             view,
             governors,
-            coordinates: crate::QueryCoordinates::NotStarted,
+            coordinates: QueryCoordinates::NotStarted,
         }
     }
 }

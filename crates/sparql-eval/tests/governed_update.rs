@@ -30,8 +30,8 @@ use purrdf_core::{
     ResourceDimension, SparqlEngine, SparqlRequest, StopCause, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
-    QueryOptions, StopSignal, WallDeadline,
+    CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryCoordinates,
+    QueryGovernors, QueryOptions, StopSignal, WallDeadline,
 };
 
 /// The number of `ex:p` edges in the fixture store.
@@ -103,47 +103,79 @@ fn empty_graph_fixture() -> Arc<RdfDataset> {
 
 #[test]
 fn graph_publication_observes_the_post_freeze_stop_before_assigning_the_arc() {
-    let update = format!("{PREFIX}CREATE GRAPH ex:new");
-    for mode in [
-        GraphExistenceMode::Implicit,
-        GraphExistenceMode::RememberEmpty,
-    ] {
-        for quiet in [3, 4] {
-            let original = fixture();
-            let image = complete_store_image(&original);
-            let mut dataset = Arc::clone(&original);
-            let outcome = NativeSparqlEngine::new()
-                .update_governed(
-                    &mut dataset,
-                    request(&update),
-                    QueryOptions::EMPTY.with_graph_existence(mode),
-                    &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(quiet)),
-                )
-                .expect("a publication stop is an outcome");
-            if quiet == 3 {
+    for (prefix, started) in [("", false), ("INSERT {} WHERE {}; ", true)] {
+        let update = format!("{PREFIX}{prefix}CREATE GRAPH ex:new");
+        for mode in [
+            GraphExistenceMode::Implicit,
+            GraphExistenceMode::RememberEmpty,
+        ] {
+            let polls = PollCountdown::new(usize::MAX);
+            let mut control = fixture();
+            let options = QueryOptions::EMPTY
+                .with_graph_existence(mode)
+                .with_entropy_seed(0);
+            assert!(
+                NativeSparqlEngine::new()
+                    .update_governed(
+                        &mut control,
+                        request(&update),
+                        options,
+                        &QueryGovernors::UNBOUNDED.with_stop_signal(polls.clone()),
+                    )
+                    .unwrap()
+                    .is_applied()
+            );
+            let final_poll = polls.polls();
+            if !started {
                 assert_eq!(
-                    outcome.tripped(),
-                    Some(TrippedGovernor::Stopped {
-                        cause: StopCause::Cancelled
-                    }),
-                    "the fourth poll follows freeze and must precede publication: {mode:?}: {outcome:?}"
-                );
-                assert!(Arc::ptr_eq(&dataset, &original));
-                assert_eq!(complete_store_image(&dataset), image);
-            } else {
-                assert!(
-                    outcome.is_applied(),
-                    "the adjacent clear boundary: {outcome:?}"
-                );
-                assert_eq!(outcome.evidence().tripped, None);
-                assert_eq!(store_image(&dataset), image.0);
-                assert_eq!(
-                    dataset.named_graphs().count(),
-                    1 + usize::from(mode == GraphExistenceMode::RememberEmpty)
+                    final_poll, 4,
+                    "the graph-only request retains its post-freeze poll"
                 );
             }
-            assert_eq!(complete_store_image(&original), image);
-            assert_eq!(outcome.evidence().consumed.get(ResourceDimension::Fuel), 0);
+            for quiet in [final_poll - 1, final_poll] {
+                let original = fixture();
+                let image = complete_store_image(&original);
+                let mut dataset = Arc::clone(&original);
+                let outcome = NativeSparqlEngine::new()
+                    .update_governed(
+                        &mut dataset,
+                        request(&update),
+                        options,
+                        &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(quiet)),
+                    )
+                    .expect("a publication stop is an outcome");
+                match outcome.coordinates() {
+                    QueryCoordinates::NotStarted => assert!(!started),
+                    QueryCoordinates::Started(inputs) => {
+                        assert!(started);
+                        assert_eq!(inputs.entropy_seed(), Some(0));
+                    }
+                }
+                if quiet == final_poll - 1 {
+                    assert_eq!(
+                        outcome.tripped(),
+                        Some(TrippedGovernor::Stopped {
+                            cause: StopCause::Cancelled
+                        }),
+                        "the final poll follows freeze and must precede publication: {mode:?}: {outcome:?}"
+                    );
+                    assert!(Arc::ptr_eq(&dataset, &original));
+                    assert_eq!(complete_store_image(&dataset), image);
+                } else {
+                    assert!(
+                        outcome.is_applied(),
+                        "the adjacent clear boundary: {outcome:?}"
+                    );
+                    assert_eq!(outcome.evidence().tripped, None);
+                    assert_eq!(store_image(&dataset), image.0);
+                    assert_eq!(
+                        dataset.named_graphs().count(),
+                        1 + usize::from(mode == GraphExistenceMode::RememberEmpty)
+                    );
+                }
+                assert_eq!(complete_store_image(&original), image);
+                assert_eq!(outcome.evidence().consumed.get(ResourceDimension::Fuel), 0);
+            }
         }
     }
 }
@@ -492,7 +524,7 @@ fn insert_template_blank_reservations_trip_atomically_after_where_completes() {
             .update_governed(
                 &mut dataset,
                 request(&update),
-                QueryOptions::EMPTY,
+                QueryOptions::EMPTY.with_entropy_seed(0),
                 &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(required - 1),
             )
             .expect("reservation exhaustion remains a typed governor outcome");
@@ -505,6 +537,10 @@ fn insert_template_blank_reservations_trip_atomically_after_where_completes() {
             })
         );
         assert!(Arc::ptr_eq(&dataset, &handle_before));
+        assert!(matches!(
+            stopped.coordinates(),
+            QueryCoordinates::Started(inputs) if inputs.entropy_seed() == Some(0)
+        ));
         assert_eq!(store_image(&dataset), image_before);
 
         for limit in [required, required + 1] {
@@ -579,7 +615,7 @@ fn update_governed_trip_leaves_the_store_byte_identical() {
         .update_governed(
             &mut dataset,
             request(&whole),
-            QueryOptions::EMPTY,
+            QueryOptions::EMPTY.with_entropy_seed(0),
             &QueryGovernors::UNBOUNDED.with_fuel(ceiling),
         )
         .expect("a tripped governor is an outcome, not an update error");
@@ -588,6 +624,10 @@ fn update_governed_trip_leaves_the_store_byte_identical() {
         !outcome.is_applied(),
         "the request must report that it did not apply: {outcome:?}"
     );
+    assert!(matches!(
+        outcome.coordinates(),
+        QueryCoordinates::Started(inputs) if inputs.entropy_seed() == Some(0)
+    ));
     assert!(matches!(
         outcome.tripped(),
         Some(TrippedGovernor::Budget {
@@ -1125,7 +1165,7 @@ fn an_intermediate_cell_ceiling_refuses_an_update_whose_where_would_breach_it() 
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            QueryOptions::EMPTY.with_entropy_seed(0),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(4),
         )
         .expect("a refusal is an outcome, not an update error");
@@ -1141,6 +1181,10 @@ fn an_intermediate_cell_ceiling_refuses_an_update_whose_where_would_breach_it() 
         "{outcome:?}"
     );
     assert_eq!(store_image(&dataset), image_before);
+    assert!(matches!(
+        outcome.coordinates(),
+        QueryCoordinates::Started(inputs) if inputs.entropy_seed() == Some(0)
+    ));
 }
 
 #[test]

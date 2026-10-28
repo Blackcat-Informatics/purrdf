@@ -723,10 +723,62 @@ const fn capacity_origin(stated: bool) -> &'static str {
 
 impl std::error::Error for RuleLimitExceeded {}
 
+/// A failed rule execution with its original typed cause and observed contexts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleExecutionError {
+    /// Original failure; cancellation and resource reports are not rendered away.
+    pub cause: Box<RulesError>,
+    /// Supplied coordinates and all contexts captured before the failure.
+    pub coordinates: RuleCoordinates,
+}
+impl RuleExecutionError {
+    /// Recover the original typed cause after retaining this execution's receipt.
+    #[must_use]
+    pub fn into_cause(self) -> RulesError {
+        match *self.cause {
+            RulesError::Execution(error) => error.into_cause(),
+            cause => cause,
+        }
+    }
+    /// The original typed shapes cause through any nested rule invocation.
+    #[must_use]
+    pub const fn original_shapes(&self) -> Option<&crate::error::ShapesError> {
+        match &*self.cause {
+            RulesError::Shapes(error) => Some(error),
+            RulesError::Execution(error) => error.original_shapes(),
+            _ => None,
+        }
+    }
+    /// Preserve whether the original failure was operational or an input refusal.
+    #[must_use]
+    pub const fn failure_class(&self) -> crate::error::FailureClass {
+        match &*self.cause {
+            RulesError::Shapes(error) => error.failure_class(),
+            RulesError::Execution(error) => error.failure_class(),
+            RulesError::LimitExceeded(_) | RulesError::Stopped { .. } => {
+                crate::error::FailureClass::Processor
+            }
+            RulesError::Failed(_) => crate::error::FailureClass::Evaluation,
+        }
+    }
+}
+impl std::fmt::Display for RuleExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+impl std::error::Error for RuleExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
 /// Why [`crate::srl::evaluate`] refused: a passed rule-evaluation limit, or any other
 /// failure, as the engine's diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesError {
+    /// Executed contexts retained beside the original failure.
+    Execution(Box<RuleExecutionError>),
     /// A typed shapes or data materialization refusal.
     Shapes(crate::error::ShapesError),
     /// The rule set passed a rule-evaluation limit ([`RuleOptions`]).
@@ -792,6 +844,7 @@ impl RulesError {
 impl std::fmt::Display for RulesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Execution(error) => error.fmt(f),
             Self::Shapes(error) => error.fmt(f),
             Self::LimitExceeded(limit) => write!(f, "SHACL rules did not complete: {limit}"),
             Self::Stopped { cause } => cause.fmt(f),
@@ -803,6 +856,7 @@ impl std::fmt::Display for RulesError {
 impl std::error::Error for RulesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Execution(error) => Some(error.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::LimitExceeded(error) => Some(error.as_ref()),
             Self::Stopped { cause } => Some(cause.as_ref()),
@@ -999,6 +1053,7 @@ pub fn run_rules_with_options(
             &srl::InferOptions::from_rules(options.clone()),
         )
         .map_err(|error| match error {
+            srl::SrlError::Execution(error) => crate::error::ShapesError::RuleExecution(error),
             srl::SrlError::Shapes(error) => error,
             error => crate::error::ShapesError::Invalid(error.to_string()),
         }),
@@ -1023,6 +1078,7 @@ pub(crate) fn infer_with(
     let rule_set = shacl_rule_set(shapes, options)?;
     srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution, None).map_err(|error| {
         match error {
+            RulesError::Execution(error) => crate::error::ShapesError::RuleExecution(error),
             RulesError::Shapes(error) => error,
             error => crate::error::ShapesError::Invalid(error.to_string()),
         }

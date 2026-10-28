@@ -2752,6 +2752,23 @@ pub(crate) fn encode_ast(
     shapes: &Shapes,
     classes: &ClassCatalog,
 ) -> Result<Vec<u8>, ShapesProductError> {
+    encode_model(shapes, Some(classes), &[])
+}
+
+/// Encode the semantic model before any prepared class catalog is attached.
+/// Rule execution computes its classes from this model and retained source.
+pub(crate) fn encode_rule_model(
+    shapes: &Shapes,
+    producers: &[&crate::srl::ir::ShaclProducer<'_>],
+) -> Result<Vec<u8>, ShapesProductError> {
+    encode_model(shapes, None, producers)
+}
+
+fn encode_model(
+    shapes: &Shapes,
+    classes: Option<&ClassCatalog>,
+    producers: &[&crate::srl::ir::ShaclProducer<'_>],
+) -> Result<Vec<u8>, ShapesProductError> {
     let tables = FnTable::collect_model(shapes)?;
     let functions = &tables.functions;
     let mut ownership = ownership::Ownership::new(functions, &tables.indexes);
@@ -2842,7 +2859,18 @@ pub(crate) fn encode_ast(
     // 7. The shapes-graph IRI.
     writer.opt_text(shapes.shapes_graph.as_deref());
     // 8. The reusable class analysis.
-    encode_classes(&mut writer, classes);
+    if let Some(classes) = classes {
+        encode_classes(&mut writer, classes);
+    } else {
+        writer.count(producers.len());
+        for producer in producers {
+            writer.rule(producer.rule)?;
+            writer.count(producer.shapes.len());
+            for shape in &producer.shapes {
+                writer.shape(shape)?;
+            }
+        }
+    }
 
     Ok(writer.out)
 }

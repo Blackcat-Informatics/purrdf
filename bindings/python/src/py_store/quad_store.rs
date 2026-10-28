@@ -389,6 +389,8 @@ impl PyQuadStore {
             let inner = &self.inner;
             // Snapshot + engine build + governed evaluation run detached (GIL released), so
             // the thread holding `cancel` keeps running while this one is in the engine.
+            let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+            let capture_ref = &capture;
             let outcome = run_governed(py, args, cancel, move |governors| {
                 let dataset = inner
                     .freeze()
@@ -418,14 +420,16 @@ impl PyQuadStore {
                                     registry.as_ref(),
                                     aggregates.as_ref(),
                                 )?)
-                                .with_division(division),
+                                .with_division(division)
+                                .with_coordinate_observer(capture_ref),
                         ),
                         governors,
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("query evaluation error: {e}"), &e)
                     })
-            })?;
+            });
+            let (outcome, _) = presentation::observed_result(py, capture, outcome)?;
             materialize_outcome(py, outcome)
         })
     }
@@ -568,6 +572,8 @@ impl PyQuadStore {
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
                 geo: Some(crate::py_geo::decode(geo)?),
             };
+            let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+            let capture_ref = &capture;
             let outcome = run_governed(py, args, cancel, move |governors| {
                 let dataset = inner
                     .freeze()
@@ -616,7 +622,8 @@ impl PyQuadStore {
                                 registry.as_ref(),
                                 aggregates.as_ref(),
                             )?)
-                            .with_division(division),
+                            .with_division(division)
+                            .with_coordinate_observer(capture_ref),
                     ),
                     &relations,
                     governors,
@@ -639,7 +646,8 @@ impl PyQuadStore {
                     ),
                     _ => PyValueError::new_err(format!("entailment query failed: {failure}")),
                 })
-            })?;
+            });
+            let (outcome, _) = presentation::observed_result(py, capture, outcome)?;
             materialize_entailment_outcome(py, outcome)
         })
     }
@@ -686,7 +694,7 @@ impl PyQuadStore {
         division: Option<String>,
         now: Option<&str>,
         entropy_seed: Option<u64>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Py<PyUpdateOutcome>> {
         presentation::settled(move || {
             // Parsed before any work, so an unreadable policy runs nothing.
             let division = division_policy(division.as_deref())?;
@@ -703,6 +711,8 @@ impl PyQuadStore {
             // base is adopted after reacquiring.
             let inner = &self.inner;
             let mode = inner.graph_existence();
+            let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+            let capture_ref = &capture;
             let dataset = py.detach(move || {
                 let mut dataset = inner
                     .freeze()
@@ -733,22 +743,24 @@ impl PyQuadStore {
                                     registry.as_ref(),
                                     aggregates.as_ref(),
                                 )?)
-                                .with_division(division),
+                                .with_division(division)
+                                .with_coordinate_observer(capture_ref),
                         ),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("update evaluation error: {e}"), &e)
                     })?;
                 Ok::<_, PyErr>(dataset)
-            })?;
+            });
+            let (dataset, receipt) = presentation::observed_result(py, capture, dataset)?;
             // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
             self.inner = MutableDataset::new_with_graph_existence(dataset, mode);
-            Ok(())
+            super::query::materialize_ordinary_update(py, receipt)
         })
     }
 
     /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
-    /// `UpdateOutcome` rather than `None`.
+    /// `UpdateOutcome` with governor evidence beside the execution receipt.
     ///
     /// The governor keywords are those of
     /// [`query_governed`](Self::query_governed) minus `max_answers`, which bounds an
@@ -836,7 +848,9 @@ impl PyQuadStore {
             let inner = &self.inner;
             let mode = inner.graph_existence();
             // Snapshot + governed evaluation run detached (GIL released).
-            let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
+            let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+            let capture_ref = &capture;
+            let outcome = run_governed(py, args, cancel, move |governors| {
                 let mut dataset = inner
                     .freeze()
                     .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
@@ -865,7 +879,8 @@ impl PyQuadStore {
                                     registry.as_ref(),
                                     aggregates.as_ref(),
                                 )?)
-                                .with_division(division),
+                                .with_division(division)
+                                .with_coordinate_observer(capture_ref),
                         ),
                         governors,
                     )
@@ -873,7 +888,8 @@ impl PyQuadStore {
                         presentation::value_error(format!("update evaluation error: {e}"), &e)
                     })?;
                 Ok((outcome, dataset))
-            })?;
+            });
+            let ((outcome, dataset), _) = presentation::observed_result(py, capture, outcome)?;
             // The engine publishes into its own `Arc` only on the applied path, so adopting
             // the returned base on a trip would adopt a base nothing was written to. Adopt it
             // only when the request applied, and the tripped path leaves this store's COW
@@ -1143,6 +1159,8 @@ impl PyQuadStore {
             let inner = &self.inner;
             // Snapshot + engine build + evaluation run detached (GIL released);
             // results are materialized into Python objects after reacquiring.
+            let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+            let capture_ref = &capture;
             let result = py.detach(move || {
                 let dataset = inner
                     .freeze()
@@ -1162,7 +1180,8 @@ impl PyQuadStore {
                                 .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
                         )
                         .with_env(&env)
-                        .with_division(division),
+                        .with_division(division)
+                        .with_coordinate_observer(capture_ref),
                 );
                 let request = SparqlRequest {
                     query,
@@ -1182,8 +1201,18 @@ impl PyQuadStore {
                 result.map_err(|e| {
                     presentation::value_error(format!("query evaluation error: {e}"), &e)
                 })
+            });
+            let receipt = capture
+                .into_coordinates()
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let result = result.map_err(|error| {
+                presentation::with_execution_receipt(
+                    py,
+                    error,
+                    purrdf_validate::query::execution_receipt_json(&receipt),
+                )
             })?;
-            materialize_results(py, result)
+            materialize_results(py, result, Some(&receipt))
         })
     }
 }

@@ -40,6 +40,33 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+/// Preserve the original error class and attach the actual native execution receipt.
+pub(crate) fn with_execution_receipt(py: Python<'_>, error: PyErr, receipt: String) -> PyErr {
+    match error.value(py).setattr("execution_receipt_json", receipt) {
+        Ok(()) => error,
+        Err(failure) => failure,
+    }
+}
+
+/// Preserve the native failure and attach the context captured before it.
+pub(crate) fn observed_result<T>(
+    py: Python<'_>,
+    capture: purrdf_validate::query::ExecutionReceiptCapture,
+    outcome: PyResult<T>,
+) -> PyResult<(T, purrdf_sparql_eval::QueryCoordinates)> {
+    let coordinates = capture
+        .into_coordinates()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let outcome = outcome.map_err(|error| {
+        with_execution_receipt(
+            py,
+            error,
+            purrdf_validate::query::execution_receipt_json(&coordinates),
+        )
+    })?;
+    Ok((outcome, coordinates))
+}
+
 /// The `ValueError` reading `message` for `diagnostic`, carrying its typed
 /// presentation as `message_id` and `presentation` (both `None` without one).
 /// Storage refusal also carries `code` and the lossless `diagnostic_json` record.

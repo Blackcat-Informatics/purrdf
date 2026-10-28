@@ -432,12 +432,18 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// retains its complete original definition domain once. A graph with no function
 /// class needs no function parser or prefix-map copies, and an edgeless strong
 /// ownership graph needs no SCC scratch. Identity refresh hashes the canonical
-/// framing directly, without serialization buffers. The measured restore is
-/// therefore 230 for both instance sizes. This is work
+/// framing directly, without serialization buffers. Scalar-registry fingerprints
+/// now stream into SHA-256 too. Admission fingerprints these empty populations
+/// five times: once for host admission, twice when checking installed declarations,
+/// and twice when checking the restored identity. Each previously allocated a
+/// domain frame and then grew its buffer for the population frame. Streaming
+/// removes those ten allocations; the resident capability and empty declaration
+/// ordering allocate nothing. The measured restore is therefore 220 for both
+/// instance sizes. This is work
 /// on the carried product rather than a scan or copy of the instance dataset. The
 /// equality across sizes and the live restored-validator checks below remain
 /// part of the contract.
-const ADMIT_ALLOC_CONST: u64 = 230;
+const ADMIT_ALLOC_CONST: u64 = 220;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
@@ -2753,7 +2759,7 @@ type SiblingCoverageEntry = (
 /// decomposed against the historical baseline term of 96/214/116/194 — the
 /// figure this surface measured before the reductions recorded in
 /// `tests/sparql_path_alloc.rs`'s module documentation, which have since moved it
-/// to the current 40/77/48/79 — and it is not one
+/// to the current 42/97/54/95 — and it is not one
 /// thing. Per focus node the pre-binding rewrite — the algebra clone, the term
 /// materialization, the pushdown, the seed and the expression walk together — is
 /// 27% to 51% of the charge depending on the surface, and the algebra clone

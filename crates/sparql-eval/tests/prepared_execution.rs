@@ -172,7 +172,7 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// test does, and update this constant to match: it is not a ceiling, it is the
 /// currently-measured marginal cost.
 ///
-/// The native ownership path measures **21** allocations on each of five
+/// The native ownership path measures **23** allocations on each of five
 /// consecutive steady-state runs. The call includes the original probe write,
 /// evaluation context, admitted VALUES/BGP/join schemas and row buffers, and
 /// interned projection. The old component breakdown described the previous
@@ -182,10 +182,13 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// that removes no columns retains that same schema. Neither publishes another
 /// variable array or outer schema control. Native argument leases also remain
 /// sparse: resident values do not allocate an array of empty ownership slots.
+/// Request identity capture grounds this fixture's one owned IRI binding, adding
+/// two allocations to the previous 21: its admitted lexical bytes and shared owner.
+/// The prepared algebra identity is cached outside these steady-state readings.
 ///
 /// None of it is the plan: the numbered tree and its compiled expressions are the
 /// retained substituted tree's, built once and shared by every run.
-const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 21;
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 23;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 

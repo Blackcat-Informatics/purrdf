@@ -468,6 +468,10 @@ impl PreparedExecution {
         self.prepared.source_query()
     }
 
+    pub(crate) fn coordinate_bindings(&self) -> crate::substitute::Prebindings<'_> {
+        crate::substitute::Prebindings::Paired(&self.parameters, &self.values)
+    }
+
     /// The declared parameters, in declaration order.
     #[must_use]
     pub fn parameters(&self) -> &[Variable] {

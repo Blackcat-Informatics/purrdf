@@ -22,9 +22,9 @@
 //! across worker-local engines without retaining a global evaluation lock.
 
 mod bounded_workspace;
-mod coordinates;
+pub(crate) mod coordinates;
 pub(crate) use coordinates::now as prepare_coordinate_now;
-pub use coordinates::{QueryCoordinates, SuppliedQueryCoordinates};
+pub use coordinates::{ExecutionCoordinateObserver, QueryCoordinates, SuppliedQueryCoordinates};
 mod graph_build;
 pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};
 
@@ -166,6 +166,7 @@ struct PreparingQuery {
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
 pub struct PreparedQuery {
+    coordinate_identity: std::sync::OnceLock<purrdf_hash::hex::Digest32>,
     /// Mathematical laws, carrier bindings and selected numerical policy.
     geo: purrdf_geo_kernel::GeoQueryIdentity,
     /// The parsed algebra. Private — see [`Self::query`] for why, and for the
@@ -385,6 +386,7 @@ impl PreparedQuery {
             aggregates.capacity(),
         );
         Self {
+            coordinate_identity: std::sync::OnceLock::new(),
             geo,
             query,
             source,
@@ -1245,6 +1247,7 @@ impl PlanCache {
         let charge = PlanCharge::new(&self.memory, bytes);
         let plan = crate::plan::PlanCache::default();
         let value = PreparedQuery {
+            coordinate_identity: std::sync::OnceLock::new(),
             geo: geo.query_identity(),
             query: preparing.query,
             source: preparing.source,
@@ -1969,6 +1972,7 @@ impl NativeSparqlEngine {
     ) -> Result<SparqlResult, EvaluationFailure> {
         let mut ctx = self.query_ctx(dataset, options, workspace)?;
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+        coordinates::capture_query(&ctx, prepared, Prebindings::Owned(substitutions), options)?;
         let outcome =
             evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?;
         materialize(outcome, &ctx)
@@ -2418,13 +2422,19 @@ impl NativeSparqlEngine {
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+        ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         *capture = QueryCoordinates::started(
             &ctx.now,
             ctx.rng_state,
             options.now.is_some(),
             options.entropy_seed.is_some(),
         )?;
-        ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+        *capture = coordinates::capture_query(
+            &ctx,
+            prepared,
+            Prebindings::Owned(substitutions.values),
+            options,
+        )?;
         let evaluated = evaluate_governed_with_substitutions(
             prepared,
             Prebindings::Owned(substitutions.values),
@@ -2856,7 +2866,14 @@ impl NativeSparqlEngine {
             governors: Some(&state),
             options,
         };
-        let tripped = match eval_update(&update, &mut m, self.load_resolver(options), &cfg) {
+        let mut coordinates = QueryCoordinates::NotStarted;
+        let tripped = match eval_update(
+            &update,
+            &mut m,
+            self.load_resolver(options),
+            &cfg,
+            Some(&mut coordinates),
+        ) {
             // A request that ran to the end still does not publish while a trip is latched
             // on the state. The two are normally the same fact — every site that observes a
             // governor also aborts the request — but "normally" is the wrong strength for
@@ -2886,11 +2903,13 @@ impl NativeSparqlEngine {
                     return Ok(GovernedUpdateOutcome::BudgetExhausted {
                         tripped,
                         evidence: state.evidence(),
+                        coordinates,
                     });
                 }
                 publish(frozen);
                 Ok(GovernedUpdateOutcome::Applied {
                     evidence: state.evidence(),
+                    coordinates,
                 })
             }
             Some(tripped) => {
@@ -2900,6 +2919,7 @@ impl NativeSparqlEngine {
                 Ok(GovernedUpdateOutcome::BudgetExhausted {
                     tripped,
                     evidence: state.evidence(),
+                    coordinates,
                 })
             }
         }
@@ -2973,7 +2993,7 @@ impl NativeSparqlEngine {
             governors: None,
             options,
         };
-        match eval_update(&update, &mut m, self.load_resolver(options), &cfg) {
+        match eval_update(&update, &mut m, self.load_resolver(options), &cfg, None) {
             Ok(()) => {}
             Err(UpdateAbort::Failed(diagnostic)) => {
                 return publication.finish(Err(diagnostic), |_| true);
@@ -3797,13 +3817,14 @@ impl NativeSparqlEngine {
         let mut ctx = self
             .governed_ctx(dataset, (*state).clone(), options, workspace)?
             .with_charge_ledger(ledger);
+        ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         *capture = QueryCoordinates::started(
             &ctx.now,
             ctx.rng_state,
             options.now.is_some(),
             options.entropy_seed.is_some(),
         )?;
-        ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+        *capture = coordinates::capture_query(&ctx, prepared, substitutions, options)?;
         // Every worker reports to this original admitted owner. Installing it
         // before any fork prevents a worker-local report from being lost.
         ctx.shape_state.ensure_reports(&capability)?;
@@ -4568,6 +4589,12 @@ impl NativeSparqlEngine {
         }
         ctx.witnessing = witnessing;
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+        coordinates::capture_query(
+            &ctx,
+            &execution.prepared,
+            execution.coordinate_bindings(),
+            options,
+        )?;
         // This run's scratch interner comes from the execution's retained workspace
         // rather than from the context's own lazy one — emptied by the previous run
         // but still holding its tables. See `execution::ExecutionWorkspace`.
@@ -4778,13 +4805,9 @@ impl NativeSparqlEngine {
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
-        let coordinates = QueryCoordinates::started(
-            &ctx.now,
-            ctx.rng_state,
-            options.now.is_some(),
-            options.entropy_seed.is_some(),
-        )?;
         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
+        let coordinates =
+            coordinates::capture_query(&ctx, &prepared, execution.coordinate_bindings(), options)?;
         // The retained workspace, exactly as on the ungoverned twin — and taken
         // here rather than inside `governed_ctx` so both lanes spell it at the same
         // level, beside the `substituted` call whose borrow it has to sit outside.
@@ -5229,6 +5252,12 @@ impl NativeSparqlEngine {
         )?;
         let mut ctx = self.query_ctx(dataset, options, workspace)?;
         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
+        coordinates::capture_query(
+            &ctx,
+            &prepared,
+            Prebindings::Borrowed(request.substitutions),
+            options,
+        )?;
         if let Some(source) = source {
             ctx = ctx.with_evidence_source(source)?;
         }
@@ -5307,11 +5336,11 @@ impl NativeSparqlEngine {
                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
             }
             let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
-            let coordinates = QueryCoordinates::started(
-                &ctx.now,
-                ctx.rng_state,
-                options.now.is_some(),
-                options.entropy_seed.is_some(),
+            let coordinates = coordinates::capture_query(
+                &ctx,
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                options,
             )?;
             let evaluated = evaluate_governed_with_substitutions(
                 &prepared,
@@ -6334,6 +6363,11 @@ pub struct QueryOptions<'a, 'providers> {
     /// A caller-selected seed for `RAND()`, `UUID()` and `STRUUID()`.
     /// Missing input samples the host entropy source once for this context.
     pub entropy_seed: Option<u64>,
+    /// Observe original effective coordinates before execution begins.
+    pub coordinate_observer: Option<&'a dyn ExecutionCoordinateObserver>,
+    /// Caller-certified identity of external callback implementations and their
+    /// captured sources. Without it opaque environments have no execution digest.
+    pub implementation_identity: Option<&'a purrdf_hash::hex::Digest32>,
     /// Explicit hard membership constraints evaluated by each actual producer
     /// before its ranking depth. The borrowed caller is shared with nested
     /// invocations and workers; ordinary requests carry no callback.
@@ -6483,6 +6517,8 @@ impl std::fmt::Debug for QueryOptions<'_, '_> {
         f.debug_struct("QueryOptions")
             .field("now", &self.now)
             .field("entropy_seed", &self.entropy_seed)
+            .field("coordinate_observer", &self.coordinate_observer.is_some())
+            .field("implementation_identity", &self.implementation_identity)
             .field("candidate_scope", &self.candidate_scope.is_some())
             .field("graph_existence", &self.graph_existence)
             .field("prebinding", &self.prebinding)
@@ -6542,6 +6578,8 @@ impl QueryOptions<'_, '_> {
     pub const EMPTY: Self = Self {
         now: None,
         entropy_seed: None,
+        coordinate_observer: None,
+        implementation_identity: None,
         candidate_scope: None,
         graph_existence: purrdf_core::GraphExistenceMode::RememberEmpty,
         prebinding: ShaclPrebinding::None,
@@ -6588,6 +6626,31 @@ impl<'a, 'providers> QueryOptions<'a, 'providers> {
     #[must_use]
     pub const fn with_entropy_seed(mut self, seed: u64) -> Self {
         self.entropy_seed = Some(seed);
+        self
+    }
+
+    /// Retain each actual context receipt before any execution or random draw.
+    #[must_use]
+    pub const fn with_coordinate_observer(
+        mut self,
+        observer: &'a dyn ExecutionCoordinateObserver,
+    ) -> Self {
+        self.coordinate_observer = Some(observer);
+        self
+    }
+
+    /// Certify external implementations and captured source snapshots for replay.
+    ///
+    /// The caller promises that this identity changes whenever a callback's
+    /// behavior or captured data changes. It must cover native scalar bodies,
+    /// producer/aggregate implementations, membership callbacks and remote inputs.
+    /// A declaration fingerprint alone does not establish that promise.
+    #[must_use]
+    pub const fn with_implementation_identity(
+        mut self,
+        identity: &'a purrdf_hash::hex::Digest32,
+    ) -> Self {
+        self.implementation_identity = Some(identity);
         self
     }
 
