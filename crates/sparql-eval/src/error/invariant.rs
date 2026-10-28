@@ -86,6 +86,7 @@ macro_rules! invariants {
 }
 
 invariants! {
+    QueryClockNotDateTime => "eval-invariant-query-clock-not-datetime", "an admitted query context lost its dateTime clock coordinate";
     VmEvidenceOperandsOutsideStack => "eval-invariant-vm-evidence-operands-outside-stack", "VM evidence operands exceed the original value stack";
     VmEvidenceResultSlotMissing => "eval-invariant-vm-evidence-result-slot-missing", "VM evidence result has no original value slot";
     VmConditionalEvidenceMissing => "eval-invariant-vm-conditional-evidence-missing", "VM evidence lost its original conditional record";
