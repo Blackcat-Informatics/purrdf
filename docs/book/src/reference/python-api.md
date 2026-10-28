@@ -90,12 +90,14 @@ rows = list(prepared.run({"person": purrdf.NamedNode("https://example.org/alice"
 assert rows[0]["name"].value == "Alice"
 ```
 
-## Supplied query time and entropy
+## Supplied query and UPDATE time and entropy
 
-`query`, `query_rdflib`, `query_governed` and `query_entailment_governed`
+`query`, `query_rdflib`, `query_governed`, `query_entailment_governed`,
+`update` and `update_governed`
 accept keyword-only `now: str | None` and `entropy_seed: int | None` on both
-`Store` and `MutableDataset`. The RDFLib-compatible `Graph.query` and its
-processor forward the same inputs. `now` is a native `xsd:dateTime` lexical
+`Store` and `MutableDataset`. The RDFLib-compatible `Graph.query`,
+`Graph.update` and their processors forward the same inputs, including through
+Dataset and context receivers. `now` is a native `xsd:dateTime` lexical
 form, preserving exact fractional seconds, declared timezone and negative
 years without conversion through Python `datetime` or `float`. The seed is
 an unsigned 64-bit Python integer; zero is valid. Omission or `None` requests
@@ -123,6 +125,15 @@ precedes snapshot and execution work. Governor trips, partial answers and
 entailment reports retain their existing contracts. These controls do not
 serialize an execution receipt or change the serializer's caller-supplied
 opaque `query_hash`.
+
+UPDATE uses one request-wide entropy stream across its operations and the
+same supplied time in each WHERE clause. Repeating an identical request on
+identical starting data with the same coordinates repeats its generated values.
+A governed trip still applies nothing. Malformed coordinates fail before any
+snapshot, provider execution or mutation; existing engine-configuration errors
+retain their precedence. RDFLib first performs its nonmutating namespace and
+`initBindings` string preprocessing, then forwards coordinates for native
+decoding. Successful updates retain the existing literal reconciliation.
 
 ## Governors and incomplete answers
 

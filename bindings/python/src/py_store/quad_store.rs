@@ -664,6 +664,7 @@ impl PyQuadStore {
         aggregate_namespace=None,
         xpath_regex=None, geo=None,
         division=None,
+        now=None, entropy_seed=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -683,6 +684,8 @@ impl PyQuadStore {
         xpath_regex: Option<&str>,
         geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
+        now: Option<&str>,
+        entropy_seed: Option<u64>,
     ) -> PyResult<()> {
         presentation::settled(move || {
             // Parsed before any work, so an unreadable policy runs nothing.
@@ -695,6 +698,7 @@ impl PyQuadStore {
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
                 geo: Some(crate::py_geo::decode(geo)?),
             };
+            let coordinates = super::env::query_coordinates(now, entropy_seed)?;
             // Snapshot + evaluation run detached (GIL released); the fresh frozen
             // base is adopted after reacquiring.
             let inner = &self.inner;
@@ -717,18 +721,20 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        purrdf_sparql_eval::QueryOptions::new()
-                            .with_geo(
-                                geo.as_deref()
-                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
-                            )
-                            .with_graph_existence(mode)
-                            .with_env(&extension_env(
-                                parser_options,
-                                registry.as_ref(),
-                                aggregates.as_ref(),
-                            )?)
-                            .with_division(division),
+                        coordinates.apply(
+                            purrdf_sparql_eval::QueryOptions::new()
+                                .with_geo(
+                                    geo.as_deref()
+                                        .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                                )
+                                .with_graph_existence(mode)
+                                .with_env(&extension_env(
+                                    parser_options,
+                                    registry.as_ref(),
+                                    aggregates.as_ref(),
+                                )?)
+                                .with_division(division),
+                        ),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("update evaluation error: {e}"), &e)
@@ -768,6 +774,7 @@ impl PyQuadStore {
         aggregate_namespace=None,
         xpath_regex=None, geo=None,
         division=None,
+        now=None, entropy_seed=None,
         fuel=None,
         deadline_ms=None,
         max_intermediate_cells=None,
@@ -795,6 +802,8 @@ impl PyQuadStore {
         xpath_regex: Option<&str>,
         geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
+        now: Option<&str>,
+        entropy_seed: Option<u64>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_intermediate_cells: Option<u64>,
@@ -814,6 +823,7 @@ impl PyQuadStore {
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
                 geo: Some(crate::py_geo::decode(geo)?),
             };
+            let coordinates = super::env::query_coordinates(now, entropy_seed)?;
             let args = GovernorArgs {
                 fuel,
                 deadline_ms,
@@ -843,18 +853,20 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        purrdf_sparql_eval::QueryOptions::new()
-                            .with_geo(
-                                geo.as_deref()
-                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
-                            )
-                            .with_graph_existence(mode)
-                            .with_env(&extension_env(
-                                parser_options,
-                                registry.as_ref(),
-                                aggregates.as_ref(),
-                            )?)
-                            .with_division(division),
+                        coordinates.apply(
+                            purrdf_sparql_eval::QueryOptions::new()
+                                .with_geo(
+                                    geo.as_deref()
+                                        .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                                )
+                                .with_graph_existence(mode)
+                                .with_env(&extension_env(
+                                    parser_options,
+                                    registry.as_ref(),
+                                    aggregates.as_ref(),
+                                )?)
+                                .with_division(division),
+                        ),
                         governors,
                     )
                     .map_err(|e| {

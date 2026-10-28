@@ -885,6 +885,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
@@ -902,6 +904,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
