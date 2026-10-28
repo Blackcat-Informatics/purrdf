@@ -118,7 +118,7 @@ def test_an_undeclared_prepared_parameter_is_refused_naming_it() -> None:
 
     # The neighbour: a declared, used parameter prepares and runs.
     prepared = store.prepare(query, parameters=["this"])
-    rows = list(prepared.run(this=purrdf.NamedNode(f"{EX}s")))
+    rows = list(prepared.run({"this": purrdf.NamedNode(f"{EX}s")}))
     assert [row[0] for row in rows] == [purrdf.NamedNode(f"{EX}o")]
 
 
@@ -136,4 +136,4 @@ def test_an_undeclared_prepared_parameter_is_refused_naming_it() -> None:
 def test_a_parameter_mentioned_anywhere_in_the_query_prepares(query: str) -> None:
     prepared = _store().prepare(query, parameters=["this"])
     assert prepared.parameters == ["this"]
-    prepared.run(this=purrdf.NamedNode(f"{EX}s"))
+    prepared.run({"this": purrdf.NamedNode(f"{EX}s")})

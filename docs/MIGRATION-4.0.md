@@ -727,3 +727,20 @@ IRI and language failures keep their existing native variants. `Shexj` remains f
 caller-provided diagnostics such as CLI import lookup; it is no longer the library
 materializer's fallback. This change adds no success-path DOM copy or whole-parser
 allocation guarantee.
+
+
+## Python prepared query bindings and execution coordinates
+
+`PreparedQuery.run(**bindings)` is replaced by
+`PreparedQuery.run(bindings=None, *, now=None, entropy_seed=None)`. Pass SPARQL
+parameters in a dictionary: `prepared.run({"this": node})` replaces
+`prepared.run(this=node)`. There is no legacy keyword-binding path. Names such
+as `now`, `entropy_seed` and `bindings` remain valid SPARQL parameter names
+inside the dictionary.
+
+Every run may select a fresh exact `xsd:dateTime` string and unsigned 64-bit
+Python integer seed. Omitted values use native defaults for that run, and all
+parameter slots are reset before applying its dictionary. No execution inputs
+are retained from a previous call. Ordinary, RDFLib, governed and entailment
+query methods accept the same coordinate keywords; parser/provider settings
+remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).

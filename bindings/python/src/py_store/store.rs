@@ -241,6 +241,10 @@ impl PyStore {
     /// two points in time. The other axes are caller-supplied constants and are
     /// carried unchanged: re-deriving a constant is how a constant stops being one.
     ///
+    /// Execution time and entropy are supplied per call to `PreparedQuery.run`,
+    /// not at preparation. Its explicit bindings dictionary keeps parameter names
+    /// separate from those execution options.
+    ///
     /// `substitutions` has no seat here, deliberately: a prepared query's whole point
     /// is that the values that change between runs arrive per-run through
     /// [`run`](super::prepared::PyPreparedQuery::run)'s parameter bindings, and a

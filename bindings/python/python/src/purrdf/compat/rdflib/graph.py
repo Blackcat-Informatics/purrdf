@@ -1117,6 +1117,8 @@ class Graph:
         path_relations: dict[str, object] | None = None,
         aggregate_namespace: str | None = None,
         division: str | None = None,
+        now: str | None = None,
+        entropy_seed: int | None = None,
         xpath_regex: str | None = None,
         **kwargs: object,
     ) -> Result:
@@ -1156,6 +1158,8 @@ class Graph:
             path_relations=path_relations,
             aggregate_namespace=aggregate_namespace,
             division=division,
+            now=now,
+            entropy_seed=entropy_seed,
             named_graphs=isinstance(self, Dataset),
             default_graph=_native_subject(self._graph_name) if self._graph_name is not None else None,
             default_union=getattr(self, "default_union", False),

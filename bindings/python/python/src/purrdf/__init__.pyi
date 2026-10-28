@@ -661,12 +661,13 @@ class PreparedQuery:
     @property
     def parameters(self) -> list[str]: ...
     # Bind every declared parameter and run, returning the results exactly as
-    # `Store.query` does. Each keyword names a declared parameter; an unknown keyword
+    # `Store.query` does. Each dictionary key names a declared parameter; an unknown key
     # raises, and so does a parameter left unbound — an unbound focus would answer
     # over every subject, which is a silently wider answer rather than a visible
     # mistake.
     def run(
-        self, **bindings: _Term
+        self, bindings: dict[str, _Term] | None = ..., *,
+        now: str | None = ..., entropy_seed: int | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
 
 # ── Store / Dataset ─────────────────────────────────────────────────────────────
@@ -765,6 +766,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     def query_rdflib(
         self,
@@ -781,6 +784,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         named_graphs: bool = ...,
         default_graph: NamedNode | BlankNode | None = ...,
         default_union: bool = ...,
@@ -805,6 +810,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -850,6 +857,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,

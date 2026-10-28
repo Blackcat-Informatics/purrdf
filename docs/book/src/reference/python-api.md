@@ -78,7 +78,7 @@ Use lexical forms for exact decimal and temporal values rather than converting t
 
 ## Prepared queries
 
-Declare parameter names with `Store.prepare(..., parameters=[...])`. Every run must bind every declared name to an RDF term. An unknown name or a missing binding raises an error. Configuration is fixed at preparation; source rows are read from the store for each run. Parameter names are supplied without `?`.
+Declare parameter names with `Store.prepare(..., parameters=[...])`. Every run must bind every declared name to an RDF term. An unknown name or a missing binding raises an error. Parser and provider configuration is fixed at preparation; source rows and optional time/entropy inputs are selected for each run. Parameter names are supplied without `?`.
 
 ```python
 prepared = store.prepare(
@@ -86,9 +86,43 @@ prepared = store.prepare(
     parameters=["person"],
 )
 assert prepared.parameters == ["person"]
-rows = list(prepared.run(person=purrdf.NamedNode("https://example.org/alice")))
+rows = list(prepared.run({"person": purrdf.NamedNode("https://example.org/alice")}))
 assert rows[0]["name"].value == "Alice"
 ```
+
+## Supplied query time and entropy
+
+`query`, `query_rdflib`, `query_governed` and `query_entailment_governed`
+accept keyword-only `now: str | None` and `entropy_seed: int | None` on both
+`Store` and `MutableDataset`. The RDFLib-compatible `Graph.query` and its
+processor forward the same inputs. `now` is a native `xsd:dateTime` lexical
+form, preserving exact fractional seconds, declared timezone and negative
+years without conversion through Python `datetime` or `float`. The seed is
+an unsigned 64-bit Python integer; zero is valid. Omission or `None` requests
+the native clock or entropy default for that execution.
+
+A prepared handle accepts fresh inputs on each call:
+
+```python
+rows = prepared.run(
+    {"person": purrdf.NamedNode("https://example.org/alice")},
+    now="2024-01-02T03:04:05.123456789012345678901+05:30",
+    entropy_seed=0,
+)
+```
+
+Bindings are an explicit dictionary, so parameter names such as `now`,
+`entropy_seed` and `bindings` do not collide with execution options. Each call
+replaces all bindings and both coordinate selections; omitted values never
+reuse a preceding run's settings. Preparing a query samples neither input.
+
+Malformed time raises `ValueError` naming `now`, with `message_id` and
+`presentation` set to `None`. Wrong Python argument types raise `TypeError`;
+negative or overflowing seeds raise `OverflowError`. Coordinate conversion
+precedes snapshot and execution work. Governor trips, partial answers and
+entailment reports retain their existing contracts. These controls do not
+serialize an execution receipt or change the serializer's caller-supplied
+opaque `query_hash`.
 
 ## Governors and incomplete answers
 
