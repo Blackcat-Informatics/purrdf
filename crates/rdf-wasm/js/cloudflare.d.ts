@@ -112,6 +112,10 @@ export interface EndpointCors {
 }
 
 export interface SparqlEndpointOptions {
+  /** Exact query time. Configured query coordinates make UPDATE requests fail with status 400. */
+  readonly now?: string | null;
+  /** Query seed: unsigned 64-bit bigint or non-negative safe integral number. */
+  readonly entropySeed?: bigint | number | null;
   readonly engine: QueryEngine;
   readonly dataset: Dataset;
   readonly governors: EndpointGovernors;

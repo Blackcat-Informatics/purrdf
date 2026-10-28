@@ -232,6 +232,17 @@ ownership, and all limits. Complete examples are in
   Kept scope labels are deterministic: inserting the returned terms into a new
   dataset, serializing and parsing preserves the same blank identity, including
   blank nodes inside quoted triple terms.
+- Asynchronous query coordinates — `now` accepts an exact native `xsd:dateTime`
+  string, retaining fractional seconds and its declared timezone. `entropySeed`
+  accepts an unsigned 64-bit `bigint` or a non-negative safe integral `number`;
+  zero is a supplied seed. Each omitted field selects a fresh native default per
+  begun job. These inputs reach every async query, raw/context, governed,
+  entailment, negotiated and explain route, including `Dataset.queryAsync`.
+  A suspended job retains its inputs and random stream independently of other
+  jobs. The Cloudflare handler accepts the same options for queries and returns
+  status 400 for UPDATE requests when query coordinates are configured.
+  Synchronous package query calls and async UPDATE/SHACL calls refuse these
+  controls. The inputs do not add an execution receipt or change provenance.
 - `xpathRegex` — every evaluating `QueryEngine` method and its asynchronous twin accept
   this option: the stable name of the dated native XPath law `REGEX` and `REPLACE`
   evaluate under, `"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"` (typed as
@@ -861,7 +872,7 @@ panic; PurRDF's parser and evaluator refuse nesting before either stack runs out
 host-stack budget above keeps V8's).
 
 A Rust panic poisons the instance too, in an asynchronous job or in a synchronous call
-alike. A panic aborts on wasm32 and leaves whatever it interrupted half-changed, so the
+alike. A panic aborts on `wasm32` and leaves whatever it interrupted half-changed, so the
 panic hook PurRDF installs when the instance starts poisons the instance, naming the
 panic's location and message, before the panic's trap unwinds. The call that panicked
 throws that trap; every asynchronous entry afterwards rejects with the poison error,

@@ -11,8 +11,9 @@ use std::mem::MaybeUninit;
 
 use purrdf_core::RdfDatasetBuilder;
 
+use super::tests::take_buffer_text;
 use super::*;
-use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+use crate::buffer::purrdf_buffer_free;
 use crate::error::{purrdf_error_code, purrdf_error_free, purrdf_error_message};
 use crate::governor::{
     PURRDF_EXPRESSION_ERROR_CODE_COUNT, PurrdfExpressionErrorCode, purrdf_query_governors_init,
@@ -29,20 +30,6 @@ fn dataset() -> *mut PurrdfDataset {
     let object = builder.intern_iri("http://example.org/o").unwrap();
     builder.push_quad(subject, predicate, object, None).unwrap();
     into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
-}
-
-/// The bytes of a buffer handle, read through `purrdf_buffer_data`, then the buffer freed.
-fn take_buffer_text(buffer: *mut PurrdfBuffer) -> String {
-    let mut ptr = std::ptr::null();
-    let mut len = 0;
-    assert_eq!(
-        unsafe { purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len) },
-        PurrdfStatus::Ok as i32
-    );
-    let text = String::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
-        .expect("UTF-8 buffer");
-    unsafe { purrdf_buffer_free(buffer) };
-    text
 }
 
 /// The status and message of an error handle, read through its accessors, then freed.
@@ -93,6 +80,8 @@ fn query_json(dataset: *const PurrdfDataset, query: &str) -> Result<String, (i32
         purrdf_query_json(
             dataset,
             query.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
@@ -156,6 +145,8 @@ fn governed_x(dataset: *const PurrdfDataset, query: &str) -> GovernedAnswer {
             std::ptr::null(),
             std::ptr::null(),
             &raw const governors,
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut outcome,
             &raw mut kind,
             &raw mut rows,
@@ -380,6 +371,8 @@ fn an_entailment_query_runs_under_the_policy() {
                 std::ptr::null(),
                 std::ptr::null(),
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut outcome,
                 &raw mut kind,
                 &raw mut rows,
