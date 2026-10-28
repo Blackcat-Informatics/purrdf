@@ -201,14 +201,7 @@ pub(crate) fn run_rules(
         max_stored_facts: options.max_stored_facts,
         max_join_steps: options.max_join_steps,
     };
-    let mut execution = limits.rule_options(cli_limit_knobs());
-    let (now, entropy_seed) = coordinates.into_parts();
-    if let Some(now) = now {
-        execution = execution.with_now(now);
-    }
-    if let Some(seed) = entropy_seed {
-        execution = execution.with_entropy_seed(seed);
-    }
+    let execution = coordinates.into_rule_options(&limits, cli_limit_knobs());
     let inference: Inference = match &rule_source {
         RuleSource::Shapes {
             path,

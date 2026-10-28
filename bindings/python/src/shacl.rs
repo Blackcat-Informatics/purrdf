@@ -417,6 +417,7 @@ fn messages_list<'py>(
     max_stored_facts=None,
     max_join_steps=None,
     xpath_regex=None,
+    now=None, entropy_seed=None,
 ))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
@@ -432,13 +433,16 @@ fn entail(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     xpath_regex: Option<&str>,
+    now: Option<&str>,
+    entropy_seed: Option<u64>,
 ) -> PyResult<Py<PyAny>> {
     let profile = crate::xpath_regex::profile(xpath_regex)?;
+    let coordinates = crate::py_store::query_coordinates(now, entropy_seed)?;
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
     let outcome = py
         .detach(|| {
-            purrdf_validate::entail_to_ntriples_with_xpath_regex(
+            purrdf_validate::entail_to_ntriples_with_coordinates(
                 &purrdf_validate::EntailRequest {
                     shapes_ttl,
                     shapes_base,
@@ -452,6 +456,7 @@ fn entail(
                     host: purrdf_validate::RulesHost::Python,
                 },
                 profile,
+                coordinates,
             )
         })
         .map_err(|error| xpath_error(py, error))?;
@@ -505,8 +510,8 @@ fn entail(
 /// every `sh:pattern` a rule condition decides, runs under — see the
 /// [module documentation](self).
 ///
-/// The work is [`purrdf_validate::apply_rules_to_ntriples_with_xpath_regex`], the function
-/// the WASM and C-ABI bindings call.
+/// The work is [`purrdf_validate::apply_rules_to_ntriples_with_coordinates`],
+/// whose default-coordinate wrappers also serve the WASM and C-ABI bindings.
 #[pyfunction]
 #[pyo3(signature = (
     data_nt,
@@ -523,6 +528,7 @@ fn entail(
     imports=Vec::new(),
     shapes_graph=None,
     xpath_regex=None,
+    now=None, entropy_seed=None,
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -541,12 +547,15 @@ fn apply_rules(
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
     xpath_regex: Option<&str>,
+    now: Option<&str>,
+    entropy_seed: Option<u64>,
 ) -> PyResult<Py<PyAny>> {
     let profile = crate::xpath_regex::profile(xpath_regex)?;
+    let coordinates = crate::py_store::query_coordinates(now, entropy_seed)?;
     let pairs = crate::py_entail::import_list(&imports);
     let outcome = py
         .detach(|| {
-            purrdf_validate::apply_rules_to_ntriples_with_xpath_regex(
+            purrdf_validate::apply_rules_to_ntriples_with_coordinates(
                 &purrdf_validate::RulesRequest {
                     data_nt,
                     shapes_ttl,
@@ -563,6 +572,7 @@ fn apply_rules(
                     host: purrdf_validate::RulesHost::Python,
                 },
                 profile,
+                coordinates,
             )
         })
         .map_err(|error| xpath_error(py, error))?;

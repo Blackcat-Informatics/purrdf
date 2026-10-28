@@ -472,3 +472,71 @@ fn only_an_exact_name_selects_a_law() {
         Ok(Some(Profile::Xpath20))
     );
 }
+
+/// Owned host coordinates survive configured entailment and both rule-source
+/// routes, without weakening the request's limits or sampling host defaults.
+#[test]
+fn configured_rule_coordinates_preserve_dispatch_and_request_limits() {
+    use purrdf_testkit::harness::without_host_clock_or_entropy;
+    use purrdf_validate::query::CoordinateInputs;
+    use purrdf_validate::{
+        RulesHost, apply_rules_to_ntriples_with_coordinates, entail_to_ntriples_with_coordinates,
+    };
+
+    const NOW: &str = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
+    const SHAPES: &str = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:s ; sh:rule [
+          a sh:SPARQLRule ; sh:runOnce true ; sh:construct """
+          CONSTRUCT { <http://example.org/s> <http://example.org/time> ?time }
+          WHERE { BIND(NOW() AS ?time) FILTER(REGEX("ok", "^ok$")) } """ ] ."#;
+    const SRL: &str = "PREFIX : <http://example.org/> RULE { :s :time ?time } \
+        WHERE { SET(?time := NOW()) FILTER(REGEX(\"ok\", \"^ok$\")) }";
+    let coordinates = || CoordinateInputs::from_time_and_seed(Some(NOW), Some(0)).unwrap();
+    for profile in [None, Some(Profile::Xpath31)] {
+        for shapes in [true, false] {
+            let mut request = RulesRequest {
+                shapes_ttl: shapes.then_some(SHAPES),
+                srl: (!shapes).then_some(SRL),
+                explain: true,
+                host: RulesHost::Python,
+                ..RulesRequest::default()
+            };
+            let outcome = without_host_clock_or_entropy(|| {
+                apply_rules_to_ntriples_with_coordinates(&request, profile, coordinates())
+            })
+            .unwrap();
+            assert!(outcome.inferred_ntriples.contains(NOW));
+            assert!(outcome.proof.unwrap().contains("derived"));
+            request.max_stored_facts = Some(0);
+            let error = apply_rules_to_ntriples_with_coordinates(&request, profile, coordinates())
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("apply_rules(max_stored_facts=...)")
+            );
+        }
+        let mut request = EntailRequest {
+            shapes_ttl: SHAPES,
+            shapes_base: None,
+            shapes_graph: None,
+            data_nt: "",
+            imports: &[],
+            max_term_generating_rounds: None,
+            max_generated_terms: None,
+            max_stored_facts: None,
+            max_join_steps: None,
+            host: RulesHost::Python,
+        };
+        let outcome = without_host_clock_or_entropy(|| {
+            entail_to_ntriples_with_coordinates(&request, profile, coordinates())
+        })
+        .unwrap();
+        assert!(outcome.ntriples.contains(NOW));
+        request.max_stored_facts = Some(0);
+        let error =
+            entail_to_ntriples_with_coordinates(&request, profile, coordinates()).unwrap_err();
+        assert!(error.to_string().contains("entail(max_stored_facts=...)"));
+    }
+}
