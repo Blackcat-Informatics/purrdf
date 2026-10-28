@@ -312,8 +312,15 @@
  * XPath and geographic variants, gain nullable `now` and `entropy_seed` pointers
  * immediately before their first output. Callers must rebuild; each null pointer
  * independently requests the native default, and a pointed zero is a supplied seed.
+ *
+ * # `0.13.0` → `0.14.0`: supplied UPDATE coordinates
+ *
+ * The three governed UPDATE entries add independently nullable `now` and
+ * `entropy_seed` inputs after governors and before the first output. Rebuild C
+ * callers against the new header. Exact time and the copied unsigned seed are
+ * owned for the request; NULL independently retains a fresh native default.
  */
-#define PURRDF_ABI_MINOR 13
+#define PURRDF_ABI_MINOR 14
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -3112,11 +3119,23 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
  * reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
  * `SELECT … GROUP BY` — the only place SPARQL UPDATE's grammar admits an aggregate.
  *
+ * `now` and `entropy_seed` are independently nullable: NULL selects a fresh native
+ * default for this request, while a pointed zero supplies seed zero. Time uses the
+ * exact native `xsd:dateTime` lexical form, retaining fractional seconds and timezone.
+ * Supplied coordinates give the request one fixed time and one progressing random
+ * stream across its operations. Omitted coordinates preserve native defaults. Inputs
+ * are owned before execution; inserted values retain no caller memory.
+ * Invalid time is `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 is
+ * `PURRDF_STATUS_INVALID_UTF8`. A refusal leaves the dataset, outcome and evidence
+ * unchanged, including when the request would otherwise mutate it.
+ *
  * # Safety
  * `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
  * string; `governors` live for the call; and both output pointers writable. Any enabled
  * cancellation handle must remain live until the call returns. `aggregate_namespace`, if
- * non-null, must be a NUL-terminated UTF-8 C string live for the call.
+ * non-null, must be a NUL-terminated UTF-8 C string live for the call. `now` must be
+ * null or a NUL-terminated C string live for the call; `entropy_seed` must be null
+ * or point to a readable, aligned `uint64_t` live for the call.
  */
 int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *request,
@@ -3124,6 +3143,8 @@ int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *aggregate_namespace,
                                int32_t graph_existence,
                                const PurrdfQueryGovernors *governors,
+                               const char *now,
+                               const uint64_t *entropy_seed,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,
                                PurrdfError **out_error);
@@ -3150,6 +3171,8 @@ int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset,
                                            const char *regex_profile,
                                            int32_t graph_existence,
                                            const PurrdfQueryGovernors *governors,
+                                           const char *now,
+                                           const uint64_t *entropy_seed,
                                            int32_t *out_outcome,
                                            PurrdfGovernorEvidence *out_evidence,
                                            PurrdfError **out_error);
@@ -3279,6 +3302,8 @@ int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo,
                                         const char *regex_profile,
                                         int32_t graph_existence,
                                         const PurrdfQueryGovernors *governors,
+                                        const char *now,
+                                        const uint64_t *entropy_seed,
                                         int32_t *out_outcome,
                                         PurrdfGovernorEvidence *out_evidence,
                                         PurrdfError **out_error);

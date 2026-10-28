@@ -174,7 +174,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 13, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 14, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -3103,6 +3103,8 @@ fn governed_update_parse_refusals_carry_typed_presentations() {
                 std::ptr::null(),
                 purrdf::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
                 &raw mut error,
@@ -3270,6 +3272,8 @@ unsafe fn governed_update_in(
                 c"xpath-3.1-2017-03-21".as_ptr(),
                 graph_existence,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -3283,6 +3287,8 @@ unsafe fn governed_update_in(
                 c"xpath-3.1-2017-03-21".as_ptr(),
                 graph_existence,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -3295,6 +3301,8 @@ unsafe fn governed_update_in(
                 std::ptr::null(),
                 graph_existence,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,

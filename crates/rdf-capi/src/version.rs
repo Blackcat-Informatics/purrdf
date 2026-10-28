@@ -280,7 +280,14 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// XPath and geographic variants, gain nullable `now` and `entropy_seed` pointers
 /// immediately before their first output. Callers must rebuild; each null pointer
 /// independently requests the native default, and a pointed zero is a supplied seed.
-pub const PURRDF_ABI_MINOR: u32 = 13;
+///
+/// # `0.13.0` → `0.14.0`: supplied UPDATE coordinates
+///
+/// The three governed UPDATE entries add independently nullable `now` and
+/// `entropy_seed` inputs after governors and before the first output. Rebuild C
+/// callers against the new header. Exact time and the copied unsigned seed are
+/// owned for the request; NULL independently retains a fresh native default.
+pub const PURRDF_ABI_MINOR: u32 = 14;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

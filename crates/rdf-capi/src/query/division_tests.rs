@@ -205,6 +205,8 @@ fn governed_update(dataset: *mut PurrdfDataset, request: &str) -> Result<(), Str
             std::ptr::null(),
             crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
             &raw const governors,
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut outcome,
             evidence.as_mut_ptr(),
             &raw mut error,
