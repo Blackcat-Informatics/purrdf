@@ -1355,7 +1355,7 @@ export class QueryEngine {
   updateGovernedAsync(
     dataset: Dataset,
     sparql: string,
-    options?: AsyncGovernedQueryOptions | null,
+    options?: Omit<AsyncGovernedQueryOptions, keyof QueryCoordinateOptions> | null,
   ): Promise<AsyncUpdateOutcome>;
   free(): void;
 }
@@ -1746,9 +1746,17 @@ export interface AsyncHostOptions {
   readonly cancel?: never;
 }
 
-export interface AsyncQueryOptions extends QueryOptions, AsyncHostOptions {}
+/** Caller inputs for an asynchronous query; omitted fields select fresh native defaults per job. */
+export interface QueryCoordinateOptions {
+  /** Exact native xsd:dateTime, including fractional seconds and the declared timezone. */
+  readonly now?: string | null;
+  /** Unsigned 64-bit seed: bigint, or a non-negative safe integral number. Zero is supplied. */
+  readonly entropySeed?: bigint | number | null;
+}
 
-export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions {
+export interface AsyncQueryOptions extends QueryOptions, AsyncHostOptions, QueryCoordinateOptions {}
+
+export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions, QueryCoordinateOptions {
   /**
    * A `JsonLdSerializeOptions` document (`JSON.stringify` it) configuring a JSON-LD or
    * YAML-LD `format`, as `queryRawConfigured` takes it. Needs `format`; not combinable
@@ -1757,12 +1765,13 @@ export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions 
   readonly optionsJson?: string | null;
 }
 
-export interface AsyncQueryRawWithContextOptions extends QueryOptions, AsyncHostOptions {
+export interface AsyncQueryRawWithContextOptions extends QueryOptions, AsyncHostOptions, QueryCoordinateOptions {
   readonly yamlSchemaUrl?: string | null;
 }
 
 export interface AsyncGovernedQueryOptions
   extends QueryOptions,
+    QueryCoordinateOptions,
     Omit<GovernorOptions, "cancel">,
     AggregateNamespaceOption,
     AsyncHostOptions {}

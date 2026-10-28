@@ -2446,7 +2446,7 @@ impl JobInner {
         self.state.set(JobState::Running);
         let operation = self.operation.borrow_mut().take();
         let slots = &self.watch.slots;
-        // Only on wasm32 is the job actually running on its region (the linked run
+        // Only on `wasm32` is the job actually running on its region (the linked run
         // wrapper switched the stack pointer to its top); the native build never arms it.
         slots
             .region_armed
@@ -3362,7 +3362,9 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 25] = [
+const OPTION_SHAPES: [(&str, OptionShape); 27] = [
+    ("now", OptionShape::Text),
+    ("entropySeed", OptionShape::Limit),
     ("base", OptionShape::Text),
     ("xpathRegex", OptionShape::Text),
     ("shaclProfile", OptionShape::Text),
@@ -3540,8 +3542,24 @@ impl AsyncOperationKind {
         }
     }
 
+    /// Query coordinates are accepted only by the complete asynchronous query family.
+    const fn coordinate_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Query
+            | Self::Raw
+            | Self::RawWithContext
+            | Self::Governed
+            | Self::EntailmentGoverned
+            | Self::Negotiated
+            | Self::Explain => &["now", "entropySeed"],
+            Self::Update | Self::UpdateGoverned | Self::Shacl => &[],
+        }
+    }
+
     fn accepts(self, key: &str) -> bool {
-        self.spec().keys.contains(&key) || HOST_KEYS.contains(&key)
+        self.spec().keys.contains(&key)
+            || self.coordinate_keys().contains(&key)
+            || HOST_KEYS.contains(&key)
     }
 }
 
@@ -3616,6 +3634,8 @@ impl fmt::Display for OptionsError {
 #[wasm_bindgen]
 #[derive(Debug, Default, Clone)]
 pub struct AsyncJobOptions {
+    now: Option<String>,
+    entropy_seed: Option<u64>,
     kind: Option<AsyncOperationKind>,
     base: Option<String>,
     format: Option<String>,
@@ -3947,6 +3967,7 @@ impl AsyncJobOptions {
             let accepted: Vec<&str> = spec
                 .keys
                 .iter()
+                .chain(kind.coordinate_keys().iter())
                 .chain(HOST_KEYS.iter())
                 .chain(PACKAGE_KEYS.iter())
                 .copied()
@@ -3987,6 +4008,8 @@ impl AsyncJobOptions {
             match (key.as_str(), value) {
                 ("noCeiling", OptionValue::Boolean(value)) => no_ceiling = value,
                 ("base", OptionValue::Text(text)) => options.base = Some(text),
+                ("now", OptionValue::Text(text)) => options.now = Some(text),
+                ("entropySeed", OptionValue::Limit(seed)) => options.entropy_seed = Some(seed),
                 ("xpathRegex", OptionValue::Text(name)) => {
                     options.xpath_regex =
                         crate::xpath_regex::parse(Some(&name)).map_err(OptionsError::refused)?;
@@ -4378,6 +4401,11 @@ fn begin_job(
     options
         .require_kind(kind)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let coordinates = purrdf_validate::query::CoordinateInputs::from_time_and_seed(
+        options.now.as_deref(),
+        options.entropy_seed,
+    )
+    .map_err(|error| JobError::message(OPTIONS_CODE, format!("query option now: {error}")))?;
     let provenance = match &options.provenance {
         None => None,
         Some((prefix, iri)) => Some(
@@ -4404,6 +4432,7 @@ fn begin_job(
     let frozen = dataset.view().freeze().map_err(JobError::diagnostic)?;
     let freeze_ms = now_ms() - freeze_started;
     let input = OperationInput {
+        coordinates,
         kind,
         engine: Rc::clone(engine.engine()),
         frozen,

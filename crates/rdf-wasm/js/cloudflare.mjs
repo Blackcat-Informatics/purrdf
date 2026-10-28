@@ -45,6 +45,8 @@ const GOVERNOR_KEYS = [
 ];
 
 const HANDLER_KEYS = [
+  "now",
+  "entropySeed",
   "engine",
   "dataset",
   "governors",
@@ -540,6 +542,7 @@ function handlerOptions(options) {
   return {
     engine: source.engine,
     dataset: source.dataset,
+    coordinates: { now: source.now, entropySeed: source.entropySeed },
     governors: { ...governors },
     cors,
     maxRequestBytes,
@@ -950,6 +953,11 @@ export async function handleSparqlRequest(request, options) {
         signal: request.signal,
       };
       if (operation.kind === "update") {
+        if (isPresent(o.coordinates.now) || isPresent(o.coordinates.entropySeed)) {
+          return problem(400, "now and entropySeed configure queries, not UPDATE", {
+            code: "purrdf-wasm-options",
+          }, headers);
+        }
         const { maxAnswers: _queryOnly, ...governors } = o.governors;
         let outcome;
         try {
@@ -976,6 +984,7 @@ export async function handleSparqlRequest(request, options) {
       let outcome;
       try {
         outcome = await o.engine.queryGovernedNegotiatedAsync(o.dataset, text, {
+          ...o.coordinates,
           ...o.governors,
           ...host,
           accept,
