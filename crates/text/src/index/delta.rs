@@ -744,7 +744,18 @@ mod tests {
 
             // Use a distinct operation with a cold cache for the independent
             // whole-source oracle. No warmed pages are credited to either path.
-            let full_query = snapshot.query(read_limits).unwrap();
+            // Profile 7's larger authenticated summary directory exceeds the
+            // old full-scan request allowance at 2,048 documents. Admit that
+            // reference scan without changing the subject lookup's limit.
+            let full_query = snapshot
+                .query(purrdf_core::SegmentedReadLimits::new(
+                    128_000_000,
+                    8,
+                    400_000,
+                    128_000_000,
+                    16,
+                ))
+                .unwrap();
             let before = requests(&full_query);
             let (all_rows, _) = collect_rows(&full_query, &config()).unwrap();
             let full_reads = requests(&full_query) - before;
