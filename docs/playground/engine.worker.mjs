@@ -188,9 +188,9 @@ const HANDLERS = {
     };
   },
 
-  query({ sparql }) {
+  query({ sparql, now, entropySeed }) {
     const ds = requireCurrent();
-    const out = ds.query(sparql); // throws on SERVICE/LOAD/parse/eval error
+    const out = ds.query(sparql, undefined, undefined, now, entropySeed); // throws on SERVICE/LOAD/parse/eval error
     let parsed = null;
     try {
       parsed = JSON.parse(out);

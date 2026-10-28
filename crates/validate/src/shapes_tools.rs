@@ -55,10 +55,11 @@ use purrdf_shapes::lint::{self, LintReport};
 use purrdf_shapes::srl;
 use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_document};
 use purrdf_shapes::{LimitKnobs, ShapesError, ShapesImports, engine};
-use purrdf_shapes::{RuleSource, run_rules};
+use purrdf_shapes::{RuleOptions, RuleSource, run_rules_with_options};
 
 use crate::ShapesImportList;
 use crate::expr_selector::ExprSelector;
+use crate::query::CoordinateInputs;
 use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 
 /// One rules run across the host boundary: the data graph and exactly ONE rule source —
@@ -219,7 +220,7 @@ pub struct RulesOutcome {
 /// passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
-    apply_rules_with(request, run_rules)
+    apply_rules_with(request, CoordinateInputs::default(), run_rules_with_options)
 }
 
 /// [`apply_rules_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the
@@ -238,22 +239,33 @@ pub fn apply_rules_to_ntriples_with_xpath_regex(
     request: &RulesRequest<'_>,
     xpath_regex: Option<Profile>,
 ) -> Result<RulesOutcome, XPathValidationError> {
-    let Some(profile) = xpath_regex else {
-        return Ok(apply_rules_to_ntriples(request)?);
-    };
-    apply_rules_with(request, |source, data, limits, knobs| {
-        purrdf_shapes::xpath::run_rules(source, data, limits, knobs, profile, Limits::new())
+    apply_rules_to_ntriples_with_coordinates(request, xpath_regex, CoordinateInputs::default())
+}
+
+/// Execute with owned exact coordinates and an optional dated XPath law.
+/// Request limits and the calling host's knob names remain authoritative.
+///
+/// # Errors
+/// The same parse, import, execution and pattern refusals as
+/// [`apply_rules_to_ntriples_with_xpath_regex`].
+pub fn apply_rules_to_ntriples_with_coordinates(
+    request: &RulesRequest<'_>,
+    xpath_regex: Option<Profile>,
+    coordinates: CoordinateInputs,
+) -> Result<RulesOutcome, XPathValidationError> {
+    apply_rules_with(request, coordinates, |source, data, options| {
+        run_configured_rules(source, data, options, xpath_regex)
     })
 }
 
 /// The one rules body under either law: `run` is the rules dispatch it runs.
 fn apply_rules_with<E: From<ShapesError>>(
     request: &RulesRequest<'_>,
+    coordinates: CoordinateInputs,
     run: impl FnOnce(
         RuleSource<'_>,
         &purrdf_core::RdfDataset,
-        &RuleLimits,
-        LimitKnobs,
+        &RuleOptions,
     ) -> Result<srl::Inference, E>,
 ) -> Result<RulesOutcome, E> {
     let (data, rules) = rule_inputs(request)?;
@@ -263,14 +275,14 @@ fn apply_rules_with<E: From<ShapesError>>(
         max_stored_facts: request.max_stored_facts,
         max_join_steps: request.max_join_steps,
     };
-    let knobs = request.host.limit_knobs();
+    let options = coordinates.into_rule_options(&limits, request.host.limit_knobs());
     let (inference, diagnostics) = match &rules {
         RuleInput::Shapes(shapes) => (
-            run(RuleSource::Shapes(shapes), data.as_ref(), &limits, knobs)?,
+            run(RuleSource::Shapes(shapes), data.as_ref(), &options)?,
             shapes.mandatory_diagnostics().to_vec(),
         ),
         RuleInput::Srl(document) => (
-            run(RuleSource::Srl(document), data.as_ref(), &limits, knobs)?,
+            run(RuleSource::Srl(document), data.as_ref(), &options)?,
             Vec::new(),
         ),
     };
@@ -279,6 +291,25 @@ fn apply_rules_with<E: From<ShapesError>>(
         proof: request.explain.then(|| inference.proof_text()),
         diagnostics,
     })
+}
+
+/// The configured rule dispatch shared by entailment and inference boundaries.
+pub(crate) fn run_configured_rules(
+    source: RuleSource<'_>,
+    data: &purrdf_core::RdfDataset,
+    options: &RuleOptions,
+    xpath_regex: Option<Profile>,
+) -> Result<srl::Inference, XPathValidationError> {
+    match xpath_regex {
+        Some(profile) => purrdf_shapes::xpath::run_rules_with_options(
+            source,
+            data,
+            options,
+            profile,
+            Limits::new(),
+        ),
+        None => Ok(run_rules_with_options(source, data, options)?),
+    }
 }
 
 /// The one rule source a [`RulesRequest`] names, parsed and checked.

@@ -95,10 +95,9 @@ test("async coordinates reject lossy host inputs and unsupported routes", async 
         assert.throws(() => AsyncJobOptions.fromJs(kind, controls, undefined, false, undefined), /unknown query option/);
       }
     }
-    for (const method of ["query", "select", "ask", "construct", "describe", "queryRaw", "explainQuery", "queryGoverned", "update", "updateGoverned"]) {
-      assert.throws(() => engine[method](data, QUERY, INPUTS), /only by asynchronous query calls/);
+    for (const method of ["update", "updateGoverned"]) {
+      assert.throws(() => engine[method](data, QUERY, INPUTS), /UPDATE option/);
     }
-    assert.throws(() => engine.queryEntailmentGoverned(data, QUERY, "rdfs", INPUTS), /only by asynchronous query calls/);
     await assert.rejects(engine.updateAsync(data, "INSERT DATA {}", INPUTS), /unknown query option/);
     await assert.rejects(engine.updateGovernedAsync(data, "INSERT DATA {}", INPUTS), /unknown query option/);
     assert.equal(data.size, 0);

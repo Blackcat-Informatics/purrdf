@@ -84,13 +84,15 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
         ] {
             let what = format!("{law:?} {query}");
             assert_eq!(
-                engine.ask(&dataset, query, None, owned(law)).expect(&what),
+                engine
+                    .ask(&dataset, query, None, owned(law), None, None)
+                    .expect(&what),
                 expected,
                 "ask {what}"
             );
             assert_eq!(
                 engine
-                    .query(&dataset, query, None, owned(law))
+                    .query(&dataset, query, None, owned(law), None, None)
                     .expect(&what)
                     .boolean(),
                 Some(expected),
@@ -99,14 +101,28 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
             assert_eq!(
                 srj_boolean(
                     &engine
-                        .query_raw(&dataset, query, None, None, None, None, owned(law))
+                        .query_raw(
+                            &dataset,
+                            query,
+                            None,
+                            None,
+                            None,
+                            None,
+                            owned(law),
+                            None,
+                            None
+                        )
                         .expect(&what)
                 ),
                 expected,
                 "queryRaw {what}"
             );
             assert_eq!(
-                srj_boolean(&dataset.query(query, None, owned(law)).expect(&what)),
+                srj_boolean(
+                    &dataset
+                        .query(query, None, owned(law), None, None)
+                        .expect(&what)
+                ),
                 expected,
                 "Dataset.query {what}"
             );
@@ -125,6 +141,8 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
                     None,
                     None,
                     owned(law),
+                    None,
+                    None,
                 )
                 .expect(&what);
             assert_eq!(
@@ -155,6 +173,8 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
                     None,
                     None,
                     owned(law),
+                    None,
+                    None,
                 )
                 .expect(&what);
             assert_eq!(
@@ -180,14 +200,14 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
         let rows = usize::from(backreference);
         assert_eq!(
             engine
-                .select(&dataset, SELECT_BACKREFERENCE, None, owned(law))
+                .select(&dataset, SELECT_BACKREFERENCE, None, owned(law), None, None)
                 .expect(&what)
                 .row_count(),
             rows,
             "select {what}"
         );
         let replaced = engine
-            .select(&dataset, SELECT_REPLACE, None, owned(law))
+            .select(&dataset, SELECT_REPLACE, None, owned(law), None, None)
             .expect(&what)
             .next_row()
             .expect("one row")
@@ -199,7 +219,14 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
         );
         assert_eq!(
             engine
-                .construct(&dataset, CONSTRUCT_BACKREFERENCE, None, owned(law))
+                .construct(
+                    &dataset,
+                    CONSTRUCT_BACKREFERENCE,
+                    None,
+                    owned(law),
+                    None,
+                    None
+                )
                 .expect(&what)
                 .size(),
             rows,
@@ -207,7 +234,14 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
         );
         assert_eq!(
             engine
-                .describe(&dataset, DESCRIBE_NON_CAPTURING, None, owned(law))
+                .describe(
+                    &dataset,
+                    DESCRIBE_NON_CAPTURING,
+                    None,
+                    owned(law),
+                    None,
+                    None
+                )
                 .expect(&what)
                 .size()
                 > 0,
@@ -222,6 +256,8 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
                 "jsonld",
                 JSONLD_OPTIONS,
                 owned(law),
+                None,
+                None,
             )
             .expect(&what);
         assert_eq!(
@@ -239,11 +275,13 @@ fn every_row_and_graph_entry_evaluates_under_the_selected_law() {
                 &context,
                 None,
                 owned(law),
+                None,
+                None,
             )
             .expect(&what);
         assert_eq!(contextual, configured, "queryRawWithContext {what}");
         let explained = engine
-            .explain_query(&dataset, SELECT_BACKREFERENCE, None, owned(law))
+            .explain_query(&dataset, SELECT_BACKREFERENCE, None, owned(law), None, None)
             .expect(&what);
         let filter = explained
             .lines()
@@ -878,7 +916,17 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
              ?s <http://example.org/v> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i ?s"
         );
         let srj = engine
-            .query_raw(&dataset, &query, None, None, None, None, owned(law))
+            .query_raw(
+                &dataset,
+                &query,
+                None,
+                None,
+                None,
+                None,
+                owned(law),
+                None,
+                None,
+            )
             .unwrap_or_else(|_| panic!("{law:?}: the query answers"));
         let document = purrdf_lex::json::read(&srj).expect("SRJ parses");
         (0..)
@@ -911,7 +959,17 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         );
         let replaced = |law: Option<&str>| {
             engine
-                .query_raw(&dataset, &query, None, None, None, None, owned(law))
+                .query_raw(
+                    &dataset,
+                    &query,
+                    None,
+                    None,
+                    None,
+                    None,
+                    owned(law),
+                    None,
+                    None,
+                )
                 .unwrap_or_else(|_| panic!("{law:?}: the replacement answers"))
         };
         let expected = replaced(None);
@@ -987,7 +1045,17 @@ fn large_counts_of_one_class_or_one_group_answer_at_the_production_defaults() {
     let engine = QueryEngine::new();
     let column = |query: &str, law: &str| -> Vec<String> {
         let srj = engine
-            .query_raw(&dataset, query, None, None, None, None, owned(Some(law)))
+            .query_raw(
+                &dataset,
+                query,
+                None,
+                None,
+                None,
+                None,
+                owned(Some(law)),
+                None,
+                None,
+            )
             .unwrap_or_else(|_| panic!("{law}: the query answers"));
         let document = purrdf_lex::json::read(&srj).expect("SRJ parses");
         (0..)

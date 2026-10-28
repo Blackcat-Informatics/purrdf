@@ -1142,7 +1142,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.14.0` is pinned in tests/abi.rs. */
+     * literal `0.15.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1805,6 +1805,55 @@ int main(int argc, char **argv) {
           "UPDATE time and seed cross the linked C boundary");
     purrdf_buffer_free(coordinate_json);
     purrdf_dataset_free(coordinate_dataset);
+
+    /* Every rule coordinate prototype is exercised through the linked library. */
+    const char *coordinate_shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> . "
+        "@prefix ex: <http://example.org/> . "
+        "ex:S a sh:NodeShape; sh:targetNode ex:s; sh:rule [ a sh:SPARQLRule; "
+        "sh:runOnce true; sh:construct \"\"\"CONSTRUCT { "
+        "<http://example.org/s> <http://example.org/time> ?t; "
+        "<http://example.org/id> ?u } WHERE { BIND(NOW() AS ?t) "
+        "BIND(UUID() AS ?u) }\"\"\" ] .";
+    const char *coordinate_srl =
+        "PREFIX : <http://example.org/> RULE { :s :time ?t; :id ?u } "
+        "WHERE { SET(?t := NOW()) SET(?u := UUID()) }";
+    for (int entry = 0; entry < 4; ++entry) {
+        PurrdfBuffer *rule_result = NULL;
+        PurrdfBuffer *rule_proof = NULL;
+        PurrdfBuffer *rule_diagnostics = NULL;
+        if (entry == 0) {
+            rc = purrdf_shacl_entail_to_ntriples(coordinate_shapes, NULL, NULL, "",
+                NULL, NULL, 0, NULL, NULL, NULL, NULL, query_now, &query_seed,
+                &rule_result, &rule_diagnostics, &error);
+        } else if (entry == 1) {
+            rc = purrdf_shacl_entail_to_ntriples_xpath_regex(coordinate_shapes,
+                NULL, NULL, "", NULL, NULL, 0, NULL, NULL, NULL, NULL,
+                "xpath-3.1-2017-03-21", query_now, &query_seed,
+                &rule_result, &rule_diagnostics, &error);
+        } else if (entry == 2) {
+            rc = purrdf_shacl_apply_rules("", coordinate_shapes, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, query_now, &query_seed,
+                &rule_result, &rule_proof, &rule_diagnostics, &error);
+        } else {
+            rc = purrdf_shacl_apply_rules_xpath_regex("", NULL, NULL, NULL,
+                coordinate_srl, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0,
+                "xpath-3.1-2017-03-21", query_now, &query_seed,
+                &rule_result, &rule_proof, &rule_diagnostics, &error);
+        }
+        CHECK(rc == PURRDF_STATUS_OK && error == NULL,
+              "supplied coordinates cross each linked rule entry");
+        const uint8_t *rule_bytes = NULL;
+        size_t rule_len = 0;
+        CHECK(purrdf_buffer_data(rule_result, &rule_bytes, &rule_len) == PURRDF_STATUS_OK,
+              "read coordinate rule result");
+        CHECK(contains_bytes(rule_bytes, rule_len, query_now) &&
+                  contains_bytes(rule_bytes, rule_len, "urn:uuid:"),
+              "rule outputs retain exact time and generated values");
+        purrdf_buffer_free(rule_result);
+        purrdf_buffer_free(rule_proof);
+        purrdf_buffer_free(rule_diagnostics);
+    }
 
     /* All three governed UPDATE doors carry the explicit graph lifetime. These calls
      * compile against the generated public header and use the shared library. */

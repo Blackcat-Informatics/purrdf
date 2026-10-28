@@ -287,7 +287,14 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `entropy_seed` inputs after governors and before the first output. Rebuild C
 /// callers against the new header. Exact time and the copied unsigned seed are
 /// owned for the request; NULL independently retains a fresh native default.
-pub const PURRDF_ABI_MINOR: u32 = 14;
+///
+/// # `0.14.0` → `0.15.0`: supplied rule execution coordinates
+///
+/// Both entailment and rule-application entries, including their XPath variants,
+/// gain nullable `now` and `entropy_seed` inputs immediately before their first
+/// output. Callers must rebuild. Rule application covers both SHACL and SRL;
+/// owned inputs retain exact time and the unsigned seed while preserving request limits.
+pub const PURRDF_ABI_MINOR: u32 = 15;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 
