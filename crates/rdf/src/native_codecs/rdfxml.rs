@@ -395,8 +395,9 @@ impl RdfXmlParser {
             )?;
         }
 
+        let mut li_counter = 0;
         for child in element.element_children() {
-            self.parse_property_element(&subject, child, &context)?;
+            self.parse_property_element(&subject, child, &context, &mut li_counter)?;
         }
         Ok(subject)
     }
@@ -406,9 +407,10 @@ impl RdfXmlParser {
         subject: &XmlNode,
         element: Node<'_, '_>,
         parent_context: &ParseContext,
+        li_counter: &mut usize,
     ) -> Result<(), RdfDiagnostic> {
         let context = parent_context.for_child(element)?;
-        let predicate = element_iri(element, &context.base)?;
+        let predicate = property_iri(element, &context.base, li_counter)?;
         let reifier = attr_rdf(element, RDF_ID)
             .map(|id| self.rdf_id_iri(id, &context).map(XmlNode::Iri))
             .transpose()?;
@@ -458,8 +460,9 @@ impl RdfXmlParser {
                     annotation,
                 )?;
                 self.insert_property_attribute_statements(&object, element, &context)?;
+                let mut li_counter = 0;
                 for child in element.element_children() {
-                    self.parse_property_element(&object, child, &context)?;
+                    self.parse_property_element(&object, child, &context, &mut li_counter)?;
                 }
                 return Ok(());
             }
@@ -652,7 +655,7 @@ impl RdfXmlParser {
             )
         } else {
             (
-                element_iri(child_props[0], &node_ctx.base)?,
+                property_iri(child_props[0], &node_ctx.base, &mut 0)?,
                 self.triple_object(child_props[0], context)?,
             )
         };
@@ -901,6 +904,22 @@ fn is_rdf(element: Node<'_, '_>, local: &str) -> bool {
     element.tag_name().namespace() == Some(RDF_NS) && element.tag_name().name() == local
 }
 
+/// RDF/XML §7.4: expand only `rdf:li` property elements, counting independently
+/// within each node element (including the node implied by `parseType="Resource"`).
+fn property_iri(
+    element: Node<'_, '_>,
+    base: &purrdf_iri::BaseScope,
+    li_counter: &mut usize,
+) -> Result<String, RdfDiagnostic> {
+    if is_rdf(element, "li") {
+        // A counter cannot exceed the number of elements in the resident XML tree.
+        *li_counter += 1;
+        rdf_iri(&format!("_{li_counter}"))
+    } else {
+        element_iri(element, base)
+    }
+}
+
 /// The IRI of a node element / property element: `namespace + local`.
 fn element_iri(
     element: Node<'_, '_>,
@@ -966,9 +985,9 @@ fn property_attrs<'a, 'input>(
 
 fn rdf_iri(local: &str) -> Result<String, RdfDiagnostic> {
     let iri = format!("{RDF_NS}{local}");
-    // The one IRI position with no document text in it at all: both halves are crate
-    // constants, so no caller base could bear on it and the empty scope is the literal
-    // truth rather than a stand-in for a scope that was thrown away. The check stays
+    // No document text enters this IRI: the namespace is constant and the local part
+    // is a constant or generated membership ordinal, so no caller base bears on it.
+    // The empty scope is literal truth rather than a discarded caller scope. The check stays
     // because a constant can be mistyped; it cannot fire on user input.
     validate_iri(&iri, &purrdf_iri::BaseScope::empty())?;
     Ok(iri)
