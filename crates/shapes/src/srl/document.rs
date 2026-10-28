@@ -132,7 +132,21 @@ pub enum SrlError {
 impl fmt::Display for SrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Execution(error) => error.fmt(f),
+            Self::Execution(error) => {
+                let mut cause = error.cause.as_ref();
+                while let crate::rules::RulesError::Execution(nested) = cause {
+                    cause = nested.cause.as_ref();
+                }
+                match cause {
+                    crate::rules::RulesError::LimitExceeded(limit) => {
+                        write!(f, "SPARQL 1.2 RL evaluation failed: {limit}")
+                    }
+                    crate::rules::RulesError::Failed(message) => {
+                        write!(f, "SPARQL 1.2 RL evaluation failed: {message}")
+                    }
+                    cause => cause.fmt(f),
+                }
+            }
             Self::Shapes(error) => error.fmt(f),
             Self::TripleSource(error) => error.fmt(f),
             Self::Syntax {

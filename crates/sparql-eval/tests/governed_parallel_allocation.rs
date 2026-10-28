@@ -187,7 +187,12 @@ fn forked_high_cost_rows_stop_with_bounded_workspace_and_work() {
     let functions = engine
         .bind_functions(functions, ExtensionEnv::empty())
         .expect("stable function");
-    let options = QueryOptions::new().with_functions(&functions);
+    // Whole receipts are compared across pools, so their coordinates must match.
+    let now = purrdf_xsd::temporal::parse_datetime("2024-02-29T12:34:56Z").unwrap();
+    let options = QueryOptions::new()
+        .with_functions(&functions)
+        .with_now(&now)
+        .with_entropy_seed(7);
     let query = high_cost_query();
     let request = SparqlRequest {
         query: &query,
