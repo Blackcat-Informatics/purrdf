@@ -1,17 +1,89 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! What a host attaches to a SPARQL query's results beside the answers.
+//! Shared query inputs and the provenance a host attaches beside the answers.
 //!
 //! The command line, the C ABI and the wasm package each serialize a SELECT or
 //! ASK result with the additive `purrdf` provenance extension when their caller
 //! supplies a namespace to anchor it under. What that extension says about the
 //! query is computed here, once, so the same query text carries the same
-//! identity whichever host answered it.
+//! identity whichever host answered it. [`CoordinateInputs`] decodes supplied
+//! time and entropy once, independently of that query-text identity.
 
-use purrdf_sparql_eval::AggregateRegistry;
+use purrdf_sparql_eval::{AggregateRegistry, QueryOptions};
 use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
+use purrdf_xsd::temporal::{DateTime, parse_datetime};
 use sha2::{Digest as _, Sha256};
+
+/// Caller-supplied query time and entropy, decoded once at a host boundary.
+///
+/// This owns request inputs, not a receipt of execution or sampled defaults.
+/// Parsing samples neither the clock nor entropy. Exact fractional seconds and
+/// the declared timezone follow the native `xsd:dateTime` contract.
+#[derive(Debug, Default)]
+pub struct CoordinateInputs {
+    now: Option<DateTime>,
+    entropy_seed: Option<u64>,
+}
+
+impl CoordinateInputs {
+    /// Decode independently optional time and unsigned decimal seed strings.
+    /// A supplied zero is a seed; an omitted field requests the native default.
+    ///
+    /// # Errors
+    /// Returns the corresponding typed native parse error for invalid input.
+    pub fn from_parts(
+        now: Option<&str>,
+        entropy_seed: Option<&str>,
+    ) -> Result<Self, CoordinateInputError> {
+        Ok(Self {
+            now: now
+                .map(parse_datetime)
+                .transpose()
+                .map_err(CoordinateInputError::Now)?,
+            entropy_seed: entropy_seed
+                .map(str::parse)
+                .transpose()
+                .map_err(CoordinateInputError::EntropySeed)?,
+        })
+    }
+
+    /// Replace both coordinate selections, preserving all unrelated options.
+    ///
+    /// An omitted input clears an earlier selection to the native host default;
+    /// this is replacement, not an overlay. The returned options borrow the
+    /// exact caller-owned time, which execution admits through its native path.
+    #[must_use]
+    pub fn apply<'a, 'providers>(
+        &'a self,
+        mut options: QueryOptions<'a, 'providers>,
+    ) -> QueryOptions<'a, 'providers> {
+        options.now = self.now.as_ref();
+        options.entropy_seed = self.entropy_seed;
+        options
+    }
+}
+
+/// A malformed supplied query coordinate, retaining its native parse cause.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CoordinateInputError {
+    /// The supplied time is not a native `xsd:dateTime`.
+    Now(purrdf_xsd::XsdError),
+    /// The supplied seed is not an unsigned 64-bit decimal integer.
+    EntropySeed(std::num::ParseIntError),
+}
+
+impl std::fmt::Display for CoordinateInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Now(error) => write!(f, "query time: {error}"),
+            Self::EntropySeed(error) => write!(f, "query entropy seed: {error}"),
+        }
+    }
+}
+
+purrdf_hash::error_sources!(CoordinateInputError, Now, EntropySeed);
 
 /// The producer label a populated [`provenance`] carries: the evaluator that
 /// answered the query, whichever host called it.
@@ -65,6 +137,46 @@ pub fn provenance(namespace: Option<&ProvenanceNamespace>, query: &str) -> Resul
 mod tests {
     use super::{ENGINE_LABEL, provenance};
     use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
+
+    /// Replacing a prior request must not retain its time or seed by accident.
+    #[test]
+    fn coordinate_inputs_replace_prior_selections_without_resetting_other_options() {
+        let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
+        let prior =
+            super::CoordinateInputs::from_parts(Some(time), Some("7")).expect("valid coordinates");
+        let replacement = super::CoordinateInputs::from_parts(None, Some("0")).expect("zero seed");
+        let division = purrdf_sparql_eval::DivisionPolicy::Exact;
+        let options = replacement
+            .apply(prior.apply(purrdf_sparql_eval::QueryOptions::new().with_division(division)));
+        assert!(
+            options.now.is_none(),
+            "absent replacement clears prior time"
+        );
+        assert_eq!(options.entropy_seed, Some(0));
+        assert_eq!(options.division, division);
+        let time_only =
+            super::CoordinateInputs::from_parts(Some(time), None).expect("time-only request");
+        let options = time_only.apply(options);
+        assert!(
+            options.entropy_seed.is_none(),
+            "absent replacement clears prior seed"
+        );
+        assert_eq!(options.now.expect("supplied time").to_string(), time);
+        let empty = super::CoordinateInputs::default();
+        let options = empty.apply(options);
+        assert!(options.now.is_none());
+        assert!(options.entropy_seed.is_none());
+        assert_eq!(options.division, division);
+        for (now, seed) in [(Some("invalid"), None), (None, Some("-1"))] {
+            let error = super::CoordinateInputs::from_parts(now, seed).expect_err("invalid");
+            assert!(std::error::Error::source(&error).is_some());
+            assert!(matches!(
+                (&error, now),
+                (super::CoordinateInputError::Now(_), Some(_))
+                    | (super::CoordinateInputError::EntropySeed(_), None)
+            ));
+        }
+    }
 
     fn namespace() -> ProvenanceNamespace {
         ProvenanceNamespace::new("prov", "https://example.org/ns/prov#").expect("a valid namespace")

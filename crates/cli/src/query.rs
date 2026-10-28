@@ -147,6 +147,8 @@ use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::governors::{self, GovernorFlags};
+use purrdf_validate::query::{CoordinateInputError, CoordinateInputs};
+
 use crate::ledger;
 use crate::path_relation::{self, PathRelationSpec};
 use crate::reason;
@@ -173,6 +175,7 @@ struct QueryOp<'a> {
     relations: RelationSpecs<'a>,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 /// The `--path-relation` specs one lane will snapshot, plus the query text they force a
@@ -264,11 +267,14 @@ fn engine_options<'a>(
     env: &'a ExtensionEnv<'a>,
     geo: &'a purrdf_validate::geo::GeoProfile,
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 ) -> EngineQueryOptions<'a, 'a> {
-    EngineQueryOptions::new()
-        .with_geo(geo)
-        .with_env(env)
-        .with_division(division)
+    coordinates.apply(
+        EngineQueryOptions::new()
+            .with_geo(geo)
+            .with_env(env)
+            .with_division(division),
+    )
 }
 
 impl ViewOp for QueryOp<'_> {
@@ -282,7 +288,7 @@ impl ViewOp for QueryOp<'_> {
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.relations.geo, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
         Ok(self.engine.query_prepared_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -332,6 +338,7 @@ struct GovernedQueryOp<'a> {
     relations: RelationSpecs<'a>,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 impl ViewOp for GovernedQueryOp<'_> {
@@ -345,13 +352,13 @@ impl ViewOp for GovernedQueryOp<'_> {
         let (relations, prepared) =
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
-        // `QueryOptions::EMPTY` for every axis but the two registries: the CLI wires no
-        // SHACL-AF function table. Both registries here are the SAME instances the plan
+        // The CLI wires no SHACL-AF function table. Both registries here are the
+        // SAME instances the plan
         // being evaluated was parsed against — `aggregates` from `run` below, and
         // `property_functions` from the re-prepare `prepare_against` just did over this
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.relations.geo, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
         Ok(self.engine.query_prepared_governed_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -382,6 +389,7 @@ struct ExplainOp<'a> {
     relations: RelationSpecs<'a>,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 impl ViewOp for ExplainOp<'_> {
@@ -400,7 +408,7 @@ impl ViewOp for ExplainOp<'_> {
         // registered.
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.relations.geo, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
         Ok(self
             .engine
             .explain_query_with_options_view(view, self.query, self.base, options)?)
@@ -711,6 +719,7 @@ struct EntailedQueryOp<'a> {
     report_target: &'a ReportTarget,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 impl ViewOp for EntailedQueryOp<'_> {
@@ -755,6 +764,7 @@ impl ViewOp for EntailedQueryOp<'_> {
                 &engine_env(self.aggregates, admitted.as_ref())?,
                 self.relations.geo,
                 self.division,
+                self.coordinates,
             ),
             &relations,
             self.report_target,
@@ -820,6 +830,10 @@ pub(crate) struct QueryOptions<'a> {
     /// at, for `/` and `AVG` alike. The default is exact for terminating quotients,
     /// otherwise eighteen fractional digits rounded half to even.
     pub(crate) division: DivisionPolicy,
+    /// Raw `--now`, decoded once before query sources are opened.
+    pub(crate) now: Option<&'a str>,
+    /// Raw `--entropy-seed`, decoded with `now`.
+    pub(crate) entropy_seed: Option<&'a str>,
 }
 
 /// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
@@ -835,6 +849,15 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
 ) -> Result<CliOutcome, CliError> {
+    let coordinates =
+        CoordinateInputs::from_parts(options.now, options.entropy_seed).map_err(|error| {
+            let flag = match &error {
+                CoordinateInputError::Now(_) => "--now",
+                CoordinateInputError::EntropySeed(_) => "--entropy-seed",
+                _ => "query coordinates",
+            };
+            CliError::Usage(format!("{flag}: {error}"))
+        })?;
     let data_format = format::resolve(None, options.data)?;
     // A report of a run that will not happen is a request the flag cannot honor, and
     // honoring it with silence is what this pipeline refuses.
@@ -899,6 +922,7 @@ pub(crate) fn run(
                 aggregates: aggregates.as_ref(),
                 relations,
                 division: options.division,
+                coordinates: &coordinates,
             },
         )?;
         sink::write_out("-", explanation.render().as_bytes())?;
@@ -958,6 +982,7 @@ pub(crate) fn run(
                 relations,
                 report_target,
                 division: options.division,
+                coordinates: &coordinates,
             },
         )?;
         return emit_entailed(
@@ -980,6 +1005,7 @@ pub(crate) fn run(
                 aggregates: aggregates.as_ref(),
                 relations,
                 division: options.division,
+                coordinates: &coordinates,
             },
         )?;
         return emit_governed(
@@ -1003,6 +1029,7 @@ pub(crate) fn run(
             aggregates: aggregates.as_ref(),
             relations,
             division: options.division,
+            coordinates: &coordinates,
         },
     )?;
     emit_result(
