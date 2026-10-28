@@ -121,24 +121,44 @@ const PLAN_IDENTITY_TAG: Domain = Domain::new(b"purrdf-datalog-plan-identity-v1"
 /// Hash one clause term under an explicit variant tag, its text framed by
 /// [`frame_le_into`]: every variable-length field is length-prefixed, so no
 /// concatenation of two fields can be confused with a different split of the same bytes.
-fn hash_term(hasher: &mut purrdf_hash::blake3::Hasher, term: &ClauseTerm) {
+struct RuleHasher<'a, E> {
+    hasher: purrdf_hash::blake3::Hasher,
+    tick: &'a mut dyn FnMut(usize) -> Result<(), E>,
+}
+
+impl<E> RuleHasher<'_, E> {
+    fn update(&mut self, bytes: &[u8]) -> Result<(), E> {
+        for chunk in bytes.chunks(4096) {
+            (self.tick)(chunk.len())?;
+            self.hasher.update(chunk);
+        }
+        Ok(())
+    }
+
+    fn frame(&mut self, bytes: &[u8]) -> Result<(), E> {
+        purrdf_hash::frame::try_frame_le_with(bytes, |part| self.update(part))
+    }
+}
+
+fn hash_term<E>(hasher: &mut RuleHasher<'_, E>, term: &ClauseTerm) -> Result<(), E> {
     match term {
         ClauseTerm::Var(name) => {
-            hasher.update(&[0]);
-            frame_le_into(hasher, name.as_bytes());
+            hasher.update(&[0])?;
+            hasher.frame(name.as_bytes())?;
         }
         ClauseTerm::Iri(iri) => {
-            hasher.update(&[1]);
-            frame_le_into(hasher, iri.as_bytes());
+            hasher.update(&[1])?;
+            hasher.frame(iri.as_bytes())?;
         }
         ClauseTerm::Literal(surface) => {
-            hasher.update(&[2]);
-            frame_le_into(hasher, surface.as_bytes());
+            hasher.update(&[2])?;
+            hasher.frame(surface.as_bytes())?;
         }
         ClauseTerm::DefaultGraph => {
-            hasher.update(&[3]);
+            hasher.update(&[3])?;
         }
     }
+    Ok(())
 }
 
 /// Hash one clause atom: every stored position, polarity included.
@@ -152,16 +172,20 @@ fn hash_term(hasher: &mut purrdf_hash::blake3::Hasher, term: &ClauseTerm) {
 ///
 /// The polarity byte is emitted for head atoms too, where it is always `0`: one atom
 /// encoder for both positions is cheaper to keep correct than two that must agree.
-fn hash_atom<const N: usize>(hasher: &mut purrdf_hash::blake3::Hasher, atom: &ClauseAtom<N>) {
+fn hash_atom<const N: usize, E>(
+    hasher: &mut RuleHasher<'_, E>,
+    atom: &ClauseAtom<N>,
+) -> Result<(), E> {
     if N == 3 {
         hasher.update(&[u8::from(
             atom.read_source() == crate::clause::ReadSource::Base,
-        )]);
+        )])?;
     }
     for term in atom.terms() {
-        hash_term(hasher, term);
+        hash_term(hasher, term)?;
     }
-    hasher.update(&[u8::from(atom.is_negated())]);
+    hasher.update(&[u8::from(atom.is_negated())])?;
+    Ok(())
 }
 
 /// A canonical digest of every execution-relevant field of a DL-clause program.
@@ -204,19 +228,45 @@ fn hash_atom<const N: usize>(hasher: &mut purrdf_hash::blake3::Hasher, atom: &Cl
 /// Hashing any of the five order-insensitively would let two programs with different
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
-    let guarded = rules.iter().any(DlClause::is_guarded);
-    let ordered = rules.iter().any(|rule| rule.guard_positions().is_some());
-    let native = rules.iter().any(|rule| {
-        rule.guards()
-            .iter()
-            .chain(
-                rule.negations()
-                    .iter()
-                    .flat_map(crate::guard::Negation::guards),
-            )
-            .any(|guard| guard.operation() != GuardOperation::Callback)
-    });
-    let mut hasher = purrdf_hash::blake3::Hasher::new();
+    match canonical_rule_hash_with_control(rules, |_| Ok::<(), core::convert::Infallible>(())) {
+        Ok(digest) => digest,
+        Err(never) => match never {},
+    }
+}
+
+/// The same canonical identity, with control over source visits and each hashed byte chunk.
+/// Chunks contain at most 4096 bytes; the callback receives their exact byte count.
+/// Source-shape visits charge one unit. No intermediate preimage is allocated.
+///
+/// # Errors
+/// Returns the original callback refusal before absorbing the refused chunk.
+pub fn canonical_rule_hash_with_control<const N: usize, E>(
+    rules: &[DlClause<N>],
+    mut tick: impl FnMut(usize) -> Result<(), E>,
+) -> Result<[u8; 32], E> {
+    let mut guarded = false;
+    let mut ordered = false;
+    let mut native = false;
+    for rule in rules {
+        tick(1)?;
+        guarded |= rule.is_guarded();
+        ordered |= rule.guard_positions().is_some();
+        for guard in rule.guards() {
+            tick(1)?;
+            native |= guard.operation() != GuardOperation::Callback;
+        }
+        for negation in rule.negations() {
+            tick(1)?;
+            for guard in negation.guards() {
+                tick(1)?;
+                native |= guard.operation() != GuardOperation::Callback;
+            }
+        }
+    }
+    let mut hasher = RuleHasher {
+        hasher: purrdf_hash::blake3::Hasher::new(),
+        tick: &mut tick,
+    };
     let domain = match (N, guarded, native, ordered) {
         (3, _, _, true) => ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
         (_, _, _, true) => ORDERED_CLAUSE_IR_DIGEST_TAG,
@@ -227,76 +277,77 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
         (_, true, false, false) => GUARDED_CLAUSE_IR_DIGEST_TAG,
         (_, false, false, false) => CLAUSE_IR_DIGEST_TAG,
     };
-    frame_le_into(&mut hasher, domain.as_bytes());
-    hasher.update(&(rules.len() as u64).to_le_bytes());
+    hasher.frame(domain.as_bytes())?;
+    hasher.update(&(rules.len() as u64).to_le_bytes())?;
     for rule in rules {
         if N == 3 {
             hasher.update(&[u8::from(
                 rule.head_form() == crate::clause::HeadForm::NoOutput,
-            )]);
+            )])?;
         }
-        hasher.update(&(rule.body().len() as u64).to_le_bytes());
+        hasher.update(&(rule.body().len() as u64).to_le_bytes())?;
         for atom in rule.body() {
-            hash_atom(&mut hasher, atom);
+            hash_atom(&mut hasher, atom)?;
         }
-        hasher.update(&(rule.existentials().len() as u64).to_le_bytes());
+        hasher.update(&(rule.existentials().len() as u64).to_le_bytes())?;
         for name in rule.existentials() {
-            frame_le_into(&mut hasher, name.as_bytes());
+            hasher.frame(name.as_bytes())?;
         }
-        hasher.update(&(rule.head_disjuncts().len() as u64).to_le_bytes());
+        hasher.update(&(rule.head_disjuncts().len() as u64).to_le_bytes())?;
         for disjunct in rule.head_disjuncts() {
-            hasher.update(&(disjunct.atoms().len() as u64).to_le_bytes());
+            hasher.update(&(disjunct.atoms().len() as u64).to_le_bytes())?;
             for atom in disjunct.atoms() {
-                hash_atom(&mut hasher, atom);
+                hash_atom(&mut hasher, atom)?;
             }
         }
         if guarded {
-            hash_guards(&mut hasher, rule.guards(), native || ordered);
+            hash_guards(&mut hasher, rule.guards(), native || ordered)?;
             if ordered {
                 for position in 0..rule.guards().len() {
                     let after = rule
                         .guard_positions()
                         .map_or_else(|| rule.body().len(), |positions| positions[position]);
-                    hasher.update(&(after as u64).to_le_bytes());
+                    hasher.update(&(after as u64).to_le_bytes())?;
                 }
             }
-            hasher.update(&(rule.negations().len() as u64).to_le_bytes());
+            hasher.update(&(rule.negations().len() as u64).to_le_bytes())?;
             for negation in rule.negations() {
-                hasher.update(&(negation.atoms().len() as u64).to_le_bytes());
+                hasher.update(&(negation.atoms().len() as u64).to_le_bytes())?;
                 for atom in negation.atoms() {
-                    hash_atom(&mut hasher, atom);
+                    hash_atom(&mut hasher, atom)?;
                 }
-                hash_guards(&mut hasher, negation.guards(), native || ordered);
+                hash_guards(&mut hasher, negation.guards(), native || ordered)?;
             }
         }
     }
-    *hasher.finalize().as_bytes()
+    Ok(*hasher.hasher.finalize().as_bytes())
 }
 
 /// Hash a guard list: its length, then per guard its name, inputs, outputs and read kind.
-fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard], native: bool) {
-    hasher.update(&(guards.len() as u64).to_le_bytes());
+fn hash_guards<E>(hasher: &mut RuleHasher<'_, E>, guards: &[Guard], native: bool) -> Result<(), E> {
+    hasher.update(&(guards.len() as u64).to_le_bytes())?;
     for guard in guards {
         if native {
             hasher.update(&[match guard.operation() {
                 GuardOperation::Callback => 0,
                 GuardOperation::NotEqual => 1,
-            }]);
+            }])?;
         }
-        frame_le_into(hasher, guard.name().as_bytes());
-        hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
+        hasher.frame(guard.name().as_bytes())?;
+        hasher.update(&(guard.inputs().len() as u64).to_le_bytes())?;
         for input in guard.inputs() {
-            frame_le_into(hasher, input.as_bytes());
+            hasher.frame(input.as_bytes())?;
         }
-        hasher.update(&(guard.outputs().len() as u64).to_le_bytes());
+        hasher.update(&(guard.outputs().len() as u64).to_le_bytes())?;
         for output in guard.outputs() {
-            frame_le_into(hasher, output.as_bytes());
+            hasher.frame(output.as_bytes())?;
         }
         hasher.update(&[match guard.reads() {
             GuardReads::Bindings => 0,
             GuardReads::Model => 1,
-        }]);
+        }])?;
     }
+    Ok(())
 }
 
 // ── The contract hash: which calculus produced this result ──────────────────────

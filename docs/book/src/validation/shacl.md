@@ -90,6 +90,24 @@ validator and a `sh:SPARQLTarget` may carry only the terms their
 specification gives them, so an `sh:ask` beside a constraint's `sh:select`,
 or a misspelled `sh:mesage`, is refused rather than ignored.
 
+### Supplied rule coordinates
+
+Native `RuleOptions` and `srl::InferOptions` accept `with_now` and
+`with_entropy_seed`. A successful `Inference::coordinates()` returns the
+effective supplied time and the starting state of the rule's query-seed
+sequence, captured before any query consumes a draw. The `RuleCoordinates`
+receipt compares exact calendar fields, fractional seconds and timezone offsets;
+equal instants with different offsets remain distinct because `STR(NOW())` can
+observe the difference. Decimal lexical trailing zeros are already normalized.
+
+Empty options inherit an active supplied scope. Supplying either coordinate
+replaces the scope, so its omitted counterpart is absent. An absent receipt
+field does not identify a sampled host value. This receipt is independent of
+`Inference::contract_hash()`, which still identifies the program and schedule;
+it is not a complete execution or dataset identity. The receipt and its clones
+share the original caller-owned time allocation, keeping that input alive until
+the final owner drops without copying its exact coefficient.
+
 ### Recursion and resource failures
 
 A cyclic shape reference requires an explicit native selection through

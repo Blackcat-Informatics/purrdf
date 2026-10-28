@@ -430,9 +430,12 @@ fn maintenance_source_error<E>(error: TermExpired) -> EntailError<E> {
 
 /// The restricted chase's refusal, wrapped in this crate's vocabulary. See
 /// [`evaluate_error`] for why a stop keeps its own variant.
-fn chase_error(error: ChaseError) -> EntailError {
+pub(super) fn chase_error<E>(error: ChaseError) -> EntailError<E> {
     match error {
-        ChaseError::Stopped { .. } => EntailError::Stopped,
+        ChaseError::Stopped { .. }
+        | ChaseError::Termination(purrdf_datalog::chase::TerminationError::Stopped { .. }) => {
+            EntailError::Stopped
+        }
         other => EntailError::Chase(other),
     }
 }
@@ -814,9 +817,9 @@ pub(crate) fn seed<D: DatasetView>(
 ///
 /// `purrdf_datalog::chase::chase` certifies the clause set by constant-refined weak
 /// acyclicity before it runs a round: an existential edge of the position dependency graph
-/// that lies in a cycle is [`ChaseError::NonTerminating`], and nothing else is refused for
-/// termination. There is no caller-supplied budget and no acyclicity parameter — the
-/// analysis is a function of the clauses the calculus declares, and `the_existential_lanes_are_certified_terminating`
+/// that lies in a cycle is [`ChaseError::Termination`], and nothing else is refused for
+/// termination. A caller cannot assert acyclicity: fallible source-bound evidence is
+/// independently checked before execution. The analysis reads the declared clauses, and `every_declared_program_is_admissible_to_the_engine_that_runs_it`
 /// asserts that both lanes that reach here are certified.
 ///
 /// # The surrogates do not reach the answer, and that is REQUIRED
