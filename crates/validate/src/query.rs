@@ -43,15 +43,32 @@ impl CoordinateInputs {
         now: Option<&str>,
         entropy_seed: Option<&str>,
     ) -> Result<Self, CoordinateInputError> {
+        let mut inputs = Self::from_time_and_seed(now, None)?;
+        inputs.entropy_seed = entropy_seed
+            .map(str::parse)
+            .transpose()
+            .map_err(CoordinateInputError::EntropySeed)?;
+        Ok(inputs)
+    }
+
+    /// Decode an optional exact time with an already-typed unsigned seed.
+    ///
+    /// Hosts whose integer boundary has already produced a `u64` use this
+    /// constructor without formatting and reparsing the seed. Omitted inputs
+    /// request native defaults; a supplied zero remains a seed.
+    ///
+    /// # Errors
+    /// Returns [`CoordinateInputError::Now`] for an invalid native `xsd:dateTime`.
+    pub fn from_time_and_seed(
+        now: Option<&str>,
+        entropy_seed: Option<u64>,
+    ) -> Result<Self, CoordinateInputError> {
         Ok(Self {
             now: now
                 .map(parse_datetime)
                 .transpose()
                 .map_err(CoordinateInputError::Now)?,
-            entropy_seed: entropy_seed
-                .map(str::parse)
-                .transpose()
-                .map_err(CoordinateInputError::EntropySeed)?,
+            entropy_seed,
         })
     }
 
@@ -174,7 +191,11 @@ mod tests {
         assert!(options.now.is_none());
         assert!(options.entropy_seed.is_none());
         assert_eq!(options.division, division);
-        for (now, seed) in [(Some("invalid"), None), (None, Some("-1"))] {
+        for (now, seed) in [
+            (Some("invalid"), None),
+            (None, Some("-1")),
+            (Some("invalid"), Some("-1")),
+        ] {
             let error = super::CoordinateInputs::from_parts(now, seed).expect_err("invalid");
             assert!(std::error::Error::source(&error).is_some());
             assert!(matches!(
