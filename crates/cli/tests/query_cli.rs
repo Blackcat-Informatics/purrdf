@@ -2704,10 +2704,11 @@ fn a_multi_graph_template_refusal_names_every_graph_in_order() {
         "the refusal must name both graphs, sorted (g1 before g2 despite the template \
          declaring g2 first); got:\n{message}"
     );
-    // Deterministic: the identical run produces byte-identical stderr.
+    // The refusal is deterministic; each run separately reports its sampled inputs.
     let again = construct_graph_into("turtle", CONSTRUCT_TWO_GRAPHS, &ttl);
     assert_eq!(
-        again.stderr, out.stderr,
+        support::execution_diagnostics(&again, "started"),
+        support::execution_diagnostics(&out, "started"),
         "the refusal message must be byte-deterministic across runs"
     );
 }
@@ -3245,7 +3246,7 @@ fn parse_refusals_render_each_condition_in_its_exact_words() {
         let out = run(&["update", "--data", &data, "--to", "nquads", update]);
         assert_eq!(out.status.code(), Some(1), "{update}: {}", stderr(&out));
         assert_eq!(
-            stderr(&out),
+            support::execution_diagnostics(&out, "not-started"),
             format!("purrdf: error native-sparql-update-parse: {english}\n"),
             "{update}"
         );

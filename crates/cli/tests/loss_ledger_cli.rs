@@ -490,10 +490,10 @@ fn query_construct_reifier_to_rdfxml_via_path_records_the_universal_drop() {
         "CONSTRUCT reifier -> rdfxml must PROJECT (exit 0); stderr:\n{}",
         stderr(&o)
     );
-    // stderr is empty (the ledger is redirected to the file); stdout carries the RDF/XML.
+    // Only the receipt remains on stderr; the ledger file and RDF/XML stay separate.
     assert!(
-        o.stderr.is_empty(),
-        "--loss-ledger=PATH must leave stderr EMPTY; got:\n{}",
+        support::execution_diagnostics(&o, "started").is_empty(),
+        "--loss-ledger=PATH must leave no ledger on stderr; got:\n{}",
         stderr(&o)
     );
     assert!(

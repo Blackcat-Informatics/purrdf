@@ -582,13 +582,9 @@ impl PageSummary {
     /// walk.
     #[must_use]
     pub(crate) fn first_disagreeing_field(&self, other: &Self) -> Option<&'static str> {
-        if self.snapshot_identity != other.snapshot_identity {
-            return Some("snapshot content identity");
-        }
-        if self.intervals != other.intervals {
-            return Some("annotation value intervals");
-        }
-        let checks: [(&'static str, bool); 13] = [
+        // Report the specific structural drift before the encompassing identity:
+        // any content change also changes that identity, obscuring useful fields.
+        let checks: [(&'static str, bool); 15] = [
             ("graphs", self.graphs == other.graphs),
             ("subject", self.subject == other.subject),
             ("predicate", self.predicate == other.predicate),
@@ -620,6 +616,14 @@ impl PageSummary {
                 self.default_annotation_rows == other.default_annotation_rows,
             ),
             ("statistics", self.statistics == other.statistics),
+            (
+                "annotation value intervals",
+                self.intervals == other.intervals,
+            ),
+            (
+                "snapshot content identity",
+                self.snapshot_identity == other.snapshot_identity,
+            ),
         ];
         checks
             .into_iter()
