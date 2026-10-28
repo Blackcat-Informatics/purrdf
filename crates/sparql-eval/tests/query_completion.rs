@@ -2073,9 +2073,10 @@ fn materialized_coordinate_receipts_balance_with_retained_engine_and_plan() {
                     &QueryGovernors::METERED,
                 )
             }
+            .unwrap()
         };
         // Warm the existing immutable plan/cache owners, with no supplied coordinate.
-        drop(run(QueryOptions::EMPTY).unwrap());
+        drop(run(QueryOptions::EMPTY));
         let baseline = state.owned_bytes.load(Ordering::Relaxed);
         let purrdf_xsd::XsdValue::DateTime(now) = purrdf_xsd::parse(
             &format!("2024-02-29T12:34:56.{}+05:30", "7".repeat(4096)),
@@ -2086,7 +2087,7 @@ fn materialized_coordinate_receipts_balance_with_retained_engine_and_plan() {
         };
         let mut retained = None;
         for iteration in 0..4 {
-            let result = run(QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0)).unwrap();
+            let result = run(QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0));
             let window = purrdf_alloc_probe::CurrentThreadWindow::open();
             let coordinates = result.evidence.coordinates.clone();
             let measured = window.close();
