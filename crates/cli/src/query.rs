@@ -156,6 +156,22 @@ use crate::report;
 use crate::sink;
 use crate::source::{self, ViewOp};
 
+/// Surface the actual context even when evaluation or result collection fails.
+pub(crate) fn with_execution_receipt<T>(
+    run: impl FnOnce(&purrdf_validate::query::ExecutionReceiptCapture) -> Result<T, CliError>,
+) -> Result<T, CliError> {
+    let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+    let outcome = run(&capture);
+    let coordinates = capture
+        .into_coordinates()
+        .map_err(|error| CliError::Runtime(error.to_string()))?;
+    eprintln!(
+        "purrdf-execution {}",
+        purrdf_validate::query::execution_receipt_json(&coordinates)
+    );
+    outcome
+}
+
 /// The generic query operation: evaluate the prepared query over whichever concrete
 /// view the data source resolved to, returning the (fully owned) [`SparqlResult`].
 ///
@@ -289,12 +305,14 @@ impl ViewOp for QueryOp<'_> {
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
         let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
-        Ok(self.engine.query_prepared_view(
-            view,
-            prepared.as_deref().unwrap_or(self.prepared),
-            &[],
-            options,
-        )?)
+        with_execution_receipt(|capture| {
+            Ok(self.engine.query_prepared_view(
+                view,
+                prepared.as_deref().unwrap_or(self.prepared),
+                &[],
+                options.with_coordinate_observer(capture),
+            )?)
+        })
     }
 }
 
@@ -359,13 +377,15 @@ impl ViewOp for GovernedQueryOp<'_> {
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
         let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
-        Ok(self.engine.query_prepared_governed_view(
-            view,
-            prepared.as_deref().unwrap_or(self.prepared),
-            &[],
-            options,
-            &governors,
-        )?)
+        with_execution_receipt(|capture| {
+            Ok(self.engine.query_prepared_governed_view(
+                view,
+                prepared.as_deref().unwrap_or(self.prepared),
+                &[],
+                options.with_coordinate_observer(capture),
+                &governors,
+            )?)
+        })
     }
 }
 
@@ -409,9 +429,14 @@ impl ViewOp for ExplainOp<'_> {
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
         let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
-        Ok(self
-            .engine
-            .explain_query_with_options_view(view, self.query, self.base, options)?)
+        with_execution_receipt(|capture| {
+            Ok(self.engine.explain_query_with_options_view(
+                view,
+                self.query,
+                self.base,
+                options.with_coordinate_observer(capture),
+            )?)
+        })
     }
 }
 
@@ -751,24 +776,27 @@ impl ViewOp for EntailedQueryOp<'_> {
         } else {
             ClosureRelations::rebuilt_by(&rebuild)
         };
-        entailed_query(
-            self.engine,
-            view,
-            self.query,
-            self.base,
-            self.plan.regime_name(),
-            &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
-                .with_limits(self.limits.eval_options()),
-            self.governors,
-            engine_options(
-                &engine_env(self.aggregates, admitted.as_ref())?,
-                self.relations.geo,
-                self.division,
-                self.coordinates,
-            ),
-            &relations,
-            self.report_target,
-        )
+        with_execution_receipt(|capture| {
+            entailed_query(
+                self.engine,
+                view,
+                self.query,
+                self.base,
+                self.plan.regime_name(),
+                &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
+                    .with_limits(self.limits.eval_options()),
+                self.governors,
+                engine_options(
+                    &engine_env(self.aggregates, admitted.as_ref())?,
+                    self.relations.geo,
+                    self.division,
+                    self.coordinates,
+                )
+                .with_coordinate_observer(capture),
+                &relations,
+                self.report_target,
+            )
+        })
     }
 }
 

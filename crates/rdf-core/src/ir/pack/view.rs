@@ -154,6 +154,10 @@ impl DatasetView for PackView<'_> {
         Self: 'a;
     type ProbePlan = ();
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.snapshot_identity))
+    }
+
     fn reserve_owned_workspace(
         &self,
         _: u64,

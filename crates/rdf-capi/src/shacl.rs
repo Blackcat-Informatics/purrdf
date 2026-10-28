@@ -80,6 +80,11 @@
 //! it on `function-registry`, `aggregate-registry` or `property-function-registry`,
 //! and the caller learns which. Rust is the surface for those products.
 
+//! Execution entries require writable `out_receipt` storage. A successful call
+//! transfers an owned JSON buffer to it; release that buffer with `purrdf_buffer_free`.
+//! On failure, the error owns any observed receipt and exposes it through
+//! `purrdf_error_execution_receipt_json` until the error is freed.
+
 use std::os::raw::c_char;
 
 use purrdf_validate::{
@@ -906,6 +911,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     max_join_steps: *const u64,
     now: *const c_char,
     entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -930,6 +936,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
                 std::ptr::null(),
                 now,
                 entropy_seed,
+                out_receipt,
                 out_buffer,
                 out_diagnostics,
             )
@@ -968,6 +975,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples_xpath_regex(
     regex_profile: *const c_char,
     now: *const c_char,
     entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -992,6 +1000,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples_xpath_regex(
                 regex_profile,
                 now,
                 entropy_seed,
+                out_receipt,
                 out_buffer,
                 out_diagnostics,
             )
@@ -1035,11 +1044,16 @@ unsafe fn entail_entry(
     regex_profile: *const c_char,
     now: *const c_char,
     entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     unsafe {
-        if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
+        if shapes_ttl.is_null()
+            || data_nt.is_null()
+            || out_buffer.is_null()
+            || out_receipt.is_null()
+        {
             return Err(PurrdfError::new(
                 PurrdfStatus::NullPointer,
                 format!("null pointer argument to {entry}"),
@@ -1068,6 +1082,9 @@ unsafe fn entail_entry(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
             ));
         }
+        *out_receipt = into_handle(PurrdfBuffer(
+            purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates).into_bytes(),
+        ));
         *out_buffer = into_handle(PurrdfBuffer(outcome.ntriples.into_bytes()));
         Ok(PurrdfStatus::Ok)
     }
@@ -1177,6 +1194,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     import_count: usize,
     now: *const c_char,
     entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
@@ -1206,6 +1224,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 std::ptr::null(),
                 now,
                 entropy_seed,
+                out_receipt,
                 [out_inferred, out_proof, out_diagnostics],
             )
         })
@@ -1246,6 +1265,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
     regex_profile: *const c_char,
     now: *const c_char,
     entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
@@ -1275,6 +1295,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
                 regex_profile,
                 now,
                 entropy_seed,
+                out_receipt,
                 [out_inferred, out_proof, out_diagnostics],
             )
         })
@@ -1300,6 +1321,7 @@ unsafe fn apply_rules_entry(
     regex_profile: *const c_char,
     now: *const c_char,
     entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     outputs: [*mut *mut PurrdfBuffer; 3],
 ) -> Result<PurrdfStatus, PurrdfError> {
     let [
@@ -1312,7 +1334,7 @@ unsafe fn apply_rules_entry(
     ] = documents;
     let [out_inferred, out_proof, out_diagnostics] = outputs;
     unsafe {
-        if data_nt.is_null() || out_inferred.is_null() {
+        if data_nt.is_null() || out_inferred.is_null() || out_receipt.is_null() {
             return Err(PurrdfError::new(
                 PurrdfStatus::NullPointer,
                 format!("null pointer argument to {entry}"),
@@ -1346,6 +1368,9 @@ unsafe fn apply_rules_entry(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
             ));
         }
+        *out_receipt = into_handle(PurrdfBuffer(
+            purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates).into_bytes(),
+        ));
         *out_inferred = into_handle(PurrdfBuffer(outcome.inferred_ntriples.into_bytes()));
         Ok(PurrdfStatus::Ok)
     }
@@ -3713,6 +3738,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut entailed,
                     &raw mut entail_diagnostics,
                     &raw mut error,
@@ -3734,6 +3760,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     &raw mut rules_diagnostics,
@@ -3810,6 +3837,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     pointer(&limits[3]),
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     &raw mut error,
@@ -3904,6 +3932,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -3935,6 +3964,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     &raw mut error,
@@ -4008,6 +4038,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     if explain {
                         &raw mut proof
@@ -4090,6 +4121,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4148,6 +4180,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4237,6 +4270,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     count,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -5132,6 +5166,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     &raw mut error,
@@ -5159,6 +5194,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_count,
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),

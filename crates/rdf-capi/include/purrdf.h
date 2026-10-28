@@ -8,6 +8,7 @@
 #pragma once
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
+
 #define PURRDF_MAJOR 3
 #define PURRDF_MINOR 0
 #define PURRDF_PATCH 1
@@ -326,8 +327,15 @@
  * gain nullable `now` and `entropy_seed` inputs immediately before their first
  * output. Callers must rebuild. Rule application covers both SHACL and SRL;
  * owned inputs retain exact time and the unsigned seed while preserving request limits.
+ *
+ * # `0.15.0` → `0.16.0`: owned execution receipts
+ *
+ * Every query, UPDATE and rule execution export requires an independent
+ * `out_receipt` buffer slot after the seed input. Release it with
+ * `purrdf_buffer_free`. Failed executions expose their receipt through
+ * `purrdf_error_execution_receipt_json` on the original error handle.
  */
-#define PURRDF_ABI_MINOR 15
+#define PURRDF_ABI_MINOR 16
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -2331,6 +2339,14 @@ int32_t purrdf_reasoner_explain_conclusion(const PurrdfReasoner *reasoner,
                                            PurrdfError **out_error);
 
 /**
+ * Borrow a failed execution's JSON receipt, or null when no execution was attempted.
+ *
+ * # Safety
+ * `error` must be null or a live error handle; the returned text lives with it.
+ */
+const char *purrdf_error_execution_receipt_json(const PurrdfError *error);
+
+/**
  * Return the status code carried by an error, or `Panic` if `err` is null.
  *
  * # Safety
@@ -2764,6 +2780,7 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
                      const char *base_iri,
                      const char *now,
                      const uint64_t *entropy_seed,
+                     PurrdfBuffer **out_receipt,
                      int32_t *out_kind,
                      PurrdfRowCursor **out_rows,
                      PurrdfDataset **out_graph,
@@ -2796,6 +2813,7 @@ int32_t purrdf_query_xpath_regex(const PurrdfDataset *dataset,
                                  const char *regex_profile,
                                  const char *now,
                                  const uint64_t *entropy_seed,
+                                 PurrdfBuffer **out_receipt,
                                  int32_t *out_kind,
                                  PurrdfRowCursor **out_rows,
                                  PurrdfDataset **out_graph,
@@ -2875,6 +2893,7 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           const char *provenance_iri,
                           const char *now,
                           const uint64_t *entropy_seed,
+                          PurrdfBuffer **out_receipt,
                           PurrdfBuffer **out_buffer,
                           PurrdfError **out_error);
 
@@ -2898,6 +2917,7 @@ int32_t purrdf_query_json_xpath_regex(const PurrdfDataset *dataset,
                                       const char *regex_profile,
                                       const char *now,
                                       const uint64_t *entropy_seed,
+                                      PurrdfBuffer **out_receipt,
                                       PurrdfBuffer **out_buffer,
                                       PurrdfError **out_error);
 
@@ -2943,6 +2963,7 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               const PurrdfQueryGovernors *governors,
                               const char *now,
                               const uint64_t *entropy_seed,
+                              PurrdfBuffer **out_receipt,
                               int32_t *out_outcome,
                               int32_t *out_kind,
                               PurrdfRowCursor **out_rows,
@@ -2975,6 +2996,7 @@ int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
                                           const PurrdfQueryGovernors *governors,
                                           const char *now,
                                           const uint64_t *entropy_seed,
+                                          PurrdfBuffer **out_receipt,
                                           int32_t *out_outcome,
                                           int32_t *out_kind,
                                           PurrdfRowCursor **out_rows,
@@ -3055,6 +3077,7 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          const PurrdfQueryGovernors *governors,
                                          const char *now,
                                          const uint64_t *entropy_seed,
+                                         PurrdfBuffer **out_receipt,
                                          int32_t *out_outcome,
                                          int32_t *out_kind,
                                          PurrdfRowCursor **out_rows,
@@ -3096,6 +3119,7 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
                                                      const PurrdfQueryGovernors *governors,
                                                      const char *now,
                                                      const uint64_t *entropy_seed,
+                                                     PurrdfBuffer **out_receipt,
                                                      int32_t *out_outcome,
                                                      int32_t *out_kind,
                                                      PurrdfRowCursor **out_rows,
@@ -3152,6 +3176,7 @@ int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const PurrdfQueryGovernors *governors,
                                const char *now,
                                const uint64_t *entropy_seed,
+                               PurrdfBuffer **out_receipt,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,
                                PurrdfError **out_error);
@@ -3180,13 +3205,14 @@ int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset,
                                            const PurrdfQueryGovernors *governors,
                                            const char *now,
                                            const uint64_t *entropy_seed,
+                                           PurrdfBuffer **out_receipt,
                                            int32_t *out_outcome,
                                            PurrdfGovernorEvidence *out_evidence,
                                            PurrdfError **out_error);
 
 /**
  * [`purrdf_query_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3200,6 +3226,7 @@ int32_t purrdf_query_with_geo(const PurrdfGeoSession *geo,
                               const char *regex_profile,
                               const char *now,
                               const uint64_t *entropy_seed,
+                              PurrdfBuffer **out_receipt,
                               int32_t *out_kind,
                               PurrdfRowCursor **out_rows,
                               PurrdfDataset **out_graph,
@@ -3208,7 +3235,7 @@ int32_t purrdf_query_with_geo(const PurrdfGeoSession *geo,
 
 /**
  * [`purrdf_query_json_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3224,12 +3251,13 @@ int32_t purrdf_query_json_with_geo(const PurrdfGeoSession *geo,
                                    const char *regex_profile,
                                    const char *now,
                                    const uint64_t *entropy_seed,
+                                   PurrdfBuffer **out_receipt,
                                    PurrdfBuffer **out_buffer,
                                    PurrdfError **out_error);
 
 /**
  * [`purrdf_query_governed_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3245,6 +3273,7 @@ int32_t purrdf_query_governed_with_geo(const PurrdfGeoSession *geo,
                                        const PurrdfQueryGovernors *governors,
                                        const char *now,
                                        const uint64_t *entropy_seed,
+                                       PurrdfBuffer **out_receipt,
                                        int32_t *out_outcome,
                                        int32_t *out_kind,
                                        PurrdfRowCursor **out_rows,
@@ -3256,7 +3285,7 @@ int32_t purrdf_query_governed_with_geo(const PurrdfGeoSession *geo,
 
 /**
  * [`purrdf_query_entailment_governed_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3282,6 +3311,7 @@ int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
                                                   const PurrdfQueryGovernors *governors,
                                                   const char *now,
                                                   const uint64_t *entropy_seed,
+                                                  PurrdfBuffer **out_receipt,
                                                   int32_t *out_outcome,
                                                   int32_t *out_kind,
                                                   PurrdfRowCursor **out_rows,
@@ -3294,7 +3324,7 @@ int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
 
 /**
  * [`purrdf_update_governed_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3311,6 +3341,7 @@ int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo,
                                         const PurrdfQueryGovernors *governors,
                                         const char *now,
                                         const uint64_t *entropy_seed,
+                                        PurrdfBuffer **out_receipt,
                                         int32_t *out_outcome,
                                         PurrdfGovernorEvidence *out_evidence,
                                         PurrdfError **out_error);
@@ -3915,6 +3946,7 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const uint64_t *max_join_steps,
                                         const char *now,
                                         const uint64_t *entropy_seed,
+                                        PurrdfBuffer **out_receipt,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfBuffer **out_diagnostics,
                                         PurrdfError **out_error);
@@ -3950,6 +3982,7 @@ int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
                                                     const char *regex_profile,
                                                     const char *now,
                                                     const uint64_t *entropy_seed,
+                                                    PurrdfBuffer **out_receipt,
                                                     PurrdfBuffer **out_buffer,
                                                     PurrdfBuffer **out_diagnostics,
                                                     PurrdfError **out_error);
@@ -4042,6 +4075,7 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  size_t import_count,
                                  const char *now,
                                  const uint64_t *entropy_seed,
+                                 PurrdfBuffer **out_receipt,
                                  PurrdfBuffer **out_inferred,
                                  PurrdfBuffer **out_proof,
                                  PurrdfBuffer **out_diagnostics,
@@ -4081,6 +4115,7 @@ int32_t purrdf_shacl_apply_rules_xpath_regex(const char *data_nt,
                                              const char *regex_profile,
                                              const char *now,
                                              const uint64_t *entropy_seed,
+                                             PurrdfBuffer **out_receipt,
                                              PurrdfBuffer **out_inferred,
                                              PurrdfBuffer **out_proof,
                                              PurrdfBuffer **out_diagnostics,

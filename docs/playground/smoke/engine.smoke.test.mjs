@@ -179,7 +179,7 @@ test("N-Quads round-trips the object-position quoted triple", () => {
 
 test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
-  const out = ds.query("SELECT ?s ?p ?o WHERE { ?s ?p ?o }");
+  const out = ds.query("SELECT ?s ?p ?o WHERE { ?s ?p ?o }").body;
   const srj = JSON.parse(out);
   assert.ok(Object.hasOwn(srj, "head"), "SELECT result must be SRJ (has .head)");
   assert.deepEqual(srj.head.vars, ["s", "p", "o"]);
@@ -189,7 +189,7 @@ test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
 test("ASK query returns an SRJ boolean", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
   const srj = JSON.parse(
-    ds.query("ASK { <http://example.org/carol> <http://example.org/name> ?n }"),
+    ds.query("ASK { <http://example.org/carol> <http://example.org/name> ?n }").body,
   );
   assert.ok(Object.hasOwn(srj, "boolean"));
   assert.equal(srj.boolean, true);
@@ -197,7 +197,7 @@ test("ASK query returns an SRJ boolean", () => {
 
 test("CONSTRUCT returns Turtle (not SRJ)", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
-  const out = ds.query("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } LIMIT 1");
+  const out = ds.query("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } LIMIT 1").body;
   let parsedAsSrj = false;
   try {
     const j = JSON.parse(out);
@@ -313,6 +313,6 @@ test("SERVICE query throws (never-silent federation hard-fail)", () => {
   assert.throws(() =>
     ds.query(
       "SELECT ?x WHERE { SERVICE <http://example.org/sparql> { ?x ?p ?o } }",
-    ),
+    ).body,
   );
 });

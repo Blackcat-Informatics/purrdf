@@ -1306,6 +1306,7 @@ static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
 /// held them apart is a door that can forget one of them. See that module's
 /// documentation for why the separateness was the bug.
 struct AmbientScopes {
+    coordinate_recorder: Option<Arc<coordinates::Recorder>>,
     now: Option<Arc<purrdf_xsd::temporal::DateTime>>,
     /// The SHACL-AF function table in scope, if a validation installed one. Bound
     /// against `env` already — see [`bind_in_current_env`].
@@ -1351,6 +1352,7 @@ impl AmbientScopes {
             .as_ref()
             .map(crate::query_law::Runtime::function_admission);
         Ok(Self {
+            coordinate_recorder: coordinates::recorder(),
             now: coordinates::now(),
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
             env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
@@ -1419,6 +1421,29 @@ impl AmbientScopes {
             .map_or(options, |now| options.with_now(now));
         let options =
             coordinates::next_seed().map_or(options, |seed| options.with_entropy_seed(seed));
+        let options = self
+            .coordinate_recorder
+            .as_ref()
+            .map_or(options, |recorder| {
+                let options = options.with_coordinate_observer(recorder.as_ref());
+                // The typed rule program binds parser-generated scalar closures.
+                // Arbitrary external producers and remote sources require their own
+                // caller certification, which a shapes model cannot manufacture.
+                if options.remote.is_none()
+                    && options.load.is_none()
+                    && options.candidate_scope.is_none()
+                    && options.property_functions().is_empty()
+                    && options.aggregates().is_empty()
+                {
+                    recorder
+                        .implementation_identity()
+                        .map_or(options, |identity| {
+                            options.with_implementation_identity(identity)
+                        })
+                } else {
+                    options
+                }
+            });
         let options = self.native_xpath.as_ref().map_or(options, |configuration| {
             options.with_xpath_regex(configuration.profile, configuration.limits)
         });

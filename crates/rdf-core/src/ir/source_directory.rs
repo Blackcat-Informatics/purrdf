@@ -101,6 +101,10 @@ pub(crate) struct SourceDirectory {
 }
 
 impl SourceDirectory {
+    pub(crate) fn content_records(&self) -> Multiset256 {
+        self.prefix(self.records.len(), &mut SourceDifferenceWork::default())
+    }
+
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         size_of_val(self.records.as_ref()).checked_add(size_of_val(self.checkpoints.as_ref()))
     }

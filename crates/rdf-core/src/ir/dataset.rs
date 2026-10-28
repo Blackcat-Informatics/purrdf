@@ -322,6 +322,7 @@ pub struct RdfDataset {
     /// Graph-independent lexical ownership shared by resident carriers.
     dictionary: super::frozen_terms::FrozenTerms,
     statistics: super::statistics::LocalStatistics,
+    snapshot_identity: purrdf_hash::hex::Digest32,
     /// Deduplicated quad rows in deterministic order (C0.5).
     quads: Box<[QuadRow]>,
     /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
@@ -413,6 +414,7 @@ impl std::fmt::Debug for RdfDataset {
             .field("predecessor_index", &self.predecessor_index)
             .field("statement_graph_rows", &self.statement_graph_rows)
             .field("statistics", &self.statistics)
+            .field("snapshot_identity", &self.snapshot_identity)
             .finish()
     }
 }
@@ -450,6 +452,7 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
         Ok(Self {
             dictionary: dataset.dictionary,
             statistics: dataset.statistics,
+            snapshot_identity: dataset.snapshot_identity,
             triples: TripleTable::new(memory.boxed_slice(triples)?),
             reifiers: memory.boxed_slice(reifiers)?,
             reifier_targets: OnceLock::new(),
@@ -1075,9 +1078,31 @@ impl RdfDataset {
             }),
             memory,
         )?;
+        // Seal content and graph declarations once, before publishing the owner.
+        // Query admission reads this fixed-size identity without walking payloads.
+        let graphs = memory.try_scope(|memory| {
+            let mut graphs = purrdf_hash::multiset::Multiset256::default();
+            let mut pending = Vec::new();
+            for &graph in &named_graphs {
+                let mut hash = purrdf_hash::blake3::Hasher::new();
+                dictionary.visit_canonical_bytes(graph, &mut pending, memory, |bytes| {
+                    hash.update(bytes);
+                })?;
+                graphs
+                    .insert(*hash.finalize().as_bytes())
+                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            }
+            Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
+        })?;
+        let snapshot_identity = crate::source::resident_snapshot(
+            statistics.source_directory().content_records(),
+            graphs,
+            dictionary.snapshot_fingerprint(memory)?,
+        );
         Ok(Self {
             dictionary,
             statistics,
+            snapshot_identity,
             quads,
             reifiers,
             reifier_targets: OnceLock::new(),
@@ -1091,6 +1116,26 @@ impl RdfDataset {
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
         })
+    }
+
+    pub(crate) fn term_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        id: TermId,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<[u8; 32], purrdf_lex::allocation::StorageError> {
+        memory.try_scope(|memory| {
+            let mut hash = purrdf_hash::blake3::Hasher::new();
+            self.dictionary
+                .visit_canonical_bytes(id, &mut Vec::new(), memory, |bytes| {
+                    hash.update(bytes);
+                })?;
+            Ok(*hash.finalize().as_bytes())
+        })
+    }
+
+    /// Frozen content identity, including empty graph declarations.
+    pub(crate) const fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
+        self.snapshot_identity
     }
 
     /// Every named graph known to this dataset (quad-bearing or explicitly
@@ -2322,6 +2367,7 @@ impl RdfDataset {
         Self {
             dictionary: self.dictionary.clone(),
             statistics: self.statistics.clone(),
+            snapshot_identity: self.snapshot_identity,
             quads: self.quads.clone(),
             reifiers: self.reifiers.clone(),
             reifier_targets: OnceLock::new(),

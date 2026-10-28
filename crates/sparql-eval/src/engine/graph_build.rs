@@ -404,6 +404,7 @@ impl NativeSparqlEngine {
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }
+        ctx.options.force_sequential |= sequencing == super::Sequencing::Sequential;
         *capture = crate::QueryCoordinates::started(
             &ctx.now,
             ctx.rng_state,
@@ -411,7 +412,13 @@ impl NativeSparqlEngine {
             options.entropy_seed.is_some(),
         )
         .map_err(GraphBuildError::Evaluation)?;
-        ctx.options.force_sequential |= sequencing == super::Sequencing::Sequential;
+        *capture = super::coordinates::capture_query(
+            &ctx,
+            prepared,
+            crate::substitute::Prebindings::Owned(substitutions),
+            options,
+        )
+        .map_err(GraphBuildError::Evaluation)?;
         let evaluated = (|| {
             crate::eval::prepare_query_context(query, &mut ctx)?;
             let Query::Construct {

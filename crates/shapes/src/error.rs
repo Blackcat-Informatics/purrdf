@@ -47,6 +47,8 @@ use crate::imports::ShapesImportError;
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesError {
+    /// Original rule failure with the contexts observed before refusal.
+    RuleExecution(Box<crate::rules::RuleExecutionError>),
     /// A recursive shapes catalog requires an explicit recursion semantics.
     Recursion(RecursionRefusal),
     /// The shapes model could not be prepared within the native stack margin.
@@ -82,6 +84,14 @@ pub enum ShapesError {
 }
 
 impl ShapesError {
+    /// Actual contexts retained by a failed rule execution.
+    #[must_use]
+    pub const fn execution_coordinates(&self) -> Option<&crate::rules::RuleCoordinates> {
+        match self {
+            Self::RuleExecution(error) => Some(&error.coordinates),
+            _ => None,
+        }
+    }
     /// Add evaluation context to a textual diagnostic while retaining typed refusals.
     pub(crate) fn context(self, prefix: &str) -> Self {
         match self {
@@ -94,6 +104,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_imports(&self) -> Option<&ShapesImportError> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_imports(),
+                None => None,
+            },
             Self::Imports(error) => Some(error),
             Self::ShaclJs(_)
             | Self::Recursion(_)
@@ -112,6 +126,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_shacl_js(&self) -> Option<&ShaclJsRefusal> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_shacl_js(),
+                None => None,
+            },
             Self::ShaclJs(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -130,6 +148,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_ill_formed(&self) -> Option<&IllFormedShapesGraph> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_ill_formed(),
+                None => None,
+            },
             Self::IllFormed(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -148,6 +170,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_unsupported_target(&self) -> Option<&UnsupportedTargetRefusal> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_unsupported_target(),
+                None => None,
+            },
             Self::UnsupportedTarget(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -166,6 +192,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_sparql_target_disagreement(&self) -> Option<&SparqlTargetDisagreement> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_sparql_target_disagreement(),
+                None => None,
+            },
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -184,6 +214,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_prebinding(&self) -> Option<&PrebindingViolation> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_prebinding(),
+                None => None,
+            },
             Self::Prebinding(violation) => Some(violation),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -235,6 +269,7 @@ impl ShapesError {
         match self {
             Self::Invalid(_) => FailureClass::Evaluation,
             Self::Storage(_) | Self::Processor(_) | Self::Preparation(_) => FailureClass::Processor,
+            Self::RuleExecution(error) => error.failure_class(),
             Self::Imports(_)
             | Self::Recursion(_)
             | Self::ShaclJs(_)
@@ -256,6 +291,10 @@ impl ShapesError {
     #[must_use]
     pub const fn as_processor(&self) -> Option<&ProcessorFailure> {
         match self {
+            Self::RuleExecution(error) => match error.original_shapes() {
+                Some(cause) => cause.as_processor(),
+                None => None,
+            },
             Self::Processor(failure) => Some(failure),
             Self::Imports(_)
             | Self::Preparation(_)
@@ -431,6 +470,7 @@ impl std::error::Error for ProcessorFailure {}
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuleExecution(error) => error.fmt(f),
             Self::Preparation(refusal) => refusal.fmt(f),
             Self::Recursion(refusal) => refusal.fmt(f),
             Self::Storage(error) => error.fmt(f),
@@ -449,6 +489,7 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RuleExecution(error) => Some(error.as_ref()),
             Self::Preparation(refusal) => Some(refusal),
             Self::Recursion(refusal) => Some(refusal),
             Self::Storage(error) => Some(error),

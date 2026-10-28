@@ -35,7 +35,7 @@ def test_update_receivers_preserve_exact_coordinates_and_independent_defaults(ki
         if route == "update_governed":
             assert outcome.is_applied and outcome.evidence.is_complete
         else:
-            assert outcome is None
+            assert outcome.is_applied and outcome.evidence is None and outcome.execution_receipt_json
         return _values(store)
 
     first = run(now=NOW, entropy_seed=0)

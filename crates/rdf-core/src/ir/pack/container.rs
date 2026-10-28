@@ -672,6 +672,7 @@ fn assemble(
 /// verification [`from_bytes`](Self::from_bytes) performs.
 #[derive(Debug)]
 pub struct PackView<'a> {
+    pub(super) snapshot_identity: purrdf_hash::hex::Digest32,
     dict: PackDict,
     triples: TriplesRef<'a>,
     side: SideTablesRef<'a>,
@@ -772,7 +773,11 @@ impl<'a> PackView<'a> {
             ));
         }
 
+        // Seal the authenticated complete representation once at ingestion.
+        let snapshot_identity =
+            purrdf_hash::hex::Digest32::new(*purrdf_hash::blake3::hash(bytes).as_bytes());
         Ok(Self {
+            snapshot_identity,
             dict,
             triples,
             side,

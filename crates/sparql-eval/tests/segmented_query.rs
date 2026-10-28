@@ -2160,3 +2160,78 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     );
     assert!(source.read_error().is_none());
 }
+
+#[test]
+fn authenticated_annotation_ranges_reduce_cold_reads_and_keep_exact_filter() {
+    use purrdf_core::{PackBuilder, RdfDatasetBuilder, SegmentedBuildLimits, SegmentedImage};
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("urn:range:value").unwrap();
+    let relation = builder.intern_iri("urn:range:claim").unwrap();
+    let object = builder.intern_iri("urn:range:object").unwrap();
+    for index in 0..1024 {
+        let claim = builder
+            .intern_iri(&format!("urn:range:{index:05}"))
+            .unwrap();
+        let target = builder.intern_triple(claim, relation, object).unwrap();
+        builder.push_reifier(claim, target).unwrap();
+        let lexical = if index == 100 {
+            "ill-typed".to_owned()
+        } else {
+            index.to_string()
+        };
+        let value = builder
+            .intern_value(&TermValue::typed_literal(
+                lexical,
+                purrdf_xsd::datatype::XSD_INTEGER,
+            ))
+            .unwrap();
+        builder.push_annotation(claim, predicate, value).unwrap();
+    }
+    let resident = builder.freeze().unwrap();
+    let image = SegmentedImage::from_pack_v1(
+        &PackBuilder::build_bytes(&resident).unwrap(),
+        SegmentedBuildLimits::new(8192, 2_000_000, 8192, 1024, 16).unwrap(),
+    )
+    .unwrap();
+    let engine = NativeSparqlEngine::new();
+    let run = |value: &str| {
+        let query = format!(
+            "SELECT ?claim ?value WHERE {{ ?claim <urn:range:value> ?value FILTER({value} >= 512 && {value} < 522) }} ORDER BY ?claim"
+        );
+        let source = SegmentedSession::open(
+            Arc::new(image.provider()),
+            image.receipt(),
+            SegmentedReadLimits::new(64_000_000, 64, 200_000, 1_000_000_000, 8),
+        )
+        .unwrap();
+        let before = source.evidence();
+        assert!(source.snapshot_identity().unwrap().is_some());
+        assert_eq!(
+            source.evidence().request_count(),
+            before.request_count(),
+            "snapshot identity is a certified descriptor lookup"
+        );
+        let result = engine
+            .query_fallible_view(
+                &source,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::EMPTY,
+            )
+            .unwrap();
+        (support::solutions(result.result), source.evidence())
+    };
+    let (baseline, baseline_reads) = run("(?value + 0)");
+    let (pruned, pruned_reads) = run("?value");
+    assert_eq!(pruned, baseline);
+    assert_eq!(pruned.1.len(), 10);
+    assert!(
+        pruned_reads.io_bytes() < baseline_reads.io_bytes(),
+        "authenticated ranges must save actual cold I/O: {} versus {}",
+        pruned_reads.io_bytes(),
+        baseline_reads.io_bytes()
+    );
+}

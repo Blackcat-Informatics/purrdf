@@ -157,6 +157,9 @@ pub mod turtle_render;
 // not `purrdf-core` internals.
 pub mod xsd_regex;
 
+mod annotation_range;
+pub use annotation_range::{AnnotationRangeWorkspace, AnnotationValueBound, AnnotationValueRange};
+
 pub use backend::{
     DatasetHandle, RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer,
     SerializeGraph, SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,

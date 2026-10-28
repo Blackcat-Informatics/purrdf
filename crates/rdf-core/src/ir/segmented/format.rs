@@ -12,11 +12,13 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG6";
-pub(super) const HEADER_BYTES: usize = 432;
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG7";
+pub(super) const HEADER_BYTES: usize = 456;
 pub(super) const RECORD_HEADER: usize = 13;
 const COMPRESSED_RECORDS: u32 = 1 << 31;
-pub(super) const SUMMARY_BYTES: usize = 88;
+pub(super) const SUMMARY_BYTES: usize = 104;
+pub(super) const VALUE_RANGES: u8 = 14;
+pub(super) const VALUE_RANGE_BYTES: usize = 24;
 pub(super) const MAX_RECORDS_PER_BLOCK: u32 = 256;
 pub(super) const DICTIONARY: u8 = 1;
 pub(super) const REVERSE: u8 = 2;
@@ -68,6 +70,7 @@ pub(super) struct Header {
     pub streams: [Stream; 3],
     pub graphs: Stream,
     pub summaries: Stream,
+    pub value_ranges: Stream,
     pub statistics: [Stream; 4],
     pub effective_directory: Stream,
     pub source_checkpoints: Stream,
@@ -88,7 +91,7 @@ impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&6_u32.to_le_bytes());
+        out.extend_from_slice(&7_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -104,6 +107,7 @@ impl Header {
             self.streams[2],
             self.graphs,
             self.summaries,
+            self.value_ranges,
             self.statistics[0],
             self.statistics[1],
             self.statistics[2],
@@ -122,7 +126,7 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(6) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(7) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile; regenerate the image from RDF input",
             ));
@@ -145,7 +149,7 @@ impl Header {
         first_term_index
             .checked_add(terms)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let mut streams = [Stream::default(); 14];
+        let mut streams = [Stream::default(); 15];
         for stream in &mut streams {
             *stream = Stream {
                 first: input.u64()?,
@@ -175,10 +179,11 @@ impl Header {
             streams: [streams[2], streams[3], streams[4]],
             graphs: streams[5],
             summaries: streams[6],
-            statistics: [streams[7], streams[8], streams[9], streams[10]],
-            effective_directory: streams[11],
-            source_checkpoints: streams[12],
-            overflow: streams[13],
+            value_ranges: streams[7],
+            statistics: [streams[8], streams[9], streams[10], streams[11]],
+            effective_directory: streams[12],
+            source_checkpoints: streams[13],
+            overflow: streams[14],
             source_union: purrdf_hash::multiset::Multiset256::from_parts(
                 source_sum,
                 source_population,
@@ -212,6 +217,14 @@ impl Header {
             if stream.blocks != stream.rows.div_ceil(per_block) {
                 return Err(SegmentedError::Corrupt("statistics block count mismatch"));
             }
+        }
+        if header.value_ranges.blocks
+            != header
+                .value_ranges
+                .rows
+                .div_ceil((u64::from(block_bytes) - 9) / VALUE_RANGE_BYTES as u64)
+        {
+            return Err(SegmentedError::Corrupt("value range block count mismatch"));
         }
         let per_block =
             (u64::from(block_bytes) - 9) / super::super::source_directory::RECORD_BYTES as u64;
@@ -249,6 +262,7 @@ impl Header {
             self.streams[2],
             self.graphs,
             self.summaries,
+            self.value_ranges,
             self.statistics[0],
             self.statistics[1],
             self.statistics[2],

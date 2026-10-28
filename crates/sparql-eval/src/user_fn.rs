@@ -53,6 +53,7 @@
 //! given `Ok(None)` produces.
 
 use purrdf_hash::Domain;
+use sha2::Digest as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -64,7 +65,7 @@ use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
-use crate::registry_id::{RegistryId, append_framed_part};
+use crate::registry_id::{RegistryId, digest_framed_part as append_framed_part};
 use crate::witness::RelationWitness;
 use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
 
@@ -812,11 +813,6 @@ impl Arity {
     /// diagnostic words would collide) â this encoding exists so that can never
     /// happen: it is a variant tag plus its numeric fields, with no wording to
     /// drift.
-    pub(crate) fn stable_encoding(self) -> String {
-        self.stable_display().to_string()
-    }
-
-    /// The stable identity encoding, borrowing no allocated rendering.
     pub(crate) fn stable_display(self) -> impl core::fmt::Display {
         struct Encoding(Arity);
         impl core::fmt::Display for Encoding {
@@ -834,7 +830,7 @@ impl Arity {
 
 impl core::fmt::Display for Arity {
     /// Human-facing wording only â NOT part of any stable fingerprint or cache-key
-    /// encoding. See `Arity::stable_encoding`, which
+    /// encoding. See `Arity::stable_display`, which
     /// `crate::agg_fn::registry_fingerprint` uses instead, for the encoding that
     /// IS load-bearing; this impl is free to change wording at any time.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -992,6 +988,11 @@ impl core::fmt::Debug for UserFunctionRegistry {
 }
 
 impl UserFunctionRegistry {
+    /// Whether executable bodies include opaque host closures.
+    pub(crate) fn has_opaque_bodies(&self) -> bool {
+        !self.native.is_empty() || !self.exprs.is_empty()
+    }
+
     /// The canonical empty registry â the non-optional "no scalar functions
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::functions`],
@@ -1629,7 +1630,7 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/user-function-re
 /// form available for algebra is the serializer's rendering, and making that
 /// load-bearing would turn a cosmetic wording change in an unrelated module into a
 /// silent invalidation of every persisted artifact (the trap
-/// `Arity::stable_encoding` exists to avoid for `Display`). That objection was
+/// `Arity::stable_display` exists to avoid for `Display`). That objection was
 /// sound, and it is answered rather than overruled: [`UserFunction::body`] is now
 /// the declaration's own SPARQL **text**, which no serializer can reword.
 ///
@@ -1654,21 +1655,34 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/user-function-re
 ///
 /// # Errors
 ///
-/// Returns [`Result`] for uniformity with the two sibling `content_fingerprint`
-/// functions, whose `describe()` calls can fail when a host's declaration methods
-/// panic. This registry reads plain struct fields and has no such failure mode, so
-/// the `Err` arm is unreachable today; the shape is kept so a caller folding all
-/// three digests writes one error path rather than three.
+/// Returns the original storage refusal if ordering the borrowed declarations or
+/// rendering an arity cannot be admitted. Declaration bytes stream into SHA-256.
 pub fn content_fingerprint(
     functions: &UserFunctionRegistry,
     part: FnPopulation,
 ) -> Result<ContentDigest, EvalError> {
-    let mut bytes = Vec::new();
+    let capability = WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(
+        functions,
+        part,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+}
+
+/// Compute the same declaration identity through the original request account.
+pub(crate) fn content_fingerprint_with_memory(
+    functions: &UserFunctionRegistry,
+    part: FnPopulation,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut bytes = sha2::Sha256::new();
     append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
     append_framed_part(&mut bytes, "population", part.label().as_bytes());
     match part {
         FnPopulation::Declared => {
-            for (iri, func) in iri_sorted(&functions.fns) {
+            for &(iri, func) in &iri_sorted(&functions.fns, &capability)? {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
                 append_framed_part(&mut bytes, "kind", b"sparql-bodied");
                 append_framed_part(
@@ -1696,22 +1710,39 @@ pub fn content_fingerprint(
                 append_framed_part(&mut bytes, "body", func.body.as_bytes());
                 append_constraint(&mut bytes, "return", &func.return_constraint);
             }
-            for (iri, func) in iri_sorted(&functions.exprs) {
+            for &(iri, func) in &iri_sorted(&functions.exprs, &capability)? {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
                 append_framed_part(&mut bytes, "kind", b"expression-bodied");
-                append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
+                append_arity(&mut bytes, func.arity, memory)?;
             }
         }
         FnPopulation::Injected => {
-            for (iri, func) in iri_sorted(&functions.native) {
+            for &(iri, func) in &iri_sorted(&functions.native, &capability)? {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
                 append_framed_part(&mut bytes, "kind", b"native");
-                append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
+                append_arity(&mut bytes, func.arity, memory)?;
                 append_framed_part(&mut bytes, "volatility", func.volatility.label().as_bytes());
             }
         }
     }
-    Ok(ContentDigest::of(&bytes))
+    Ok(ContentDigest::from_raw(bytes.finalize().into()))
+}
+
+fn append_arity(
+    out: &mut sha2::Sha256,
+    arity: Arity,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    let result = (|| {
+        let text = memory.format(&arity.stable_display())?;
+        append_framed_part(out, "arity", text.as_bytes());
+        memory.release_string(text)
+    })();
+    result.map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "function fingerprint arity")
+    })
 }
 
 /// One registry map's entries in IRI order â the fingerprint reads this rather than
@@ -1719,10 +1750,14 @@ pub fn content_fingerprint(
 /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)
 /// does, so the digest is a function of the registry's contents and not of the order
 /// a host happened to register them in.
-fn iri_sorted<V>(map: &DetHashMap<String, V>) -> Vec<(&str, &V)> {
-    let mut out: Vec<(&str, &V)> = map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+fn iri_sorted<'a, V>(
+    map: &'a DetHashMap<String, V>,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<(&'a str, &'a V)>, EvalError> {
+    let mut out =
+        AdmittedVec::from_iter_admitted(map.iter().map(|(k, v)| (k.as_str(), v)), workspace)?;
     out.sort_unstable_by(|left, right| left.0.cmp(right.0));
-    out
+    Ok(out)
 }
 
 /// Fold a parameter's or return value's [`TypeConstraint`] in under `role`.
@@ -1731,7 +1766,7 @@ fn iri_sorted<V>(map: &DetHashMap<String, V>) -> Vec<(&str, &V)> {
 /// sites cannot produce overlapping label spellings, and every field is emitted
 /// unconditionally (absent ones as a zero presence byte) so an absent constraint and
 /// a present-but-empty one stay distinguishable.
-fn append_constraint(out: &mut Vec<u8>, role: &str, constraint: &TypeConstraint) {
+fn append_constraint(out: &mut sha2::Sha256, role: &str, constraint: &TypeConstraint) {
     append_framed_part(out, "constraint-role", role.as_bytes());
     append_optional_part(
         out,
@@ -1748,7 +1783,7 @@ fn append_constraint(out: &mut Vec<u8>, role: &str, constraint: &TypeConstraint)
 /// Append an optional field: always a one-byte presence flag under `label`, then the
 /// value under the same label when present. Emitting the flag unconditionally is what
 /// keeps the framing injective across a field that may or may not be there.
-fn append_optional_part(out: &mut Vec<u8>, label: &str, value: Option<&[u8]>) {
+fn append_optional_part(out: &mut sha2::Sha256, label: &str, value: Option<&[u8]>) {
     append_framed_part(out, label, &[u8::from(value.is_some())]);
     if let Some(value) = value {
         append_framed_part(out, label, value);

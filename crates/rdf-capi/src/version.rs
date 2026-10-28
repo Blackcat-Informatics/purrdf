@@ -294,7 +294,14 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// gain nullable `now` and `entropy_seed` inputs immediately before their first
 /// output. Callers must rebuild. Rule application covers both SHACL and SRL;
 /// owned inputs retain exact time and the unsigned seed while preserving request limits.
-pub const PURRDF_ABI_MINOR: u32 = 15;
+///
+/// # `0.15.0` → `0.16.0`: owned execution receipts
+///
+/// Every query, UPDATE and rule execution export requires an independent
+/// `out_receipt` buffer slot after the seed input. Release it with
+/// `purrdf_buffer_free`. Failed executions expose their receipt through
+/// `purrdf_error_execution_receipt_json` on the original error handle.
+pub const PURRDF_ABI_MINOR: u32 = 16;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

@@ -1166,7 +1166,7 @@ class Graph:
             xpath_regex=xpath_regex,
         )
         if isinstance(res, purrdf.QueryBoolean):
-            return Result("ASK", ask=bool(res))
+            return Result("ASK", ask=bool(res), execution_receipt_json=res.execution_receipt_json)
         if isinstance(res, purrdf.QueryTriples):
             constructed = Graph()
             nt = res.serialize(_NT)
@@ -1175,7 +1175,7 @@ class Graph:
             form = (
                 "DESCRIBE" if _query_form(query_object) == "DESCRIBE" else "CONSTRUCT"
             )
-            return Result(form, graph=constructed)
+            return Result(form, graph=constructed, execution_receipt_json=res.execution_receipt_json)
         if isinstance(res, purrdf.QueryQuads):
             # A quad template (`CONSTRUCT { GRAPH ?g { ... } }` — a first-party
             # extension, NOT defined by SPARQL 1.2) wrote at least one named
@@ -1187,14 +1187,14 @@ class Graph:
             nq = res.serialize(_NQ)
             if nq:
                 dataset._store.load(nq, format=_NQ)
-            return Result("CONSTRUCT", graph=dataset)
+            return Result("CONSTRUCT", graph=dataset, execution_receipt_json=res.execution_receipt_json)
         variables = list(res.variables)
         var_names = tuple(Variable(v.value) for v in variables)
         rows = [
             ResultRow(tuple(from_native(sol[index]) for index in range(len(variables))), var_names)
             for sol in res
         ]
-        return Result("SELECT", rows=rows, variables=var_names)
+        return Result("SELECT", rows=rows, variables=var_names, execution_receipt_json=res.execution_receipt_json)
 
     def update(
         self,
@@ -1208,7 +1208,7 @@ class Graph:
         now: str | None = None,
         entropy_seed: int | None = None,
         **kwargs: object,
-    ) -> None:
+    ) -> purrdf.UpdateOutcome:
         """Run a SPARQL UPDATE against this graph.
 
         ``Store.update`` has no native ``substitutions`` kwarg (unlike
@@ -1232,7 +1232,7 @@ class Graph:
             update_object = prefix_block + update_object
         if initBindings:
             update_object = _inline_bound_variables(update_object, initBindings)
-        self._store.update(
+        outcome = self._store.update(
             update_object,
             extension_namespaces=extension_namespaces,
             standpoint_predicates=standpoint_predicates,
@@ -1241,6 +1241,7 @@ class Graph:
             entropy_seed=entropy_seed,
         )
         self._reconcile_literal_terms()
+        return outcome
 
     def _reconcile_literal_terms(self) -> None:
         """Prune literal provenance whose backing quad no longer exists.

@@ -66,7 +66,7 @@ report.typedFailure = await settle(() =>
 // After them, every lane still answers exactly, on the objects that ran the jobs and on
 // new ones: an asynchronous update commits, and the synchronous and asynchronous lanes
 // both see it.
-report.updateBefore = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`));
+report.updateBefore = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`).then(result => result.dataset));
 report.syncBefore = await settle(() => engine.query(data, SHALLOW));
 report.asyncAfterFaults = await settle(() => engine.queryAsync(data, SHALLOW));
 report.newEngineBefore = await settle(() => new QueryEngine().query(Dataset.parse(`<${EX}c> <${EX}p> <${EX}o> .\n`, "nquads"), SHALLOW));
@@ -100,7 +100,7 @@ report.inFlight = await inFlight;
 // calls and getters on objects created before the trap, new objects, statics and free
 // functions at the gate.
 report.asyncAfter = await settle(() => engine.queryAsync(data, SHALLOW));
-report.updateAfter = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}d> <${EX}p> <${EX}o> }`));
+report.updateAfter = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}d> <${EX}p> <${EX}o> }`).then(result => result.dataset));
 report.syncAfter = settleSync(() => engine.query(data, SHALLOW));
 report.syncDeepAfter = settleSync(() => engine.query(data, TOO_DEEP));
 report.sizeAfter = settleSync(() => data.size);

@@ -302,8 +302,8 @@ pub use property_fn_plan::content_fingerprint as property_function_content_finge
 // `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
 // ranked relation as soon as it has what it needs holds one of these.
 pub use engine::{
-    AdmittedInternedGoverned, EvaluationFailure, QueryCoordinates, ReadOperation,
-    SuppliedQueryCoordinates, with_fallible_read,
+    AdmittedInternedGoverned, EvaluationFailure, ExecutionCoordinateObserver, QueryCoordinates,
+    ReadOperation, SuppliedQueryCoordinates, with_fallible_read,
 };
 pub use property_fn_eval::{AdmittedPropertyRow, CallCursor, EvidencedPropertyRow};
 pub use workspace::SharedWorkspace;

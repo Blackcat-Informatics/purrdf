@@ -115,6 +115,8 @@ impl PagedQueryEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PagedQueryError {
+    /// Physical storage refusal while comparing certified value endpoints.
+    RangeStorage(purrdf_lex::allocation::StorageError),
     /// The provider changed its dense page layout at a checkpoint.
     PageCountMismatch {
         /// Pinned page count.
@@ -195,6 +197,7 @@ pub enum PagedQueryError {
 
 impl purrdf_hash::error::StructuredError for PagedQueryError {
     purrdf_hash::error_visit! {
+        RangeStorage(cause) => "paged-query-range-storage" { "cause" => Cause(cause) },
         PageCountMismatch { expected, actual } => "paged-query-page-count-mismatch" {
             "expected" => Unsigned(u128::from(*expected)), "actual" => Unsigned(u128::from(*actual)),
         },
@@ -254,6 +257,7 @@ impl From<PageFault> for PagedQueryError {
 impl std::fmt::Display for PagedQueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RangeStorage(error) => error.fmt(f),
             Self::PageCountMismatch { expected, actual } => write!(
                 f,
                 "provider page count changed: expected {expected}, got {actual}"
@@ -324,6 +328,7 @@ impl std::fmt::Display for PagedQueryError {
 impl std::error::Error for PagedQueryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RangeStorage(error) => Some(error),
             Self::SourceSnapshot { error, .. } => Some(error.as_ref()),
             _ => None,
         }
@@ -427,6 +432,21 @@ impl<'dataset> PagedQueryView<'dataset> {
         g: GraphMatch<GlobalTermId>,
         range: std::ops::Range<usize>,
     ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + '_ {
+        self.stream_pattern_value_range(stream, (s, p, o, g), range, None)
+    }
+
+    pub(super) fn stream_pattern_value_range<'a>(
+        &'a self,
+        stream: PageStream,
+        (s, p, o, g): (
+            Option<GlobalTermId>,
+            Option<GlobalTermId>,
+            Option<GlobalTermId>,
+            GraphMatch<GlobalTermId>,
+        ),
+        range: std::ops::Range<usize>,
+        values: Option<&'a crate::AnnotationValueRange<'a>>,
+    ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + 'a {
         admission::candidate_pages_for_stream_in_range(
             self.dataset.graph_index(),
             self.dataset.page_count(),
@@ -435,7 +455,29 @@ impl<'dataset> PagedQueryView<'dataset> {
             range.start as u64..range.end as u64,
         )
         .map(move |id| &self.dataset.pages[id.0 as usize])
+        .take_while(move |_| {
+            !self.failed()
+                && values.is_none_or(|range| {
+                    range.workspace.is_none_or(|workspace| !workspace.stopped())
+                })
+        })
         .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
+        .filter(move |slot| {
+            if self.failed() {
+                return false;
+            }
+            values.is_none_or(|values| {
+                match self.dataset.range_may_match(slot, stream, p, *values) {
+                    Ok(matches) => matches,
+                    Err(error) => {
+                        lock_read_state(&self.state)
+                            .error
+                            .get_or_insert(PagedQueryError::RangeStorage(error));
+                        false
+                    }
+                }
+            })
+        })
         .flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {
                 let local = if stream == PageStream::Base {
@@ -733,12 +775,26 @@ impl<'dataset> PagedQueryView<'dataset> {
         // it (clause G10). Typed, and latched sticky by the caller, exactly like every
         // other refusal above: the content is provider-supplied and must never abort
         // the process.
-        let digest = PageSummary::digest_of(&materialization.dataset).map_err(|defect| {
-            PagedQueryError::InvalidData {
+        if materialization.dataset.frozen_snapshot_identity()
+            != slot.translation.summary().snapshot_identity
+        {
+            return Err(PagedQueryError::InvalidData {
                 page: id,
-                message: defect.to_string(),
-            }
-        })?;
+                message: "page content identity changed after sealing".to_owned(),
+            });
+        }
+        let digest =
+            PageSummary::digest_of(&materialization.dataset).map_err(|error| match error {
+                super::summary::SummarySealError::Contents(defect) => {
+                    PagedQueryError::InvalidData {
+                        page: id,
+                        message: defect.to_string(),
+                    }
+                }
+                super::summary::SummarySealError::Storage(error) => {
+                    PagedQueryError::RangeStorage(error)
+                }
+            })?;
         let sealed = slot.translation.summary();
         if digest != sealed.digest() {
             return Err(PagedQueryError::InvalidData {
@@ -848,6 +904,13 @@ impl DatasetView for PagedQueryView<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(Some(self.dataset.statistics.snapshot_identity))
+    }
 
     fn read_error(&self) -> Option<Self::ReadError> {
         let mut state = lock_read_state(&self.state);
@@ -1169,6 +1232,22 @@ impl DatasetView for PagedQueryView<'_> {
                     .filter(move |quad| g.matches(quad.g))
             })
         })
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        self.stream_pattern_value_range(
+            PageStream::Annotation,
+            (None, predicate, object, graph),
+            0..self.dataset.pages.len(),
+            Some(range),
+        )
+        .map(|(_, row)| row)
     }
 
     /// Every named graph any page declares, including ones a page leaves empty or

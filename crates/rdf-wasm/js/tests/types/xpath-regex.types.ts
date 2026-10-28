@@ -29,10 +29,10 @@ const dataset = new Dataset();
 const laws: XPathRegexLaw[] = ["xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21"];
 const selected: QueryOptions = { xpathRegex: "xpath-3.1-2017-03-21" };
 const governed: GovernedQueryOptions = { xpathRegex: "xpath-2.0-2010-12-14", fuel: 10 };
-const asked: boolean = engine.ask(dataset, "ASK {}", selected);
+const asked: boolean = engine.ask(dataset, "ASK {}", selected).boolean;
 const outcome = engine.queryGoverned(dataset, "ASK {}", governed);
-const raw: string = dataset.query("ASK {}", null, "xpath-3.1-2017-03-21");
-const unselected: string = dataset.query("ASK {}");
+const raw: string = dataset.query("ASK {}", null, "xpath-3.1-2017-03-21").body;
+const unselected: string = dataset.query("ASK {}").body;
 const sarif: string = shaclValidateToSarif(
   "",
   "",

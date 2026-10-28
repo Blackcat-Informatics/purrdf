@@ -73,6 +73,83 @@ fn supplied_inputs_repeat_complete_results_without_host_reads() {
     assert!(rows[0][1..].iter().all(Option::is_some));
 }
 
+/// Sampled defaults are sufficient to replay results; identity also binds program and source.
+fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
+    let engine = NativeSparqlEngine::new();
+    let mut dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let query = "SELECT (NOW() AS ?time) (RAND() AS ?random) (UUID() AS ?uuid) WHERE {}";
+    let request = SparqlRequest {
+        query,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let sampled = engine
+        .query_governed_view(
+            &dataset,
+            request,
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    let QueryCoordinates::Started(actual) = sampled.coordinates().clone() else {
+        panic!("sampled context")
+    };
+    assert!(actual.now().is_none() && actual.entropy_seed().is_none());
+    assert!(actual.execution_identity().is_some());
+    let options = QueryOptions::new()
+        .with_now(actual.effective_now())
+        .with_entropy_seed(actual.effective_entropy_seed());
+    let replay = without_host_clock_or_entropy(|| {
+        engine.query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
+    })
+    .unwrap();
+    let QueryCoordinates::Started(replayed) = replay.coordinates() else {
+        panic!("replayed context")
+    };
+    assert_eq!(actual.execution_identity(), replayed.execution_identity());
+    let SparqlResult::Solutions { rows: expected, .. } = sampled.into_complete().unwrap() else {
+        panic!("SELECT")
+    };
+    let SparqlResult::Solutions { rows, .. } = replay.into_complete().unwrap() else {
+        panic!("SELECT")
+    };
+    assert_eq!(rows, expected);
+    let changed_query = engine
+        .query_governed_view(
+            &dataset,
+            SparqlRequest {
+                query: "SELECT (NOW() AS ?time) (RAND() AS ?random) WHERE {}",
+                ..request
+            },
+            options,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    let QueryCoordinates::Started(changed) = changed_query.coordinates() else {
+        panic!("changed query")
+    };
+    assert_ne!(actual.execution_identity(), changed.execution_identity());
+    assert_eq!(actual.snapshot_identity(), changed.snapshot_identity());
+    engine
+        .update_with_options(
+            &mut dataset,
+            SparqlRequest {
+                query: "INSERT DATA { <https://example.org/s> <https://example.org/p> 1 }",
+                ..request
+            },
+            options,
+        )
+        .unwrap();
+    let changed_source = engine
+        .query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
+        .unwrap();
+    let QueryCoordinates::Started(changed) = changed_source.coordinates() else {
+        panic!("changed source")
+    };
+    assert_ne!(actual.snapshot_identity(), changed.snapshot_identity());
+    assert_ne!(actual.execution_identity(), changed.execution_identity());
+}
+
 fn supplied_large_fraction_and_timezone_survive_repeated_now() {
     let dataset = RdfDatasetBuilder::new().freeze().unwrap();
     let engine = NativeSparqlEngine::new();
@@ -499,6 +576,8 @@ fn update_receipts_distinguish_contexts_and_independent_inputs() {
                 QueryCoordinates::NotStarted => assert!(!started),
                 QueryCoordinates::Started(inputs) => {
                     assert!(started);
+                    assert!(inputs.execution_identity().is_some());
+                    assert!(inputs.snapshot_identity().is_some());
                     assert_eq!(inputs.entropy_seed(), options.entropy_seed);
                     assert_eq!(inputs.now().is_some(), options.now.is_some());
                     if let Some(actual) = inputs.now() {
@@ -558,8 +637,57 @@ fn update_receipts_release_the_resident_owner_after_the_last_clone() {
     }
 }
 
+/// A retained unused blank is observable by the native mint collision law.
+fn snapshot_identity_binds_unused_blank_mint_reservations() {
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let mut builder = RdfDatasetBuilder::new();
+    builder
+        .intern_blank("bnode1", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    let reserved = builder.freeze().unwrap();
+    assert_eq!(empty.quad_count(), reserved.quad_count());
+    let XsdValue::DateTime(now) =
+        purrdf_xsd::parse("2024-01-01T00:00:00Z", XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("dateTime")
+    };
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
+    let engine = NativeSparqlEngine::new();
+    let run = |dataset: &std::sync::Arc<purrdf_core::RdfDataset>| {
+        let outcome = engine
+            .query_governed_view(
+                dataset,
+                SparqlRequest {
+                    query: "SELECT (BNODE() AS ?blank) WHERE {}",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                options,
+                &QueryGovernors::METERED,
+            )
+            .unwrap();
+        let QueryCoordinates::Started(coordinates) = outcome.coordinates().clone() else {
+            panic!("started context")
+        };
+        (
+            coordinates,
+            support::solutions(outcome.into_complete().unwrap()),
+        )
+    };
+    let (ordinary, ordinary_result) = run(&empty);
+    let (collision, collision_result) = run(&reserved);
+    assert_ne!(ordinary_result, collision_result);
+    assert_ne!(ordinary.snapshot_identity(), collision.snapshot_identity());
+    assert_ne!(
+        ordinary.execution_identity(),
+        collision.execution_identity()
+    );
+}
+
 purrdf_testkit::harness_main!(
+    snapshot_identity_binds_unused_blank_mint_reservations,
     supplied_inputs_repeat_complete_results_without_host_reads,
+    sampled_coordinates_replay_and_bind_query_and_snapshot,
     supplied_large_fraction_and_timezone_survive_repeated_now,
     prepared_executions_select_fresh_inputs_without_changing_the_plan,
     bounded_coordinate_owners_price_real_allocations_and_release_after_last_output,

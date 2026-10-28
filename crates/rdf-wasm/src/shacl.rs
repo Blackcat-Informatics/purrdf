@@ -154,6 +154,14 @@ impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
 /// [`shapes_error_message`] for anything else.
 fn shapes_rejection(error: ShapesError) -> JsValue {
     match error {
+        ShapesError::RuleExecution(error) => {
+            let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+            let rejection = match error.into_cause() {
+                purrdf_shapes::rules::RulesError::Shapes(cause) => shapes_rejection(cause),
+                cause => JsError::new(&cause.to_string()).into(),
+            };
+            crate::operation::attach_execution_receipt(rejection, &receipt)
+        }
         ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
         ShapesError::Storage(error) => crate::operation::diagnostic_to_js(error.into()),
         other => JsError::new(&shapes_error_message(&other)).into(),
@@ -164,6 +172,7 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
 /// synchronous and the asynchronous lane alike.
 pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
     match error {
+        ShapesError::RuleExecution(error) => error.to_string(),
         ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(*error).to_string(),
         ShapesError::Imports(error) => error.to_string(),
         ShapesError::Recursion(refusal) => refusal.to_string(),
@@ -187,13 +196,28 @@ pub(crate) enum ShaclRefusal {
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table
     /// cannot be used.
     Import(ShaclImportError),
+    Execution(Box<Self>, String),
 }
 
 impl ShaclRefusal {
+    pub(crate) fn execution_receipt(&self) -> Option<&str> {
+        match self {
+            Self::Execution(_, receipt) => Some(receipt),
+            _ => None,
+        }
+    }
+    pub(crate) fn into_cause(self) -> Self {
+        match self {
+            Self::Execution(inner, _) => inner.into_cause(),
+            other => other,
+        }
+    }
+
     /// The stable code the job's failure is reported under: a product refusal's own
     /// native XPath resource code when it carries one, `fallback` otherwise.
     pub(crate) fn code<'a>(&'a self, fallback: &'a str) -> &'a str {
         match self {
+            Self::Execution(inner, _) => inner.code(fallback),
             Self::Product(ShaclProductRefusal {
                 code: Some(code), ..
             }) => code,
@@ -204,6 +228,7 @@ impl ShaclRefusal {
     /// The refusal's message, as its class's `toString()` spells it.
     pub(crate) fn to_js_string(&self) -> String {
         match self {
+            Self::Execution(inner, _) => inner.to_js_string(),
             Self::Product(refusal) => refusal.to_js_string(),
             Self::Import(error) => error.to_js_string(),
         }
@@ -470,6 +495,7 @@ pub(crate) fn entail_to_ntriples_impl(
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct ShaclEntailment {
+    coordinates: purrdf_shapes::RuleCoordinates,
     /// The materialized dataset as N-Triples.
     ntriples: String,
     /// The mandatory diagnostics.
@@ -479,6 +505,7 @@ pub struct ShaclEntailment {
 impl From<purrdf_validate::EntailOutcome> for ShaclEntailment {
     fn from(outcome: purrdf_validate::EntailOutcome) -> Self {
         Self {
+            coordinates: outcome.coordinates,
             diagnostics: diagnostic_values(&outcome.diagnostics),
             ntriples: outcome.ntriples,
         }
@@ -487,6 +514,13 @@ impl From<purrdf_validate::EntailOutcome> for ShaclEntailment {
 
 #[wasm_bindgen]
 impl ShaclEntailment {
+    /// The exact native rule execution transcript, including sampled defaults.
+    #[wasm_bindgen(getter, js_name = executionReceiptJson)]
+    #[must_use]
+    pub fn execution_receipt_json(&self) -> String {
+        purrdf_validate::query::rule_execution_receipt_json(&self.coordinates)
+    }
+
     /// The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
     /// N-Triples.
     #[wasm_bindgen(getter)]
@@ -516,6 +550,7 @@ impl ShaclEntailment {
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct ShaclRulesInference {
+    coordinates: purrdf_shapes::RuleCoordinates,
     /// The inference graph as N-Triples.
     inferred: String,
     /// The proof text, when `explain` was set.
@@ -526,6 +561,13 @@ pub struct ShaclRulesInference {
 
 #[wasm_bindgen]
 impl ShaclRulesInference {
+    /// The native rule execution transcript, independent of proof selection.
+    #[wasm_bindgen(getter, js_name = executionReceiptJson)]
+    #[must_use]
+    pub fn execution_receipt_json(&self) -> String {
+        purrdf_validate::query::rule_execution_receipt_json(&self.coordinates)
+    }
+
     /// The INFERENCE GRAPH — the inferred triples only, never the data graph — as
     /// N-Triples 1.2, one triple per line, in canonical order.
     #[wasm_bindgen(getter)]
@@ -558,6 +600,7 @@ impl ShaclRulesInference {
 impl From<purrdf_validate::RulesOutcome> for ShaclRulesInference {
     fn from(outcome: purrdf_validate::RulesOutcome) -> Self {
         Self {
+            coordinates: outcome.coordinates,
             diagnostics: diagnostic_values(&outcome.diagnostics),
             inferred: outcome.inferred_ntriples,
             proof: outcome.proof,
@@ -2035,6 +2078,16 @@ trait ShaclFailure {
     fn into_outcome(self) -> JobOutcome;
 }
 
+fn outcome_with_rule_receipt(outcome: JobOutcome, receipt: String) -> JobOutcome {
+    match outcome {
+        JobOutcome::Failed(error) => JobOutcome::Failed(error.with_execution_receipt(receipt)),
+        JobOutcome::Refused(refusal) => {
+            JobOutcome::Refused(ShaclRefusal::Execution(Box::new(refusal), receipt))
+        }
+        other => other,
+    }
+}
+
 impl ShaclFailure for ShapesError {
     fn into_rejection(self) -> JsValue {
         shapes_rejection(self)
@@ -2042,6 +2095,15 @@ impl ShaclFailure for ShapesError {
 
     fn into_outcome(self) -> JobOutcome {
         match self {
+            Self::RuleExecution(error) => {
+                let receipt =
+                    purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+                let outcome = match error.into_cause() {
+                    purrdf_shapes::rules::RulesError::Shapes(cause) => cause.into_outcome(),
+                    cause => JobOutcome::Failed(JobError::message(SHACL_CODE, cause.to_string())),
+                };
+                outcome_with_rule_receipt(outcome, receipt)
+            }
             Self::Storage(error) => JobOutcome::Failed(JobError::diagnostic(error.into())),
             Self::Imports(error) => {
                 JobOutcome::Refused(ShaclRefusal::Import(ShaclImportError::from(&error)))
@@ -2059,6 +2121,12 @@ impl ShaclFailure for XPathValidationError {
     /// the plain `Error` it always was.
     fn into_rejection(self) -> JsValue {
         match self {
+            Self::RuleExecution { cause, coordinates } => {
+                crate::operation::attach_execution_receipt(
+                    cause.into_rejection(),
+                    &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+                )
+            }
             Self::Shapes(error) => shapes_rejection(error),
             other => {
                 let message = selected_error_message(&other);
@@ -2075,6 +2143,10 @@ impl ShaclFailure for XPathValidationError {
     /// [`SHACL_CODE`] otherwise.
     fn into_outcome(self) -> JobOutcome {
         match self {
+            Self::RuleExecution { cause, coordinates } => outcome_with_rule_receipt(
+                cause.into_outcome(),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            ),
             Self::Shapes(error) => error.into_outcome(),
             other => JobOutcome::Failed(JobError::message(
                 selected_refusal_code(&other).unwrap_or(SHACL_CODE),

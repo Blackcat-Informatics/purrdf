@@ -56,6 +56,7 @@ impl ViewTermId for DeltaViewId {
 /// with a generic RDF importer does not transfer those sidecars automatically.
 #[derive(Debug, Clone)]
 pub struct DeltaDatasetView {
+    snapshot_identity: purrdf_hash::hex::Digest32,
     base: DatasetHandle,
     delta: Arc<RdfDataset>,
     suppressed: Arc<FastSet<(RecordKind, QuadIds)>>,
@@ -76,6 +77,50 @@ pub struct DeltaDatasetView {
 }
 
 impl DeltaDatasetView {
+    pub(crate) const fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
+        self.snapshot_identity
+    }
+
+    fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, crate::RdfDiagnostic> {
+        const SNAPSHOT: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/delta-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        hash.update(SNAPSHOT.as_bytes());
+        hash.update(self.base.frozen_snapshot_identity().as_bytes());
+        hash.update(self.delta.frozen_snapshot_identity().as_bytes());
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        for records in [&self.suppressed, &self.converted] {
+            let mut sum = purrdf_hash::multiset::Multiset256::default();
+            for (kind, row) in records.iter() {
+                let mut record = purrdf_hash::blake3::Hasher::new();
+                record.update(&[match kind {
+                    RecordKind::Ordinary => 0,
+                    RecordKind::Reifier => 1,
+                    RecordKind::Annotation => 2,
+                }]);
+                for id in [row.s, row.p, row.o] {
+                    record.update(&self.base.term_fingerprint(id, &mut memory)?);
+                }
+                record.update(&[u8::from(row.g.is_some())]);
+                if let Some(graph) = row.g {
+                    record.update(&self.base.term_fingerprint(graph, &mut memory)?);
+                }
+                sum.insert(*record.finalize().as_bytes())
+                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            }
+            hash.update(&sum.fingerprint(SNAPSHOT));
+        }
+        let mut graphs = purrdf_hash::multiset::Multiset256::default();
+        for &graph in self.withdrawn_graphs.iter() {
+            graphs
+                .insert(self.base.term_fingerprint(graph, &mut memory)?)
+                .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        }
+        hash.update(&graphs.fingerprint(SNAPSHOT));
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    }
+
     /// The construction charge of one term of the frozen delta: its slot in the
     /// delta id table plus the hash entries that map it to a base id, at four times
     /// their payload for table slack.
@@ -133,6 +178,7 @@ impl DeltaDatasetView {
             }
         }
         let mut view = Self {
+            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
             base,
             delta,
             suppressed: Arc::new(suppressed),
@@ -192,6 +238,7 @@ impl DeltaDatasetView {
                 * size_of::<(RecordKind, QuadIds)>(),
             ..Default::default()
         });
+        view.snapshot_identity = view.seal_content_identity()?;
         Ok(view)
     }
 
@@ -600,6 +647,10 @@ impl DatasetView for DeltaDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.snapshot_identity))
+    }
 
     fn reserve_owned_workspace(
         &self,

@@ -742,6 +742,25 @@ closures on the Rust side — the full-text index, the GeoSPARQL relations, the
 embedding kNN relation — do not cross this boundary; only these three
 data-shaped registrations do.
 
+## Execution receipt migration
+
+Ordinary and prepared query result objects now expose `execution_receipt_json`.
+Governed query and UPDATE outcomes expose the same property. Parse its JSON to
+read the actual effective time, decimal-string entropy seed, supplied-input flags,
+and nullable snapshot and execution identities. An absent identity is explicit;
+it is never reconstructed from request inputs or result bytes.
+
+`MutableDataset.update(...)` now returns an owned `UpdateOutcome` instead of
+`None`. Read `is_applied` and `execution_receipt_json`; ordinary UPDATE has
+`evidence is None`, since it retains ungoverned execution. An UPDATE without a
+WHERE context may apply with a `not-started` context receipt. Existing calls that
+ignore the return value continue to apply the same mutation.
+
+Rule entailment and application dictionaries include `execution_receipt_json`
+with rule identities and ordered query contexts. Errors after evaluation retain
+that property on the original Python exception class. Query rows, graph results,
+and exception receipts own their values after caller input objects are released.
+
 ## Typed SPARQL parse failures
 
 A query or update the parser refuses raises the same `ValueError`, with the same
@@ -971,15 +990,15 @@ JSON documents cross these APIs as the documented `str` or `bytes`: JSON-LD,
 compiled contexts, projection configurations, loss matrices and proof/retrieval
 JSON accessors retain their document representation. The shared JSON reader retains number lexemes; each codec applies its specified
 conversion before emitting a document. JSON-LD numeric RDF values and `@json`
-fractions use the nearest finite binary64 spelling, while integers within the
+fractions use the nearest finite `binary64` spelling, while integers within the
 signed/unsigned 64-bit domain remain integers. Decode the emitted document to
 Python values with
 `json.loads(document, parse_int=int, parse_float=decimal.Decimal)` for exact
 integers and decimals; Python's default `json.loads` instead converts fractional
-and exponent lexemes to binary64 `float`. Neither Python decoding policy changes the emitted document or recovers digits
+and exponent lexemes to `binary64` `float`. Neither Python decoding policy changes the emitted document or recovers digits
 already rounded by a codec. RDF literal values remain lexical strings, including numeric literals. In expanded
 JSON-LD output, an `rdf:JSON` literal has a string `@value` containing its JSON
 lexical form; decode that string separately to obtain its Python object.
 Structured report/provenance APIs documented as dictionaries return dictionaries.
 The GTS fold view's `python_value` is a typed value conversion: integer cells are
-Python `int`, and IEEE binary64 cells are Python `float`.
+Python `int`, and IEEE `binary64` cells are Python `float`.

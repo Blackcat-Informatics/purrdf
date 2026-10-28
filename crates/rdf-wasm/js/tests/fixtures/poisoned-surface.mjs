@@ -20,7 +20,7 @@ export async function settle(call) {
     const value = await call();
     return { settled: "resolved", ...(value?.rows === undefined ? {} : { subjects: subjects(value) }) };
   } catch (error) {
-    return { settled: "rejected", ...describe(error) };
+    return { settled: "rejected", ...describe(error).dataset };
   }
 }
 
@@ -30,7 +30,7 @@ export function settleSync(call) {
     const value = call();
     return { settled: "returned", value: typeof value === "object" ? typeof value : value };
   } catch (error) {
-    return { settled: "threw", ...describe(error) };
+    return { settled: "threw", ...describe(error).dataset };
   }
 }
 

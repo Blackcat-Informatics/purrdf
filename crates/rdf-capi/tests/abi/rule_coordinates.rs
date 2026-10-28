@@ -37,6 +37,7 @@ fn execute(
     let mut proof = sentinel;
     let mut diagnostics = sentinel;
     let mut error = null_mut();
+    let mut receipt = crate::receipt::Output::default();
     let status = {
         let shapes = CString::new(if valid_document {
             SHAPES
@@ -67,6 +68,7 @@ fn execute(
                     null(),
                     now,
                     seed,
+                    &mut receipt.0,
                     &raw mut output,
                     &raw mut diagnostics,
                     &raw mut error,
@@ -86,6 +88,7 @@ fn execute(
                     regex.as_ptr(),
                     now,
                     seed,
+                    &mut receipt.0,
                     &raw mut output,
                     &raw mut diagnostics,
                     &raw mut error,
@@ -106,6 +109,7 @@ fn execute(
                     0,
                     now,
                     seed,
+                    &mut receipt.0,
                     &raw mut output,
                     &raw mut proof,
                     &raw mut diagnostics,
@@ -128,6 +132,7 @@ fn execute(
                     regex.as_ptr(),
                     now,
                     seed,
+                    &mut receipt.0,
                     &raw mut output,
                     &raw mut proof,
                     &raw mut diagnostics,
@@ -147,6 +152,11 @@ fn execute(
     }
     assert!(error.is_null());
     unsafe {
+        let receipt = String::from_utf8(buffer_bytes(receipt.0)).unwrap();
+        assert!(receipt.contains("executionIdentity"));
+        if let Some(time) = time {
+            assert!(receipt.contains(time.to_str().unwrap()));
+        }
         assert_eq!(buffer_bytes(diagnostics), b"");
         purrdf_buffer_free(diagnostics);
         if route >= 2 {

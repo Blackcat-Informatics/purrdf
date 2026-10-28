@@ -332,7 +332,7 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
              size_t import_count, const uint64_t *max_term_generating_rounds, \
              const uint64_t *max_generated_terms, const uint64_t *max_stored_facts, \
              const uint64_t *max_join_steps, const char *now, const uint64_t *entropy_seed, \
-             PurrdfBuffer **out_buffer, \
+             PurrdfBuffer **out_receipt, PurrdfBuffer **out_buffer, \
              PurrdfBuffer **out_diagnostics, PurrdfError **out_error)"
                 .to_owned(),
         ),

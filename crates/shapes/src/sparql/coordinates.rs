@@ -3,28 +3,64 @@
 
 //! Caller inputs for one serial rule execution and its nested SPARQL requests.
 
+use purrdf_sparql_eval::{EvalError, ExecutionCoordinateObserver, QueryCoordinates};
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use purrdf_hash::hex::Digest32;
 use purrdf_xsd::temporal::DateTime;
 
-/// Effective supplied coordinates at the start of one successful rule inference.
+/// Inputs and actual query contexts of one rule inference, including failures.
 ///
-/// This records inputs, not a complete execution or snapshot identity. An absent
-/// value makes no claim about a host clock or entropy sample. Empty request options
+/// Supplied getters retain caller controls; each nested execution records its
+/// actual clock and seed, including sampled defaults. Empty request options
 /// can inherit an outer supplied scope; a partially supplied request replaces it.
 /// The exact time shares the original caller-input owner, extending its lifetime
 /// without copying its coefficient or allocating another owner. This retention is
-/// not a new execution allocation.
+/// not a new execution allocation. A complete execution identity is available
+/// when the source and every nested query expose certified identities.
 #[derive(Debug, Clone, Default)]
 pub struct RuleCoordinates {
     now: Option<Arc<DateTime>>,
     entropy_seed: Option<u64>,
+    executions: Arc<[QueryCoordinates]>,
+    pub(crate) program: Option<Digest32>,
+    pub(crate) snapshot: Option<Digest32>,
+    pub(crate) shapes: Option<Digest32>,
+    pub(crate) contract: Option<Digest32>,
+    pub(crate) source_rules: bool,
+    execution: Option<Digest32>,
 }
 
 impl RuleCoordinates {
+    /// Certified semantic program identity, when available.
+    #[must_use]
+    pub const fn program_identity(&self) -> Option<&Digest32> {
+        self.program.as_ref()
+    }
+    /// Certified immutable source identity, when available.
+    #[must_use]
+    pub const fn snapshot_identity(&self) -> Option<&Digest32> {
+        self.snapshot.as_ref()
+    }
+    /// Certified shapes graph identity, when available.
+    #[must_use]
+    pub const fn shapes_identity(&self) -> Option<&Digest32> {
+        self.shapes.as_ref()
+    }
+    /// Identity of the program, input snapshots and ordered actual query contexts.
+    #[must_use]
+    pub const fn execution_identity(&self) -> Option<&Digest32> {
+        self.execution.as_ref()
+    }
+    /// Actual nested query contexts in execution order, including sampled defaults.
+    #[must_use]
+    pub fn executions(&self) -> &[QueryCoordinates] {
+        &self.executions
+    }
+
     /// The effective supplied time, including exact seconds and declared timezone.
     #[must_use]
     pub fn now(&self) -> Option<&DateTime> {
@@ -42,7 +78,14 @@ impl RuleCoordinates {
 
 impl PartialEq for RuleCoordinates {
     fn eq(&self, other: &Self) -> bool {
-        self.entropy_seed == other.entropy_seed
+        self.executions == other.executions
+            && self.program == other.program
+            && self.snapshot == other.snapshot
+            && self.shapes == other.shapes
+            && self.contract == other.contract
+            && self.source_rules == other.source_rules
+            && self.execution == other.execution
+            && self.entropy_seed == other.entropy_seed
             && match (&self.now, &other.now) {
                 (None, None) => true,
                 (Some(left), Some(right)) => {
@@ -66,6 +109,13 @@ pub(crate) fn snapshot() -> RuleCoordinates {
             .map_or_else(RuleCoordinates::default, |runtime| RuleCoordinates {
                 now: runtime.now.clone(),
                 entropy_seed: runtime.entropy,
+                executions: Arc::default(),
+                program: None,
+                snapshot: None,
+                shapes: None,
+                contract: None,
+                source_rules: false,
+                execution: None,
             })
     })
 }
@@ -74,6 +124,7 @@ pub(crate) fn snapshot() -> RuleCoordinates {
 pub(crate) struct Runtime {
     now: Option<Arc<DateTime>>,
     entropy: Option<u64>,
+    recorder: Option<Arc<Recorder>>,
 }
 
 thread_local! {
@@ -97,7 +148,11 @@ pub(crate) fn enter(now: Option<Arc<DateTime>>, entropy: Option<u64>) -> Option<
         return None;
     }
     Some(Scope {
-        previous: replace(Some(Runtime { now, entropy })),
+        previous: replace(Some(Runtime {
+            now,
+            entropy,
+            recorder: recorder(),
+        })),
         _not_send: PhantomData,
     })
 }
@@ -117,6 +172,144 @@ pub(super) fn next_seed() -> Option<u64> {
         let state = runtime.as_mut()?.entropy.as_mut()?;
         Some(purrdf_hash::mix::splitmix64_next(state))
     })
+}
+
+/// Request-owned capture; it travels with the existing suspended ambient runtime.
+#[derive(Debug)]
+pub(crate) struct Recorder {
+    entries: Mutex<Vec<QueryCoordinates>>,
+    parent: Option<Arc<Self>>,
+    implementation: std::sync::OnceLock<Digest32>,
+}
+impl Recorder {
+    pub(crate) fn implementation_identity(&self) -> Option<&Digest32> {
+        self.implementation.get()
+    }
+}
+impl ExecutionCoordinateObserver for Recorder {
+    fn observe(&self, coordinates: &QueryCoordinates) -> Result<(), EvalError> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            EvalError::Invariant(purrdf_sparql_eval::EvaluatorInvariant::CoordinateObserverPoisoned)
+        })?;
+        entries
+            .try_reserve(1)
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "rule execution coordinates",
+            })?;
+        entries.push(coordinates.clone());
+        drop(entries);
+        if let Some(parent) = &self.parent {
+            parent.observe(coordinates)?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn recorder() -> Option<Arc<Recorder>> {
+    CURRENT.with(|slot| slot.borrow().as_ref()?.recorder.clone())
+}
+
+/// A distinct record for this inference, without restarting an inherited seed stream.
+pub(crate) struct RecordingScope {
+    recorder: Arc<Recorder>,
+    previous: Option<Arc<Recorder>>,
+    inserted: bool,
+    _not_send: PhantomData<Rc<()>>,
+}
+impl RecordingScope {
+    pub(crate) fn enter() -> Self {
+        let recorder = Arc::new(Recorder {
+            entries: Mutex::new(Vec::new()),
+            parent: recorder(),
+            implementation: std::sync::OnceLock::new(),
+        });
+        let (previous, inserted) = CURRENT.with(|slot| {
+            let mut current = slot.borrow_mut();
+            let inserted = current.is_none();
+            let runtime = current.get_or_insert_with(|| Runtime {
+                now: None,
+                entropy: None,
+                recorder: None,
+            });
+            (runtime.recorder.replace(Arc::clone(&recorder)), inserted)
+        });
+        Self {
+            recorder,
+            previous,
+            inserted,
+            _not_send: PhantomData,
+        }
+    }
+    pub(crate) fn bind_implementation(&self, identity: Digest32) -> Result<(), EvalError> {
+        self.recorder.implementation.set(identity).map_err(|_| {
+            EvalError::Invariant(
+                purrdf_sparql_eval::EvaluatorInvariant::CoordinateEnvironmentChanged,
+            )
+        })
+    }
+    pub(crate) fn finish(
+        &self,
+        mut coordinates: RuleCoordinates,
+    ) -> Result<RuleCoordinates, EvalError> {
+        let mut entries = self.recorder.entries.lock().map_err(|_| {
+            EvalError::Invariant(purrdf_sparql_eval::EvaluatorInvariant::CoordinateObserverPoisoned)
+        })?;
+        coordinates.executions = std::mem::take(&mut *entries).into();
+        drop(entries);
+        coordinates.execution = execution_identity(&coordinates);
+        Ok(coordinates)
+    }
+}
+
+const EXECUTION: purrdf_hash::Domain = purrdf_hash::Domain::new(b"purrdf-shapes/rule-execution/v1");
+
+fn execution_identity(coordinates: &RuleCoordinates) -> Option<Digest32> {
+    let mut hash = purrdf_hash::blake3::Hasher::new();
+    let mut field = |bytes: &[u8]| {
+        purrdf_hash::frame::frame_le_with(bytes, &mut |part| {
+            hash.update(part);
+        });
+    };
+    field(EXECUTION.as_bytes());
+    field(coordinates.program.as_ref()?.as_bytes());
+    field(coordinates.snapshot.as_ref()?.as_bytes());
+    field(coordinates.shapes.as_ref()?.as_bytes());
+    field(coordinates.contract.as_ref()?.as_bytes());
+    field(&[u8::from(coordinates.source_rules)]);
+    match coordinates.now() {
+        Some(now) => {
+            field(b"supplied-now");
+            field(now.representation_identity().as_bytes());
+        }
+        None => field(b"unsupplied-now"),
+    }
+    match coordinates.entropy_seed() {
+        Some(seed) => {
+            field(b"supplied-seed");
+            field(&seed.to_le_bytes());
+        }
+        None => field(b"unsupplied-seed"),
+    }
+    field(&(coordinates.executions.len() as u64).to_le_bytes());
+    for execution in coordinates.executions() {
+        let QueryCoordinates::Started(started) = execution else {
+            return None;
+        };
+        field(started.execution_identity()?.as_bytes());
+    }
+    Some(Digest32::from(*hash.finalize().as_bytes()))
+}
+impl Drop for RecordingScope {
+    fn drop(&mut self) {
+        CURRENT.with(|slot| {
+            let mut current = slot.borrow_mut();
+            if self.inserted {
+                *current = None;
+            } else if let Some(runtime) = current.as_mut() {
+                runtime.recorder = self.previous.take();
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +406,15 @@ mod tests {
         })
         .unwrap();
         assert_eq!(result.coordinates().entropy_seed(), Some(expected_seed));
+        assert!(result.coordinates().program_identity().is_some());
+        assert!(result.coordinates().snapshot_identity().is_some());
+        assert!(result.coordinates().execution_identity().is_some());
+        let mut next = expected_seed;
+        let first_seed = purrdf_hash::mix::splitmix64_next(&mut next);
+        let QueryCoordinates::Started(first) = &result.coordinates().executions()[0] else {
+            panic!("rule query context")
+        };
+        assert_eq!(first.effective_entropy_seed(), first_seed);
         assert_eq!(
             std::ptr::from_ref(result.coordinates().now().unwrap()),
             original
@@ -248,5 +450,67 @@ mod tests {
         assert!(weak.upgrade().is_some());
         drop(receipt);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn query_free_rules_bind_the_program_and_keep_limit_failure_receipts() {
+        use crate::srl::{self, InferOptions};
+        let first = srl::parse_and_check(
+            "PREFIX : <https://example.org/> RULE { :s :p :first } WHERE {}",
+            None,
+        )
+        .unwrap();
+        let second = srl::parse_and_check(
+            "PREFIX : <https://example.org/> RULE { :s :p :second } WHERE {}",
+            None,
+        )
+        .unwrap();
+        let source = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+        let options = InferOptions::default();
+        let first_result = purrdf_testkit::harness::without_host_clock_or_entropy(|| {
+            srl::infer(&first, &source, &options)
+        })
+        .unwrap();
+        let repeated = purrdf_testkit::harness::without_host_clock_or_entropy(|| {
+            srl::infer(&first, &source, &options)
+        })
+        .unwrap();
+        let second_result = purrdf_testkit::harness::without_host_clock_or_entropy(|| {
+            srl::infer(&second, &source, &options)
+        })
+        .unwrap();
+        assert!(first_result.coordinates().executions().is_empty());
+        assert!(first_result.coordinates().execution_identity().is_some());
+        assert_eq!(first_result.coordinates(), repeated.coordinates());
+        assert_ne!(
+            first_result.coordinates().program_identity(),
+            second_result.coordinates().program_identity()
+        );
+        assert_ne!(
+            first_result.coordinates().execution_identity(),
+            second_result.coordinates().execution_identity()
+        );
+        let error = srl::infer(
+            &first,
+            &source,
+            &InferOptions::default().with_max_stored_facts(0),
+        )
+        .unwrap_err();
+        let srl::SrlError::Execution(error) = error else {
+            panic!("receipt-bearing rule failure")
+        };
+        assert_eq!(
+            error.coordinates.program_identity(),
+            first_result.coordinates().program_identity()
+        );
+        assert_eq!(
+            error.coordinates.snapshot_identity(),
+            first_result.coordinates().snapshot_identity()
+        );
+        assert!(error.coordinates.execution_identity().is_some());
+        assert!(matches!(
+            *error.cause,
+            crate::rules::RulesError::LimitExceeded(_)
+        ));
     }
 }

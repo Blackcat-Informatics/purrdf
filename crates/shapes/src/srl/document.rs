@@ -62,6 +62,8 @@ use crate::term::{NamedNode, Term, Triple};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SrlError {
+    /// Original rule failure and its actual execution coordinates.
+    Execution(Box<crate::rules::RuleExecutionError>),
     /// Original failure of the graph-free input operation.
     TripleSource(purrdf_core::TripleReadError),
     /// Data materialization or a shapes operation refused evaluation.
@@ -130,6 +132,7 @@ pub enum SrlError {
 impl fmt::Display for SrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Execution(error) => error.fmt(f),
             Self::Shapes(error) => error.fmt(f),
             Self::TripleSource(error) => error.fmt(f),
             Self::Syntax {
@@ -188,6 +191,7 @@ impl fmt::Display for SrlError {
 impl std::error::Error for SrlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Execution(error) => Some(error.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::TripleSource(error) => Some(error),
             Self::LimitExceeded(error) => Some(error.as_ref()),
@@ -695,6 +699,12 @@ impl RuleSetDocument {
     /// Preserve the one public rule-error mapping for both physical carriers.
     fn evaluation_error(&self, error: crate::rules::RulesError) -> SrlError {
         match error {
+            crate::rules::RulesError::Execution(mut error) => {
+                if let crate::rules::RulesError::LimitExceeded(limit) = error.cause.as_mut() {
+                    limit.rename(|index| self.rules.get(index).map(SrlRule::describe));
+                }
+                SrlError::Execution(error)
+            }
             crate::rules::RulesError::Shapes(error) => SrlError::Shapes(error),
             crate::rules::RulesError::LimitExceeded(mut limit) => {
                 limit.rename(|index| self.rules.get(index).map(SrlRule::describe));

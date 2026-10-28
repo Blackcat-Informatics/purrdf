@@ -67,6 +67,14 @@ head publishes no fact. A latched read failure is returned as the original
 typed `SrlError::TripleSource`; opening a new read on the same frozen source
 starts a fresh operation.
 
+Rule inference retains `RuleCoordinates` on success and typed execution failure.
+The receipt binds the typed program, source and shapes snapshots, the rule
+contract, and its ordered nested query receipts. Nested receipts record actual
+clock values and initial seeds, including sampled defaults; capturing them does
+not draw another seed or read the clock again. A rule set that executes no query
+still has program and snapshot identities without inventing a sampled context.
+The existing program contract hash keeps its separate meaning.
+
 For cooperative cancellation, pass a borrowed `StopSignal` to
 `srl::infer_until` or `srl::infer_triples_until`. Both take
 `Option<&dyn StopSignal>` after the inference options. `Inference::usage()`

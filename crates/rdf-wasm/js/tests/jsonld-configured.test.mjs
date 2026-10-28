@@ -37,7 +37,7 @@ test("configured graph results and YAML schema headers use the same engine", () 
   const dataset = Dataset.parse(SOURCE, "nquads");
   const engine = new QueryEngine();
   const query = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
-  const jsonld = engine.queryRawConfigured(dataset, query, undefined, "jsonld", OPTIONS);
+  const jsonld = engine.queryRawConfigured(dataset, query, undefined, "jsonld", OPTIONS).body;
   assert.equal(JSON.parse(jsonld)["@graph"][0]["@id"], "ex:alice");
 
   const context = new CompiledJsonLdContext(OPTIONS);
@@ -48,7 +48,7 @@ test("configured graph results and YAML schema headers use the same engine", () 
     "yamlld",
     context,
     "https://example.org/purrdf.schema.json",
-  );
+  ).body;
   assert.match(yaml, /^# yaml-language-server: \$schema=https:\/\/example\.org\/purrdf\.schema\.json/m);
 });
 

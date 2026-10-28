@@ -215,6 +215,18 @@ pub(crate) fn shapes_error(
     base_flag: &str,
 ) -> CliError {
     let error = match error {
+        ShapesError::RuleExecution(error) => {
+            eprintln!(
+                "purrdf-execution {}",
+                purrdf_validate::query::rule_execution_receipt_json(&error.coordinates)
+            );
+            return match error.into_cause() {
+                purrdf::shapes::rules::RulesError::Shapes(cause) => {
+                    shapes_error(cause, context, root, base_flag)
+                }
+                cause => CliError::Runtime(format!("{context}: {cause}")),
+            };
+        }
         ShapesError::Imports(error) => error,
         ShapesError::Recursion(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));

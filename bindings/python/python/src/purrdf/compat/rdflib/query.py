@@ -200,6 +200,7 @@ class Result:
         variables: tuple[str | Variable, ...] | None = None,
         graph: Graph | None = None,
         ask: bool | None = None,
+        execution_receipt_json: str | None = None,
     ) -> None:
         """Build a SELECT (``rows``), CONSTRUCT/DESCRIBE (``graph``), or ASK result."""
         self.type = type_
@@ -210,6 +211,7 @@ class Result:
         ]
         self.graph = graph
         self.askAnswer = ask
+        self.execution_receipt_json = execution_receipt_json
 
     @property
     def bindings(self) -> list[dict[Variable, Identifier | None]]:
@@ -354,7 +356,7 @@ class UpdateProcessor:
         """Bind the processor to the graph it updates."""
         self.graph = graph
 
-    def update(self, strOrQuery: object, **kwargs: Any) -> None:  # noqa: N803
+    def update(self, strOrQuery: object, **kwargs: Any) -> purrdf.UpdateOutcome:  # noqa: N803
         """Execute an update (overridden by concrete processors)."""
         raise NotImplementedError
 

@@ -882,6 +882,10 @@ impl GovernorState {
         Self::with_workspace(governors, crate::WorkspaceCapability::default())
     }
 
+    pub(crate) fn workspace_capability(&self) -> &crate::WorkspaceCapability {
+        &self.workspace
+    }
+
     pub(crate) fn with_workspace(
         governors: &QueryGovernors,
         workspace: crate::WorkspaceCapability,

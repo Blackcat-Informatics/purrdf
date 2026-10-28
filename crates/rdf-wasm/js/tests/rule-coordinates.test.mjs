@@ -30,7 +30,7 @@ const routes = [
   [shaclApplyRules, raw.shaclApplyRules, shaclApplyRulesAsync, "applyRules", "takeShaclRulesInference", apply(undefined, SRL)],
 ];
 function value(result) {
-  try { return { text: result.ntriples ?? result.inferred, diagnostics: result.diagnostics, proof: result.proof }; }
+  try { const receipt = JSON.parse(result.executionReceiptJson); assert.ok(Array.isArray(receipt.executions)); return { text: result.ntriples ?? result.inferred, diagnostics: result.diagnostics, proof: result.proof }; }
   finally { result.free(); }
 }
 function begin(route, controls) {
@@ -135,7 +135,7 @@ test("rule supplied coordinates preserve signal cancellation and subsequent reus
     const reason = new Error("stop rule execution");
     const timer = setTimeout(() => controller.abort(reason), 0);
     try {
-      await assert.rejects(route[2](...route[5], { now: NOW, entropySeed: 0n, signal: controller.signal, yieldEveryPolls: 0 }), (error) => error === reason);
+      await assert.rejects(route[2](...route[5], { now: NOW, entropySeed: 0n, signal: controller.signal, yieldEveryPolls: 0 }), (error) => error.cause === reason);
     } finally { clearTimeout(timer); }
     assert.ok(value(await route[2](...route[5], { now: NOW, entropySeed: 0n })).text.includes(NOW));
   }

@@ -249,6 +249,10 @@ pub(crate) fn run_rules(
         }
     };
 
+    eprintln!(
+        "purrdf-execution {}",
+        purrdf_validate::query::rule_execution_receipt_json(inference.coordinates())
+    );
     let inferred = inference.inferred_dataset()?;
     let ledger = sink::write_rdf(
         &*inferred,
@@ -285,14 +289,35 @@ fn rules_run(
     context: &str,
 ) -> Result<Inference, CliError> {
     let Some(profile) = xpath_regex else {
-        return purrdf::shapes::run_rules_with_options(source, data, options)
-            .map_err(|error| CliError::Runtime(format!("{context}: {error}")));
+        return purrdf::shapes::run_rules_with_options(source, data, options).map_err(|error| {
+            emit_rule_failure(&error);
+            CliError::Runtime(format!("{context}: {error}"))
+        });
     };
     purrdf::shapes::xpath::run_rules_with_options(source, data, options, profile, Limits::new())
         .map_err(|error| match error {
-            XPathValidationError::Shapes(error) => CliError::Runtime(format!("{context}: {error}")),
+            XPathValidationError::RuleExecution { cause, coordinates } => {
+                eprintln!(
+                    "purrdf-execution {}",
+                    purrdf_validate::query::rule_execution_receipt_json(&coordinates)
+                );
+                xpath_regex_error(profile, &cause)
+            }
+            XPathValidationError::Shapes(error) => {
+                emit_rule_failure(&error);
+                CliError::Runtime(format!("{context}: {error}"))
+            }
             other => xpath_regex_error(profile, &other),
         })
+}
+
+fn emit_rule_failure(error: &purrdf::shapes::ShapesError) {
+    if let Some(coordinates) = error.execution_coordinates() {
+        eprintln!(
+            "purrdf-execution {}",
+            purrdf_validate::query::rule_execution_receipt_json(coordinates)
+        );
+    }
 }
 
 /// A refusal only the `--xpath-regex` law raises, as the runtime failure (exit 1) it

@@ -36,7 +36,7 @@ const routes = [
   ...methods.map((name) => [name, async (engine, data, text, inputs) => {
     const result = await engine[name](data, text, inputs);
     if (name.includes("Governed")) assert.equal(result.isApplied, true);
-    else assert.equal(result, data);
+    else { assert.equal(result.dataset, data); assert.equal(result.executionReceipt.state, "started"); }
   }]),
   ["raw update", (engine, data, text, o) => rawUpdate.call(engine, data, text, undefined, o.xpathRegex, o.now, o.entropySeed)],
   ["raw governed", (engine, data, text, o) => {
@@ -139,7 +139,7 @@ test("UPDATE low-level coordinates survive suspension freed options and interlea
       try {
         await suspended;
         assert.equal(data.size, 0, "suspended updates have not published their first operation");
-        await engine.updateAsync(other, SUSPENDING, { ...controls, resolveService: async () => ANSWER });
+        await engine.updateAsync(other, SUSPENDING, { ...controls, resolveService: async () => ANSWER }).then(result => result.dataset);
         release(ANSWER);
         assert.equal(await pending, RunStatus.Outcome);
         job.commitUpdate(data);
@@ -164,15 +164,15 @@ test("UPDATE supplied coordinates preserve asynchronous abort atomicity and reus
   const suspended = new Promise((resolve) => { entered = resolve; });
   const pending = engine.updateAsync(data, SUSPENDING, { ...INPUTS, signal: controller.signal,
     resolveService: () => new Promise((resolve) => { release = resolve; entered(); }),
-  });
-  const rejected = assert.rejects(pending, (error) => error === reason);
+  }).then(result => result.dataset);
+  const rejected = assert.rejects(pending, (error) => error.cause === reason);
   try {
     await suspended;
     controller.abort(reason);
     release(ANSWER);
     await rejected;
     assert.equal(data.size, 0);
-    await engine.updateAsync(data, UPDATE, INPUTS);
+    await engine.updateAsync(data, UPDATE, INPUTS).then(result => result.dataset);
     assert.equal(data.size, 8);
   } finally { if (release) release(ANSWER); await rejected; data.free(); engine.free(); }
 });
@@ -187,9 +187,9 @@ test("Cloudflare UPDATE coordinates reach mutation and typed refusal responses",
   const request = (text, type = "application/sparql-update") => new Request("https://example.org/sparql", { method: "POST", headers: { "Content-Type": type }, body: text });
   try {
     const response = await handleSparqlRequest(request(UPDATE), options);
-    assert.equal(response.status, 204);
+    assert.equal(response.status, 204); assert.equal(JSON.parse(response.headers.get("Purrdf-Execution-Receipt")).state, "started");
     const read = await handleSparqlRequest(request("SELECT ?t WHERE { <https://example.org/first> <https://example.org/time> ?t }", "application/sparql-query"), options);
-    assert.equal(read.status, 200);
+    assert.equal(read.status, 200); assert.equal(JSON.parse(read.headers.get("Purrdf-Execution-Receipt")).state, "started");
     assert.equal((await read.json()).results.bindings[0].t.value, NOW);
     const before = snapshot(dataset);
     for (const controls of [{ now: 7 }, { now: "not a date" }, { entropySeed: -1n }]) {

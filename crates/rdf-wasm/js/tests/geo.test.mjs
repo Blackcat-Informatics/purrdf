@@ -56,16 +56,16 @@ test("explicit axes reach sync queries and an already started async profile snap
   const engine = new QueryEngine();
   const session = new GeoSession(AXES);
   try {
-    assert.throws(() => engine.ask(dataset, AXES_QUERY), /unregistered/i);
+    assert.throws(() => engine.ask(dataset, AXES_QUERY).boolean, /unregistered/i);
     assert.throws(() => engine.setGeoSession(), /expected instance of GeoSession/);
     engine.setGeoSession(session);
     session.free();
-    assert.equal(engine.ask(dataset, AXES_QUERY), true);
+    assert.equal(engine.ask(dataset, AXES_QUERY).boolean, true);
     assert.throws(() => engine.setGeoProfile('{"version":1,"unknown":true}'));
-    assert.equal(engine.ask(dataset, AXES_QUERY), true);
-    const started = engine.askAsync(dataset, AXES_QUERY);
+    assert.equal(engine.ask(dataset, AXES_QUERY).boolean, true);
+    const started = engine.askAsync(dataset, AXES_QUERY).then(result => result.boolean);
     engine.setGeoProfile('{"version":1}');
     assert.equal(await started, true);
-    assert.throws(() => engine.ask(dataset, AXES_QUERY), /unregistered/i);
+    assert.throws(() => engine.ask(dataset, AXES_QUERY).boolean, /unregistered/i);
   } finally { engine.free(); dataset.free(); }
 });

@@ -606,35 +606,36 @@ pub(crate) fn nodes_eq(a: NodeRef<'_>, b: NodeRef<'_>) -> bool {
     .expect("resident structural comparison storage")
 }
 
+fn expand_admitted<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+    node: NodeRef<'a>,
+    stack: &mut Tokens<'a>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    let before = stack.len();
+    let mut failure = None;
+    Script {
+        out: &mut |token| {
+            if failure.is_none()
+                && let Err(error) = stack.try_push_admitted(token, memory)
+            {
+                failure = Some(error);
+            }
+        },
+    }
+    .of(node);
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    stack.reverse_top(stack.len() - before);
+    Ok(())
+}
+
 /// The same script comparison, with actual before-growth spill admission.
 pub(crate) fn nodes_eq_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     a: NodeRef<'_>,
     b: NodeRef<'_>,
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> Result<bool, purrdf_lex::allocation::StorageError> {
-    fn expand_admitted<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
-        node: NodeRef<'a>,
-        stack: &mut Tokens<'a>,
-        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-    ) -> Result<(), purrdf_lex::allocation::StorageError> {
-        let before = stack.len();
-        let mut failure = None;
-        Script {
-            out: &mut |token| {
-                if failure.is_none()
-                    && let Err(error) = stack.try_push_admitted(token, memory)
-                {
-                    failure = Some(error);
-                }
-            },
-        }
-        .of(node);
-        if let Some(error) = failure {
-            return Err(error);
-        }
-        stack.reverse_top(stack.len() - before);
-        Ok(())
-    }
     let (mut left, mut right) = (Tokens::with(Tok::Node(a)), Tokens::with(Tok::Node(b)));
     let equal = loop {
         match (left.pop(), right.pop()) {
@@ -680,6 +681,29 @@ pub(crate) fn node_hash<H: Hasher>(node: NodeRef<'_>, state: &mut H) {
             Tok::Field(_) | Tok::EndStruct | Tok::EndTuple | Tok::EndList => {}
         }
     }
+}
+
+/// Feed the same structural script with before-growth admission.
+pub(crate) fn node_hash_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    node: NodeRef<'_>,
+    state: &mut impl Hasher,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    let mut stack = Tokens::with(Tok::Node(node));
+    let result = (|| {
+        while let Some(tok) = stack.pop() {
+            match tok {
+                Tok::Node(node) => expand_admitted(node, &mut stack, memory)?,
+                Tok::Struct(name) | Tok::Tuple(name) | Tok::Unit(name) => name.hash(state),
+                Tok::List(len) => len.hash(state),
+                Tok::Leaf(leaf) => leaf.feed(state),
+                Tok::Field(_) | Tok::EndStruct | Tok::EndTuple | Tok::EndList => {}
+            }
+        }
+        Ok(())
+    })();
+    let released = stack.release_admitted(memory);
+    result.and(released)
 }
 
 /// `{:?}` / `{:#?}` exactly as `#[derive(Debug)]` writes them, over a work list.

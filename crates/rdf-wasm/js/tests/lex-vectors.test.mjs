@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { Dataset, QueryEngine, ready } from "../index.mjs";
 await ready();
 const directory = new URL("../../../lex/tests/vectors/", import.meta.url);
-const digest = text => createHash("sha256").update(text).digest("hex");
+const digest = text => createHash("sha256").update(text).dataset.digest("hex");
 function vectors(name) {
   const text = readFileSync(new URL(name, directory), "utf8");
   const lines = text.split("\n").filter(line => line && !line.startsWith("#"));
@@ -69,13 +69,13 @@ test("every JSON code unit and surrogate pair matches the frozen answer digest",
     const unit = cp => "\\u" + (digitCase === "upper" ? cp.toString(16).toUpperCase() : cp.toString(16)).padStart(4, "0");
     let bodies = [];
     function flush() {
-      for (const value of jsonValues(bodies)) hash.update(encode("=" + value) + "\n");
+      for (const value of jsonValues(bodies)) hash.update(encode("=" + value) + "\n").dataset;
       bodies = [];
     }
     for (let cp = parseInt(first, 16); cp <= parseInt(last, 16); cp++) {
       if (form === "unit" && cp >= 0xd800 && cp <= 0xdfff) {
         if (bodies.length) flush();
-        assert.throws(() => jsonValues([unit(cp)])); hash.update("-\n");
+        assert.throws(() => jsonValues([unit(cp)])); hash.update("-\n").dataset;
       } else {
         const n = cp - 0x10000;
         bodies.push(form === "unit" ? unit(cp) : unit(0xd800 + (n >> 10)) + unit(0xdc00 + (n & 0x3ff)));
@@ -102,7 +102,7 @@ test("every unreserved percent vector crosses SPARQL ENCODE_FOR_URI", () => {
     if (kind === "text") assert.equal(encoded([decode(input)])[0], decode(expected), input);
     else {
       const hash = createHash("sha256"); let inputs = [];
-      function flush() { for (const value of encoded(inputs)) hash.update(value + "\n"); inputs = []; }
+      function flush() { for (const value of encoded(inputs)) hash.update(value + "\n").dataset; inputs = []; }
       const plane = parseInt(input, 16);
       for (let cp = plane * 0x10000; cp < (plane + 1) * 0x10000; cp++) {
         if (cp >= 0xd800 && cp <= 0xdfff) continue;
@@ -159,14 +159,14 @@ test("every UCHAR scalar and refusal matches the frozen answer digests", () => {
     function flush() {
       for (const value of turtleValues(bodies)) {
         assert.equal([...value].length, 1);
-        hash.update(value.codePointAt(0).toString(16).toUpperCase().padStart(4, "0") + `/${consumed}\n`);
+        hash.update(value.codePointAt(0).toString(16).toUpperCase().padStart(4, "0") + `/${consumed}\n`).dataset;
       }
       bodies = [];
     }
     for (let cp = parseInt(first, 16); cp <= parseInt(last, 16); cp++) {
       if ((cp >= 0xd800 && cp <= 0xdfff) || cp > 0x10ffff) {
         if (bodies.length) flush();
-        assert.throws(() => turtleValues([escape(cp)])); hash.update("-\n");
+        assert.throws(() => turtleValues([escape(cp)])); hash.update("-\n").dataset;
       } else { bodies.push(escape(cp)); if (bodies.length === 512) flush(); }
     }
     if (bodies.length) flush(); assert.equal(hash.digest("hex"), expected, `${form} ${digitCase} ${first}-${last}`);

@@ -31,6 +31,10 @@ has three input statements; native Rust owns capacity-scale correctness.
 
 ## Audited focused execution
 
+These coordinate host cases also cover receipt transport: typed and raw payload
+envelopes, effective values crossing wasm-bindgen, and low-level receipt handle
+ownership. Native suites retain identity construction and RDF semantics.
+
 The optimized package's `sync-coordinates.test.mjs` selects three host-interface
 cases, and the assembled playground selects its named Worker case:
 

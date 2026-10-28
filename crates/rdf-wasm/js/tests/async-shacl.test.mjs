@@ -513,13 +513,13 @@ test("a signal stops a SHACL validation: its reason, a timeout, and an already-a
   const aborted = await rejection(
     validateAsync(CORE_SHAPES, HEAVY, null, { signal: controller.signal, yieldEveryPolls: 16 }),
   );
-  assert.equal(aborted, reason, "the twin rejects with the signal's own reason");
+  assert.equal(aborted.cause, reason, "the twin rejects with the signal's own reason");
 
   // The entailment twin stops between a rule's focus nodes the same way.
   const entailController = new AbortController();
   setTimeout(() => entailController.abort(reason), 1);
   assert.equal(
-    await rejection(entailAsync(RULE_SHAPES, HEAVY, null, { signal: entailController.signal, yieldEveryPolls: 16 })),
+    (await rejection(entailAsync(RULE_SHAPES, HEAVY, null, { signal: entailController.signal, yieldEveryPolls: 16 }))).cause,
     reason,
   );
 
@@ -529,7 +529,7 @@ test("a signal stops a SHACL validation: its reason, a timeout, and an already-a
     validateAsync(CORE_SHAPES, HEAVY, null, { signal: deadline, yieldEveryPolls: 16 }),
   );
   assert.equal(timedOut.name, "TimeoutError");
-  assert.equal(timedOut, deadline.reason);
+  assert.equal(timedOut.cause, deadline.reason);
 
   // An already-aborted signal rejects before any job begins: the resolver is never asked.
   const early = new AbortController();

@@ -923,6 +923,51 @@ impl DatasetView for ShaclDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Infallible> {
+        let source = match &self.source {
+            Source::Native(source) => source.snapshot_identity()?,
+            Source::Composite(dense) => dense.source.snapshot_identity()?,
+            Source::Delta(dense) => dense.source.snapshot_identity()?,
+        };
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        const DOMAIN: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-shapes/data-view-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Streaming::<1024>::new();
+        hash.update(DOMAIN.as_bytes());
+        hash.update(source.as_bytes());
+        hash.update(&[
+            u8::from(self.projected),
+            u8::from(self.statements_projected),
+        ]);
+        match self.selected_graph {
+            None => {
+                hash.update(&[0]);
+            }
+            Some(graph) => match self.resolve_term(graph) {
+                TermRef::Iri(iri) => {
+                    hash.update(&[1]);
+                    purrdf_hash::frame::frame_le_with(iri.as_bytes(), &mut |bytes| {
+                        hash.update(bytes);
+                    });
+                }
+                TermRef::Blank { label, scope } => {
+                    hash.update(&[2]);
+                    hash.update(&scope.0.to_le_bytes());
+                    purrdf_hash::frame::frame_le_with(label.as_bytes(), &mut |bytes| {
+                        hash.update(bytes);
+                    });
+                }
+                // RDF graph names have exactly these two native representations.
+                // A caller selecting another term has not supplied a graph identity.
+                TermRef::Literal { .. } | TermRef::Triple { .. } => return Ok(None),
+            },
+        }
+        Ok(Some(purrdf_hash::hex::Digest32::new(
+            *hash.finalize().as_bytes(),
+        )))
+    }
     fn reserve_owned_workspace(
         &self,
         bytes: u64,

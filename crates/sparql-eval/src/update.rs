@@ -152,6 +152,19 @@ purrdf_lex::variant_from!(UpdateAbort {
 /// well-formed request cannot reach this. It is still checked rather than assumed:
 /// `INSERT DATA` is a genuine ingress into the store, and the absoluteness invariant
 /// is enforced where terms ENTER the store, not where we believe they came from.
+fn execution_abort(
+    error: &crate::EvalError,
+    governors: Option<&Arc<GovernorState>>,
+) -> UpdateAbort {
+    if let Some(tripped) = governors.and_then(|state| state.tripped()) {
+        return UpdateAbort::Tripped(tripped);
+    }
+    UpdateAbort::Failed(RdfDiagnostic::error(
+        crate::engine::eval_diagnostic_code(error, "native-sparql-update-eval"),
+        error.to_string(),
+    ))
+}
+
 fn insertion_abort(error: purrdf_iri::IriReadError) -> UpdateAbort {
     let diagnostic = match error {
         purrdf_iri::IriReadError::Lexical(err) => RdfDiagnostic::error(
@@ -442,7 +455,25 @@ pub(crate) fn eval_update(
     // Only a supplied seed owns a request-wide stream. Absence preserves the
     // existing fresh host seed for each WHERE context.
     let mut supplied_rng = cfg.options.entropy_seed;
-    for op in &update.operations {
+    let capability = cfg
+        .governors
+        .map_or_else(crate::WorkspaceCapability::resident, |state| {
+            state.workspace_capability().clone()
+        });
+    let program = {
+        let mut frame = crate::workspace::LexicalFrame::new(&capability);
+        purrdf_sparql_algebra::identity::update_with_memory(
+            update,
+            &mut purrdf_lex::allocation::Memory::new(&mut frame),
+        )
+        .map_err(|error| {
+            execution_abort(
+                &frame.storage_error(error, "update identity"),
+                cfg.governors,
+            )
+        })?
+    };
+    for (index, op) in update.operations.iter().enumerate() {
         apply_operation(
             op,
             m,
@@ -450,12 +481,25 @@ pub(crate) fn eval_update(
             cfg,
             &mut bnode_counter,
             &mut supplied_rng,
-            coordinates.as_deref_mut(),
+            UpdateReceipt {
+                program: &program,
+                operation: index as u64,
+                external_source: resolver.is_some(),
+                first: coordinates.as_deref_mut(),
+            },
         )?;
         // Close the single-operation terminal hole as well as the gap between operations.
         check_stop(cfg.governors)?;
     }
     Ok(())
+}
+
+/// Original program and operation ordinal beside the first-context output slot.
+struct UpdateReceipt<'a> {
+    program: &'a purrdf_hash::hex::Digest32,
+    operation: u64,
+    external_source: bool,
+    first: Option<&'a mut crate::QueryCoordinates>,
 }
 
 /// Apply one update operation to `m`. `bnode_counter` is the request-wide monotonic
@@ -476,7 +520,7 @@ fn apply_operation(
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
     supplied_rng: &mut Option<u64>,
-    coordinates: Option<&mut crate::QueryCoordinates>,
+    receipt: UpdateReceipt<'_>,
 ) -> Result<(), UpdateAbort> {
     check_stop(cfg.governors)?;
     match op {
@@ -504,7 +548,7 @@ fn apply_operation(
             cfg,
             bnode_counter,
             supplied_rng,
-            coordinates,
+            receipt,
         ),
         GraphUpdateOperation::Load {
             silent,
@@ -619,7 +663,7 @@ fn delete_insert(
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
     supplied_rng: &mut Option<u64>,
-    coordinates: Option<&mut crate::QueryCoordinates>,
+    mut receipt: UpdateReceipt<'_>,
 ) -> Result<(), UpdateAbort> {
     let DeleteInsertSpec {
         delete,
@@ -694,25 +738,6 @@ fn delete_insert(
     if let Some(preds) = cfg.standpoint_predicates {
         ctx = ctx.with_shared_standpoint_predicates(Arc::clone(preds));
     }
-    // Capture the actual first context owner before any reservation, forecast
-    // or draw. Later WHERE operations continue the stream but never replace its
-    // initial receipt. Ungoverned execution requests no capture.
-    if let Some(coordinates) = coordinates
-        && matches!(coordinates, crate::QueryCoordinates::NotStarted)
-    {
-        *coordinates = crate::QueryCoordinates::started(
-            &ctx.now,
-            ctx.rng_state,
-            cfg.options.now.is_some(),
-            cfg.options.entropy_seed.is_some(),
-        )
-        .map_err(|error| {
-            RdfDiagnostic::error(
-                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
-                error.to_string(),
-            )
-        })?;
-    }
     // Seed the WHERE/template context from the request-wide counter (never reset
     // between operations — see `eval_update`) and hand it back below, so blanks
     // minted by this operation (template blanks, `BNODE()`, `rdf:List` cells) stay
@@ -733,14 +758,6 @@ fn delete_insert(
         })?;
     }
 
-    ctx.reserve_concrete_blank_inputs(pattern)
-        .map_err(|error| {
-            RdfDiagnostic::error(
-                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
-                error.to_string(),
-            )
-        })?;
-
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
     // default graph; otherwise the dataset under mutation. An absent USING/WITH graph
@@ -752,6 +769,53 @@ fn delete_insert(
     } else {
         ActiveDataset::store_default()
     };
+
+    // Each WHERE observes the actual snapshot after prior operations. The full
+    // program and ordinal distinguish identical bodies in different operations;
+    // observers receive every context while governed results retain the first.
+    const UPDATE_CONTEXT: purrdf_hash::Domain =
+        purrdf_hash::Domain::new(b"purrdf-sparql-eval/update-context/v1");
+    let mut request = purrdf_hash::blake3::Streaming::<1024>::new();
+    request.update(UPDATE_CONTEXT.as_bytes());
+    request.update(receipt.program.as_bytes());
+    request.update(&receipt.operation.to_le_bytes());
+    request.update(&ctx.bnode_counter.to_le_bytes());
+    let capture_first = receipt
+        .first
+        .as_deref()
+        .is_some_and(|value| matches!(value, crate::QueryCoordinates::NotStarted));
+    if capture_first && let Some(first) = receipt.first.as_deref_mut() {
+        *first = crate::QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            cfg.options.now.is_some(),
+            cfg.options.entropy_seed.is_some(),
+        )
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
+    }
+    let captured = crate::engine::coordinates::capture_request(
+        &ctx,
+        *request.finalize().as_bytes(),
+        cfg.options,
+        receipt.external_source,
+    )
+    .map_err(|error| execution_abort(&error, cfg.governors))?;
+    if capture_first && let Some(first) = receipt.first {
+        *first = captured;
+    }
+
+    ctx.reserve_concrete_blank_inputs(pattern)
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
 
     admit_where(
         pattern,

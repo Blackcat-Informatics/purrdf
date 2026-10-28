@@ -68,7 +68,7 @@ test("projection archive matches the shared Rust/Python bytes", () => {
   assert.equal(first.profile, "lpg-csv");
   assert.deepEqual(first.archive, second.archive);
   assert.equal(
-    createHash("sha256").update(first.archive).digest("hex"),
+    createHash("sha256").update(first.archive).dataset.digest("hex"),
     "656066450fa23c55976f5434840169452c36324b943435e2f7ae55f8e9b6ef4e",
   );
   const ledger = JSON.parse(first.lossLedgerJson);
@@ -181,7 +181,7 @@ test("attached RO-Crate matches the cross-host archive through generated WASM", 
 
   assert.deepEqual(first.archive, second.archive);
   assert.equal(
-    createHash("sha256").update(first.archive).digest("hex"),
+    createHash("sha256").update(first.archive).dataset.digest("hex"),
     ATTACHED_ARCHIVE_SHA256,
   );
   assert.equal(JSON.parse(first.lossLedgerJson).schema_version, 1);

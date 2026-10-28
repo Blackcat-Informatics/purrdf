@@ -30,6 +30,13 @@ use crate::term::Term;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum XPathValidationError {
+    /// Selected-law failure with the rule contexts captured before refusal.
+    RuleExecution {
+        /// Original selected-law cause.
+        cause: Box<Self>,
+        /// Supplied inputs and observed effective contexts.
+        coordinates: Box<crate::RuleCoordinates>,
+    },
     /// Existing shape, projection, source or target admission failed.
     Shapes(ShapesError),
     /// A selected dated SHACL bundle refused source or query admission.
@@ -54,6 +61,7 @@ purrdf_lex::variant_from!(XPathValidationError {
 impl fmt::Display for XPathValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuleExecution { cause, .. } => cause.fmt(f),
             Self::Shapes(error) => error.fmt(f),
             Self::Complete(error) => error.fmt(f),
             Self::Pattern(error) => error.fmt(f),
@@ -68,6 +76,7 @@ impl fmt::Display for XPathValidationError {
 impl std::error::Error for XPathValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RuleExecution { cause, .. } => Some(cause.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::Complete(error) => Some(error.as_ref()),
             Self::Pattern(error) => Some(error),
@@ -891,7 +900,17 @@ pub fn run_rules_with_options(
     };
     Configuration::detached(profile, pattern_limits, owner)
         .run(|| crate::rules::run_rules_with_options(source, data, options))
-        .map_err(|error| error.into_public(XPathValidationError::Shapes))
+        .map_err(|error| match error.into_parts() {
+            (Some(cause), Some(ShapesError::RuleExecution(execution))) => {
+                XPathValidationError::RuleExecution {
+                    cause: Box::new(cause.into_public()),
+                    coordinates: Box::new(execution.coordinates),
+                }
+            }
+            (Some(cause), _) => cause.into_public(),
+            (None, Some(error)) => XPathValidationError::Shapes(error),
+            (None, None) => unreachable!("a refused rule run retains its cause"),
+        })
 }
 
 /// Evaluate one node expression under an explicit dated XPath law and finite limits.

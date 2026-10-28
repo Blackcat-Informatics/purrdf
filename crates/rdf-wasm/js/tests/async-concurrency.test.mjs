@@ -163,13 +163,13 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   const baseline = {
     select: rowsOf(baselineEngine.select(data, PATH_SELECT)),
     backward: rowsOf(baselineEngine.select(data, PATH_BACKWARD)),
-    construct: baselineEngine.construct(data, PATH_CONSTRUCT).canonicalize(),
+    construct: baselineEngine.construct(data, PATH_CONSTRUCT).dataset.canonicalize(),
   };
   // 12 edges: 78 pairs one or more steps apart, 12 subjects reaching n12, and 91
   // reflexive-or-longer pairs to construct.
   assert.equal(baseline.select.length, 78);
   assert.equal(baseline.backward.length, 12);
-  assert.equal(engine.construct(data, PATH_CONSTRUCT).size, 91);
+  assert.equal(engine.construct(data, PATH_CONSTRUCT).dataset.size, 91);
 
   const yieldEvery = { yieldEveryPolls: 0 };
   let settled = 0;
@@ -182,7 +182,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
    * suspended — mostly mid-traversal, with its walk scope open — then one turn. */
   const turn = async () => {
     assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select, `sync select, turn ${turns}`);
-    assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct, `sync construct, turn ${turns}`);
+    assert.equal(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize(), baseline.construct, `sync construct, turn ${turns}`);
     assert.equal(stackPointer(), IDLE);
     turns += 1;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -193,7 +193,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   await turn();
   await turn();
   jobs.select = track(engine.queryGovernedAsync(data, PATH_SELECT, yieldEvery));
-  jobs.construct = track(engine.constructAsync(data, PATH_CONSTRUCT, yieldEvery));
+  jobs.construct = track(engine.constructAsync(data, PATH_CONSTRUCT, yieldEvery).then(result => result.dataset));
   while (settled < Object.keys(jobs).length) await turn();
   assert.ok(turns > 10, `the jobs interleaved over ${turns} turns`);
 
@@ -210,7 +210,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   // Afterwards every lane still answers exactly — nothing a job left behind (a scope
   // it never closed, a refusal it latched) outlives it.
   assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select);
-  assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct);
+  assert.equal(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize(), baseline.construct);
   assert.deepEqual(rowsOf(await engine.queryAsync(data, PATH_BACKWARD, yieldEvery)), baseline.backward);
   assert.equal(stackPointer(), IDLE);
 });

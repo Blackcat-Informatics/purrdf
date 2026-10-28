@@ -1,19 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Request-selected clock values retain their native coefficient admission.
+//! Effective execution coordinates retain their original native admission.
 
 use crate::workspace::LexicalFrame;
 use crate::{EvalError, WorkspaceCapability};
 use purrdf_lex::allocation::{Memory, SharedOwned};
 use purrdf_xsd::{XsdValue, temporal::DateTime};
 
-/// Supplied coordinates retained by one native governed query or UPDATE outcome,
-/// or query evidence. UPDATE records its first constructed WHERE context;
-/// operations without a WHERE context do not start this receipt.
-/// This is not a query, source or snapshot identity. Missing supplied inputs
-/// make no claim about sampled defaults. Clones share the original admitted
-/// timestamp coefficient; they allocate no replacement storage or owner.
+/// Receives the actual context coordinates before evaluation or random draws.
+/// A refusal aborts execution through the evaluator's native error channel.
+pub trait ExecutionCoordinateObserver: Send + Sync {
+    /// Retain or incorporate one context's original coordinate receipt.
+    ///
+    /// # Errors
+    /// Returns the observer's admission or publication failure.
+    fn observe(&self, coordinates: &QueryCoordinates) -> Result<(), EvalError>;
+}
+
+/// Actual coordinates retained by native execution outcomes and evidence.
+/// Supplied and sampled inputs share the original admitted timestamp owner.
+/// UPDATE records its first constructed WHERE context; operations without one
+/// leave the context receipt unstarted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryCoordinates {
     /// No evaluation context was successfully created. Preparation or reads may
@@ -23,33 +31,65 @@ pub enum QueryCoordinates {
     Started(SuppliedQueryCoordinates),
 }
 
-/// Supplied inputs captured from an admitted context before its first draw.
+/// Effective inputs and identities captured before the context's first draw.
 /// Private fields preserve the original timestamp owner across every clone.
 #[derive(Debug, Clone)]
 pub struct SuppliedQueryCoordinates {
-    now: Option<DateTime>,
-    entropy_seed: Option<u64>,
+    now: DateTime,
+    entropy_seed: u64,
+    supplied_now: bool,
+    supplied_seed: bool,
+    snapshot: Option<purrdf_hash::hex::Digest32>,
+    execution: Option<purrdf_hash::hex::Digest32>,
 }
 impl SuppliedQueryCoordinates {
     /// Effective supplied time, including exact seconds and declared timezone.
     #[must_use]
     pub const fn now(&self) -> Option<&DateTime> {
-        self.now.as_ref()
+        if self.supplied_now {
+            Some(&self.now)
+        } else {
+            None
+        }
     }
     /// Effective supplied seed before the execution's first random draw.
     #[must_use]
     pub const fn entropy_seed(&self) -> Option<u64> {
+        if self.supplied_seed {
+            Some(self.entropy_seed)
+        } else {
+            None
+        }
+    }
+    /// The context's actual clock value, including a sampled default.
+    #[must_use]
+    pub const fn effective_now(&self) -> &DateTime {
+        &self.now
+    }
+    /// The context's actual initial entropy state, before its first draw.
+    #[must_use]
+    pub const fn effective_entropy_seed(&self) -> u64 {
         self.entropy_seed
+    }
+    /// Certified immutable source identity when the carrier supplies one.
+    #[must_use]
+    pub const fn snapshot_identity(&self) -> Option<&purrdf_hash::hex::Digest32> {
+        self.snapshot.as_ref()
+    }
+    /// Identity binding the request, source and actual effective coordinates.
+    #[must_use]
+    pub const fn execution_identity(&self) -> Option<&purrdf_hash::hex::Digest32> {
+        self.execution.as_ref()
     }
 }
 impl PartialEq for SuppliedQueryCoordinates {
     fn eq(&self, other: &Self) -> bool {
         self.entropy_seed == other.entropy_seed
-            && match (&self.now, &other.now) {
-                (None, None) => true,
-                (Some(left), Some(right)) => left.same_representation(right),
-                _ => false,
-            }
+            && self.supplied_now == other.supplied_now
+            && self.supplied_seed == other.supplied_seed
+            && self.now.same_representation(&other.now)
+            && self.snapshot == other.snapshot
+            && self.execution == other.execution
     }
 }
 impl Eq for SuppliedQueryCoordinates {}
@@ -61,20 +101,276 @@ impl QueryCoordinates {
         supplied_now: bool,
         supplied_seed: bool,
     ) -> Result<Self, EvalError> {
-        let now = if supplied_now {
-            let XsdValue::DateTime(now) = now else {
-                return Err(EvalError::Invariant(
-                    crate::EvaluatorInvariant::QueryClockNotDateTime,
-                ));
-            };
-            Some(now.clone())
-        } else {
-            None
+        let XsdValue::DateTime(now) = now else {
+            return Err(EvalError::Invariant(
+                crate::EvaluatorInvariant::QueryClockNotDateTime,
+            ));
         };
         Ok(Self::Started(SuppliedQueryCoordinates {
-            now,
-            entropy_seed: supplied_seed.then_some(seed),
+            now: now.clone(),
+            entropy_seed: seed,
+            supplied_now,
+            supplied_seed,
+            snapshot: None,
+            execution: None,
         }))
+    }
+}
+
+/// Capture the request's exact algebra and effective bindings under its account.
+pub(crate) fn capture_query<D: purrdf_core::DatasetView + Sync>(
+    ctx: &crate::eval::EvalCtx<'_, D>,
+    prepared: &super::PreparedQuery,
+    bindings: crate::substitute::Prebindings<'_>,
+    options: super::QueryOptions<'_, '_>,
+) -> Result<QueryCoordinates, EvalError> {
+    let request: Result<[u8; 32], EvalError> = (|| {
+        let mut frame = LexicalFrame::new(&ctx.growth);
+        let mut memory = Memory::new(&mut frame);
+        let query = match prepared.coordinate_identity.get() {
+            Some(identity) => *identity,
+            None => {
+                let identity = purrdf_sparql_algebra::identity::query_with_memory(
+                    &prepared.query,
+                    &mut memory,
+                )
+                .map_err(|error| ctx.growth.storage_error(error, "execution query identity"))?;
+                *prepared.coordinate_identity.get_or_init(|| identity)
+            }
+        };
+        let mut request = purrdf_hash::blake3::Streaming::<1024>::new();
+        const DOMAIN: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-sparql-eval/bound-request/v1");
+        request.update(DOMAIN.as_bytes());
+        request.update(query.as_bytes());
+        request.update(&(bindings.len() as u64).to_le_bytes());
+        for index in 0..bindings.len() {
+            purrdf_hash::frame::frame_le_with(bindings.name(index).as_bytes(), &mut |part| {
+                request.update(part);
+            });
+            let ground = bindings
+                .ground_with_memory(index, &mut memory)
+                .map_err(crate::substitute::GroundFailure::into_eval_error)?;
+            let identity = purrdf_sparql_algebra::identity::node_with_memory(
+                purrdf_sparql_algebra::walk::NodeRef::Ground(&ground),
+                &mut memory,
+            )
+            .map_err(|error| {
+                ctx.growth
+                    .storage_error(error, "execution binding identity")
+            })?;
+            request.update(identity.as_bytes());
+        }
+        request.update(&prepared.geo.framed_bytes());
+        Ok(*request.finalize().as_bytes())
+    })();
+    match request {
+        Ok(request) => capture_request(ctx, request, options, false),
+        Err(error) => {
+            if let Some(observer) = options.coordinate_observer {
+                observer.observe(&QueryCoordinates::started(
+                    &ctx.now,
+                    ctx.rng_state,
+                    options.now.is_some(),
+                    options.entropy_seed.is_some(),
+                )?)?;
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Bind a request digest to its actual immutable source and initial coordinates.
+pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
+    ctx: &crate::eval::EvalCtx<'_, D>,
+    request: [u8; 32],
+    options: super::QueryOptions<'_, '_>,
+    external_source: bool,
+) -> Result<QueryCoordinates, EvalError> {
+    let mut coordinates = QueryCoordinates::started(
+        &ctx.now,
+        ctx.rng_state,
+        options.now.is_some(),
+        options.entropy_seed.is_some(),
+    )?;
+    let identity: Result<(), EvalError> = (|| {
+        let QueryCoordinates::Started(value) = &mut coordinates else {
+            unreachable!()
+        };
+        value.snapshot = ctx
+            .dataset
+            .snapshot_identity()
+            .map_err(|error| ctx.workspace.source_error(error))?;
+        let opaque = external_source
+            || options.candidate_scope.is_some()
+            || options.remote.is_some()
+            || options.load.is_some()
+            || !options.property_functions().is_empty()
+            || !options.aggregates().is_empty()
+            || options.functions.declarations().has_opaque_bodies();
+        if let Some(snapshot) = value.snapshot
+            && (!opaque || options.implementation_identity.is_some())
+        {
+            const DOMAIN: purrdf_hash::Domain =
+                purrdf_hash::Domain::new(b"purrdf-sparql-eval/execution-coordinates/v1");
+            let mut digest = purrdf_hash::blake3::Streaming::<1024>::new();
+            digest.update(DOMAIN.as_bytes());
+            digest.update(&request);
+            match options.implementation_identity {
+                Some(identity) => {
+                    digest.update(&[1]);
+                    digest.update(identity.as_bytes());
+                }
+                None => {
+                    digest.update(&[0]);
+                }
+            }
+            digest.update(&[match options.graph_existence {
+                purrdf_core::GraphExistenceMode::Implicit => 0,
+                purrdf_core::GraphExistenceMode::RememberEmpty => 1,
+                _ => {
+                    return Err(EvalError::unsupported(
+                        "unrecognized graph lifetime policy in execution identity",
+                    ));
+                }
+            }]);
+            digest.update(snapshot.as_bytes());
+            digest.update(value.now.representation_identity().as_bytes());
+            digest.update(&value.entropy_seed.to_le_bytes());
+            let mut frame = LexicalFrame::new(&ctx.growth);
+            let mut memory = Memory::new(&mut frame);
+            digest.update(
+                options
+                    .env
+                    .content_fingerprint_with_memory(&mut memory)?
+                    .as_bytes(),
+            );
+            for population in [
+                crate::user_fn::FnPopulation::Declared,
+                crate::user_fn::FnPopulation::Injected,
+            ] {
+                digest.update(
+                    crate::user_fn::content_fingerprint_with_memory(
+                        options.functions.declarations(),
+                        population,
+                        &mut memory,
+                    )?
+                    .as_bytes(),
+                );
+            }
+            purrdf_hash::frame::frame_le_with(
+                options.bnode_mint_prefix.unwrap_or("").as_bytes(),
+                &mut |part| {
+                    digest.update(part);
+                },
+            );
+            digest.update(&[u8::from(options.disjoint_language_strings)]);
+            // Canonical policy text is emitted directly into a bounded-stack hash
+            // sink; no formatted String or unowned scratch allocation is created.
+            let mut policy = purrdf_hash::blake3::Streaming::<1024>::new();
+            std::fmt::write(
+                &mut DigestText(&mut policy),
+                format_args!("{}", options.division),
+            )
+            .map_err(|_| {
+                EvalError::Invariant(crate::EvaluatorInvariant::CoordinateIdentityFormatting)
+            })?;
+            digest.update(policy.finalize().as_bytes());
+            if let Some(selection) = ctx.xpath_regex {
+                use purrdf_core::xsd_regex::xpath::Resource;
+                digest.update(&[1]);
+                purrdf_hash::frame::frame_le_with(
+                    selection.profile.name().as_bytes(),
+                    &mut |part| {
+                        digest.update(part);
+                    },
+                );
+                for resource in [
+                    Resource::PatternBytes,
+                    Resource::CompileSteps,
+                    Resource::ProgramNodes,
+                    Resource::CompileSlots,
+                    Resource::MatchSteps,
+                    Resource::MatchStates,
+                    Resource::MatchSlots,
+                    Resource::OutputBytes,
+                ] {
+                    digest.update(&selection.limits.limit(resource).to_le_bytes());
+                }
+            } else {
+                digest.update(&[0]);
+            }
+            digest.update(&[
+                u8::from(ctx.options.exists_memo),
+                u8::from(ctx.options.force_structural_bgp_order),
+                u8::from(ctx.options.force_sequential),
+                u8::from(ctx.options.disable_shapes),
+            ]);
+            digest.update(&options.call_depth.to_le_bytes());
+            match &ctx.standpoint_predicates {
+                Some(predicates) => {
+                    digest.update(&[1]);
+                    for text in [&predicates.according_to, &predicates.sharpens] {
+                        purrdf_hash::frame::frame_le_with(text.as_bytes(), &mut |part| {
+                            digest.update(part);
+                        });
+                    }
+                }
+                None => {
+                    digest.update(&[0]);
+                }
+            }
+            match &ctx.loss_vocabulary {
+                Some(vocabulary) => {
+                    digest.update(&[1]);
+                    for text in [
+                        &vocabulary.projection_loss,
+                        &vocabulary.loss_code,
+                        &vocabulary.lost_reifies,
+                    ] {
+                        purrdf_hash::frame::frame_le_with(text.as_bytes(), &mut |part| {
+                            digest.update(part);
+                        });
+                    }
+                }
+                None => {
+                    digest.update(&[0]);
+                }
+            }
+            if let Some(graph) = options.focus_graph {
+                digest.update(&[1]);
+                match purrdf_core::DatasetView::snapshot_identity(graph.as_ref()) {
+                    Ok(Some(identity)) => {
+                        digest.update(identity.as_bytes());
+                    }
+                    Ok(None) => {
+                        return Err(EvalError::Invariant(
+                            crate::EvaluatorInvariant::CoordinateFocusIdentityMissing,
+                        ));
+                    }
+                    Err(never) => match never {},
+                }
+            } else {
+                digest.update(&[0]);
+            }
+            value.execution = Some(purrdf_hash::hex::Digest32::new(
+                *digest.finalize().as_bytes(),
+            ));
+        }
+        Ok(())
+    })();
+    if let Some(observer) = options.coordinate_observer {
+        observer.observe(&coordinates)?;
+    }
+    identity?;
+    Ok(coordinates)
+}
+
+struct DigestText<'a>(&'a mut purrdf_hash::blake3::Streaming<1024>);
+impl std::fmt::Write for DigestText<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.0.update(text.as_bytes());
+        Ok(())
     }
 }
 
@@ -188,13 +484,12 @@ mod tests {
             (coordinates, rows)
         };
         let (coordinates, rows) = execute(&first, 7);
-        assert_eq!(
-            coordinates,
-            QueryCoordinates::Started(SuppliedQueryCoordinates {
-                now: Some(first.clone()),
-                entropy_seed: Some(7)
-            })
-        );
+        let QueryCoordinates::Started(started) = &coordinates else {
+            panic!("started query")
+        };
+        assert!(started.now().unwrap().same_representation(&first));
+        assert_eq!(started.entropy_seed(), Some(7));
+        assert!(started.execution_identity().is_some());
         assert_eq!((coordinates.clone(), rows.clone()), execute(&first, 7));
         let (other, shifted_rows) = execute(&shifted, 7);
         assert_ne!(
@@ -209,7 +504,7 @@ mod tests {
         assert_ne!(rows[1..], seeded_rows[1..]);
     }
 
-    /// Missing inputs remain missing even though the context has sampled defaults.
+    /// Every entry reports actual defaults while keeping supplied inputs distinguishable.
     #[test]
     fn started_receipt_distinguishes_partial_and_absent_supplied_inputs() {
         let engine = NativeSparqlEngine::new();
@@ -225,29 +520,26 @@ mod tests {
             )
             .unwrap();
         let now = time("2024-02-29T12:34:56.125+05:30");
-        for (options, expected) in [
-            (
-                QueryOptions::EMPTY,
-                QueryCoordinates::Started(SuppliedQueryCoordinates {
-                    now: None,
-                    entropy_seed: None,
-                }),
-            ),
-            (
-                QueryOptions::new().with_now(&now),
-                QueryCoordinates::Started(SuppliedQueryCoordinates {
-                    now: Some(now.clone()),
-                    entropy_seed: None,
-                }),
-            ),
-            (
-                QueryOptions::new().with_entropy_seed(0),
-                QueryCoordinates::Started(SuppliedQueryCoordinates {
-                    now: None,
-                    entropy_seed: Some(0),
-                }),
-            ),
+        for (options, supplied_now, supplied_seed) in [
+            (QueryOptions::EMPTY, false, None),
+            (QueryOptions::new().with_now(&now), true, None),
+            (QueryOptions::new().with_entropy_seed(0), false, Some(0)),
         ] {
+            let assert_receipt = |coordinates: &QueryCoordinates| {
+                let QueryCoordinates::Started(started) = coordinates else {
+                    panic!("started query")
+                };
+                assert_eq!(started.now().is_some(), supplied_now);
+                if supplied_now {
+                    assert!(started.effective_now().same_representation(&now));
+                }
+                assert_eq!(started.entropy_seed(), supplied_seed);
+                if let Some(seed) = supplied_seed {
+                    assert_eq!(started.effective_entropy_seed(), seed);
+                }
+                assert!(started.snapshot_identity().is_some());
+                assert!(started.execution_identity().is_some());
+            };
             let receipt = engine
                 .execute_governed_admitted(
                     &mut prepared,
@@ -258,7 +550,7 @@ mod tests {
                     |_| (),
                 )
                 .unwrap();
-            assert_eq!(receipt.coordinates(), &expected);
+            assert_receipt(receipt.coordinates());
             let query = "SELECT (1 AS ?value) WHERE {}";
             let request = purrdf_core::SparqlRequest {
                 query,
@@ -268,7 +560,7 @@ mod tests {
             let materialized = engine
                 .query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
                 .unwrap();
-            assert_eq!(materialized.coordinates(), &expected);
+            assert_receipt(materialized.coordinates());
             let state = std::sync::Arc::new(crate::GovernorState::new(&QueryGovernors::METERED));
             let interned = engine
                 .query_governed_interned_in_operation(
@@ -283,11 +575,11 @@ mod tests {
                     |_| (),
                 )
                 .unwrap();
-            assert_eq!(interned.coordinates(), &expected);
+            assert_receipt(interned.coordinates());
             let converted = engine
                 .execute_governed_in_operation(&mut prepared, &dataset, options, &state, |_| ())
                 .unwrap();
-            assert_eq!(converted.coordinates(), &expected);
+            assert_receipt(converted.coordinates());
 
             assert_ne!(receipt.coordinates(), &QueryCoordinates::NotStarted);
         }
@@ -340,13 +632,12 @@ mod tests {
             stopped.outcome(),
             InternedGoverned::BudgetExhausted(_)
         ));
-        assert_eq!(
-            stopped.coordinates(),
-            &QueryCoordinates::Started(SuppliedQueryCoordinates {
-                now: Some(now),
-                entropy_seed: Some(7)
-            })
-        );
+        let QueryCoordinates::Started(started) = stopped.coordinates() else {
+            panic!("started query")
+        };
+        assert!(started.effective_now().same_representation(&now));
+        assert_eq!(started.entropy_seed(), Some(7));
+        assert!(started.execution_identity().is_some());
     }
 
     /// The coordinate is the only returned timestamp owner, while producers stay alive between runs.
@@ -403,14 +694,11 @@ mod tests {
             assert_eq!(measured.requested_bytes, 0);
             drop(receipt);
             assert!(ledger.live.load(Ordering::Relaxed) > baseline);
-            let QueryCoordinates::Started(SuppliedQueryCoordinates {
-                now: Some(retained),
-                entropy_seed: Some(7),
-            }) = &coordinates
-            else {
+            let QueryCoordinates::Started(started) = &coordinates else {
                 panic!("supplied receipt")
             };
-            assert!(retained.same_representation(&now));
+            assert!(started.effective_now().same_representation(&now));
+            assert_eq!(started.entropy_seed(), Some(7));
             drop(coordinates);
             assert_eq!(ledger.live.load(Ordering::Relaxed), baseline);
         }

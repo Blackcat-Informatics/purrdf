@@ -492,3 +492,260 @@ fn paged_subquery_parity_across_pages() {
     // subquery aggregated across both pages.
     assert_paged_matches_single(&corpus, pages, SUBQUERY_QUERY, 2);
 }
+
+/// Each page has a dense numeric interval plus one distant outlier. Every row
+/// belongs to a distinct reified claim; no fixture pages or claims are repeated.
+fn annotation_range_pages(page_count: usize, claims_per_page: usize) -> PagedDataset {
+    use purrdf_core::{RdfDatasetBuilder, TermFactory as _};
+    let mut pages = Vec::with_capacity(page_count + 1);
+    for page in 0..page_count {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("urn:range:value").unwrap();
+        let relation = builder.intern_iri("urn:range:claim").unwrap();
+        let object = builder.intern_iri("urn:range:object").unwrap();
+        for offset in 0..claims_per_page {
+            let ordinal = page * claims_per_page + offset;
+            let claim = builder
+                .intern_iri(&format!("urn:range:{ordinal:010}"))
+                .unwrap();
+            let target = builder.intern_triple(claim, relation, object).unwrap();
+            builder.push_reifier(claim, target).unwrap();
+            let value = if offset + 1 == claims_per_page {
+                1_000_000_000_000
+            } else {
+                // Keep the scale fixture's dictionary proportional to claim IDs,
+                // not duplicated numeric spellings; the first 32 rows span the
+                // dense interval and later claims share its minimum value.
+                (page * claims_per_page + if offset < 32 { offset } else { 0 }) as u64
+            };
+            let value = builder.intern_value(&xsd_int(&value.to_string())).unwrap();
+            builder.push_annotation(claim, predicate, value).unwrap();
+        }
+        pages.push(builder.freeze().unwrap());
+    }
+    paged_over(pages)
+}
+
+fn compare_annotation_range_reads(page_count: usize, claims_per_page: usize) {
+    use purrdf_core::{FallibleDatasetView as _, SparqlRequest, ViewOperationStatus};
+    let paged = annotation_range_pages(page_count, claims_per_page);
+    assert_eq!(
+        paged.source_statement_count().unwrap(),
+        Some((page_count * claims_per_page * 2) as u128),
+        "each unique reified claim has a declaration and one annotation"
+    );
+    let low = (page_count / 2) * claims_per_page + 10;
+    let high = low + 10;
+    let engine = NativeSparqlEngine::new();
+    let run = |value: &str| {
+        let query = format!(
+            "SELECT ?claim ?value WHERE {{ ?claim <urn:range:value> ?value FILTER({value} >= {low} && {value} < {high}) }} ORDER BY ?claim"
+        );
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let began = std::time::Instant::now();
+        let result = engine
+            .query_fallible_view(
+                &view,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::EMPTY,
+            )
+            .unwrap();
+        let elapsed = began.elapsed();
+        let ViewOperationStatus::Ready { evidence } = view.operation_status() else {
+            panic!("complete source")
+        };
+        (solutions(result.result), evidence, elapsed)
+    };
+    // Arithmetic is outside the extracted comparison grammar. Adding integer
+    // zero preserves this fixture's values and executes the real residual FILTER.
+    let (unpruned, full, full_time) = run("(?value + 0)");
+    let (pruned, selected, selected_time) = run("?value");
+    assert_eq!(pruned, unpruned);
+    assert_eq!(pruned.1.len(), 10);
+    assert_eq!(full.consumed_pages, page_count as u64);
+    assert_eq!(
+        selected.consumed_pages, 1,
+        "outliers cannot widen the dense interior"
+    );
+    assert!(selected.consumed_bytes < full.consumed_bytes);
+    eprintln!(
+        "G8 claims={} pages={} full_pages={} pruned_pages={} full_bytes={} pruned_bytes={} full_elapsed={full_time:?} pruned_elapsed={selected_time:?}",
+        page_count * claims_per_page,
+        page_count,
+        full.consumed_pages,
+        selected.consumed_pages,
+        full.consumed_bytes,
+        selected.consumed_bytes
+    );
+}
+
+#[test]
+fn annotation_ranges_skip_outlier_pages_without_changing_exact_filter_results() {
+    compare_annotation_range_reads(24, 64);
+}
+
+#[test]
+#[ignore = "explicit ten-million-claim G8 scale acceptance"]
+fn ten_million_reified_claims_range_g8() {
+    compare_annotation_range_reads(10_000, 1_000);
+}
+
+#[test]
+fn annotation_ranges_keep_unknown_values_and_exact_exclusive_bounds() {
+    use purrdf_core::{RdfDatasetBuilder, SparqlRequest, TermFactory as _};
+    let mut pages = Vec::new();
+    for (index, values) in [
+        vec![xsd_int("10"), xsd_int("20"), xsd_int("30")],
+        vec![
+            xsd_int("not-an-integer"),
+            TermValue::typed_literal("20", "urn:unknown:type"),
+        ],
+        vec![
+            TermValue::typed_literal("NaN", purrdf_xsd::datatype::XSD_DOUBLE),
+            TermValue::lang_literal("20", "en"),
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("urn:range:value").unwrap();
+        for (offset, value) in values.iter().enumerate() {
+            let claim = builder
+                .intern_iri(&format!("urn:range:{index}:{offset}"))
+                .unwrap();
+            let value = builder.intern_value(value).unwrap();
+            builder.push_annotation(claim, predicate, value).unwrap();
+        }
+        pages.push(builder.freeze().unwrap());
+    }
+    let paged = paged_over(pages);
+    let engine = NativeSparqlEngine::new();
+    let run = |value: &str| {
+        let query = format!(
+            "SELECT ?v WHERE {{ ?s <urn:range:value> ?v FILTER({value} > 10 && {value} < 30) }}"
+        );
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        solutions(
+            engine
+                .query_fallible_view(
+                    &view,
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                )
+                .unwrap()
+                .result,
+        )
+    };
+    let actual = run("?v");
+    assert_eq!(actual, run("(?v + 0)"));
+    assert_eq!(actual.1, vec![vec![Some(xsd_int("20"))]]);
+}
+
+#[test]
+fn annotation_validity_ranges_use_supplied_now_and_independent_variables() {
+    use purrdf_core::{RdfDatasetBuilder, SparqlRequest, TermFactory as _};
+    use purrdf_xsd::{XsdDatatype, XsdValue};
+    let mut pages = Vec::new();
+    for (name, from, until) in [
+        ("expired", "2020-01-01T00:00:00Z", "2021-01-01T00:00:00Z"),
+        ("current", "2021-01-01T00:00:00Z", "2023-01-01T00:00:00Z"),
+        ("future", "2023-01-01T00:00:00Z", "2024-01-01T00:00:00Z"),
+    ] {
+        let mut builder = RdfDatasetBuilder::new();
+        let claim = builder.intern_iri(&format!("urn:range:{name}")).unwrap();
+        for (predicate, value) in [("urn:range:from", from), ("urn:range:until", until)] {
+            let predicate = builder.intern_iri(predicate).unwrap();
+            let value = builder
+                .intern_value(&TermValue::typed_literal(
+                    value,
+                    XsdDatatype::DateTime.iri(),
+                ))
+                .unwrap();
+            builder.push_annotation(claim, predicate, value).unwrap();
+        }
+        pages.push(builder.freeze().unwrap());
+    }
+    let paged = paged_over(pages);
+    let XsdValue::DateTime(now) =
+        purrdf_xsd::parse("2022-01-01T00:00:00Z", XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("dateTime")
+    };
+    let engine = NativeSparqlEngine::new();
+    let result = {
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        engine.query_fallible_view(&view, SparqlRequest {
+            query: "SELECT ?claim WHERE { ?claim <urn:range:from> ?from ; <urn:range:until> ?until FILTER(?from <= NOW() && ?until > NOW()) }",
+            base_iri: None, substitutions: &[],
+        }, QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0)).unwrap().result
+    };
+    assert_eq!(
+        solutions(result).1,
+        vec![vec![Some(TermValue::iri("urn:range:current"))]]
+    );
+}
+
+#[test]
+fn annotation_range_endpoint_parsing_uses_the_original_scratch_ceiling() {
+    use purrdf_core::{
+        RdfDatasetBuilder, ResourceDimension, SparqlRequest, TermFactory as _, TrippedGovernor,
+    };
+    use purrdf_sparql_eval::{GovernedOutcome, QueryGovernors};
+    let fixture = |lexical: &str| {
+        let mut builder = RdfDatasetBuilder::new();
+        let claim = builder.intern_iri("urn:range:claim").unwrap();
+        let predicate = builder.intern_iri("urn:range:value").unwrap();
+        let value = builder.intern_value(&xsd_int(lexical)).unwrap();
+        builder.push_annotation(claim, predicate, value).unwrap();
+        paged_over(vec![builder.freeze().unwrap()])
+    };
+    let tiny = fixture("1");
+    let wide = fixture(&"7".repeat(16_384));
+    let engine = NativeSparqlEngine::new();
+    let request = SparqlRequest {
+        query: "SELECT ?v WHERE { ?s <urn:range:value> ?v FILTER(?v < 0) }",
+        base_iri: None,
+        substitutions: &[],
+    };
+    let metered = engine
+        .query_governed_view(
+            &tiny,
+            request,
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    assert!(matches!(metered, GovernedOutcome::Complete { .. }));
+    let limit = metered
+        .evidence()
+        .consumed_in(ResourceDimension::ScratchBytes);
+    let governors = QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit);
+    assert!(matches!(
+        engine
+            .query_governed_view(&tiny, request, QueryOptions::EMPTY, &governors)
+            .unwrap(),
+        GovernedOutcome::Complete { .. }
+    ));
+    let stopped = engine
+        .query_governed_view(&wide, request, QueryOptions::EMPTY, &governors)
+        .unwrap();
+    let GovernedOutcome::BudgetExhausted(exhausted) = stopped else {
+        panic!("wide range endpoint must refuse its actual scratch allocation")
+    };
+    assert!(matches!(
+        exhausted.tripped,
+        TrippedGovernor::Budget {
+            dimension: ResourceDimension::ScratchBytes,
+            ..
+        }
+    ));
+}

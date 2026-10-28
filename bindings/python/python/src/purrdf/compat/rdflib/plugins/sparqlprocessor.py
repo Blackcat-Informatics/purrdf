@@ -12,6 +12,7 @@ lookups resolve to a working implementation.
 from __future__ import annotations
 
 from typing import Any
+import purrdf
 
 from ..query import Processor, Result, UpdateProcessor
 
@@ -51,9 +52,9 @@ class SPARQLUpdateProcessor(UpdateProcessor):
         initBindings: dict[str, Any] | None = None,
         initNs: dict[str, object] | None = None,
         **kwargs: Any,
-    ) -> None:
+    ) -> purrdf.UpdateOutcome:
         """Run ``strOrQuery`` as an update against the bound graph."""
-        self.graph.update(
+        return self.graph.update(
             str(strOrQuery), initBindings=initBindings, initNs=initNs, **kwargs
         )
 

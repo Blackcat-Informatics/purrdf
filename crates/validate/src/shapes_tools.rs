@@ -186,6 +186,8 @@ pub use purrdf_shapes::RuleLimits;
 /// What a rules run produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RulesOutcome {
+    /// Original supplied rule coordinates and the executed query coordinate record.
+    pub coordinates: purrdf_shapes::RuleCoordinates,
     /// The inference graph — the inferred triples only, never the base graph — as
     /// N-Triples 1.2 in canonical order
     /// ([`Inference::inferred_ntriples`](purrdf_shapes::srl::Inference::inferred_ntriples)).
@@ -287,6 +289,7 @@ fn apply_rules_with<E: From<ShapesError>>(
         ),
     };
     Ok(RulesOutcome {
+        coordinates: inference.coordinates().clone(),
         inferred_ntriples: inference.inferred_ntriples(),
         proof: request.explain.then(|| inference.proof_text()),
         diagnostics,

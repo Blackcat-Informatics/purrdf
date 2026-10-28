@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
+import json
 import pytest
-
 import purrdf
 from purrdf.compat import rdflib
 from purrdf.compat.rdflib.plugins.sparqlprocessor import SPARQLProcessor
@@ -32,7 +32,7 @@ def _store(kind=purrdf.Store):
 
 def _row(result):
     rows = list(result)
-    assert len(rows) == 1
+    assert len(rows) == 1 and json.loads(result.execution_receipt_json)["state"] == "started"
     return tuple(rows[0][i].value for i in range(len(result.variables)))
 
 
