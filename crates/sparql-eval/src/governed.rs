@@ -68,12 +68,23 @@ pub enum GovernedOutcome {
         /// The identity of the property-function registry this execution ran under.
         /// See [`RelationIdentity`].
         relations: RelationIdentity,
+        /// Supplied coordinates captured before evaluation begins.
+        coordinates: crate::QueryCoordinates,
     },
     /// A governor stopped the execution before it finished. See [`BudgetExhausted`].
     BudgetExhausted(BudgetExhausted),
 }
 
 impl GovernedOutcome {
+    /// Supplied coordinates, or a refusal before context construction.
+    #[must_use]
+    pub const fn coordinates(&self) -> &crate::QueryCoordinates {
+        match self {
+            Self::Complete { coordinates, .. } => coordinates,
+            Self::BudgetExhausted(exhausted) => &exhausted.coordinates,
+        }
+    }
+
     /// This execution's consumption and ceilings, whichever outcome it reached.
     #[must_use]
     pub const fn evidence(&self) -> &GovernorEvidence {
@@ -92,8 +103,7 @@ impl GovernedOutcome {
         self.receipts().1
     }
 
-    /// The two receipts every outcome carries, whichever it reached: the governor
-    /// evidence and the relation identity.
+    /// The governor evidence and relation identity, whichever outcome was reached.
     const fn receipts(&self) -> (&GovernorEvidence, &RelationIdentity) {
         match self {
             Self::Complete {
@@ -239,6 +249,8 @@ impl GovernedUpdateOutcome {
 /// anything already in hand is usable while that decision is made.
 #[derive(Debug, Clone)]
 pub struct BudgetExhausted {
+    /// Supplied coordinates retained even when evaluation stops partway.
+    pub coordinates: crate::QueryCoordinates,
     /// The governor that stopped the execution.
     pub tripped: TrippedGovernor,
     /// This execution's consumption, ceilings, and trip.
@@ -676,9 +688,13 @@ fn dataset_without_withheld_blank_nodes(
 /// [`CompleteSparqlResult`](crate::CompleteSparqlResult) or
 /// [`FallibleSparqlError`](crate::FallibleSparqlError) is what keeps those two types'
 /// shapes unchanged: they are already generic over their evidence, so the governed lane
-/// simply instantiates that parameter with this pair.
+/// carries those measurements alongside the exact supplied coordinates captured
+/// when its evaluation context was constructed. A failure before construction
+/// reports `NotStarted`; later failures retain the original started receipt.
 #[derive(Debug, Clone)]
 pub struct GovernedEvidence<Evidence> {
+    /// Coordinates captured by this operation, including failed publication.
+    pub coordinates: crate::QueryCoordinates,
     /// The view's deterministic operational evidence at the reporting checkpoint.
     pub view: Evidence,
     /// This execution's consumption, ceilings, and trip.
@@ -686,10 +702,20 @@ pub struct GovernedEvidence<Evidence> {
 }
 
 impl<Evidence> GovernedEvidence<Evidence> {
-    /// Pair a view's operational `view` evidence with this execution's `governors`
-    /// accounting.
+    /// Attach the original context capture without replacing its timestamp owner.
+    pub(crate) fn with_coordinates(mut self, coordinates: crate::QueryCoordinates) -> Self {
+        self.coordinates = coordinates;
+        self
+    }
+
+    /// Begin reporting before an execution context exists. The execution body
+    /// attaches its captured coordinates at the final publication boundary.
     pub(crate) const fn new(view: Evidence, governors: GovernorEvidence) -> Self {
-        Self { view, governors }
+        Self {
+            view,
+            governors,
+            coordinates: crate::QueryCoordinates::NotStarted,
+        }
     }
 }
 

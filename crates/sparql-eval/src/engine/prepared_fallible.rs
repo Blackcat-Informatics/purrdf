@@ -130,6 +130,7 @@ impl NativeSparqlEngine {
                 )
                 .map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
             })?;
+        let mut capture = crate::QueryCoordinates::NotStarted;
         let evaluation = self.query_governed_prepared_admitted(
             dataset,
             prepared,
@@ -138,9 +139,10 @@ impl NativeSparqlEngine {
             state,
             super::Sequencing::for_view::<D>(),
             workspace,
+            &mut capture,
         );
         publication.finish(
-            finish_governed_fallible_query(dataset, state, evaluation, Some(workspace)),
+            finish_governed_fallible_query(dataset, state, evaluation, Some(workspace), &capture),
             |error| matches!(error, FallibleSparqlError::Query { .. }),
         )
     }

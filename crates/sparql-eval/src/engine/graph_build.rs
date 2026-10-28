@@ -201,6 +201,7 @@ impl NativeSparqlEngine {
                 )
                 .map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
             })?;
+        let mut capture = crate::QueryCoordinates::NotStarted;
         let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
@@ -210,23 +211,28 @@ impl NativeSparqlEngine {
             Some(state),
             super::Sequencing::for_view::<D>(),
             &workspace,
+            &mut capture,
         );
         if let Some(error) = workspace.take_failure() {
             return Err(super::fallible_admission_failure(
                 dataset,
                 super::bounded_workspace::AdmissionError::Operational(error),
             )
-            .map_evidence(|view| GovernedEvidence::new(view, state.evidence())));
+            .map_evidence(|view| {
+                GovernedEvidence::new(view, state.evidence()).with_coordinates(capture.clone())
+            }));
         }
         let result = match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
                 Err(FallibleSparqlError::Operational {
                     error,
-                    evidence: GovernedEvidence::new(evidence, state.evidence()),
+                    evidence: GovernedEvidence::new(evidence, state.evidence())
+                        .with_coordinates(capture.clone()),
                 })
             }
             ViewOperationStatus::Ready { evidence } => {
-                let evidence = GovernedEvidence::new(evidence, state.evidence());
+                let evidence = GovernedEvidence::new(evidence, state.evidence())
+                    .with_coordinates(capture.clone());
                 let evaluation = evaluation
                     .and_then(|staged| publish(staged, destination, Some(state.evidence())));
                 match evaluation {
@@ -245,7 +251,10 @@ impl NativeSparqlEngine {
                             Some(&workspace),
                         )
                         .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, state.evidence())
+                                    .with_coordinates(capture.clone())
+                            })
                         })
                         .map(|_| unreachable!("a native failure cannot publish a graph"))
                     }
@@ -257,16 +266,20 @@ impl NativeSparqlEngine {
                             Some(&workspace),
                         )
                         .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, state.evidence())
+                                    .with_coordinates(capture.clone())
+                            })
                         })?;
-                        let (result, _) = super::retain_query_result(
-                            dataset,
-                            empty,
-                            Some(&workspace),
-                        )
-                        .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
-                        })?;
+                        let (result, _) =
+                            super::retain_query_result(dataset, empty, Some(&workspace)).map_err(
+                                |error| {
+                                    error.map_evidence(|view| {
+                                        GovernedEvidence::new(view, state.evidence())
+                                            .with_coordinates(capture.clone())
+                                    })
+                                },
+                            )?;
                         Err(FallibleSparqlError::BudgetExhausted {
                             tripped,
                             partial: crate::PartialAnswers::Certain(
@@ -309,6 +322,7 @@ impl NativeSparqlEngine {
         )?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication.options(dataset, options)?;
+        let mut capture = crate::QueryCoordinates::NotStarted;
         let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
@@ -318,6 +332,7 @@ impl NativeSparqlEngine {
             state,
             sequencing,
             &workspace,
+            &mut capture,
         );
         publication.finish(evaluation, |error| {
             matches!(
@@ -349,6 +364,7 @@ impl NativeSparqlEngine {
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+        capture: &mut crate::QueryCoordinates,
     ) -> Result<StagedGraph, GraphBuildError> {
         let capability = workspace.capability();
         let prefix = crate::template::destination_mint_prefix_admitted(
@@ -388,6 +404,13 @@ impl NativeSparqlEngine {
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }
+        *capture = crate::QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            options.now.is_some(),
+            options.entropy_seed.is_some(),
+        )
+        .map_err(GraphBuildError::Evaluation)?;
         ctx.options.force_sequential |= sequencing == super::Sequencing::Sequential;
         let evaluated = (|| {
             crate::eval::prepare_query_context(query, &mut ctx)?;

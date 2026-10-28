@@ -2088,6 +2088,7 @@ pub(crate) fn materialize_outcome(
             result,
             evidence,
             relations,
+            ..
         } => Py::new(
             py,
             PyQueryOutcome {
@@ -2103,6 +2104,7 @@ pub(crate) fn materialize_outcome(
             evidence,
             relations,
             partial,
+            ..
         }) => Py::new(
             py,
             PyQueryOutcome {
