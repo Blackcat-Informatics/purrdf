@@ -533,6 +533,12 @@ impl Default for InferOptions {
     }
 }
 
+purrdf_lex::constructors! {
+    impl InferOptions {
+        pub(crate) fn from_rules(rules: RuleOptions) -> Self { .. };
+    }
+}
+
 impl InferOptions {
     /// Select the exact evaluation time for every query in this inference.
     #[must_use]

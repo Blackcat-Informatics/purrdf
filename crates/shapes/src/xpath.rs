@@ -859,6 +859,29 @@ pub fn run_rules(
     profile: Profile,
     pattern_limits: Limits,
 ) -> Result<crate::Inference, XPathValidationError> {
+    run_rules_with_options(
+        source,
+        data,
+        &limits.rule_options(knobs),
+        profile,
+        pattern_limits,
+    )
+}
+
+/// Run caller-configured rules inside the selected XPath pattern law.
+///
+/// Supplied time, entropy, limits and knob names reach the same dispatch as
+/// [`crate::run_rules_with_options`]; pattern refusal semantics match [`run_rules`].
+///
+/// # Errors
+/// The errors of [`run_rules`], under the caller's execution options.
+pub fn run_rules_with_options(
+    source: crate::RuleSource<'_>,
+    data: &RdfDataset,
+    options: &crate::RuleOptions,
+    profile: Profile,
+    pattern_limits: Limits,
+) -> Result<crate::Inference, XPathValidationError> {
     // The selection's declared-pattern cache is keyed by the cells the shapes own; a
     // clone shares those cells, so the cache serves the rules this run executes. A SPARQL
     // 1.2 RL rule set declares no `sh:pattern`.
@@ -867,7 +890,7 @@ pub fn run_rules(
         crate::RuleSource::Srl(_) => Arc::default(),
     };
     Configuration::detached(profile, pattern_limits, owner)
-        .run(|| crate::rules::run_rules(source, data, limits, knobs))
+        .run(|| crate::rules::run_rules_with_options(source, data, options))
         .map_err(|error| error.into_public(XPathValidationError::Shapes))
 }
 

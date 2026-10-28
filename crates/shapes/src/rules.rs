@@ -957,7 +957,7 @@ pub enum RuleSource<'a> {
 /// through `purrdf_validate::apply_rules_to_ntriples`, and the entailment service), so a
 /// rules run of the same rule set over the same data is the same [`Inference`] whichever
 /// host asks. A SHACL shapes graph's data is projected into the SHACL evaluation view
-/// first; a SPARQL 1.2 RL rule set reads `data` as given.
+/// first; a SPARQL 1.2 RL rule set uses its existing inference projection.
 ///
 /// # Errors
 ///
@@ -969,17 +969,37 @@ pub fn run_rules(
     limits: &RuleLimits,
     knobs: LimitKnobs,
 ) -> Result<Inference, crate::error::ShapesError> {
+    run_rules_with_options(source, data, &limits.rule_options(knobs))
+}
+
+/// Run either rule source with the caller's native execution options.
+///
+/// This is the shared dispatch used by [`run_rules`], retaining its projection,
+/// static checks and refusal behavior while honoring supplied time and entropy.
+/// Existing program identities and proof text do not become execution identities.
+///
+/// # Errors
+/// The errors of [`run_rules`], under the limits and knob names in `options`.
+pub fn run_rules_with_options(
+    source: RuleSource<'_>,
+    data: &RdfDataset,
+    options: &RuleOptions,
+) -> Result<Inference, crate::error::ShapesError> {
     match source {
         RuleSource::Shapes(shapes) => {
             let projected = crate::engine::project_dataset(data)?;
             let holder = ShaclData::new(Arc::clone(&projected), projected, None);
-            infer(&holder, shapes, &limits.rule_options(knobs))
+            infer(&holder, shapes, options)
         }
-        RuleSource::Srl(document) => srl::infer(document, data, &limits.infer_options(knobs))
-            .map_err(|error| match error {
-                srl::SrlError::Shapes(error) => error,
-                error => crate::error::ShapesError::Invalid(error.to_string()),
-            }),
+        RuleSource::Srl(document) => srl::infer(
+            document,
+            data,
+            &srl::InferOptions::from_rules(options.clone()),
+        )
+        .map_err(|error| match error {
+            srl::SrlError::Shapes(error) => error,
+            error => crate::error::ShapesError::Invalid(error.to_string()),
+        }),
     }
 }
 

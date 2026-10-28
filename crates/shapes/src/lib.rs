@@ -123,7 +123,7 @@ pub use pydantic::{
 };
 pub use rules::{
     LimitKnobs, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions, RuleProcessor, RuleSource,
-    apply_rules, entail_dataset, infer, run_rules,
+    apply_rules, entail_dataset, infer, run_rules, run_rules_with_options,
 };
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,

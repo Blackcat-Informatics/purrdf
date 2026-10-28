@@ -27,6 +27,13 @@ pub struct CoordinateInputs {
 }
 
 impl CoordinateInputs {
+    /// Move the exact inputs into a host request that owns its coordinates.
+    /// No clock or entropy is sampled and no timestamp coefficient is copied.
+    #[must_use]
+    pub fn into_parts(self) -> (Option<DateTime>, Option<u64>) {
+        (self.now, self.entropy_seed)
+    }
+
     /// Decode independently optional time and unsigned decimal seed strings.
     /// A supplied zero is a seed; an omitted field requests the native default.
     ///
