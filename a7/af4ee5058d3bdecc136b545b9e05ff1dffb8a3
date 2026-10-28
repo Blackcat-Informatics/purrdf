@@ -1,0 +1,19 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 005ad304b6d0f749de61163440f966e3d82fd06e
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 852
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/852
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: ddbc2bfab20a542b012bce09d93c074c32bfec3d
+GhpRsq-Head-Ref: paudley/849-supply-exact-time-and-entropy-across
+GhpRsq-Head-OID: 005ad304b6d0f749de61163440f966e3d82fd06e
+GhpRsq-Result-Tree: 03a7fa9179463e1b66ebe81d69a8916d33a2fa65
+GhpRsq-Result-Commit: a7af4ee5058d3bdecc136b545b9e05ff1dffb8a3
+GhpRsq-Parent-Hashes: 005ad304b6d0f749de61163440f966e3d82fd06e
+GhpRsq-Squash-Notes-SHA256: 00c6cc9854793b4b8de599e4a0fdcb58ffa64ddf1e940c69c820763f9393d072
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
