@@ -62,7 +62,7 @@ pub(super) fn execution_diagnostics(out: &Output, state: &str) -> String {
     let receipt = receipt.expect("native execution receipt");
     assert_eq!(receipt["state"].as_str(), Some(state));
     if state == "started" {
-        assert!(!receipt["now"].as_str().unwrap().is_empty());
+        assert_ne!(receipt["now"].as_str().unwrap(), "");
         assert!(
             receipt["entropySeed"]
                 .as_str()
