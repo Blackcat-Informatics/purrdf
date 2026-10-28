@@ -531,7 +531,7 @@ static int count_regex_rows(const PurrdfDataset *dataset, const char *query,
     int32_t kind = -1;
     PurrdfRowCursor *rows = NULL;
     PurrdfError *error = NULL;
-    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, &kind, &rows, NULL, NULL,
+    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, NULL, NULL, &kind, &rows, NULL, NULL,
                                        &error);
     if (*status != PURRDF_STATUS_OK) {
         if (error == NULL || rows != NULL || purrdf_error_code(error) != *status) {
@@ -882,7 +882,7 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
     rc = purrdf_query_json(dataset,
                            "SELECT ?n WHERE { BIND(170141183460469231731687303715884105727 + 1 "
                            "AS ?n) }",
-                           NULL, NULL, NULL, &results, &error);
+                           NULL, NULL, NULL, NULL, NULL, &results, &error);
     CHECK(rc == PURRDF_STATUS_OK && results != NULL, "a SPARQL sum past i128");
     purrdf_buffer_data(results, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"170141183460469231731687303715884105728\""),
@@ -912,7 +912,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (1/1048576 AS ?x) {}", NULL, NULL, NULL,
-                           &buffer, &error);
+                           NULL, NULL, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default terminating quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.00000095367431640625\""),
@@ -921,7 +921,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
-                           &buffer, &error);
+                           NULL, NULL, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default repeating quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.666666666666666667\""),
@@ -932,7 +932,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_query_json(dataset,
                            "SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^"
                            "<http://www.w3.org/2001/XMLSchema#dateTime>) AS ?x) {}",
-                           NULL, NULL, NULL, &buffer, &error);
+                           NULL, NULL, NULL, NULL, NULL, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"05.123456789012345678901\""),
@@ -948,7 +948,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     error = NULL;
 
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
+    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
                            &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact 1/8 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
@@ -956,7 +956,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     purrdf_buffer_free(buffer);
 
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
+    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
                            &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL,
           "the refused policy left exact in force: 1/3 answers");
@@ -967,7 +967,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_dataset_set_division_policy(dataset, "5:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 5:half-even");
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
                            &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "5:half-even 2/3 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
@@ -977,7 +977,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_dataset_set_division_policy(dataset, "2:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 2:half-even for an exact tie");
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
+    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &buffer,
                            &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "half-even tie answers");
     purrdf_buffer_data(buffer, &bytes, &len);
@@ -988,7 +988,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     CHECK(rc == PURRDF_STATUS_OK, "set bare scale policy");
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
-                           &buffer, &error);
+                           NULL, NULL, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "bare scale quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.66\""), "bare scale truncates toward zero");
@@ -1005,7 +1005,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
         PurrdfGovernorEvidence evidence;
         PurrdfPartialCertificate partial;
         rc = purrdf_query_governed(dataset, queries[query], NULL, NULL, &governors,
-                                   &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
+                                   NULL, NULL, &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
                                    &error);
         CHECK(rc == PURRDF_STATUS_OK && outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
               "a governed division completes");
@@ -1106,7 +1106,7 @@ static int check_geo_handles(const PurrdfDataset *dataset) {
     uint8_t boolean = 0;
     int32_t kind = -1;
     CHECK(purrdf_query_with_geo(NULL, dataset, axes_query, NULL, NULL,
-              &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
+              NULL, NULL, &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
               error != NULL && rows == NULL && graph == NULL &&
               strstr(purrdf_error_message(error), "unregistered") != NULL,
           "C query refuses undeclared geographic axes");
@@ -1119,7 +1119,7 @@ static int check_geo_handles(const PurrdfDataset *dataset) {
               &session, &error) == PURRDF_STATUS_OK && error == NULL,
           "C query geographic profile creation");
     CHECK(purrdf_query_with_geo(session, dataset, axes_query, NULL, NULL,
-              &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
+              NULL, NULL, &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
               error == NULL && rows == NULL && graph == NULL &&
               kind == PURRDF_RESULT_KIND_BOOLEAN && boolean == 1,
           "C query forwards the declared geographic axes");
@@ -1142,7 +1142,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.12.0` is pinned in tests/abi.rs. */
+     * literal `0.13.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1501,19 +1501,21 @@ int main(int argc, char **argv) {
 
     /* SPARQL JSON */
     PurrdfBuffer *json = NULL;
-    rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL,
-                           NULL, &json, &error);
+    const uint64_t query_seed = 0;
+    const char *query_now = "2020-01-02T03:04:05.123456789+05:30";
+    rc = purrdf_query_json(dataset, "SELECT ?s (NOW() AS ?clock) WHERE { ?s ?p ?o }", NULL, NULL,
+                           NULL, query_now, &query_seed, &json, &error);
     CHECK(rc == PURRDF_STATUS_OK && json != NULL, "query_json");
     const uint8_t *jbytes = NULL;
     size_t jlen = 0;
     purrdf_buffer_data(json, &jbytes, &jlen);
-    CHECK(jlen > 0, "sparql-json bytes present");
+    CHECK(contains_bytes(jbytes, jlen, query_now), "query time crosses the linked C boundary");
     purrdf_buffer_free(json);
 
     /* `provenance_prefix`/`provenance_iri` anchor the additive purrdf extension. */
     PurrdfBuffer *prov_json = NULL;
     rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, "prov",
-                           "https://example.org/ns/prov#", &prov_json, &error);
+                           "https://example.org/ns/prov#", NULL, NULL, &prov_json, &error);
     CHECK(rc == PURRDF_STATUS_OK && prov_json != NULL, "query_json with provenance");
     const uint8_t *pbytes = NULL;
     size_t plen = 0;
@@ -1540,7 +1542,7 @@ int main(int argc, char **argv) {
     PurrdfPartialCertificate partial_certificate;
     rc = purrdf_query_governed(
         dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL, &governors,
-        &query_outcome, &result_kind, &partial_rows, &partial_graph,
+        NULL, NULL, &query_outcome, &result_kind, &partial_rows, &partial_graph,
         &partial_boolean, &query_evidence, &partial_certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
     CHECK(query_outcome == PURRDF_QUERY_OUTCOME_KIND_BUDGET_EXHAUSTED,
@@ -1585,7 +1587,7 @@ int main(int argc, char **argv) {
         median_dataset,
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) "
         "WHERE { ?s <http://example.org/value> ?v }",
-        NULL, "https://example.org/agg#", &governors, &median_outcome,
+        NULL, "https://example.org/agg#", &governors, NULL, NULL, &median_outcome,
         &median_kind, &median_rows, NULL, NULL, &median_evidence,
         &median_partial, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "aggregate_namespace query runs");
@@ -1617,7 +1619,7 @@ int main(int argc, char **argv) {
     rc = purrdf_query_entailment_governed(
         dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
         0, NULL, NULL, NULL, NULL, &governors,
-        &entailment_outcome, &entailment_kind, NULL, NULL,
+        NULL, NULL, &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
         &entailment_report, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
@@ -1673,7 +1675,7 @@ int main(int argc, char **argv) {
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
         NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, NULL, "https://example.org/agg#",
         &governors,
-        &entailed_median_outcome, &entailed_median_kind,
+        NULL, NULL, &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
         &entailed_median_partial, &entailed_median_report, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
@@ -1715,7 +1717,7 @@ int main(int argc, char **argv) {
         rc = purrdf_query_entailment_governed(
             entailed_median_dataset, "ASK { ?s ?p ?o }", NULL, "rdfs", "",
             NULL, NULL, 0, NULL, 0, NULL, NULL, &arena_limits[arena_case], NULL,
-            &governors, &entailment_outcome, &entailment_kind, NULL, NULL,
+            &governors, NULL, NULL, &entailment_outcome, &entailment_kind, NULL, NULL,
             &entailment_boolean, &entailment_evidence, &entailment_partial,
             &entailed_median_report, &error);
         if (arena_case == 0) {
@@ -1893,7 +1895,7 @@ int main(int argc, char **argv) {
     PurrdfDataset *parse_graph = NULL;
     uint8_t parse_boolean = 0;
     bad_error = NULL;
-    rc = purrdf_query(dataset, "ASK {", NULL, &parse_kind, &parse_rows,
+    rc = purrdf_query(dataset, "ASK {", NULL, NULL, NULL, &parse_kind, &parse_rows,
                       &parse_graph, &parse_boolean, &bad_error);
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed query refused");
@@ -1907,7 +1909,7 @@ int main(int argc, char **argv) {
 
     bad_error = NULL;
     rc = purrdf_query(dataset, "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
-                      NULL, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
+                      NULL, NULL, NULL, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
                       &bad_error);
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "query with a malformed IRI refused");

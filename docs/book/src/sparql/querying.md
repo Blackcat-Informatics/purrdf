@@ -2213,7 +2213,8 @@ nearest equivalent optional-string configuration:
 
   ```c
   purrdf_query_governed(dataset, query, /* base_iri */ NULL,
-                         "https://ex.example/agg#", &governors, /* … */);
+                         "https://ex.example/agg#", &governors,
+                         /* now */ NULL, /* entropy_seed */ NULL, /* … */);
   ```
 
 `namespace` stays caller-supplied configuration with no fabricated default on

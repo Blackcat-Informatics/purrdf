@@ -174,7 +174,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 12, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 13, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -1532,6 +1532,8 @@ unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfR
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -1673,6 +1675,8 @@ fn ask_returns_boolean() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -1699,6 +1703,8 @@ fn construct_returns_graph() {
         let status = purrdf_query(
             dataset,
             cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             std::ptr::null(),
             &raw mut kind,
             &raw mut rows,
@@ -1736,6 +1742,8 @@ fn construct_graph_result_keeps_its_graph_name() {
         let status = purrdf_query(
             dataset,
             cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             std::ptr::null(),
             &raw mut kind,
             &raw mut rows,
@@ -1801,6 +1809,8 @@ fn describe_graph_result_keeps_its_graph_name_on_every_layer() {
         let status = purrdf_query(
             dataset,
             cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             std::ptr::null(),
             &raw mut kind,
             &raw mut rows,
@@ -2018,6 +2028,8 @@ fn query_json_has_sparql_results_shape() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut buffer,
             &raw mut error,
         );
@@ -2066,6 +2078,8 @@ fn query_json_construct_into_a_named_graph_keeps_the_graph() {
                 dataset,
                 cq.as_ptr(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut kind,
                 &raw mut rows,
                 &raw mut graph,
@@ -2113,6 +2127,8 @@ fn query_json_construct_into_a_named_graph_keeps_the_graph() {
             purrdf_query_json(
                 dataset,
                 cq.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -2171,6 +2187,8 @@ fn query_json_describe_over_trig_keeps_every_layers_graph() {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut buffer,
                 &raw mut error,
             ),
@@ -2215,6 +2233,8 @@ fn query_json_provenance_namespace_populates_and_round_trips() {
             std::ptr::null(),
             prefix.as_ptr(),
             iri.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut buffer,
             &raw mut error,
         );
@@ -2253,6 +2273,8 @@ fn query_json_lone_provenance_half_is_refused() {
             cq.as_ptr(),
             std::ptr::null(),
             prefix.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             std::ptr::null(),
             &raw mut buffer,
             &raw mut error,
@@ -2754,6 +2776,8 @@ unsafe fn sha3_row_over_the_c_abi(spelling: impl Fn(&str) -> String) -> purrdf_l
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut buffer,
             &raw mut error,
         );
@@ -2822,6 +2846,8 @@ fn a_spaced_sha3_hyphen_is_an_error_over_the_c_abi() {
         let status = purrdf_query_json(
             dataset,
             cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
@@ -2985,6 +3011,8 @@ fn query_parse_refusals_carry_typed_presentations() {
             let status = purrdf_query(
                 dataset,
                 cq.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
                 std::ptr::null(),
                 &raw mut kind,
                 &raw mut rows,
