@@ -30,12 +30,13 @@
 
 use purrdf_shapes::engine;
 use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
-use purrdf_shapes::{RuleSource, run_rules};
+use purrdf_shapes::{RuleOptions, RuleSource, run_rules_with_options};
 use purrdf_shapes::{ShapesError, ShapesImports};
 
 use crate::ShapesImportList;
-use crate::shapes_tools::{RuleLimits, RulesHost};
-use crate::xpath_regex::{Limits, Profile, XPathValidationError};
+use crate::query::CoordinateInputs;
+use crate::shapes_tools::{RuleLimits, RulesHost, run_configured_rules};
+use crate::xpath_regex::{Profile, XPathValidationError};
 
 /// One SHACL entailment run across the host boundary: the shapes graph whose rules run,
 /// the data graph they run over, and the rule-evaluation limits bounding the run.
@@ -95,11 +96,11 @@ pub struct EntailOutcome {
 /// Everything [`entail_to_ntriples_string_with_shapes_graph`] refuses, and
 /// [`ShapesError::Invalid`] naming the host's knob for a passed rule-evaluation limit.
 pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, ShapesError> {
-    entail_with(request, run_rules)
+    entail_with(request, CoordinateInputs::default(), run_rules_with_options)
 }
 
 /// [`entail_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the
-/// production bounds ([`Limits::new`]): every `REGEX`/`REPLACE` a rule, function or node
+/// production bounds ([`crate::xpath_regex::Limits::new`]): every `REGEX`/`REPLACE` a rule, function or node
 /// expression evaluates, and every `sh:pattern` a rule condition decides, compiles and
 /// matches under it ([`purrdf_shapes::xpath::run_rules`]). `None` is
 /// [`entail_to_ntriples`]'s exact outcome.
@@ -113,22 +114,33 @@ pub fn entail_to_ntriples_with_xpath_regex(
     request: &EntailRequest<'_>,
     xpath_regex: Option<Profile>,
 ) -> Result<EntailOutcome, XPathValidationError> {
-    let Some(profile) = xpath_regex else {
-        return Ok(entail_to_ntriples(request)?);
-    };
-    entail_with(request, |source, data, limits, knobs| {
-        purrdf_shapes::xpath::run_rules(source, data, limits, knobs, profile, Limits::new())
+    entail_to_ntriples_with_coordinates(request, xpath_regex, CoordinateInputs::default())
+}
+
+/// Execute with owned exact coordinates and an optional dated XPath law.
+/// Request limits and the calling host's knob names remain authoritative.
+///
+/// # Errors
+/// The same parse, import, execution and pattern refusals as
+/// [`entail_to_ntriples_with_xpath_regex`].
+pub fn entail_to_ntriples_with_coordinates(
+    request: &EntailRequest<'_>,
+    xpath_regex: Option<Profile>,
+    coordinates: CoordinateInputs,
+) -> Result<EntailOutcome, XPathValidationError> {
+    entail_with(request, coordinates, |source, data, options| {
+        run_configured_rules(source, data, options, xpath_regex)
     })
 }
 
 /// The one entailment body under either law: `run` is the rules dispatch it runs.
 fn entail_with<E: From<ShapesError>>(
     request: &EntailRequest<'_>,
+    coordinates: CoordinateInputs,
     run: impl FnOnce(
         RuleSource<'_>,
         &purrdf_core::RdfDataset,
-        &RuleLimits,
-        purrdf_shapes::LimitKnobs,
+        &RuleOptions,
     ) -> Result<purrdf_shapes::Inference, E>,
 ) -> Result<EntailOutcome, E> {
     let data = parse_ntriples_to_dataset(request.data_nt)
@@ -146,12 +158,8 @@ fn entail_with<E: From<ShapesError>>(
         max_stored_facts: request.max_stored_facts,
         max_join_steps: request.max_join_steps,
     };
-    let inference = run(
-        RuleSource::Shapes(&shapes),
-        data.as_ref(),
-        &limits,
-        request.host.entail_limit_knobs(),
-    )?;
+    let options = coordinates.into_rule_options(&limits, request.host.entail_limit_knobs());
+    let inference = run(RuleSource::Shapes(&shapes), data.as_ref(), &options)?;
     Ok(EntailOutcome {
         ntriples: canonical_ntriples(inference.dataset())?,
         diagnostics: shapes.mandatory_diagnostics().to_vec(),

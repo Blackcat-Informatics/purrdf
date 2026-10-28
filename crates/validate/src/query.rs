@@ -15,7 +15,7 @@ use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
 use purrdf_xsd::temporal::{DateTime, parse_datetime};
 use sha2::{Digest as _, Sha256};
 
-/// Caller-supplied query time and entropy, decoded once at a host boundary.
+/// Caller-supplied query or rule time and entropy, decoded once at a host boundary.
 ///
 /// This owns request inputs, not a receipt of execution or sampled defaults.
 /// Parsing samples neither the clock nor entropy. Exact fractional seconds and
@@ -32,6 +32,25 @@ impl CoordinateInputs {
     #[must_use]
     pub fn into_parts(self) -> (Option<DateTime>, Option<u64>) {
         (self.now, self.entropy_seed)
+    }
+
+    /// Move supplied coordinates into rule options bounded by the request's limits.
+    /// The host's knob names and all four limits remain authoritative; omitted
+    /// coordinates leave the native clock and entropy defaults intact.
+    #[must_use]
+    pub fn into_rule_options(
+        self,
+        limits: &purrdf_shapes::RuleLimits,
+        knobs: purrdf_shapes::LimitKnobs,
+    ) -> purrdf_shapes::RuleOptions {
+        let mut options = limits.rule_options(knobs);
+        if let Some(now) = self.now {
+            options = options.with_now(now);
+        }
+        if let Some(seed) = self.entropy_seed {
+            options = options.with_entropy_seed(seed);
+        }
+        options
     }
 
     /// Decode independently optional time and unsigned decimal seed strings.
