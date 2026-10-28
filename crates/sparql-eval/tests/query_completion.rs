@@ -2048,6 +2048,74 @@ fn governed_explain_coordinates_survive_forecast_and_publication_refusals() {
     assert!(evidence.governors.tripped.is_some());
 }
 
+/// Real materialized publication retains only its original coordinate owner after results drop.
+fn materialized_coordinate_receipts_balance_with_retained_engine_and_plan() {
+    for prepared_route in [false, true] {
+        let source = Source::at(RefusalSite::BoundedHealthy);
+        let state = source.state.clone();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT (1 AS ?value) WHERE {}";
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let run = |options| {
+            if prepared_route {
+                engine.query_prepared_governed_fallible_view(
+                    &source,
+                    &prepared,
+                    &[],
+                    options,
+                    &QueryGovernors::METERED,
+                )
+            } else {
+                engine.query_governed_fallible_view(
+                    &source,
+                    request(query),
+                    options,
+                    &QueryGovernors::METERED,
+                )
+            }
+        };
+        // Warm the existing immutable plan/cache owners, with no supplied coordinate.
+        drop(run(QueryOptions::EMPTY).unwrap());
+        let baseline = state.owned_bytes.load(Ordering::Relaxed);
+        let purrdf_xsd::XsdValue::DateTime(now) = purrdf_xsd::parse(
+            &format!("2024-02-29T12:34:56.{}+05:30", "7".repeat(4096)),
+            purrdf_xsd::XsdDatatype::DateTime,
+        )
+        .unwrap() else {
+            panic!("wide timestamp")
+        };
+        let mut retained = None;
+        for iteration in 0..4 {
+            let result = run(QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0)).unwrap();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let coordinates = result.evidence.coordinates.clone();
+            let measured = window.close();
+            assert_eq!(measured.allocations, 0);
+            assert_eq!(measured.requested_bytes, 0);
+            drop(result);
+            assert!(state.owned_bytes.load(Ordering::Relaxed) > baseline);
+            let purrdf_sparql_eval::QueryCoordinates::Started(inputs) = &coordinates else {
+                panic!("started materialized query")
+            };
+            assert!(inputs.now().unwrap().same_representation(&now));
+            assert_eq!(inputs.entropy_seed(), Some(0));
+            if iteration == 3 {
+                retained = Some(coordinates);
+            } else {
+                drop(coordinates);
+                assert_eq!(state.owned_bytes.load(Ordering::Relaxed), baseline);
+            }
+        }
+        drop(now);
+        drop(prepared);
+        drop(engine);
+        drop(source);
+        assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+        drop(retained);
+        state.assert_released();
+    }
+}
+
 /// The resident public projection still owns both original scoped permits at
 /// its last checked_read. Its infallible source keeps admission observable.
 struct ExplainProjection<'a> {
@@ -2723,4 +2791,5 @@ purrdf_testkit::harness_main!(
     prepared_governed_queries_discard_rows_produced_before_an_iterator_failure,
     the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome,
     governed_explain_coordinates_survive_forecast_and_publication_refusals,
+    materialized_coordinate_receipts_balance_with_retained_engine_and_plan,
 );

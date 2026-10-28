@@ -1135,7 +1135,7 @@ impl NegotiatedOutcome {
 }
 
 /// What a negotiated governed query produced, before it crosses to JavaScript: the
-/// complete answer already serialized, or the exhausted outcome untouched.
+/// complete answer already serialized, or the exhausted fields exposed by this host.
 #[derive(Debug)]
 pub(crate) enum NegotiatedValue {
     /// Every governor held; the answer is serialized in `format`.
@@ -1145,7 +1145,11 @@ pub(crate) enum NegotiatedValue {
         evidence: EvidenceValue,
     },
     /// A governor stopped the execution.
-    Exhausted(BudgetExhausted),
+    Exhausted {
+        tripped: TrippedValue,
+        evidence: EvidenceValue,
+        partial: PartialValue,
+    },
 }
 
 /// Convert a [`NegotiatedValue`] into the JS-facing [`NegotiatedOutcome`].
@@ -1166,12 +1170,11 @@ pub(crate) fn negotiated_outcome_from_value(
             evidence: Some(GovernorEvidence { inner: evidence }),
             complete: true,
         }),
-        NegotiatedValue::Exhausted(BudgetExhausted {
+        NegotiatedValue::Exhausted {
             tripped,
             evidence,
             partial,
-            ..
-        }) => Ok(NegotiatedOutcome {
+        } => Ok(NegotiatedOutcome {
             body: None,
             format: None,
             partial: Some(partial_answers_from_native(partial, blank_scope)?),

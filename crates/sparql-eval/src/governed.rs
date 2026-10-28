@@ -79,10 +79,7 @@ impl GovernedOutcome {
     /// Supplied coordinates, or a refusal before context construction.
     #[must_use]
     pub const fn coordinates(&self) -> &crate::QueryCoordinates {
-        match self {
-            Self::Complete { coordinates, .. } => coordinates,
-            Self::BudgetExhausted(exhausted) => &exhausted.coordinates,
-        }
+        self.receipts().2
     }
 
     /// This execution's consumption and ceilings, whichever outcome it reached.
@@ -103,15 +100,26 @@ impl GovernedOutcome {
         self.receipts().1
     }
 
-    /// The governor evidence and relation identity, whichever outcome was reached.
-    const fn receipts(&self) -> (&GovernorEvidence, &RelationIdentity) {
+    /// Borrow all receipts through the same outcome projection.
+    const fn receipts(
+        &self,
+    ) -> (
+        &GovernorEvidence,
+        &RelationIdentity,
+        &crate::QueryCoordinates,
+    ) {
         match self {
             Self::Complete {
                 evidence,
                 relations,
+                coordinates,
                 ..
-            } => (evidence, relations),
-            Self::BudgetExhausted(exhausted) => (&exhausted.evidence, &exhausted.relations),
+            } => (evidence, relations, coordinates),
+            Self::BudgetExhausted(exhausted) => (
+                &exhausted.evidence,
+                &exhausted.relations,
+                &exhausted.coordinates,
+            ),
         }
     }
 

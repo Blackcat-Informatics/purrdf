@@ -380,7 +380,7 @@ mod tests {
             "Original retained numbered plan: {} bytes",
             baseline - parsed
         );
-        for materialized in [false, true, false, true] {
+        for _ in 0..3 {
             let receipt = without_host_clock_or_entropy(|| {
                 engine.execute_governed_admitted(
                     &mut prepared,
@@ -392,41 +392,10 @@ mod tests {
                 )
             })
             .unwrap();
-            let receipt = if materialized {
-                drop(receipt);
-                let mut capture = QueryCoordinates::NotStarted;
-                let state = crate::SharedWorkspace::new_admitted(
-                    crate::GovernorState::with_workspace(
-                        &QueryGovernors::METERED,
-                        capability.clone(),
-                    ),
-                    &capability,
-                )
-                .unwrap();
-                let outcome = engine
-                    .query_governed_prepared_admitted(
-                        &dataset,
-                        &prepared.prepared,
-                        &super::super::AdmittedSubstitutions::prepared(&[]),
-                        QueryOptions::new().with_now(&now).with_entropy_seed(7),
-                        &state,
-                        super::super::Sequencing::Free,
-                        &crate::workspace::QueryWorkspace::with_capability(&capability),
-                        &mut capture,
-                    )
-                    .unwrap();
-                let coordinates = outcome.outcome.coordinates().clone();
-                drop(outcome);
-                coordinates
-            } else {
-                let coordinates = receipt.coordinates().clone();
-                drop(receipt);
-                coordinates
-            };
             let charged = ledger.live.load(Ordering::Relaxed);
             assert!(charged > baseline);
             let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-            let coordinates = receipt.clone();
+            let coordinates = receipt.coordinates().clone();
             let measured = window.close();
             assert_eq!(measured.allocations, 0);
             assert_eq!(measured.requested_bytes, 0);
