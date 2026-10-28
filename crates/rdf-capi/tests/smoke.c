@@ -1142,7 +1142,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.13.0` is pinned in tests/abi.rs. */
+     * literal `0.14.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1764,7 +1764,7 @@ int main(int argc, char **argv) {
     rc = purrdf_update_governed(
         dataset,
         "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
-        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, &update_outcome, &update_evidence, &error);
+        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
     CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed update is typed exhaustion");
@@ -1775,6 +1775,36 @@ int main(int argc, char **argv) {
                   PURRDF_STATUS_OK &&
               after_update_count == 1,
           "exhausted update applied no mutation");
+
+    /* Supplied coordinates cross the actual linked UPDATE ABI. */
+    PurrdfDataset *coordinate_dataset = NULL;
+    CHECK(purrdf_parse((const uint8_t *)"", 0, "text/turtle", NULL, NULL,
+                      &coordinate_dataset, &error) == PURRDF_STATUS_OK,
+          "empty coordinate dataset");
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "coordinate governor initializer");
+    rc = purrdf_update_governed(coordinate_dataset,
+        "INSERT { <urn:s> <urn:clock> ?clock; <urn:random> ?random } "
+        "WHERE { BIND(NOW() AS ?clock) BIND(RAND() AS ?random) }",
+        NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors,
+        query_now, &query_seed, &update_outcome, &update_evidence, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
+              update_outcome == PURRDF_UPDATE_OUTCOME_KIND_APPLIED,
+          "supplied UPDATE coordinates apply");
+    PurrdfBuffer *coordinate_json = NULL;
+    rc = purrdf_query_json(coordinate_dataset,
+        "SELECT ?clock ?random WHERE { "
+        "<urn:s> <urn:clock> ?clock; <urn:random> ?random FILTER(?random = RAND()) }",
+        NULL, NULL, NULL, NULL, &query_seed, &coordinate_json, &error);
+    CHECK(rc == PURRDF_STATUS_OK && coordinate_json != NULL,
+          "read inserted coordinate values");
+    const uint8_t *coordinate_bytes = NULL;
+    size_t coordinate_len = 0;
+    purrdf_buffer_data(coordinate_json, &coordinate_bytes, &coordinate_len);
+    CHECK(contains_bytes(coordinate_bytes, coordinate_len, query_now),
+          "UPDATE time and seed cross the linked C boundary");
+    purrdf_buffer_free(coordinate_json);
+    purrdf_dataset_free(coordinate_dataset);
 
     /* All three governed UPDATE doors carry the explicit graph lifetime. These calls
      * compile against the generated public header and use the shared library. */
@@ -1806,16 +1836,16 @@ int main(int argc, char **argv) {
                 rc = purrdf_update_governed_with_geo(
                     NULL, lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
-                    &governors, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
             } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
-                    &governors, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
             } else {
                 rc = purrdf_update_governed(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
-                    NULL, NULL, lifetime_modes[mode_index], &governors,
+                    NULL, NULL, lifetime_modes[mode_index], &governors, NULL, NULL,
                     &update_outcome, &update_evidence, &error);
             }
             CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
@@ -1830,17 +1860,17 @@ int main(int argc, char **argv) {
             if (entry == 2) {
                 rc = purrdf_update_governed_with_geo(
                     NULL, lifetime_dataset, "DELETE WHERE {", NULL, NULL,
-                    "xpath-3.1-2017-03-21", 2, &governors,
+                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL,
                     &update_outcome, &update_evidence, &error);
             } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL,
-                    "xpath-3.1-2017-03-21", 2, &governors,
+                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL,
                     &update_outcome, &update_evidence, &error);
             } else {
                 rc = purrdf_update_governed(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL, 2,
-                    &governors, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &update_outcome, &update_evidence, &error);
             }
             CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && error != NULL &&
                       update_outcome == -1 &&
@@ -1927,7 +1957,7 @@ int main(int argc, char **argv) {
     int32_t parse_outcome = -1;
     PurrdfGovernorEvidence parse_evidence;
     bad_error = NULL;
-    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors,
+    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL,
                                 &parse_outcome, &parse_evidence, &bad_error);
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed governed update refused");

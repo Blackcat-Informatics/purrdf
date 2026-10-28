@@ -1398,11 +1398,23 @@ unsafe fn query_entailment_governed_entry(
 /// reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
 /// `SELECT … GROUP BY` — the only place SPARQL UPDATE's grammar admits an aggregate.
 ///
+/// `now` and `entropy_seed` are independently nullable: NULL selects a fresh native
+/// default for this request, while a pointed zero supplies seed zero. Time uses the
+/// exact native `xsd:dateTime` lexical form, retaining fractional seconds and timezone.
+/// Supplied coordinates give the request one fixed time and one progressing random
+/// stream across its operations. Omitted coordinates preserve native defaults. Inputs
+/// are owned before execution; inserted values retain no caller memory.
+/// Invalid time is `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 is
+/// `PURRDF_STATUS_INVALID_UTF8`. A refusal leaves the dataset, outcome and evidence
+/// unchanged, including when the request would otherwise mutate it.
+///
 /// # Safety
 /// `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
 /// string; `governors` live for the call; and both output pointers writable. Any enabled
 /// cancellation handle must remain live until the call returns. `aggregate_namespace`, if
-/// non-null, must be a NUL-terminated UTF-8 C string live for the call.
+/// non-null, must be a NUL-terminated UTF-8 C string live for the call. `now` must be
+/// null or a NUL-terminated C string live for the call; `entropy_seed` must be null
+/// or point to a readable, aligned `uint64_t` live for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_update_governed(
     dataset: *mut PurrdfDataset,
@@ -1411,6 +1423,8 @@ pub unsafe extern "C" fn purrdf_update_governed(
     aggregate_namespace: *const c_char,
     graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
     out_error: *mut *mut PurrdfError,
@@ -1427,6 +1441,8 @@ pub unsafe extern "C" fn purrdf_update_governed(
                 std::ptr::null(),
                 graph_existence,
                 governors,
+                now,
+                entropy_seed,
                 out_outcome,
                 out_evidence,
             )
@@ -1456,6 +1472,8 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
     regex_profile: *const c_char,
     graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
     out_error: *mut *mut PurrdfError,
@@ -1472,6 +1490,8 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
                 regex_profile,
                 graph_existence,
                 governors,
+                now,
+                entropy_seed,
                 out_outcome,
                 out_evidence,
             )
@@ -1494,6 +1514,8 @@ unsafe fn update_governed_entry(
     regex_profile: *const c_char,
     graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
 ) -> Result<PurrdfStatus, PurrdfError> {
@@ -1515,6 +1537,7 @@ unsafe fn update_governed_entry(
         let base_iri = opt_cstr_to_str(base_iri)?;
         let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
         let regex = decode_regex_profile(regex_profile)?;
+        let coordinates = decode_coordinates(now, entropy_seed)?;
         let env = aggregate_env(aggregates.as_ref())?;
         let division = PurrdfDataset::division(dataset);
         let outcome = sparql_engine(regex)
@@ -1525,14 +1548,14 @@ unsafe fn update_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                query_options(
+                coordinates.apply(query_options(
                     QueryOptions::new()
                         .with_geo(geo)
                         .with_env(&env)
                         .with_division(division)
                         .with_graph_existence(graph_existence),
                     regex,
-                ),
+                )),
                 &governors,
             )
             .map_err(|diagnostic| query_error(&diagnostic))?;
@@ -1800,6 +1823,8 @@ pub unsafe extern "C" fn purrdf_update_governed_with_geo(
     regex_profile: *const c_char,
     graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
+    now: *const c_char,
+    entropy_seed: *const u64,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
     out_error: *mut *mut PurrdfError,
@@ -1816,6 +1841,8 @@ pub unsafe extern "C" fn purrdf_update_governed_with_geo(
                 regex_profile,
                 graph_existence,
                 governors,
+                now,
+                entropy_seed,
                 out_outcome,
                 out_evidence,
             )
@@ -1876,6 +1903,7 @@ mod tests {
     }
 
     mod coordinates;
+    mod update_coordinates;
 
     /// The bytes of a buffer handle, read through `purrdf_buffer_data`, then the buffer freed.
     pub(super) fn take_buffer_text(buffer: *mut PurrdfBuffer) -> String {
@@ -2489,6 +2517,8 @@ mod tests {
                 std::ptr::null(),
                 crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
+                c"2020-01-02T03:04:05.1234567890123456789Z".as_ptr(),
+                &0u64,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
                 &raw mut error,
@@ -2736,6 +2766,8 @@ mod tests {
                 namespace.as_ptr(),
                 crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
                 &raw mut error,

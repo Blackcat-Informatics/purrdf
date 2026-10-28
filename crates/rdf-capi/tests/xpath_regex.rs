@@ -514,6 +514,8 @@ fn update_marks(regex: Option<&str>, pattern: &str) -> Result<Vec<String>, Failu
             regex,
             purrdf::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
             &raw const governors,
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut outcome,
             evidence.as_mut_ptr(),
             &raw mut error,

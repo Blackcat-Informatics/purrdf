@@ -137,7 +137,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.13.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.14.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -259,6 +259,15 @@ the IRI failure without parsing English. The error message and the record's
   the native default; a pointed zero supplies seed zero. Time is an exact
   `xsd:dateTime` lexical form, retaining fractional seconds, timezone and negative
   years. Inputs are copied for execution and results retain no caller memory.
+
+  `0.13.0` → `0.14.0` adds the same independently nullable `now` and
+  `entropy_seed` inputs after governors and before the first output on all three
+  governed UPDATE entries: plain, dated XPath and geographic. Rebuild UPDATE
+  callers. Supplied coordinates give one request a fixed exact time and a
+  progressing random stream across its operations; omissions retain native defaults.
+  Invalid coordinates preserve the dataset and untouched
+  outcome/evidence outputs; budget exhaustion still publishes nothing. Caller
+  input memory is not retained by the resulting dataset.
 
 ## Shapes-graph tools
 
