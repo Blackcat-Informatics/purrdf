@@ -232,7 +232,7 @@ ownership, and all limits. Complete examples are in
   Kept scope labels are deterministic: inserting the returned terms into a new
   dataset, serializing and parsing preserves the same blank identity, including
   blank nodes inside quoted triple terms.
-- Query coordinates — `now` accepts an exact native `xsd:dateTime`
+- Execution coordinates — `now` accepts an exact native `xsd:dateTime`
   string, retaining fractional seconds and its declared timezone. `entropySeed`
   accepts an unsigned 64-bit `bigint` or a non-negative safe integral `number`;
   zero is a supplied seed. Each omitted field selects a fresh native default per
@@ -243,9 +243,13 @@ ownership, and all limits. Complete examples are in
   `Dataset.queryAsync` takes them in its options object. The playground Worker
   query message forwards both controls without changing its synchronous execution.
   A suspended job retains its inputs and random stream independently of other
-  jobs. The Cloudflare handler accepts the same options for queries and returns
-  status 400 for UPDATE requests when query coordinates are configured.
-  UPDATE and asynchronous SHACL calls refuse these controls. The inputs do not add an execution receipt or change provenance.
+  jobs. The four UPDATE methods (`update`, `updateGoverned`, `updateAsync`, and
+  `updateGovernedAsync`), both raw positional UPDATE exports and both low-level
+  asynchronous UPDATE kinds accept the same controls. Supplied time spans every
+  operation in one request, and its random stream advances without restarting.
+  Omitted time keeps native per-operation sampling. The Cloudflare handler forwards
+  the controls for queries and UPDATEs. Asynchronous SHACL calls refuse them.
+  The inputs do not add an execution receipt or change provenance.
 - `xpathRegex` — every evaluating `QueryEngine` method and its asynchronous twin accept
   this option: the stable name of the dated native XPath law `REGEX` and `REPLACE`
   evaluate under, `"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"` (typed as

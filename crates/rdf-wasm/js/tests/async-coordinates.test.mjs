@@ -90,16 +90,11 @@ test("async coordinates reject lossy host inputs and unsupported routes", async 
     assert.deepEqual(cells(await engine.queryAsync(data, QUERY, { now: NOW, entropySeed: 0 })), zero);
     const maximum = cells(await engine.queryAsync(data, QUERY, INPUTS));
     assert.notEqual(maximum.r, zero.r);
-    for (const kind of [AsyncOperationKind.Update, AsyncOperationKind.UpdateGoverned, AsyncOperationKind.Shacl]) {
+    for (const kind of [AsyncOperationKind.Shacl]) {
       for (const controls of [{ now: NOW }, { entropySeed: 0n }]) {
         assert.throws(() => AsyncJobOptions.fromJs(kind, controls, undefined, false, undefined), /unknown query option/);
       }
     }
-    for (const method of ["update", "updateGoverned"]) {
-      assert.throws(() => engine[method](data, QUERY, INPUTS), /UPDATE option/);
-    }
-    await assert.rejects(engine.updateAsync(data, "INSERT DATA {}", INPUTS), /unknown query option/);
-    await assert.rejects(engine.updateGovernedAsync(data, "INSERT DATA {}", INPUTS), /unknown query option/);
     assert.equal(data.size, 0);
     const stopped = await engine.queryGovernedAsync(data, QUERY, { ...INPUTS, fuel: 0 });
     assert.equal(stopped.isComplete, false);
@@ -171,7 +166,7 @@ test("async jobs select omitted coordinates anew when validated options are reus
   }
 });
 
-test("Cloudflare query coordinates reach negotiated output and refuse UPDATE", async () => {
+test("Cloudflare query coordinates reach negotiated output", async () => {
   const engine = new QueryEngine();
   const dataset = new Dataset();
   const options = { engine, dataset, governors: { deadlineMs: 60000 }, ...INPUTS };
@@ -180,9 +175,6 @@ test("Cloudflare query coordinates reach negotiated output and refuse UPDATE", a
     const response = await handleSparqlRequest(request(QUERY, "application/sparql-query"), options);
     assert.equal(response.status, 200);
     assert.deepEqual(rawCells(await response.text()), rawCells(await engine.queryRawAsync(dataset, QUERY, INPUTS)));
-    const refused = await handleSparqlRequest(request("INSERT DATA {}", "application/sparql-update"), options);
-    assert.equal(refused.status, 400);
-    assert.equal((await refused.json()).code, "purrdf-wasm-options");
     assert.equal(dataset.size, 0);
   } finally { dataset.free(); engine.free(); }
 });

@@ -302,7 +302,14 @@ fn both_update_entries_apply_under_the_selected_law() {
         let expected = 2 + usize::from(backreference);
         let mut dataset = data();
         engine
-            .update(&mut dataset, INSERT_BACKREFERENCE, None, owned(law))
+            .update(
+                &mut dataset,
+                INSERT_BACKREFERENCE,
+                None,
+                owned(law),
+                None,
+                None,
+            )
             .expect(&what);
         assert_eq!(dataset.size(), expected, "update {what}");
         let mut dataset = data();
@@ -321,6 +328,8 @@ fn both_update_entries_apply_under_the_selected_law() {
                 None,
                 None,
                 owned(law),
+                None,
+                None,
             )
             .expect(&what);
         assert!(outcome.is_applied(), "updateGoverned {what}");

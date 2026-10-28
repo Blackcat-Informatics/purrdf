@@ -331,26 +331,6 @@ function normalizeGovernedOptions(options) {
   };
 }
 
-function refuseUpdateCoordinates(options) {
-  for (const key of ["now", "entropySeed"]) {
-    if (options?.[key] != null) {
-      const error = new TypeError(`UPDATE option ${key} is not supported`);
-      error.code = "purrdf-wasm-options";
-      throw error;
-    }
-  }
-}
-
-function normalizeUpdateOptions(options) {
-  refuseUpdateCoordinates(options);
-  return normalizeQueryOptions(options);
-}
-
-function normalizeGovernedUpdateOptions(options) {
-  refuseUpdateCoordinates(options);
-  return normalizeGovernedOptions(options);
-}
-
 function normalizeEntailmentGovernedOptions(options) {
   const governed = normalizeGovernedOptions(options);
   // The entailment-aware query lane now threads a `QueryOptions` registry through both the
@@ -1283,8 +1263,8 @@ export async function ready(wasmBytesOrUrl) {
       return wasmDescribe.call(this, dataset, sparql, base, xpathRegex, now, entropySeed);
     };
     QueryEngine.prototype.update = function (dataset, sparql, options) {
-      const { base, xpathRegex } = normalizeUpdateOptions(options);
-      wasmUpdate.call(this, dataset, sparql, base, xpathRegex);
+      const { base, xpathRegex, now, entropySeed } = normalizeQueryOptions(options);
+      wasmUpdate.call(this, dataset, sparql, base, xpathRegex, now, entropySeed);
       return dataset;
     };
     QueryEngine.prototype.queryRaw = function (dataset, sparql, options) {
@@ -1366,7 +1346,7 @@ export async function ready(wasmBytesOrUrl) {
       // `maxAnswers` is forwarded rather than dropped: an UPDATE has no answer sequence to
       // bound, and Rust refuses it by name. Silently ignoring it here would be a ceiling
       // the caller believes they set.
-      const o = normalizeGovernedUpdateOptions(options);
+      const o = normalizeGovernedOptions(options);
       return updateOutcomeToObject(
         wasmUpdateGoverned.call(
           this,
@@ -1383,6 +1363,8 @@ export async function ready(wasmBytesOrUrl) {
           o.cancel,
           o.noCeiling,
           o.xpathRegex,
+          o.now,
+          o.entropySeed,
         ),
       );
     };

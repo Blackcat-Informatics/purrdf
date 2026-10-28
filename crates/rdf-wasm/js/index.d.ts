@@ -145,11 +145,8 @@ interface EvaluationOptions {
 
 export interface QueryOptions extends EvaluationOptions, QueryCoordinateOptions {}
 
-/** UPDATE options exclude query coordinates, including on predeclared variables. */
-export interface UpdateOptions extends EvaluationOptions {
-  readonly now?: never;
-  readonly entropySeed?: never;
-}
+/** Exact execution coordinates apply to the complete UPDATE request. */
+export interface UpdateOptions extends EvaluationOptions, QueryCoordinateOptions {}
 
 /**
  * Anchors the additive `purrdf` provenance extension on a SELECT/ASK result
@@ -1761,7 +1758,7 @@ export interface AsyncHostOptions {
   readonly cancel?: never;
 }
 
-/** Caller inputs for a query; omitted fields select fresh native defaults per execution. */
+/** Caller inputs for query or UPDATE execution; omitted fields retain native defaults. */
 export interface QueryCoordinateOptions {
   /** Exact native xsd:dateTime, including fractional seconds and the declared timezone. */
   readonly now?: string | null;
