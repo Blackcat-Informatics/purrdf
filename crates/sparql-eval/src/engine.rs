@@ -23,6 +23,7 @@
 
 mod bounded_workspace;
 mod coordinates;
+pub(crate) use coordinates::now as prepare_coordinate_now;
 pub use coordinates::{QueryCoordinates, SuppliedQueryCoordinates};
 mod graph_build;
 pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};

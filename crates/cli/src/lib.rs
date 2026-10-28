@@ -404,6 +404,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &ReportTarget::decode(report.as_ref()),
         ),
         Command::Update {
+            now,
+            entropy_seed,
             data,
             from,
             output,
@@ -423,6 +425,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             graph_existence,
         } => update::run(
             &update::UpdateOptions {
+                now: now.as_deref(),
+                entropy_seed: entropy_seed.as_deref(),
                 geo: selected_geo,
                 data,
                 from: *from,

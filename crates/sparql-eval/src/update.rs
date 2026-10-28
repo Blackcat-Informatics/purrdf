@@ -438,8 +438,11 @@ pub(crate) fn eval_update(
     // previous behaviour) let two operations mint the same synthetic label, so their
     // blanks silently unified in the shared store.
     let mut bnode_counter: u64 = 0;
+    // Only a supplied seed owns a request-wide stream. Absence preserves the
+    // existing fresh host seed for each WHERE context.
+    let mut supplied_rng = cfg.options.entropy_seed;
     for op in &update.operations {
-        apply_operation(op, m, resolver, cfg, &mut bnode_counter)?;
+        apply_operation(op, m, resolver, cfg, &mut bnode_counter, &mut supplied_rng)?;
         // Close the single-operation terminal hole as well as the gap between operations.
         check_stop(cfg.governors)?;
     }
@@ -463,6 +466,7 @@ fn apply_operation(
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
+    supplied_rng: &mut Option<u64>,
 ) -> Result<(), UpdateAbort> {
     check_stop(cfg.governors)?;
     match op {
@@ -489,6 +493,7 @@ fn apply_operation(
             m,
             cfg,
             bnode_counter,
+            supplied_rng,
         ),
         GraphUpdateOperation::Load {
             silent,
@@ -602,6 +607,7 @@ fn delete_insert(
     m: &mut MutableDataset,
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
+    supplied_rng: &mut Option<u64>,
 ) -> Result<(), UpdateAbort> {
     let DeleteInsertSpec {
         delete,
@@ -642,7 +648,20 @@ fn delete_insert(
         )
     })?;
 
-    let mut ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
+    // Select before construction: a supplied coordinate must not touch the
+    // corresponding host source. UPDATE retains its resident storage contract.
+    let now = crate::engine::prepare_coordinate_now(
+        cfg.options.now,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .map_err(|error| {
+        RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+            error.to_string(),
+        )
+    })?;
+    let seed = supplied_rng.unwrap_or_else(crate::clock::entropy_seed);
+    let mut ctx = EvalCtx::at(&snap, now, seed).with_bounded_order_cache(cfg.order_cache);
     ctx.xpath_regex = cfg.xpath_regex;
     // The property-function registry, the SHACL-AF function registry, the
     // blank-mint prefix and the `SERVICE` source, applied through the SAME seam a
@@ -810,6 +829,9 @@ fn delete_insert(
         }
     }
     *bnode_counter = ctx.bnode_counter;
+    if let Some(seed) = supplied_rng {
+        *seed = ctx.rng_state;
+    }
     drop(ctx);
     drop(snap);
 

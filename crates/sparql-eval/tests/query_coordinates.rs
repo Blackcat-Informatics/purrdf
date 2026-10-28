@@ -294,9 +294,162 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     assert_eq!(owner_balance(&source.evidence()), before);
 }
 
+/// UPDATE selects supplied inputs before host sampling and carries one seed
+/// stream through every operation, on all three public native entry points.
+fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
+    use purrdf_sparql_eval::GovernedUpdateOutcome;
+    use std::sync::Arc;
+
+    let engine = NativeSparqlEngine::new();
+    let lexical = format!("-0001-02-03T04:05:06.{}-04:00", "7".repeat(4096));
+    let now = purrdf_xsd::temporal::parse_datetime(&lexical).unwrap();
+    let options = QueryOptions::new().with_now(&now).with_entropy_seed(0);
+    let update = ["a", "b"]
+        .map(|subject| {
+            format!(
+                "INSERT {{ <http://example.org/{subject}> <http://example.org/time> ?t ; \
+         <http://example.org/random> ?r ; <http://example.org/uuid> ?u ; \
+         <http://example.org/str> ?v }} WHERE {{ BIND(NOW() AS ?t) \
+         BIND(RAND() AS ?r) BIND(UUID() AS ?u) BIND(STRUUID() AS ?v) }}"
+            )
+        })
+        .join("; ");
+    let request = SparqlRequest {
+        query: &update,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let original = RdfDatasetBuilder::new().freeze().unwrap();
+    let read = |dataset: &Arc<purrdf_core::RdfDataset>| {
+        let result = engine
+            .query_with_options_view(
+                dataset,
+                SparqlRequest {
+                    query: "SELECT ?s ?t ?r ?u ?v WHERE { ?s <http://example.org/time> ?t ; \
+             <http://example.org/random> ?r ; <http://example.org/uuid> ?u ; \
+             <http://example.org/str> ?v } ORDER BY ?s",
+                    ..request
+                },
+                options,
+            )
+            .unwrap();
+        result.solutions().unwrap().1.to_vec()
+    };
+    let mut expected = None;
+    for lane in 0..3 {
+        for _ in 0..2 {
+            let mut dataset = Arc::clone(&original);
+            without_host_clock_or_entropy(|| match lane {
+                0 => engine
+                    .update_with_options(&mut dataset, request, options)
+                    .unwrap(),
+                1 => assert!(matches!(
+                    engine
+                        .update_governed(&mut dataset, request, options, &QueryGovernors::METERED)
+                        .unwrap(),
+                    GovernedUpdateOutcome::Applied { .. }
+                )),
+                _ => {
+                    let mut handle: purrdf_core::DatasetHandle = Arc::clone(&dataset).into();
+                    assert!(matches!(
+                        engine
+                            .update_governed_handle(
+                                &mut handle,
+                                request,
+                                options,
+                                &QueryGovernors::METERED
+                            )
+                            .unwrap(),
+                        GovernedUpdateOutcome::Applied { .. }
+                    ));
+                    // Materialize only for inspection; the update has already published.
+                    let mut builder = RdfDatasetBuilder::new();
+                    builder.push_dataset(handle.as_ref()).unwrap();
+                    dataset = builder.freeze().unwrap();
+                }
+            });
+            let rows = read(&dataset);
+            assert_eq!(rows.len(), 2);
+            let time = Some(TermValue::typed_literal(
+                now.canonical_lexical(),
+                XsdDatatype::DateTime.iri(),
+            ));
+            assert_eq!(rows[0][1], time);
+            assert_eq!(rows[1][1], time);
+            for column in 2..5 {
+                assert!(rows[0][column].is_some());
+                assert_ne!(
+                    rows[0][column], rows[1][column],
+                    "stream advances across operations"
+                );
+            }
+            if let Some(expected) = &expected {
+                assert_eq!(&rows, expected);
+            } else {
+                expected = Some(rows);
+            }
+        }
+    }
+    let failing = format!(
+        "{update}; CREATE GRAPH <http://example.org/g>; CREATE GRAPH <http://example.org/g>"
+    );
+    for governed in [false, true] {
+        let mut dataset = Arc::clone(&original);
+        let failed = without_host_clock_or_entropy(|| {
+            if governed {
+                engine
+                    .update_governed(
+                        &mut dataset,
+                        SparqlRequest {
+                            query: &failing,
+                            ..request
+                        },
+                        options,
+                        &QueryGovernors::METERED,
+                    )
+                    .map(|_| ())
+            } else {
+                engine.update_with_options(
+                    &mut dataset,
+                    SparqlRequest {
+                        query: &failing,
+                        ..request
+                    },
+                    options,
+                )
+            }
+        });
+        assert!(failed.is_err());
+        assert!(Arc::ptr_eq(&dataset, &original));
+    }
+    let cancelled = Arc::new(CancellationFlag::new());
+    cancelled.cancel();
+    let mut dataset = Arc::clone(&original);
+    let stopped = without_host_clock_or_entropy(|| {
+        engine.update_governed(
+            &mut dataset,
+            request,
+            options,
+            &QueryGovernors::METERED.with_stop_signal(cancelled),
+        )
+    })
+    .unwrap();
+    assert!(matches!(
+        stopped,
+        GovernedUpdateOutcome::BudgetExhausted {
+            tripped: TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled
+            },
+            ..
+        }
+    ));
+    assert!(Arc::ptr_eq(&dataset, &original));
+}
+
 purrdf_testkit::harness_main!(
     supplied_inputs_repeat_complete_results_without_host_reads,
     supplied_large_fraction_and_timezone_survive_repeated_now,
     prepared_executions_select_fresh_inputs_without_changing_the_plan,
     bounded_coordinate_owners_price_real_allocations_and_release_after_last_output,
+    supplied_update_coordinates_replay_and_preserve_atomic_publication,
 );

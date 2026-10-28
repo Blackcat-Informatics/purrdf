@@ -76,7 +76,7 @@ impl QueryCoordinates {
     }
 }
 
-pub(super) fn now(
+pub(crate) fn now(
     supplied: Option<&DateTime>,
     workspace: &WorkspaceCapability,
 ) -> Result<XsdValue, EvalError> {

@@ -740,6 +740,14 @@ pub(crate) enum Command {
     },
     /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
     Update {
+        /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
+        /// Omitted, native host-clock behavior is unchanged.
+        #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
+        now: Option<String>,
+        /// Initial seed for one random stream across this UPDATE request.
+        /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
+        #[arg(long, value_name = "U64", allow_hyphen_values = true)]
+        entropy_seed: Option<String>,
         /// Input dataset path; format is inferred from its extension unless `--from` is set.
         #[arg(long)]
         data: String,
