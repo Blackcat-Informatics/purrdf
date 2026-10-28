@@ -248,7 +248,12 @@ ownership, and all limits. Complete examples are in
   asynchronous UPDATE kinds accept the same controls. Supplied time spans every
   operation in one request, and its random stream advances without restarting.
   Omitted time keeps native per-operation sampling. The Cloudflare handler forwards
-  the controls for queries and UPDATEs. Asynchronous SHACL calls refuse them.
+  the controls for queries and UPDATEs. Rule execution accepts them on `shaclEntail` and `shaclApplyRules` after
+  `xpathRegex`, and in `AsyncShaclRuleOptions` on their asynchronous twins.
+  Null and omission independently select each native default. Low-level
+  `AsyncJob.beginShacl` admits them only for entailment and rule requests;
+  validation, product and node-expression requests refuse them. The playground
+  `shaclEntail` message forwards both controls and retains its current dataset.
   The inputs do not add an execution receipt or change provenance.
 - `xpathRegex` — every evaluating `QueryEngine` method and its asynchronous twin accept
   this option: the stable name of the dated native XPath law `REGEX` and `REPLACE`
@@ -263,7 +268,7 @@ ownership, and all limits. Complete examples are in
   governs every `REGEX`/`REPLACE` a rule, function, node expression or rule-set filter
   evaluates and every `sh:pattern` a rule condition or filter shape decides
   (`shaclLintShapes` matches no pattern and takes none). Every one of their asynchronous
-  twins takes it in its options object (`AsyncShaclValidationOptions`). Absent, the compatibility regex is
+  twins takes it in its validation or rule options object. Absent, the compatibility regex is
   unchanged. Names match exactly: `"xpath-3.1"` or `"XPATH-3.1-2017-03-21"` throws with
   the code `purrdf-wasm-options`, listing the accepted names. A pattern the selected law's
   grammar refuses is an ordinary expression error (a SHACL finding under `sh:pattern`); a

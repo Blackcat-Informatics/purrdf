@@ -1758,7 +1758,7 @@ export interface AsyncHostOptions {
   readonly cancel?: never;
 }
 
-/** Caller inputs for query or UPDATE execution; omitted fields retain native defaults. */
+/** Caller inputs for query, UPDATE or rule execution; omitted fields retain native defaults. */
 export interface QueryCoordinateOptions {
   /** Exact native xsd:dateTime, including fractional seconds and the declared timezone. */
   readonly now?: string | null;
@@ -2514,6 +2514,7 @@ export class ShaclImportError {
  * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
  * throws with the resource's code and no dataset.
  */
+/** Exact `now` and unsigned `entropySeed` follow XPath; null or omission selects each native default independently. */
 export function shaclEntail(
   shapesTtl: string,
   dataNt: string,
@@ -2526,6 +2527,8 @@ export function shaclEntail(
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
   xpathRegex?: XPathRegexLaw,
+  now?: string | null,
+  entropySeed?: bigint | number | null,
 ): ShaclEntailment;
 
 /**
@@ -2613,6 +2616,7 @@ export class ShaclRulesInference {
  * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
  * throws with the resource's code and no inference.
  */
+/** Exact `now` and unsigned `entropySeed` follow XPath; null or omission selects each native default independently. */
 export function shaclApplyRules(
   dataNt: string,
   shapesTtl?: string,
@@ -2628,6 +2632,8 @@ export function shaclApplyRules(
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
   xpathRegex?: XPathRegexLaw,
+  now?: string | null,
+  entropySeed?: bigint | number | null,
 ): ShaclRulesInference;
 
 /**
@@ -3136,14 +3142,22 @@ export function shaclProductValidateToSarifExpecting(
 /**
  * The host options a SHACL asynchronous twin accepts, and nothing else. A synchronous
  * SHACL entry takes no ceiling, so neither does its twin: a deadline is a `signal`
- * (`AbortSignal.timeout(ms)`). Every argument of the synchronous twin stays positional,
- * where the synchronous twin takes it; the host options follow them.
+ * (`AbortSignal.timeout(ms)`). Document and limit arguments stay positional; XPath law and execution inputs
+ * travel in the options object.
  */
-export interface AsyncShaclOptions extends AsyncHostOptions {}
+export interface AsyncShaclOptions extends AsyncHostOptions {
+  readonly now?: never;
+  readonly entropySeed?: never;
+}
+
+/** Execution inputs apply only to the entailment and rule-application twins. */
+export interface AsyncShaclRuleOptions extends AsyncHostOptions, QueryCoordinateOptions {
+  readonly xpathRegex?: XPathRegexLaw | null;
+  readonly shaclProfile?: never;
+}
 
 /**
- * The options of a SHACL twin that evaluates patterns — every validation, entailment, rules
- * and node-expression twin: the host options, and `xpathRegex`, the dated pattern law its
+ * The options of a SHACL validation or node-expression twin: the host options, and `xpathRegex`, the dated pattern law its
  * synchronous twin takes as its trailing argument. It travels in the options object so
  * the options keep following the positional arguments.
  */
@@ -3218,7 +3232,7 @@ export function shaclEntailAsync(
   maxGeneratedTerms?: bigint | null,
   maxStoredFacts?: bigint | null,
   maxJoinSteps?: bigint | null,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclRuleOptions | null,
 ): Promise<ShaclEntailment>;
 
 /**
@@ -3240,7 +3254,7 @@ export function shaclApplyRulesAsync(
   maxGeneratedTerms?: bigint | null,
   maxStoredFacts?: bigint | null,
   maxJoinSteps?: bigint | null,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclRuleOptions | null,
 ): Promise<ShaclRulesInference>;
 
 /**

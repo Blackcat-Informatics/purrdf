@@ -101,7 +101,7 @@ const evaluated = shaclEvalNodeExpr(
   undefined,
   "xpath-3.1-2017-03-21",
 );
-const asyncEntailed = shaclEntailAsync("", "", null, null, null, null, null, null, null, null, validation);
+const asyncEntailed = shaclEntailAsync("", "", null, null, null, null, null, null, null, null, { xpathRegex: validation.xpathRegex });
 const asyncInferred = shaclApplyRulesAsync(
   "",
   null,
@@ -116,7 +116,7 @@ const asyncInferred = shaclApplyRulesAsync(
   null,
   null,
   null,
-  validation,
+  { xpathRegex: validation.xpathRegex },
 );
 const asyncEvaluated = shaclEvalNodeExprAsync(
   "",

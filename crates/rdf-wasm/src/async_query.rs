@@ -3542,7 +3542,7 @@ impl AsyncOperationKind {
         }
     }
 
-    /// Execution coordinates belong to queries and UPDATE, not SHACL operations.
+    /// SHACL coordinates are admitted by the actual request variant when its job begins.
     const fn coordinate_keys(self) -> &'static [&'static str] {
         match self {
             Self::Query
@@ -3553,8 +3553,8 @@ impl AsyncOperationKind {
             | Self::Negotiated
             | Self::Explain
             | Self::Update
-            | Self::UpdateGoverned => &["now", "entropySeed"],
-            Self::Shacl => &[],
+            | Self::UpdateGoverned
+            | Self::Shacl => &["now", "entropySeed"],
         }
     }
 
@@ -4551,6 +4551,14 @@ fn begin_shacl_job(
     request.select_xpath_regex(options.xpath_regex.map(|profile| profile.name().to_owned()));
     request
         .select_shacl_profile(options.shacl_profile.clone())
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let coordinates = purrdf_validate::query::CoordinateInputs::from_time_and_seed(
+        options.now.as_deref(),
+        options.entropy_seed,
+    )
+    .map_err(|error| JobError::message(OPTIONS_CODE, format!("query option now: {error}")))?;
+    request
+        .select_coordinates(coordinates)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     register_operation(
         AsyncOperationKind::Shacl,
@@ -7705,7 +7713,21 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (s, d, b, i, docs, g, r, t, f, j) = entail();
-        let entailed = requests::entail(s, d, b, i, docs, g, r, t, f, j, None).expect("sync entry");
+        let entailed = requests::entail(
+            s,
+            d,
+            b,
+            i,
+            docs,
+            g,
+            r,
+            t,
+            f,
+            j,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+        )
+        .expect("sync entry");
         assert!(entailed.ntriples().contains("<http://example.org/adult>"));
         let entailment = job.take_shacl_entailment().expect("an entailment");
         assert_eq!(entailment.ntriples(), entailed.ntriples());
@@ -7737,8 +7759,24 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (d, sh, srl, b, sb, e, i, docs, g, r, t, f, j) = rules_run();
-        let applied = requests::apply_rules(d, sh, srl, b, sb, e, i, docs, g, r, t, f, j, None)
-            .expect("sync entry");
+        let applied = requests::apply_rules(
+            d,
+            sh,
+            srl,
+            b,
+            sb,
+            e,
+            i,
+            docs,
+            g,
+            r,
+            t,
+            f,
+            j,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+        )
+        .expect("sync entry");
         assert!(
             applied
                 .inferred()
@@ -8594,9 +8632,22 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
                 .ntriples();
             job.finish();
             let (a, b, c, d, e, f, g, h, i, j) = entail_args();
-            let sync = requests::entail(a, b, c, d, e, f, g, h, i, j, law.map(str::to_owned))
-                .expect("sync entry")
-                .ntriples();
+            let sync = requests::entail(
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                g,
+                h,
+                i,
+                j,
+                law.map(str::to_owned),
+                purrdf_validate::query::CoordinateInputs::default(),
+            )
+            .expect("sync entry")
+            .ntriples();
             assert_eq!(entailed, sync, "{law:?}");
             assert_eq!(entailed.contains(hit), backreference, "{law:?}");
 
@@ -8640,6 +8691,7 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
                 None,
                 None,
                 law.map(str::to_owned),
+                purrdf_validate::query::CoordinateInputs::default(),
             )
             .expect("sync entry")
             .inferred();
