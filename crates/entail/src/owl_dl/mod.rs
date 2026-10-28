@@ -71,6 +71,7 @@ mod oracle;
 pub(crate) mod parser;
 /// Independently replayable tableau PROOF TERMS, and the checker that re-derives them.
 pub(crate) mod proof;
+pub(crate) mod property_kinds;
 pub(crate) mod query;
 pub(crate) mod roles;
 pub(crate) mod saturate;
@@ -112,6 +113,8 @@ pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept
 /// the honest shape rather than a state machine in disguise.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
+    /// Property uses frozen at source ingestion, never augmented by queries.
+    pub(crate) property_kinds: property_kinds::PropertyKinds,
     pub(crate) syntax: syntax::Syntax,
     pub(crate) query_syntax: syntax::Syntax,
     /// Source anchors and explicit native derivation owners for prepared inputs.
@@ -307,6 +310,7 @@ impl Kb {
         let top = table.top();
         let bottom = table.bottom();
         Self {
+            property_kinds: property_kinds::PropertyKinds::default(),
             syntax: syntax::Syntax::default(),
             query_syntax: syntax::Syntax::query(),
             inputs: input_source::Inputs::default(),

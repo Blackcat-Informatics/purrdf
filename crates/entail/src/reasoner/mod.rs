@@ -103,10 +103,13 @@ use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 
+pub mod analysis;
 pub mod axiom;
 pub mod certificate;
 pub mod classify;
+mod hierarchy;
 pub mod module;
+pub mod object_properties;
 pub mod profile;
 pub mod proof;
 pub mod realize;
@@ -117,12 +120,14 @@ pub(crate) mod schema_tests;
 #[cfg(test)]
 mod borrowed_tests;
 
+pub use analysis::ClassAnalysis;
 pub use axiom::DlAxiom;
 pub use certificate::{Certified, DirectnessRefusal, DlCertificate, DlCompleteness, Verdict};
 pub use classify::ClassHierarchy;
 pub use module::{
     ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,
 };
+pub use object_properties::ObjectPropertyHierarchy;
 pub use profile::{OwlProfile, ProfileCertificate, ProfileViolation, profile};
 pub use proof::{
     Claim, ClaimBasis, ClaimSubject, Question, RunAssumptions, RunProof, Service, ServiceProof,
@@ -477,6 +482,19 @@ impl Reasoner {
     /// and opens no session.
     pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
         match question {
+            Question::ClassAnalysis { .. } => {
+                if question != &self.class_analysis_question() {
+                    return Err(EntailError::Parse("class analysis question differs from the source class and individual universe".to_owned()));
+                }
+            }
+            Question::ObjectPropertyClassification { properties } => {
+                let expected = self.object_property_classification_question()?;
+                if !matches!(expected, Question::ObjectPropertyClassification { properties: ref names } if names == properties)
+                {
+                    return Err(EntailError::Parse("object-property classification question differs from the source property universe".to_owned()));
+                }
+                let _prepared = self.prepare_object_properties()?;
+            }
             Question::ClassSatisfiability { class } | Question::InstanceRetrieval { class } => {
                 self.concept_of(class)?;
             }
