@@ -49,13 +49,7 @@ impl PartialEq for RuleCoordinates {
                     // Equal instants with different offsets can emit different
                     // STR(NOW()) values. Compare the retained representation,
                     // whose Decimal seconds already normalize lexical zeros.
-                    left.year() == right.year()
-                        && left.month() == right.month()
-                        && left.day() == right.day()
-                        && left.hour() == right.hour()
-                        && left.minute() == right.minute()
-                        && left.second_ref() == right.second_ref()
-                        && left.timezone_minutes() == right.timezone_minutes()
+                    left.same_representation(right)
                 }
                 _ => false,
             }

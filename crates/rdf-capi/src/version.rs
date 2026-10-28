@@ -273,7 +273,14 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// inserts an argument before existing controls/out-pointers and requires every
 /// affected C caller to rebuild. Null retains the engine default; a supplied
 /// limit is enforced and arena refusals name the actual calling parameter.
-pub const PURRDF_ABI_MINOR: u32 = 12;
+///
+/// # `0.12.0` → `0.13.0`: supplied query coordinates
+///
+/// All twelve ordinary, JSON, governed and entailment query prototypes, including
+/// XPath and geographic variants, gain nullable `now` and `entropy_seed` pointers
+/// immediately before their first output. Callers must rebuild; each null pointer
+/// independently requests the native default, and a pointed zero is a supplied seed.
+pub const PURRDF_ABI_MINOR: u32 = 13;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

@@ -1271,6 +1271,19 @@ proof of every inferred triple. The proof is one block per triple: `derived S P
 O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
 body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 
+The CLI accepts independently optional `--now XSD_DATE_TIME` and
+`--entropy-seed U64` on `rules`, with either `--shapes` or `--srl` and
+with either XPath pattern law. The exact supplied time, including fractional
+seconds and timezone, reaches every rule query's `NOW()`. The seed selects
+the starting state of the rule execution's query-seed sequence; zero is a
+supplied seed. Omitted inputs keep native host defaults. Repeating the same
+inputs and coordinates repeats the inference, including `UUID()` and
+`STRUUID()`; SHACL SPARQL rules also support `RAND()`, which SPARQL rule
+sets do not permit. Neither flag is accepted with `--check`, which evaluates
+nothing. Invalid coordinates are usage errors before data, rule or import
+files are read. Proof text and program identity keep their existing meaning;
+they do not serialize these inputs or identify a complete execution.
+
 Every host takes the same four **rule-evaluation limits**, on both of its SHACL
 rules entry points: the rules run above and SHACL-AF entailment (Python
 `shapes.entail`, WebAssembly `shaclEntail`, C `purrdf_shacl_entail_to_ntriples`),

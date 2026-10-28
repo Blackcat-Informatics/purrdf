@@ -581,7 +581,7 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
 }
 
 /// Return the Unix epoch (1970-01-01T00:00:00Z) as an xsd:dateTime value.
-/// Useful as the compile-time-safe "now" fallback for wasm32 targets.
+/// Useful as the compile-time-safe "now" fallback for `wasm32` targets.
 pub fn datetime_epoch() -> DateTime {
     datetime_from_unix_seconds(0)
 }
@@ -4740,6 +4740,20 @@ impl core::fmt::Display for Gregorian {
 }
 
 impl DateTime {
+    /// Whether calendar fields, exact normalized seconds and declared timezone agree.
+    /// This compares the retained representation without allocation. Equal instants
+    /// with different timezone offsets can have different representations.
+    #[must_use]
+    pub fn same_representation(&self, other: &Self) -> bool {
+        self.year == other.year
+            && self.month == other.month
+            && self.day == other.day
+            && self.hour == other.hour
+            && self.minute == other.minute
+            && self.second == other.second
+            && self.tz == other.tz
+    }
+
     /// Heap retained by the exact seconds component.
     #[must_use]
     pub fn owned_heap_bytes(&self) -> u64 {
@@ -6119,13 +6133,13 @@ mod tests {
             (XsdDatatype::GYearMonth, "2024-01", "P1D", None),              // days-rejected: Absent
             (XsdDatatype::GYearMonth, "2024-01", "PT1H", None),             // sub-day
             (XsdDatatype::GYearMonth, "2024-01", "PT0S", Some("2024-01")),  // zero
-            // ── gYear (Divisible12, Absent): 5 rows — no days-accepted ────────
+            // ── gYear (`Divisible12`, Absent): 5 rows — no days-accepted ────────
             (XsdDatatype::GYear, "2024", "P1Y", Some("2025")), // months-accepted
             (XsdDatatype::GYear, "2024", "P1M", None),         // months-rejected: not a whole year
             (XsdDatatype::GYear, "2024", "P1D", None),         // days-rejected: Absent
             (XsdDatatype::GYear, "2024", "PT1H", None),        // sub-day
             (XsdDatatype::GYear, "2024", "PT0S", Some("2024")), // zero
-            // ── gMonth (Cyclic12, Absent): 4 rows — Cyclic12 never rejects ────
+            // ── gMonth (`Cyclic12`, Absent): 4 rows — `Cyclic12` never rejects ────
             (XsdDatatype::GMonth, "--12", "P1M", Some("--01")), // months-accepted, wraps
             (XsdDatatype::GMonth, "--05", "P1D", None),         // days-rejected: Absent
             (XsdDatatype::GMonth, "--05", "PT1H", None),        // sub-day

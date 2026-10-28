@@ -137,7 +137,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.12.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.13.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -251,6 +251,14 @@ the IRI failure without parsing English. The error message and the record's
   services and all three governed entailment-query variants. Rebuild affected C
   callers against the new header; `NULL` retains the default. Refusals preserve
   original byte counts and name this parameter on the function called.
+
+  `0.12.0` → `0.13.0` adds nullable `const char *now` and
+  `const uint64_t *entropy_seed` immediately before the first output on all twelve
+  ordinary, JSON, governed and entailment query entries, including XPath and
+  geographic variants. Rebuild every query caller. Each `NULL` independently uses
+  the native default; a pointed zero supplies seed zero. Time is an exact
+  `xsd:dateTime` lexical form, retaining fractional seconds, timezone and negative
+  years. Inputs are copied for execution and results retain no caller memory.
 
 ## Shapes-graph tools
 

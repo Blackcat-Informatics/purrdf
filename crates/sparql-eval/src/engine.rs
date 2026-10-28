@@ -23,6 +23,8 @@
 
 mod bounded_workspace;
 mod coordinates;
+pub(crate) use coordinates::now as prepare_coordinate_now;
+pub use coordinates::{QueryCoordinates, SuppliedQueryCoordinates};
 mod graph_build;
 pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};
 
@@ -2282,7 +2284,7 @@ impl NativeSparqlEngine {
 
     /// Construct and configure one query context before evaluation begins. Keeping
     /// the context and its options in one builder keeps ordinary and governed
-    /// executions on the same options application seam. On wasm32 the construction
+    /// executions on the same options application seam. On `wasm32` the construction
     /// frame must return before recursive evaluation so its temporary contexts consume
     /// no space underneath that evaluation on the fixed shadow stack.
     #[cfg_attr(target_arch = "wasm32", inline(never))]
@@ -2308,7 +2310,7 @@ impl NativeSparqlEngine {
     /// query. See `EvalCtx::witnessing`: the flag is a fact about the return type, never
     /// a caller's preference, and a governed lane that left it unset would hand back a
     /// receipt whose witness said nothing about relations that were invoked.
-    // On wasm32 return the context-construction frame before recursive evaluation,
+    // On `wasm32` return the context-construction frame before recursive evaluation,
     // including the temporary context moved while attaching governors.
     #[cfg_attr(target_arch = "wasm32", inline(never))]
     fn governed_ctx<'d, D: DatasetView + Sync>(
@@ -4736,11 +4738,18 @@ impl NativeSparqlEngine {
                     })?;
                 Ok(AdmittedInternedGoverned {
                     outcome: InternedGoverned::BudgetExhausted(exhausted),
+                    coordinates: QueryCoordinates::NotStarted,
                     identity: identity_owner.frame,
                 })
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+        let coordinates = QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            options.now.is_some(),
+            options.entropy_seed.is_some(),
+        )?;
         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
         // The retained workspace, exactly as on the ungoverned twin — and taken
         // here rather than inside `governed_ctx` so both lanes spell it at the same
@@ -4792,6 +4801,7 @@ impl NativeSparqlEngine {
         }
         answer.map(|outcome| AdmittedInternedGoverned {
             outcome,
+            coordinates,
             identity: identity_owner.frame,
         })
     }
@@ -6374,7 +6384,7 @@ pub struct QueryOptions<'a, 'providers> {
     /// fractional digits, half to even, as XPath F&O 3.1 §4.2 leaves to the
     /// implementation. [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)
     /// returns every terminating quotient exactly; one with no finite decimal
-    /// expansion is an expression error (unbound, err:FOAR0002 in the governed
+    /// expansion is an expression error (unbound, `err:FOAR0002` in the governed
     /// evidence), as division by zero is.
     pub division: purrdf_xsd::exact::DivisionPolicy,
     /// Immutable geographic references, coordinate operations, units and execution policy.
@@ -6673,7 +6683,7 @@ impl<'a, 'providers> QueryOptions<'a, 'providers> {
     }
 
     /// Select explicit geographic bindings and independent numerical limits.
-    /// CRS84 remains the immutable WGS84 longitude/latitude reference.
+    /// `CRS84` remains the immutable `WGS84` longitude/latitude reference.
     #[must_use]
     pub const fn with_geo(mut self, profile: &'a purrdf_geo_kernel::GeoProfile) -> Self {
         self.geo = profile;
@@ -7175,10 +7185,17 @@ fn check_plan_matches_registries(
 /// Native callers borrow the outcome; only legacy egress transfers caller storage.
 pub struct AdmittedInternedGoverned<R> {
     outcome: InternedGoverned<R>,
+    coordinates: QueryCoordinates,
     identity: crate::workspace::LexicalFrame,
 }
 purrdf_hash::debug_non_exhaustive!([R: std::fmt::Debug] AdmittedInternedGoverned<R> { outcome });
 impl<R> AdmittedInternedGoverned<R> {
+    /// Supplied coordinates captured from this execution's admitted context,
+    /// before substitution, evaluation or the visitor. Clone this receipt before
+    /// consuming the outcome to retain its original timestamp owner separately.
+    pub const fn coordinates(&self) -> &QueryCoordinates {
+        &self.coordinates
+    }
     /// Inspect the receipt while its original identity admission remains live.
     pub const fn outcome(&self) -> &InternedGoverned<R> {
         &self.outcome
@@ -7190,7 +7207,11 @@ impl<R> AdmittedInternedGoverned<R> {
         complete: impl FnOnce(R, &purrdf_core::GovernorEvidence, &RelationIdentity) -> T,
         exhausted: impl FnOnce(&BudgetExhausted) -> T,
     ) -> T {
-        let Self { outcome, identity } = self;
+        let Self {
+            outcome,
+            coordinates,
+            identity,
+        } = self;
         let result = match outcome {
             InternedGoverned::Complete {
                 value,
@@ -7199,10 +7220,12 @@ impl<R> AdmittedInternedGoverned<R> {
             } => complete(value, &evidence, &relations),
             InternedGoverned::BudgetExhausted(value) => exhausted(&value),
         };
+        drop(coordinates);
         drop(identity);
         result
     }
     fn into_caller(self) -> InternedGoverned<R> {
+        // Legacy egress has no coordinate receipt; its native owner ends here.
         self.outcome
     }
 }
