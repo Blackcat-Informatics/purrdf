@@ -70,6 +70,8 @@ use crate::model::{rdf, sh};
 use crate::shapes::{Path, Shape, Shapes, Target};
 use crate::srl::reads::{Anchor, ReadPattern};
 use crate::srl::{self, Inference};
+
+pub use crate::sparql::coordinates::RuleCoordinates;
 use crate::term::canonical_cmp;
 use crate::term::{NamedNode, Term, term_id_to_native};
 

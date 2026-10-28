@@ -122,6 +122,8 @@ impl Explanation {
 /// A completed rule-set evaluation.
 #[derive(Debug)]
 pub struct Inference<D = RdfDataset> {
+    /// Effective supplied inputs captured before any query consumes them.
+    coordinates: rules::RuleCoordinates,
     /// Original deterministic resource accounting from the completed evaluator.
     usage: purrdf_datalog::seminaive::BudgetReport,
     /// The base graph plus every inferred triple.
@@ -137,6 +139,7 @@ pub struct Inference<D = RdfDataset> {
 impl<D> Clone for Inference<D> {
     fn clone(&self) -> Self {
         Self {
+            coordinates: self.coordinates.clone(),
             usage: self.usage,
             dataset: Arc::clone(&self.dataset),
             inferred: self.inferred.clone(),
@@ -147,6 +150,14 @@ impl<D> Clone for Inference<D> {
 }
 
 impl<D> Inference<D> {
+    /// Effective supplied time and starting query-seed state for this inference.
+    /// Independent of the clause program's [`Self::contract_hash`]; absent inputs
+    /// do not identify sampled host values or the evaluated dataset snapshot.
+    #[must_use]
+    pub const fn coordinates(&self) -> &rules::RuleCoordinates {
+        &self.coordinates
+    }
+
     /// The complete original resource report of the successful run.
     #[must_use]
     pub fn usage(&self) -> &purrdf_datalog::seminaive::BudgetReport {
@@ -401,6 +412,7 @@ where
     ) -> Result<Arc<D>, crate::error::ShapesError>,
 {
     let _coordinates = options.coordinate_scope();
+    let coordinates = crate::sparql::coordinates::snapshot();
     let source_rules = options.source_rules();
     let governors = options
         .eval_options()
@@ -617,6 +629,7 @@ where
     let dataset = finish(&inferred, &sources, &reifiers)?;
     check_stop(stop, &usage)?;
     Ok(Inference {
+        coordinates,
         usage,
         dataset,
         inferred,

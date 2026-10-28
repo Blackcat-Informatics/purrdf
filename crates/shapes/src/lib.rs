@@ -122,8 +122,8 @@ pub use pydantic::{
     import_pydantic_package,
 };
 pub use rules::{
-    LimitKnobs, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions, RuleProcessor, RuleSource,
-    apply_rules, entail_dataset, infer, run_rules,
+    LimitKnobs, RuleCoordinates, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions,
+    RuleProcessor, RuleSource, apply_rules, entail_dataset, infer, run_rules,
 };
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
