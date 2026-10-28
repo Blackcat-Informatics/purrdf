@@ -80,8 +80,8 @@ routes, ownership, continuation and publication boundaries that carry them.
 | `UPDATE supplied coordinates preserve asynchronous abort atomicity and reuse` | AbortSignal handling during actual SERVICE suspension publishes no staged mutation and releases the dataset claim |
 | `Cloudflare UPDATE coordinates reach mutation and typed refusal responses` | The shipped endpoint forwards controls into UPDATE, returns 204 on application, and reports invalid endpoint configuration through the existing sanitized 500 response and typed internal diagnostic with unchanged data |
 
-Run only these named cases with `node --experimental-wasm-jspi --test
---test-name-pattern` against fresh `make wasm-pkg` output. The existing exact
+Run only these named cases with `node --test --test-name-pattern` against fresh
+`make wasm-pkg` output. The existing exact
 query-coordinate cases above protect the shared decoder and changed refusal
 expectations; their Worker fixture is unchanged by UPDATE routing.
 
