@@ -2249,7 +2249,7 @@ pub enum AsyncOperationKind {
     /// shape is known. The asynchronous lane's own: a SPARQL Protocol endpoint's query.
     Negotiated = 7,
     /// `explainQuery`: the rendered charge ledger, taken through
-    /// [`AsyncJob::take_raw_bytes`]. EXPLAIN evaluates the query to measure it, so its
+    /// [`AsyncJob::take_raw_result`]. EXPLAIN evaluates the query to measure it, so its
     /// measuring run suspends on `SERVICE`, yields and stops exactly as a query does.
     Explain = 8,
     /// A SHACL entry that can evaluate SPARQL — validation to SARIF, change validation,
@@ -4873,7 +4873,11 @@ mod tests {
     }
 
     fn raw_text(job: &AsyncJob) -> String {
-        String::from_utf8(job.take_raw_bytes().expect("raw bytes")).expect("UTF-8")
+        if job.inner.kind == AsyncOperationKind::Shacl {
+            String::from_utf8(job.take_raw_bytes().expect("raw bytes")).expect("UTF-8")
+        } else {
+            job.take_raw_result().expect("raw query result").body()
+        }
     }
 
     fn slots() -> JobSlots {
@@ -6583,7 +6587,8 @@ mod tests {
         assert!(job.is_finished());
         let expected = engine
             .query_raw(&dataset, SELECT, None, None, None, None, None, None, None)
-            .expect("sync twin");
+            .expect("sync twin")
+            .body();
         assert_eq!(raw_text(&job), expected);
         let evidence = job.take_evidence();
         assert!(
@@ -6595,10 +6600,10 @@ mod tests {
         assert!(evidence.evaluate_ms() >= 0.0 && evidence.serialize_ms() >= 0.0);
         assert_eq!(
             job.inner
-                .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
+                .take_outcome("takeRawResult", &[AsyncOperationKind::Raw])
                 .expect_err("an outcome is taken once")
                 .rendered(),
-            "takeRawBytes: the outcome was already taken"
+            "takeRawResult: the outcome was already taken"
         );
         assert_eq!(run_job(job.id()), RunStatus::AlreadyStarted);
         assert_eq!(job.finish(), 0);
@@ -6745,7 +6750,8 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
             .query_raw(&dataset, &silent, None, None, None, None, None, None, None)
-            .expect("sync twin");
+            .expect("sync twin")
+            .body();
         assert_eq!(
             raw_text(&job),
             expected,
@@ -6862,7 +6868,8 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
             .explain_query(&dataset, SELECT, None, None, None, None)
-            .expect("sync twin");
+            .expect("sync twin")
+            .body();
         assert_eq!(raw_text(&job), expected);
         assert!(
             job.take_evidence().polls() > 0.0,
@@ -6973,10 +6980,10 @@ mod tests {
         assert!(outcome.take_tripped().is_some());
         assert_eq!(
             job.inner
-                .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
+                .take_outcome("takeRawResult", &[AsyncOperationKind::Raw])
                 .expect_err("a take of the wrong kind is refused")
                 .rendered(),
-            "takeRawBytes is not available on a governed job"
+            "takeRawResult is not available on a governed job"
         );
         job.finish();
     }
@@ -8227,7 +8234,8 @@ mod tests {
                             None,
                             None
                         )
-                        .expect("sync twin"),
+                        .expect("sync twin")
+                        .body(),
                     "raw {what}"
                 );
                 job.finish();

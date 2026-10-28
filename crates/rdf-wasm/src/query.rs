@@ -2846,7 +2846,7 @@ mod tests {
             }
         }
 
-        for typed_wrapper in [false, true] {
+        {
             let live = Arc::new(AtomicUsize::new(0));
             let dropped = Arc::new(AtomicUsize::new(0));
             let mut storage = GraphStorage {
@@ -2888,7 +2888,7 @@ mod tests {
                 .expect("borrowed native graph serialization");
             assert!(bytes.contains("<https://example.org/g>"));
             assert_eq!(live.load(Ordering::SeqCst), admitted);
-            let dataset = if typed_wrapper {
+            let dataset = {
                 let mut result = query_result_from_sparql(result, BlankScopeMode::Keep)
                     .expect("native graph wrapper");
                 assert!(result.take_select().is_none());
@@ -2897,8 +2897,6 @@ mod tests {
                 assert!(result.take_dataset().is_none());
                 drop(result);
                 dataset
-            } else {
-                graph_result_from_sparql(result).expect("direct host dataset")
             };
             assert!(std::ptr::eq(dataset.view().base().as_ref(), original));
             drop(retained);
@@ -3020,7 +3018,9 @@ mod tests {
                 None,
                 None,
             )
-            .expect("quad-template CONSTRUCT evaluates");
+            .expect("quad-template CONSTRUCT evaluates")
+            .take_dataset()
+            .expect("graph payload");
         let nquads = constructed
             .serialize("nquads", None)
             .expect("N-Quads serializes");
@@ -3050,7 +3050,8 @@ mod tests {
     fn the_default_format_carries_a_named_graph_instead_of_emptying_it() {
         let out = seed()
             .query(GRAPH_CONSTRUCT, None, None, None, None)
-            .expect("quad-template CONSTRUCT serializes under the default format");
+            .expect("quad-template CONSTRUCT serializes under the default format")
+            .body();
         assert!(!out.trim().is_empty(), "the default must never be empty");
         assert!(
             out.contains("<https://example.org/g>"),
@@ -3068,7 +3069,8 @@ mod tests {
     fn the_default_format_is_still_turtle_for_a_default_graph_result() {
         let out = seed()
             .query(PLAIN_CONSTRUCT, None, None, None, None)
-            .expect("plain CONSTRUCT serializes");
+            .expect("plain CONSTRUCT serializes")
+            .body();
         let turtle = seed()
             .query_with_format(PLAIN_CONSTRUCT, "turtle")
             .expect("explicit turtle serializes");
@@ -3089,7 +3091,9 @@ mod tests {
     fn an_explicit_single_graph_format_refuses_a_graph_carrying_result() {
         let constructed = QueryEngine::new()
             .construct(&seed(), GRAPH_CONSTRUCT, None, None, None, None)
-            .expect("quad-template CONSTRUCT evaluates");
+            .expect("quad-template CONSTRUCT evaluates")
+            .take_dataset()
+            .expect("graph payload");
         let frozen = constructed.view().freeze().expect("freeze");
         for token in ["turtle", "ntriples", "rdfxml"] {
             let fmt = resolve_format(token).expect("format resolves");
@@ -3115,7 +3119,9 @@ mod tests {
         }
         let plain = QueryEngine::new()
             .construct(&seed(), PLAIN_CONSTRUCT, None, None, None, None)
-            .expect("plain CONSTRUCT evaluates");
+            .expect("plain CONSTRUCT evaluates")
+            .take_dataset()
+            .expect("graph payload");
         let plain = plain.view().freeze().expect("freeze");
         let fmt = resolve_format("turtle").expect("format resolves");
         assert!(uncarriable_named_graphs(&plain, fmt, "turtle").is_none());
@@ -3145,6 +3151,8 @@ mod tests {
         let graphed = QueryEngine::new()
             .construct(&seed(), GRAPH_CONSTRUCT, None, None, None, None)
             .expect("quad-template CONSTRUCT evaluates")
+            .take_dataset()
+            .expect("graph payload")
             .view()
             .freeze()
             .expect("freeze");
@@ -3152,6 +3160,8 @@ mod tests {
         let plain = QueryEngine::new()
             .construct(&seed(), PLAIN_CONSTRUCT, None, None, None, None)
             .expect("plain CONSTRUCT evaluates")
+            .take_dataset()
+            .expect("graph payload")
             .view()
             .freeze()
             .expect("freeze");
@@ -3170,7 +3180,7 @@ mod tests {
     /// than emitting nothing, and an explicit single-graph format refuses.
     ///
     /// `describe` and `construct` are one function behind two names
-    /// (`graph_result_from_sparql`), and a description is graph-faithful at every layer
+    /// (`query_result_from_sparql`), and a description is graph-faithful at every layer
     /// — base quad, reifier declaration and annotation alike — so the DESCRIBE lane
     /// carries named graphs even though no `DESCRIBE` ever names one.
     #[test]
@@ -3185,7 +3195,9 @@ mod tests {
                 None,
                 None,
             )
-            .expect("DESCRIBE evaluates");
+            .expect("DESCRIBE evaluates")
+            .take_dataset()
+            .expect("graph payload");
         let nquads = described
             .serialize("nquads", None)
             .expect("N-Quads serializes");
@@ -3232,7 +3244,9 @@ mod tests {
                 None,
                 None,
             )
-            .expect("the quotient evaluates");
+            .expect("the quotient evaluates")
+            .take_select()
+            .expect("SELECT payload");
         rows.next_row()
             .expect("one row")
             .take_value(0)
@@ -3338,17 +3352,19 @@ mod tests {
         /// `queryRaw` with an explicit format and no provenance namespace — the
         /// two-argument shape these tests exercise.
         fn query_with_format(&self, sparql: &str, format: &str) -> Result<String, JsValue> {
-            QueryEngine::new().query_raw(
-                self,
-                sparql,
-                None,
-                Some(format.to_owned()),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
+            QueryEngine::new()
+                .query_raw(
+                    self,
+                    sparql,
+                    None,
+                    Some(format.to_owned()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .map(|result| result.body())
         }
     }
 }

@@ -410,6 +410,7 @@ mod tests {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     response,
                     error,
                 )

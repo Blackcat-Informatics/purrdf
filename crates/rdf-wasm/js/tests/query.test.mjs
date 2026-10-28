@@ -105,7 +105,7 @@ test("QueryEngine query routes ASK and graph results into discriminated objects"
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
   const ask = engine.query(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }");
-  assert.deepEqual(ask, { kind: "ask", boolean: true });
+  assert.deepEqual({ kind: ask.kind, boolean: ask.boolean }, { kind: "ask", boolean: true }); assert.equal(ask.executionReceipt.state, "started");
 
   const graph = engine.query(
     ds,

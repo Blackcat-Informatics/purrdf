@@ -1270,7 +1270,7 @@ mod tests {
                 "LOAD SILENT <http://example.org/doc>",
                 None,
             );
-            assert!(matches!(update.execute(&run), Ok(JobOutcome::Updated(_))));
+            assert!(matches!(update.execute(&run), Ok(JobOutcome::Updated(..))));
             counters.snapshot(0).silenced().len()
         };
         assert_eq!(
@@ -1343,8 +1343,8 @@ mod tests {
             )
         };
         match outcome {
-            JobOutcome::Query(result) => in_result(result),
-            JobOutcome::Raw(text) => text.contains(THIRD),
+            JobOutcome::Query(result, _) => in_result(result),
+            JobOutcome::Raw(text) | JobOutcome::QueryRaw { body: text, .. } => text.contains(THIRD),
             JobOutcome::Governed(governed) => in_outcome(governed),
             JobOutcome::Entailment(entailment) => matches!(
                 entailment.as_ref(),
@@ -1354,7 +1354,7 @@ mod tests {
                 value.as_ref(),
                 NegotiatedValue::Complete { bytes, .. } if String::from_utf8_lossy(bytes).contains(THIRD)
             ),
-            JobOutcome::Updated(dataset)
+            JobOutcome::Updated(dataset, _)
             | JobOutcome::UpdateGoverned {
                 frozen: Some(dataset),
                 ..
