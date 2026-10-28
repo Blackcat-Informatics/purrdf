@@ -479,7 +479,7 @@ mod tests {
             srl::infer(&second, &source, &options)
         })
         .unwrap();
-        assert!(first_result.coordinates().executions().is_empty());
+        assert_eq!(first_result.coordinates().executions(), []);
         assert!(first_result.coordinates().execution_identity().is_some());
         assert_eq!(first_result.coordinates(), repeated.coordinates());
         assert_ne!(

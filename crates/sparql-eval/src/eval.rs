@@ -4006,13 +4006,26 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
             if let GraphPattern::Filter { expr, inner } = current_pattern
                 && matches!(inner.as_ref(), GraphPattern::Bgp { .. })
             {
-                let evaluated = crate::expr::eval_filter(current_pattern, expr, inner, runner.ctx);
-                break finish_ordinary_active(
-                    &mut runner.active,
-                    &mut *runner.ctx,
-                    current_pattern,
-                    evaluated,
-                );
+                let ranges = crate::expr::annotation_range_constraint(expr, &runner.ctx.growth);
+                let evaluated = match ranges {
+                    Ok(Some(ranges)) => Some(crate::expr::eval_filter_range(
+                        current_pattern,
+                        expr,
+                        inner,
+                        Some(ranges),
+                        runner.ctx,
+                    )),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                };
+                if let Some(evaluated) = evaluated {
+                    break finish_ordinary_active(
+                        &mut runner.active,
+                        &mut *runner.ctx,
+                        current_pattern,
+                        evaluated,
+                    );
+                }
             }
             let after = match current_pattern {
                 GraphPattern::LeftJoin { .. } => Ok(Some(OrdinaryAfter::OptionalLeft)),

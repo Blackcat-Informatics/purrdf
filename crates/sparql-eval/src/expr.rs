@@ -217,7 +217,7 @@ impl AnnotationRangeConstraint {
 pub(crate) type AnnotationRanges =
     crate::workspace::NativeSharedWorkspace<crate::AdmittedVec<AnnotationRangeConstraint>>;
 
-fn annotation_range_constraint(
+pub(crate) fn annotation_range_constraint(
     expression: &Expression,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<Option<AnnotationRanges>, EvalError> {
@@ -331,12 +331,24 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
     let range = if matches!(inner, GraphPattern::Bgp { .. }) {
         annotation_range_constraint(expr, &ctx.growth)?
     } else {
         None
     };
+    eval_filter_range(node, expr, inner, range, ctx)
+}
+
+/// Execute a direct FILTER using already admitted range constraints. The ordinary
+/// worklist only takes this path for a nonempty range, whose grammar excludes EXISTS.
+pub(crate) fn eval_filter_range<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &Expression,
+    inner: &GraphPattern,
+    range: Option<AnnotationRanges>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
     let previous = std::mem::replace(&mut ctx.annotation_range, range);
     let child = eval_evaluated(inner, ctx);
     ctx.annotation_range = previous;

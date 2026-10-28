@@ -554,9 +554,11 @@ function handlerOptions(options) {
 /** The CORS response headers for a request from `origin`; none without `cors`. */
 function corsHeaders(cors, origin) {
   if (cors === undefined) return [];
-  if (cors.origins === "*") return [["Access-Control-Allow-Origin", "*"]];
-  if (origin !== null && cors.origins.includes(origin)) {
-    return [["Access-Control-Allow-Origin", origin]];
+  if (cors.origins === "*" || (origin !== null && cors.origins.includes(origin))) {
+    return [
+      ["Access-Control-Allow-Origin", cors.origins === "*" ? "*" : origin],
+      ["Access-Control-Expose-Headers", "Purrdf-Execution-Receipt"],
+    ];
   }
   return [];
 }

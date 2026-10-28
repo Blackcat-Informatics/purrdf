@@ -1259,7 +1259,8 @@ export class QueryEngine {
   // (the fixed budget kept under the JavaScript engine's call stack, which V8 sizes the
   // same for a job as for the synchronous lane) are the synchronous twin's refusals word
   // for word; a cancellation through `signal` rejects with
-  // `signal.reason` (an `AbortError` without one); a handler that threw, rejected or
+  // an `AbortError` carrying `signal.reason` as `cause` (`TimeoutError` for a timeout
+  // signal); a handler that threw, rejected or
   // answered something unrecognizable fails its own invocation (`native-sparql-host-fault`
   // or `native-sparql-load-fault` without `SILENT`); a fault — a broken delivery protocol,
   // or frames no stack check guards running outside the job's region or past its base —

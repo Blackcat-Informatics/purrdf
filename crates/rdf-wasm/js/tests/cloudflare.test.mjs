@@ -2277,21 +2277,21 @@ test("CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS
     { ...base, cors },
   );
   assert.equal(echoed.status, 200);
-  assert.equal(echoed.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
+  assert.deepEqual([echoed.headers.get("Access-Control-Allow-Origin"), echoed.headers.get("Access-Control-Expose-Headers")], ["https://app.example.org", "Purrdf-Execution-Receipt"]);
   assert.equal(echoed.headers.get("Vary"), "Accept, Origin");
 
   const star = await handleSparqlRequest(
     httpRequest({ query: q(SELECT_S), origin: "https://any.example.org" }),
     { ...base, cors: { origins: "*" } },
   );
-  assert.equal(star.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.deepEqual([star.headers.get("Access-Control-Allow-Origin"), star.headers.get("Access-Control-Expose-Headers")], ["*", "Purrdf-Execution-Receipt"]);
 
   const problemWithCors = await handleSparqlRequest(
     httpRequest({ query: "x=1", origin: "https://app.example.org" }),
     { ...base, cors },
   );
   assert.equal(problemWithCors.status, 400);
-  assert.equal(problemWithCors.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
+  assert.deepEqual([problemWithCors.headers.get("Access-Control-Allow-Origin"), problemWithCors.headers.get("Access-Control-Expose-Headers")], ["https://app.example.org", "Purrdf-Execution-Receipt"]);
 
   const plain = await handleSparqlRequest(
     httpRequest({ query: q(SELECT_S), origin: "https://app.example.org" }),

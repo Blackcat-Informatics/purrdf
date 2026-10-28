@@ -31,6 +31,11 @@ has three input statements; native Rust owns capacity-scale correctness.
 
 ## Audited focused execution
 
+The packaged case `CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without`
+in `cloudflare.test.mjs` checks the HTTP host interface: allowed cross-origin
+responses expose `Purrdf-Execution-Receipt` to browsers, including error responses,
+while requests without CORS configuration receive no CORS headers.
+
 These coordinate host cases also cover receipt transport: typed and raw payload
 envelopes, effective values crossing wasm-bindgen, and low-level receipt handle
 ownership. Native suites retain identity construction and RDF semantics.
