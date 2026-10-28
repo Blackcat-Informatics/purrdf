@@ -2330,3 +2330,19 @@ text, independently of these inputs and the dataset. Hosts decode the strings
 through `purrdf_validate::query::CoordinateInputs`; applying that owner replaces
 both coordinate selections, clears omitted selections to native defaults and
 preserves unrelated query options.
+
+The same flags apply to `purrdf update`, including ordinary, governed and
+`--no-ceiling` execution over text, stdin and pack sources, with the selected
+XPath pattern law. Every WHERE operation uses the exact supplied time. A
+supplied seed starts one stream for the whole request: successive operations
+advance it, so their UUIDs and random draws do not restart at the initial seed.
+Omitting either input preserves that input's existing native host behavior.
+Invalid coordinates fail before UPDATE data is read, after the existing global
+initialization. Native callers supply the same `QueryOptions` to
+`update_with_options`, `update_governed` or `update_governed_handle`.
+
+UPDATE remains transactional: a later-operation failure or governor trip
+publishes no mutation and the CLI writes no partial dataset. Existing governor
+and expression-error evidence retains its meaning; these flags add no
+execution receipt or proof schema. The native UPDATE path retains its existing
+resident storage contract.

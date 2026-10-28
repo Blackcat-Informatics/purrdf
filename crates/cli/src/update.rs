@@ -17,6 +17,10 @@ use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
 pub(crate) struct UpdateOptions<'a> {
+    /// Raw supplied time, decoded before UPDATE source I/O.
+    pub(crate) now: Option<&'a str>,
+    /// Raw supplied initial request seed.
+    pub(crate) entropy_seed: Option<&'a str>,
     /// The immutable geographic profile selected by `--geo-profile`.
     pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     pub(crate) data: &'a str,
@@ -52,6 +56,18 @@ pub(crate) fn run(
     options: &UpdateOptions<'_>,
     ledger_target: &LedgerTarget,
 ) -> Result<CliOutcome, CliError> {
+    let coordinates =
+        purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
+            .map_err(|error| {
+                let flag = match &error {
+                    purrdf_validate::query::CoordinateInputError::Now(_) => "--now",
+                    purrdf_validate::query::CoordinateInputError::EntropySeed(_) => {
+                        "--entropy-seed"
+                    }
+                    _ => "update coordinates",
+                };
+                CliError::Usage(format!("{flag}: {error}"))
+            })?;
     let source_format = format::resolve(options.from, options.data)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     let mut dataset = source::load_dataset(options.data, source_format, options.base)?;
@@ -90,11 +106,13 @@ pub(crate) fn run(
         ),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
-    let query_options = QueryOptions::new()
-        .with_geo(options.geo)
-        .with_env(&env)
-        .with_division(options.division)
-        .with_graph_existence(options.graph_existence);
+    let query_options = coordinates.apply(
+        QueryOptions::new()
+            .with_geo(options.geo)
+            .with_env(&env)
+            .with_division(options.division)
+            .with_graph_existence(options.graph_existence),
+    );
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;

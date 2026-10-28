@@ -9,6 +9,187 @@ use support::run;
 const INSERT: &str =
     "INSERT DATA { <http://example.org/new> <http://example.org/p> <http://example.org/value> }";
 
+/// Exact inputs reach every CLI execution/source route and one random stream
+/// advances across the request's operations instead of restarting each WHERE.
+#[test]
+fn supplied_update_coordinates_replay_across_operations_and_routes() {
+    use support::{code, pipe, stderr, stdout, write_file};
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let text = "<http://example.org/old> <http://example.org/p> <http://example.org/value> .";
+    let input = write_file(dir.path(), "coordinates.ttl", text);
+    let pack = write_file(dir.path(), "coordinates.purrpck", "");
+    let built = run(&["convert", "--from", "turtle", "--to", "pack", &input, &pack]);
+    assert_eq!(code(&built), 0, "{}", stderr(&built));
+    let update = ["a", "b"]
+        .map(|subject| {
+            format!(
+                "INSERT {{ <http://example.org/{subject}> <http://example.org/time> ?t ; \
+         <http://example.org/random> ?r ; <http://example.org/uuid> ?u ; \
+         <http://example.org/str> ?v }} WHERE {{ BIND(NOW() AS ?t) \
+         BIND(RAND() AS ?r) BIND(UUID() AS ?u) BIND(STRUUID() AS ?v) \
+         FILTER(REGEX(\"ok\", \"^ok$\")) }}"
+            )
+        })
+        .join("; ");
+    let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
+    let other = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
+    let answer = |source: &str, now: Option<&str>, seed: Option<&str>, lane: &[&str]| {
+        let mut args = vec!["update", "--data", source, "--to", "ntriples"];
+        if source == "-" {
+            args.extend(["--from", "turtle"]);
+        }
+        if let Some(now) = now {
+            args.extend(["--now", now]);
+        }
+        if let Some(seed) = seed {
+            args.extend(["--entropy-seed", seed]);
+        }
+        args.extend_from_slice(lane);
+        args.push(&update);
+        let out = if source == "-" {
+            pipe(&args, text)
+        } else {
+            run(&args)
+        };
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let body = stdout(&out);
+        let mut cells = Vec::new();
+        for subject in ["a", "b"] {
+            for predicate in ["time", "random", "uuid", "str"] {
+                let prefix =
+                    format!("<http://example.org/{subject}> <http://example.org/{predicate}> ");
+                cells.push(
+                    body.lines()
+                        .find_map(|line| line.strip_prefix(&prefix))
+                        .expect("inserted coordinate value")
+                        .to_owned(),
+                );
+            }
+        }
+        cells
+    };
+    let first = answer(&input, Some(time), Some("0"), &[]);
+    assert!(first[0].contains(time));
+    assert_eq!(first[0], first[4]);
+    for index in 1..4 {
+        assert_ne!(first[index], first[index + 4]);
+    }
+    for source in [&input[..], &pack[..], "-"] {
+        for lane in [
+            &[][..],
+            &["--fuel", "1000000"][..],
+            &["--no-ceiling"][..],
+            &["--xpath-regex", "xpath-3.1-2017-03-21"][..],
+        ] {
+            assert_eq!(answer(source, Some(time), Some("0"), lane), first);
+        }
+    }
+    let later = answer(&input, Some(other), Some("0"), &[]);
+    let seeded = answer(&input, Some(time), Some("1"), &[]);
+    let time_only = answer(&input, Some(time), None, &[]);
+    let seed_only = answer(&input, None, Some("0"), &[]);
+    assert_eq!(answer(&input, None, None, &[]).len(), 8);
+    for index in 0..8 {
+        if index % 4 == 0 {
+            assert!(later[index].contains(other));
+            assert_eq!(seeded[index], first[index]);
+            assert_eq!(time_only[index], first[index]);
+        } else {
+            assert_eq!(later[index], first[index]);
+            assert_ne!(seeded[index], first[index]);
+            assert_eq!(seed_only[index], first[index]);
+        }
+    }
+}
+
+/// Invalid coordinates precede source reads; later failure or a governor trip
+/// keeps both the source and an existing destination untouched.
+#[test]
+fn supplied_update_coordinates_preserve_atomic_errors_and_governor_evidence() {
+    use support::{code, stderr, write_file};
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let input = fixture(dir.path());
+    let before = std::fs::read(&input).unwrap();
+    let output = write_file(dir.path(), "destination.nt", "unchanged destination");
+    let missing = dir.path().join("missing.ttl");
+    for (flag, value) in [
+        ("--now", "invalid"),
+        ("--entropy-seed", "-1"),
+        ("--entropy-seed", "18446744073709551616"),
+    ] {
+        let out = run(&[
+            "update",
+            "--data",
+            missing.to_str().unwrap(),
+            "--output",
+            &output,
+            "--to",
+            "ntriples",
+            flag,
+            value,
+            INSERT,
+        ]);
+        assert_eq!(code(&out), 2, "{}", stderr(&out));
+        assert!(stderr(&out).contains(flag));
+        assert!(!stderr(&out).contains("missing.ttl"));
+        assert_eq!(out.stdout, [] as [u8; 0]);
+    }
+    let absorbed = run(&[
+        "update",
+        "--data",
+        &input,
+        "--to",
+        "ntriples",
+        "--fuel",
+        "1000000",
+        "--now",
+        "2020-01-01T00:00:00Z",
+        "--entropy-seed",
+        "0",
+        "INSERT { <http://example.org/a> <http://example.org/time> ?t } WHERE {
+         BIND(NOW() AS ?t) BIND(1 / 0 AS ?bad) }",
+    ]);
+    assert_eq!(code(&absorbed), 0, "{}", stderr(&absorbed));
+    assert!(stderr(&absorbed).contains("purrdf-expression-errors 1\nabsorbed err:FOAR0001 1\n"));
+    let update = "INSERT { <http://example.org/a> <http://example.org/time> ?t } \
+        WHERE { BIND(NOW() AS ?t) }; CREATE GRAPH <http://example.org/g>; \
+        CREATE GRAPH <http://example.org/g>";
+    for lane in [&[][..], &["--fuel", "1000000"][..], &["--fuel", "0"][..]] {
+        let mut args = vec![
+            "update",
+            "--data",
+            &input,
+            "--output",
+            &output,
+            "--to",
+            "ntriples",
+            "--now",
+            "2020-01-01T00:00:00Z",
+            "--entropy-seed",
+            "0",
+        ];
+        args.extend_from_slice(lane);
+        args.push(update);
+        let out = run(&args);
+        assert_eq!(
+            code(&out),
+            if lane.last() == Some(&"0") { 3 } else { 1 },
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(out.stdout, [] as [u8; 0]);
+        if code(&out) == 3 {
+            assert!(stderr(&out).contains("tripped fuel-exhausted"));
+            assert!(stderr(&out).contains("mutation none"));
+        }
+        assert_eq!(std::fs::read(&input).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged destination"
+        );
+    }
+}
+
 fn fixture(dir: &std::path::Path) -> String {
     let path = dir.join("input.ttl");
     std::fs::write(
