@@ -701,10 +701,16 @@ fn data_block_blank_nodes_are_standardized_apart() {
 fn a_non_rdf_head_instantiation_is_refused() {
     let rule = "RULE { ?o :inverse ?s } WHERE { ?s :p ?o }";
     let error = infer(rule, ":a :p \"lit\" .").expect_err("literal subject");
+    let SrlError::Execution(execution) = &error else {
+        panic!("execution receipt: {error}")
+    };
     assert!(
-        matches!(&error, SrlError::Evaluation { message } if message.contains("not an RDF triple")),
+        matches!(execution.cause.as_ref(), purrdf_shapes::rules::RulesError::Failed(message)
+            if message.contains("not an RDF triple")),
         "{error}"
     );
+    assert!(execution.coordinates.program_identity().is_some());
+    assert!(execution.coordinates.snapshot_identity().is_some());
     assert_eq!(
         infer(rule, ":a :p :b .").expect("ok"),
         [[iri("b"), iri("inverse"), iri("a")]]
