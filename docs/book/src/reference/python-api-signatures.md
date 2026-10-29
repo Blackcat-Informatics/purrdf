@@ -1621,9 +1621,11 @@ class _PlanDocumentError(ValueError):
     """
     refusal: str
 
+class _RetrievalScore(TypedDict):
+    raw: int
+    scale_digits: int
+
 class retrieval:
-    SCALE_DIGITS: int
-    SCALE: int
     PlanDocumentError: TypeAlias = _PlanDocumentError
 
     @staticmethod
@@ -1639,27 +1641,27 @@ class retrieval:
         ...
 
     @staticmethod
-    def compile(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, weights: dict[str, int] | None=None, k: int | None=None, decay: str | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def compile(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, weights: dict[str, int] | None=None, k: int | None=None, decay: str | None=None, scale_digits: int | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def search(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], weights: dict[str, int], statistics: dict[str, builtins.object], k: int, decay: str, top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def search(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], weights: dict[str, int], statistics: dict[str, builtins.object], k: int, decay: str, scale_digits: int, top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def weight_for_depth(depth: int, k: int, *, decay: str) -> int:
+    def weight_for_depth(depth: int, k: int, *, decay: str, scale_digits: int) -> _RetrievalScore:
         ...
 
     @staticmethod
-    def class_width(weight_raw: int, k: int, rank: int, *, decay: str) -> int | None:
+    def class_width(weight_raw: int, k: int, rank: int, *, decay: str, scale_digits: int) -> int | None:
         ...
 
     @staticmethod
-    def deepest_rank_within_width(weight_raw: int, k: int, max_width: int, *, decay: str) -> int | None:
+    def deepest_rank_within_width(weight_raw: int, k: int, max_width: int, *, decay: str, scale_digits: int) -> int | None:
         ...
 
     @staticmethod
-    def crossing_rank_at(naming_raw: list[int], at_rank: int, sharing_raw: list[int], k: int, *, decay: str) -> int | None:
+    def crossing_rank_at(naming_raw: list[int], at_rank: int, sharing_raw: list[int], k: int, *, decay: str, scale_digits: int) -> int | None:
         ...
 ```
 

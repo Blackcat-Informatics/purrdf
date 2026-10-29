@@ -2510,10 +2510,9 @@ mod tests {
     ///
     /// A weight of zero is measured and the measurement is one: every rank's
     /// contribution is zero, so the first adjacent pair already collides and one
-    /// is the exact first-collision rank rather than a stand-in for it. The
-    /// negative half is short-circuited alongside it — `FusionProfile::with_decay`
-    /// refuses a negative weight where one is declared — so the walk is never
-    /// entered with a weight whose contributions do not decrease.
+    /// is the exact first-collision rank rather than a stand-in for it.
+    /// `FusionProfile::with_decay` refuses zero as a declared stratum weight;
+    /// standalone arithmetic still measures its resolution.
     ///
     /// Each case is paired with its usable neighbour, which must still measure a
     /// deeper range.
@@ -2532,14 +2531,12 @@ mod tests {
                 "and the neighbouring constant of one still measures a deeper range"
             );
 
-            for raw in [0_u128] {
-                let unusable_weight = monotone_depth(rule(60), score(raw));
-                assert!(
-                    matches!(unusable_weight, Ok(1)),
-                    "a weight of raw {raw} orders a single rank and is not walked, \
-                     got {unusable_weight:?}"
-                );
-            }
+            let unusable_weight = monotone_depth(rule(60), score(0));
+            assert!(
+                matches!(unusable_weight, Ok(1)),
+                "a zero raw weight orders a single rank and is not walked, \
+                 got {unusable_weight:?}"
+            );
             assert!(
                 measured_bound(rule(60), weight) > 1,
                 "and the neighbouring positive weight still measures a deeper range"
