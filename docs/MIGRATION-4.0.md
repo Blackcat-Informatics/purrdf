@@ -240,6 +240,19 @@ Fully decided answer, certificate and proof bytes remain unchanged. The shared
 host methods accept no stop input; native refusals retain native cancellation
 evidence without adding a new host protocol claim.
 
+## Justification decision refusals
+
+Justification shrinking and its sufficiency/minimality checks now require a
+fully decided native certificate for every negative answer. Unsupported ontology
+boundaries, exhausted search and native solver failures propagate instead of
+being interpreted as evidence that an axiom is necessary. Positive evidence
+within a supported fragment remains usable.
+
+The unit `ExplainError::Undecided` variant is removed. Incomplete decisions now
+use `ExplainError::Entail` with `EntailError::Decision`, retaining the original
+certificate, including boundaries, resource refusal and cancellation evidence.
+The boolean check methods return that original `EntailError::Decision` directly.
+
 ## Canonical reserved-vocabulary refusals
 
 `ReservedVocabulary` now lends its original IRI and position through `iri()` and
