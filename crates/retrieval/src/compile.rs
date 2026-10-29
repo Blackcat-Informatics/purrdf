@@ -1569,6 +1569,7 @@ impl UnitAttribution {
 /// and reporting the first shifted tag would name a unit nothing was done to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
+    score_prefix_bounded: bool,
     constraints: Vec<crate::RequestTerm>,
     /// Per-stratum query units, ordered by stratum IRI.
     ///
@@ -1697,7 +1698,9 @@ impl CompiledRead for CompiledRetrieval {
                         fused_bound: self.fused_bound,
                         contract: stream.contract,
                         attestation: stream.attestation,
-                        stream: stream.stream,
+                        stream: stream
+                            .stream
+                            .with_score_prefix_bounded(self.score_prefix_bounded),
                     }),
                 &workspace,
             )
@@ -1757,6 +1760,7 @@ impl CompiledRetrieval {
     ) -> Self {
         let attribution = units.iter().map(UnitAttribution::of).collect();
         Self {
+            score_prefix_bounded: false,
             constraints: Vec::new(),
             units,
             plan_id,
@@ -1950,6 +1954,15 @@ pub fn compile(
     plan: &Plan,
     env: &AdmissionEnvironment<'_>,
 ) -> Result<CompiledRetrieval, AdmissionError> {
+    if env
+        .fusion_profile
+        .is_some_and(|profile| profile.ordering().is_some())
+        && matches!(plan.read_bound, ReadBound::Bounded(_))
+    {
+        return Err(AdmissionError::MalformedPlan {
+            reason: "caller-key fusion cannot use a score-prefix bounded plan; replan with ReadBound::CallerOrdered or Complete".to_owned(),
+        });
+    }
     let admitted = admit_plan(plan, env)?;
 
     let units = emit_units(&admitted)?;
@@ -2022,6 +2035,7 @@ pub fn compile(
         resolution,
     );
     compiled.constraints.clone_from(&plan.constraints);
+    compiled.score_prefix_bounded = matches!(plan.read_bound, ReadBound::Bounded(_));
     Ok(compiled)
 }
 
@@ -2105,7 +2119,7 @@ pub(crate) fn emit_units(
 /// reaching it would need more distinct candidates than a `usize` can count.
 fn fused_bound(plan: &Plan) -> TopK {
     match plan.read_bound {
-        ReadBound::Bounded(top_k) => top_k,
+        ReadBound::Bounded(top_k) | ReadBound::CallerOrdered(top_k) => top_k,
         ReadBound::Complete => {
             TopK::new(plan.stratum_depths.values().fold(0_usize, |total, depth| {
                 total.saturating_add(*depth as usize)

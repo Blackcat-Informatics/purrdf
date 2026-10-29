@@ -1175,6 +1175,10 @@ pub(crate) fn admit_plan<'a>(
     plan: &'a Plan,
     env: &AdmissionEnvironment<'_>,
 ) -> Result<AdmittedRegistry<'a>, AdmissionError> {
+    plan.validate_order_bound()
+        .map_err(|error| AdmissionError::MalformedPlan {
+            reason: error.to_string(),
+        })?;
     admit_read(
         ReadPlan {
             version: plan.version,

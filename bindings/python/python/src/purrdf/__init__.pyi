@@ -3003,6 +3003,11 @@ class _RetrievalScore(TypedDict):
     raw: int
     scale_digits: int
 
+class _RetrievalOrdering(TypedDict):
+    semantics: str
+    leading: bool
+    keys: dict[str, tuple[bytes, bytes]]
+
 class retrieval:
     # Fusion precision is explicit on each law. Scores retain raw units and scale.
     # Spelled with an explicit `TypeAlias`, exactly as `purrdf.shapes` spells its
@@ -3114,6 +3119,7 @@ class retrieval:
         top_k: int,
         hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
         knn_producers: dict[str, _KnnProducerSpec] | None = None,
+        caller_ordered: bool = False,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -3266,6 +3272,7 @@ class retrieval:
         k: int | None = None,
         decay: str | None = None,
         scale_digits: int | None = None,
+        ordering: _RetrievalOrdering | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -3485,6 +3492,7 @@ class retrieval:
         decay: str,
         scale_digits: int,
         top_k: int,
+        ordering: _RetrievalOrdering | None = None,
         hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
         knn_producers: dict[str, _KnnProducerSpec] | None = None,
         data_format: str = "turtle",

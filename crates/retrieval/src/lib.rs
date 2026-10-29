@@ -415,6 +415,7 @@ mod fusion_stream;
 mod id;
 mod iri;
 mod matching;
+mod ordering;
 mod plan;
 mod planner;
 mod ranked_stream;
@@ -424,6 +425,11 @@ mod request;
 mod scope;
 mod score;
 mod search;
+
+pub use ordering::{
+    CandidateKeys, LeadingBound, ORDER_CATALOG_DOMAIN, OrderBound, OrderBytes, OrderCatalog,
+    OrderWitness, OrderingError, OrderingEvidence, OrderingPolicy, OrderingStatus,
+};
 
 pub use purrdf_core::query_scope::{
     ConstraintCounts, ConstraintDecision, ScopeCounters, ScopeError,
@@ -498,8 +504,8 @@ pub use reciprocal_rank::{
 pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
 pub use search::{
-    FallibleSearchError, RankedStreamAdapter, SearchError, SearchResult, search, search_scoped,
-    search_scoped_fallible,
+    FallibleSearchError, RankedStreamAdapter, SearchError, SearchResult, search, search_ordered,
+    search_scoped, search_scoped_fallible, search_scoped_fallible_ordered, search_scoped_ordered,
 };
 pub use statistics::Statistics;
 pub use union::{CandidateUnion, UnionCandidate, UnionError, UnionFailure, UnionProducer, union};
