@@ -412,12 +412,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "35d022aeab318fd4bda30cc0500aeb97219fdfced7a6533cc19db383fae5f86b";
+    "6bd87ddf64b6eca89aef37c53cfe6a83be887f90f1a5320357125d8029eb986c";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "898fd3e4f5f2ddaef7ae55b62b8f87407d4ac098ed553d0eaafafc8ef94240a6";
+    "ee310ae59ee251a6100c1e98d9e7c0206fcd819036569a7f1d7c6452ef1522fa";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.

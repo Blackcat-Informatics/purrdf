@@ -47,8 +47,10 @@ Depths and row bounds still count rows. `DepthReached`, `RowBoundReached` and
 rows. `UnionProducer::last_rank` and `StratumResolution::ranks_pulled` retain
 rank progress separately from `rows_pulled`. The fusion trailer also reports
 `shared_ranks_observed`, excluding those intentional ties from
-`collisions_observed`. Registry and plan identities change with the explicit
-rank declaration. Candidate-union canonical bytes use layout version 2 and
+`collisions_observed`. Registry fingerprints use schema version 3, so registry
+and dependent plan identities change, including those of empty registries.
+The explicit rank declaration participates in that identity.
+Candidate-union canonical bytes use layout version 2 and
 include the producer's last rank and rank law.
 
 ## Execution coordinates and receipt migration
