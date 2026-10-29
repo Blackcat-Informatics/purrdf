@@ -131,6 +131,14 @@ return `PreparationRefusal::UnqualifiedRecursion`, retaining the original
 definition, parameter and model/index scope. Selecting a law does not authorize
 an unknown transfer or the old depth-bound approximation.
 
+A `sh:targetWhere :Target` can use the same explicit selection when its operand
+is a canonical named reference in the same original catalog. Discovery reuses
+the original plan and dataset binding, seeds every candidate pair into one
+fixed-point execution and publishes targets only after the whole sweep settles.
+Pair and round limits cover the candidate roots and their dependencies together;
+they do not bound raw graph scans. Anonymous where shapes and replaced operands
+remain refused under a selected recursive request.
+
 `validate_with_recursion_evidence` and `validate_shape_with_recursion` retain the
 settled verdict, ordinary finite SHACL leaf results and native closed-pair cycle
 certificates separately. A false least fixed point may have a cycle certificate
