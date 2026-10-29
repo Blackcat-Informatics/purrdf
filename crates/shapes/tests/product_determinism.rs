@@ -36,9 +36,10 @@
 //! # Regeneration
 //!
 //! `fixtures/prepared-shapes-core.product` is this build's output for
-//! [`product_fixture::SHAPES`]. When the container format or the derived
-//! `STAGE_ID` legitimately changes, [`frozen_product_bytes`] fails, and the
-//! artifact and [`GOLDEN_LEN`] are updated together in the same reviewable commit
+//! [`product_fixture::SHAPES`]. When the container format, derived `STAGE_ID`
+//! or recorded host registry identity legitimately changes,
+//! [`frozen_product_bytes`] fails, and the artifact and [`GOLDEN_LEN`] are
+//! updated together in the same reviewable commit
 //! as the change that moved them.
 //!
 //! That update is a **command**, not an improvisation:
@@ -235,7 +236,8 @@ fn frozen_product_bytes() {
         &bytes,
         product_fixture::GOLDEN,
         "this build writes a different product for the fixture than the committed golden, so \
-         the container format or the derived stage id moved; re-prepare the artifact in the \
+         the container format, stage id or recorded host registry identity moved; \
+         re-prepare the artifact in the \
          same commit as the change, with `cargo test -p purrdf-shapes --test \
          product_determinism -- --ignored --exact --nocapture \
          regenerate_the_prepared_product_fixture`, and expect every cached product in the wild \
@@ -305,7 +307,7 @@ fn frozen_golden_admits() {
 /// delete the only evidence this repository holds that an older product still
 /// opens. This writes one path and names it literally.
 #[test]
-#[ignore = "writes a committed artifact; run by name when the format or the stage id moved"]
+#[ignore = "writes a committed artifact; run by name when the format, stage id or host identity moved"]
 fn regenerate_the_prepared_product_fixture() {
     const FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
