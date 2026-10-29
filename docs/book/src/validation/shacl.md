@@ -121,8 +121,12 @@ component refusal. This explicit policy is permitted by
 The selected evaluator admits proved closed structural shape catalogs: node,
 property, logical, member and qualified references keep their original model
 and occurrence identities. Negative or nonmonotone references within a recursive
-component refuse either selection; lower strata remain fixed. Expressions,
-query/computed targets and unbound overlays without a closed dependency proof
+component refuse either selection; lower strata remain fixed. A direct
+`sh:expression [ shnex:conformsToShape ( sh:this :Target ) ]` also participates
+when `:Target` is a canonical named reference in the same original catalog.
+It asks the current value node's target pair through the active fixed point;
+a false answer produces the ordinary expression-constraint violation.
+Other expressions, query/computed targets and unbound overlays without a closed dependency proof
 return `PreparationRefusal::UnqualifiedRecursion`, retaining the original
 definition, parameter and model/index scope. Selecting a law does not authorize
 an unknown transfer or the old depth-bound approximation.

@@ -3,6 +3,7 @@
 
 //! Checked eligibility for the borrowed recursive evaluator.
 
+use crate::expression::{NodeExpr, ShapeArg};
 use crate::shapes::{
     ModelOwner,
     link::{ShapeIndex, ShapeIndexRef},
@@ -109,6 +110,33 @@ impl std::error::Error for ClosedRecursionRefusal {}
 
 /// Constructed only after the original catalog and occurrence are checked.
 pub(crate) struct ClosedProof(pub(super) ());
+
+/// A conformance question whose focus and target cannot depend on the current
+/// recursive valuation. Only a canonical reference into the same original
+/// catalog is admitted: neither a local replacement body nor another model's
+/// equal-named shape may acquire this catalog's proof or borrowed binding.
+pub(crate) fn named_conformance<'a>(
+    expression: &'a NodeExpr,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    let NodeExpr::ConformsToShape {
+        node,
+        shape: ShapeArg::Named(shape),
+    } = expression
+    else {
+        return None;
+    };
+    let owner = owner?;
+    (matches!(node.as_ref(), NodeExpr::This)
+        && matches!(shape.id, Term::NamedNode(_))
+        && super::model::canonical_handle(shape)
+        && shape
+            .owner
+            .as_ref()
+            .is_none_or(|target| Arc::ptr_eq(owner, target))
+        && owner.definition(&shape.id).is_some())
+    .then_some(shape)
+}
 
 /// The original kind of an admitted dependency-graph occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
