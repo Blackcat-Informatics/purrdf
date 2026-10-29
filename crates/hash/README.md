@@ -728,6 +728,7 @@ source on every run.
 | `b"purrdf/triples/source-row/v1"` | `TRIPLE_ROW` | `crates/rdf-core/src/source.rs` |
 | `b"purrdf:evidence:v1"` | `EVIDENCE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:fusion-profile:v1"` | `FUSION_PROFILE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
+| `b"purrdf:order-catalog:v1"` | `(inline)` | `crates/retrieval/src/ordering.rs` |
 | `b"purrdf:plan:v1"` | `PLAN_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"references-once-emoji-protect-caseless-scoped-accents-v3"` | `ORDERED_LAW` | `crates/text/src/profile.rs` |
 | `b"section"` | `SECTION_KIND` | `crates/markdown/src/identity.rs` |

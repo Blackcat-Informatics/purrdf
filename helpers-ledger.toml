@@ -3151,13 +3151,6 @@ anchor = "purrdf_sparql_eval::workspace::array::WorkspaceArray"
 reason = "The immutable and exclusive mutable slice views must have distinct Rust borrow signatures. Both preserve the original caller/native array owner and grant; sharing a mutable accessor with the immutable one would require an invalid exclusive borrow or unsafe aliasing."
 
 [[distinct]]
-members = ["purrdf_retrieval::execute::ExecutionError::source", "purrdf_retrieval::ranked_stream::ProtocolError::source"]
-kind = "body"
-criterion = "a"
-anchor = "purrdf_retrieval::execute::ExecutionError"
-reason = "Required std::error::Error adapters expose the original native failure carried by two distinct public error enums. All other variants have no nested source; the forwarding match implements each concrete trait contract without copying the failure or its owner."
-
-[[distinct]]
 members = ["purrdf_datalog::store::rows::RowLog::next", "purrdf_datalog::store::terms::TermArena::next"]
 kind = "body"
 criterion = "b"

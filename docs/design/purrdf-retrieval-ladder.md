@@ -222,7 +222,33 @@ where `recip` is the reciprocal evaluated in fixed point at a declared
 scale with a declared rounding, `w_stratum` is the stratum's declared
 weight, and `K` is the profile's smoothing constant. An item appearing in
 several strata **sums** its contributions, and the final order is by
-fused score descending with a declared, total tie-break.
+the profile's declared total order. The default is fused score descending,
+best stratum rank ascending, then canonical term ascending. Caller ordering
+compares normalized leading bytes (when enabled), fused score descending,
+normalized caller tie bytes, then canonical term. Bytes compare unsigned and
+lexicographically, with a shorter prefix first. The caller owns the key-layout
+semantic IRI and encodes directions such as tier ascending and activation
+descending before supplying keys.
+
+Caller ordering is certified inside fusion. Every source pins semantic and
+key-snapshot identities before its first row, supplies immutable candidate keys,
+and supplies a lower bound on unread leading keys. Bounds may tighten but never
+widen, and each row must satisfy the previous bound. Buffered heads remain part
+of the unread population. A degraded source also needs a bound over its full
+domain; exhaustion alone cannot prove that domain empty. Missing keys, changed
+evidence and insufficient bounds produce typed refusals. The same comparator
+orders final candidates and optimistic rivals, including candidates not yet
+seen. Row witnesses and the terminal remainder retain this full-order proof.
+
+`ReadBound::CallerOrdered(k)` keeps the fused row limit without licensing a
+score-prefix depth reduction, including score plateaus resolved by caller tie
+keys. Select it before planning. Decoding, certification and compilation reject
+plans that claim this bound while retaining a licensed score prefix. Native
+`search_ordered` chooses the bound before calling the original pipeline; its
+optional `OrderCatalog` binds policy and key data into a content identity.
+External streams may supply the typed ordering protocol directly. The profile's
+additive ordering tag preserves legacy profile encodings. Key-data snapshots
+affect evidence identity rather than the arithmetic profile identity.
 
 **Where the weight enters is a declared rule, not an implementation
 detail.** Evaluating `recip` first and applying the weight afterwards
@@ -423,7 +449,8 @@ and the class width at a depth is the layer's resolution there. A width of
 one means the fused score alone orders that rank. A width of `w` means `w`
 consecutive ranks are indistinguishable by score, and their relative order
 falls through to the declared tie-break's later keys: best stratum rank
-ascending, then canonical term bytes. That key is **total**, so the answer
+ascending under the default policy, or caller tie bytes under caller ordering,
+then canonical term bytes. That key is **total**, so the answer
 remains a pure function of its inputs at every depth. It is never wrong;
 it is coarser.
 

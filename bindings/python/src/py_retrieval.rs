@@ -393,8 +393,9 @@ use crate::hnsw::relation::{HnswRelation, HnswSpace};
 use crate::hnsw::{HnswIndex, Params as HnswGraphParams, VectorMatrix};
 use crate::py_shex::data_media_type;
 use crate::retrieval::{
-    AdmissionEnvironment, ClassWidth, CompiledRetrieval, CounterReading, CrossingRank, DecayRule,
-    DepthCause, Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
+    AdmissionEnvironment, CandidateKeys, ClassWidth, CompiledRetrieval, CounterReading,
+    CrossingRank, DecayRule, DepthCause, Fixed, FusionProfile, Iri, LeadingBound, Metric,
+    OrderBound, OrderCatalog, OrderingPolicy, Plan, PlanError, PlanId, PlannedResolution,
     Precision, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest,
     Score, ScoreExactness, ScoreInterval, SearchResult, Statistics, Term, ToleratedDepth, TopK,
     UnservedReason,
@@ -1048,7 +1049,11 @@ fn run_compile(
 }
 
 /// Run the whole ladder and return the fused answer.
-fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, String> {
+fn run_search(
+    call: &Call,
+    profile: &FusionProfile,
+    ordering: Option<Arc<OrderCatalog>>,
+) -> Result<SearchResult, String> {
     let data = build_dataset(call)?;
     let registry = build_registry(&data, &call.producers)?;
     let environment = AdmissionEnvironment {
@@ -1059,15 +1064,77 @@ fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, Stri
     // The ladder's futures are awaited in one task and never cross a thread
     // boundary, so the retrieval crate's parking executor drives the real async
     // entry point rather than a second, synchronous one.
-    crate::retrieval::block_on(crate::retrieval::search(
-        &call.request,
-        &registry,
-        &call.statistics,
-        &*data,
-        &environment,
-        profile,
-    ))
-    .map_err(|e| e.to_string())
+    let result = if let Some(catalog) = ordering {
+        crate::retrieval::block_on(crate::retrieval::search_ordered(
+            &call.request,
+            &registry,
+            &call.statistics,
+            &*data,
+            &environment,
+            profile,
+            catalog,
+        ))
+    } else {
+        crate::retrieval::block_on(crate::retrieval::search(
+            &call.request,
+            &registry,
+            &call.statistics,
+            &*data,
+            &environment,
+            profile,
+        ))
+    };
+    result.map_err(|e| e.to_string())
+}
+
+/// Decode the caller's byte-key snapshot before releasing the interpreter.
+fn collect_ordering(value: Option<&Bound<'_, PyDict>>) -> PyResult<Option<Arc<OrderCatalog>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    for (key, _) in value {
+        let key: String = key.extract()?;
+        if !matches!(key.as_str(), "semantics" | "leading" | "keys") {
+            return Err(PyValueError::new_err(format!(
+                "unknown caller ordering member {key:?}; expected semantics, leading and keys"
+            )));
+        }
+    }
+    let semantics: String = value
+        .get_item("semantics")?
+        .ok_or_else(|| PyValueError::new_err("caller ordering requires semantics"))?
+        .extract()?;
+    let leading: bool = value
+        .get_item("leading")?
+        .ok_or_else(|| PyValueError::new_err("caller ordering requires leading"))?
+        .extract()?;
+    let entries = value
+        .get_item("keys")?
+        .ok_or_else(|| PyValueError::new_err("caller ordering requires keys"))?;
+    let entries = entries.cast::<PyDict>()?;
+    let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+    let mut keys = BTreeMap::new();
+    for (term, entry) in entries {
+        let term: String = term.extract()?;
+        let (leading, tie): (Vec<u8>, Vec<u8>) = entry.extract()?;
+        let key = CandidateKeys::new(&leading, &tie, &workspace)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        keys.insert(Term::new(term), key);
+    }
+    let policy = OrderingPolicy {
+        semantics: retrieval_iri("ordering semantics", &semantics)
+            .map_err(PyValueError::new_err)?,
+        leading,
+    };
+    OrderCatalog::new(policy, keys)
+        .map(|catalog| Some(Arc::new(catalog)))
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+fn use_caller_order(call: &mut Call) {
+    if let crate::retrieval::ReadBound::Bounded(top_k) = call.request.bound {
+        call.request.bound = crate::retrieval::ReadBound::CallerOrdered(top_k);
+    }
 }
 
 // ── argument conversion ──────────────────────────────────────────────────────
@@ -2471,6 +2538,33 @@ fn score_dict(py: Python<'_>, score: Score) -> PyResult<Bound<'_, PyDict>> {
     Ok(out)
 }
 
+fn leading_bound_dict<'py>(py: Python<'py>, bound: &LeadingBound) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    match bound {
+        LeadingBound::Unbounded => out.set_item("kind", "unbounded")?,
+        LeadingBound::Empty => out.set_item("kind", "empty")?,
+        LeadingBound::Inclusive(key) => {
+            out.set_item("kind", "inclusive")?;
+            out.set_item("key", PyBytes::new(py, key))?;
+        }
+    }
+    Ok(out)
+}
+
+fn order_bound_dict<'py>(py: Python<'py>, bound: &OrderBound) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("leading", leading_bound_dict(py, &bound.leading)?)?;
+    out.set_item(
+        "score",
+        bound.score.map(|score| score_dict(py, score)).transpose()?,
+    )?;
+    if let Some((tie, term)) = &bound.tail {
+        out.set_item("tie", PyBytes::new(py, tie))?;
+        out.set_item("entity", term.as_str())?;
+    }
+    Ok(out)
+}
+
 /// Render one fused answer as a dict.
 fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
@@ -2482,6 +2576,14 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         entry.set_item("entity", row.entity.as_str())?;
         entry.set_item("score", score_dict(py, row.score)?)?;
         entry.set_item("threshold_witness", score_dict(py, row.threshold_witness)?)?;
+        if let Some(witness) = &row.order_witness {
+            let order = PyDict::new(py);
+            order.set_item("semantics", witness.semantics.as_str())?;
+            order.set_item("leading", PyBytes::new(py, &witness.keys.leading))?;
+            order.set_item("tie", PyBytes::new(py, &witness.keys.tie))?;
+            order.set_item("unseen", order_bound_dict(py, &witness.unseen)?)?;
+            entry.set_item("order_witness", order)?;
+        }
         let contributions = PyList::empty(py);
         for (stratum, rank, value) in &row.contributions {
             let contribution = PyDict::new(py);
@@ -2499,6 +2601,27 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         rows.append(entry)?;
     }
     out.set_item("rows", rows)?;
+    if let Some(sources) = &result.trailer.ordering {
+        let ordering = PyDict::new(py);
+        for (stratum, source) in &**sources {
+            let entry = PyDict::new(py);
+            entry.set_item("semantics", source.evidence.semantics.as_str())?;
+            entry.set_item("snapshot", PyBytes::new(py, &source.evidence.snapshot))?;
+            entry.set_item("domain", leading_bound_dict(py, &source.evidence.domain)?)?;
+            entry.set_item("unread", leading_bound_dict(py, &source.unread)?)?;
+            ordering.set_item(stratum.as_str(), entry)?;
+        }
+        out.set_item("ordering", ordering)?;
+        out.set_item(
+            "unemitted_order",
+            result
+                .trailer
+                .unemitted_order
+                .as_ref()
+                .map(|bound| order_bound_dict(py, bound))
+                .transpose()?,
+        )?;
+    }
 
     let statuses = PyDict::new(py);
     for (stratum, status) in &result.trailer.statuses {
@@ -2803,6 +2926,9 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
 /// overlap, each is planned to `top_k` rows and no deeper; over anything else the
 /// declared-or-measured bound stands. It never widens a depth and never changes an
 /// answer.
+/// With `caller_ordered=True`, the fused limit remains `top_k`, but every
+/// stratum retains its declared or measured depth: a caller's leading or tie
+/// keys can select a row below a score prefix.
 #[pyfunction]
 #[pyo3(signature = (
     data,
@@ -2813,6 +2939,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     top_k,
     hnsw_producers=None,
     knn_producers=None,
+    caller_ordered=false,
     data_format="turtle",
     base=None,
 ))]
@@ -2829,10 +2956,11 @@ fn plan<'py>(
     top_k: usize,
     hnsw_producers: Option<&Bound<'py, PyDict>>,
     knn_producers: Option<&Bound<'py, PyDict>>,
+    caller_ordered: bool,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(
+    let mut call = collect_call(
         data,
         request,
         text_producers,
@@ -2843,6 +2971,9 @@ fn plan<'py>(
         data_format,
         base,
     )?;
+    if caller_ordered {
+        use_caller_order(&mut call);
+    }
     // Parsing, index construction and planning run detached (GIL released); the
     // result dict is built after the GIL is reacquired.
     let planned = py
@@ -2991,6 +3122,8 @@ fn explain_depth(
 /// would be evidence about nothing. Naming some of them and not the rest is a
 /// `ValueError` that says which part is missing, because the four are one law
 /// between them.
+/// `ordering` takes the same key catalog as [`search`] and requires the complete
+/// arithmetic law. It selects caller-order planning before any depth is derived.
 ///
 /// `top_k` is required, as it is on [`plan`] and for the same reason: the depths
 /// this stage emits a `LIMIT` for were derived from it. This stage narrows nothing
@@ -3017,6 +3150,7 @@ fn explain_depth(
     k=None,
     decay=None,
     scale_digits=None,
+    ordering=None,
     data_format="turtle",
     base=None,
 ))]
@@ -3037,10 +3171,11 @@ fn compile<'py>(
     k: Option<u32>,
     decay: Option<&str>,
     scale_digits: Option<u32>,
+    ordering: Option<&Bound<'py, PyDict>>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(
+    let mut call = collect_call(
         data,
         request,
         text_producers,
@@ -3051,6 +3186,10 @@ fn compile<'py>(
         data_format,
         base,
     )?;
+    let ordering = collect_ordering(ordering)?;
+    if ordering.is_some() {
+        use_caller_order(&mut call);
+    }
     // A law is its weights, its smoothing constant *and* its decay rule; any
     // part of one names no law at all, and silently supplying the rest would
     // report a resolution measured against arithmetic the host never wrote.
@@ -3071,12 +3210,22 @@ fn compile<'py>(
             ])));
         }
     };
+    if ordering.is_some() && law.is_none() {
+        return Err(PyValueError::new_err(
+            "caller ordering requires a complete fusion law",
+        ));
+    }
     // Parsing, index construction, planning and admission run detached.
     let (planned, compiled) = py
         .detach(|| {
             let profile = law
                 .as_ref()
-                .map(|(declared, decay, precision)| build_profile(declared, *decay, *precision))
+                .map(|(declared, decay, precision)| {
+                    build_profile(declared, *decay, *precision).map(|profile| match &ordering {
+                        Some(catalog) => profile.with_ordering(catalog.policy().clone()),
+                        None => profile,
+                    })
+                })
                 .transpose()?;
             run_compile(&call, profile.as_ref())
         })
@@ -3222,10 +3371,12 @@ fn compile<'py>(
 /// `"unemitted_ceiling"` is the evidence that verdict rests on, in the same
 /// fixed-point lexical as `"score"`: the most any candidate outside the answer
 /// could be worth, counting both the candidates no stream ever named and the
-/// ones a bounded read abandoned. A leading row is certain exactly when its own
-/// floor clears it. It is `None` where a stratum declared a perturbed order,
-/// because that breaks the one inequality every bound here rests on and no
-/// finite ceiling exists — `"certain_prefix"` is then `0`.
+/// ones a bounded read abandoned. Under the built-in ordering, a row's floor
+/// must clear this ceiling and the ceilings of later rows. It is `None` where a
+/// stratum declared a perturbed order, so no finite score ceiling exists and
+/// the built-in `"certain_prefix"` is `0`. Caller ordering instead uses
+/// `"unemitted_order"` and each row's `"order_witness"`; a strictly better
+/// leading key can settle precedence even when a score is unbounded.
 ///
 /// `"domains"` reports the candidate-domain declaration each handed stream fused
 /// under — `None` where the producer promised only that it may name anything, a
@@ -3233,8 +3384,9 @@ fn compile<'py>(
 /// declarations decide which streams fusion was allowed to skip when it
 /// certified a row.
 ///
-/// `"evidence_id"` is the content identity of `"attestations"`, rendered like
-/// `"plan_id"` and `"profile_id"`: 64 lowercase hex characters. Two answers that
+/// `"evidence_id"` identifies the attestations, exclusion evidence and caller
+/// key snapshots in force, rendered like `"plan_id"` and `"profile_id"` as 64
+/// lowercase hex characters. Two answers that
 /// agree on all three were assembled from the same indexes in the same state,
 /// which no other field on the answer can show — a rebuilt index moves the
 /// dataset snapshot, the query text and the registry fingerprint not at all.
@@ -3260,6 +3412,15 @@ fn compile<'py>(
 /// candidate may receive is *not* a parameter — it is the number of weighted
 /// strata.
 ///
+/// `ordering` is `{"semantics": iri, "leading": bool, "keys":
+/// {canonical_term: (leading_bytes, tie_bytes)}}`. Keys compare as unsigned
+/// lexicographic bytes: optional leading bytes first, score descending, tie
+/// bytes, then canonical term. The caller's IRI names the key encoding. A
+/// score-first policy requires empty leading bytes. This selects full candidate
+/// depths before planning; absent keys fail with `ValueError`. Rows carry
+/// `"order_witness"`, and keyed answers carry source `"ordering"` snapshot and
+/// bound evidence plus the full-order `"unemitted_order"` remainder bound.
+///
 /// `decay` names the rank-decay rule the whole answer is computed under, and it
 /// reaches every number in that answer rather than only the law's identity.
 /// `"reciprocal_rank"` truncates the reciprocal to the declared scale before the
@@ -3281,6 +3442,7 @@ fn compile<'py>(
     decay,
     scale_digits,
     top_k,
+    ordering=None,
     hnsw_producers=None,
     knn_producers=None,
     data_format="turtle",
@@ -3301,6 +3463,7 @@ fn search<'py>(
     decay: &str,
     scale_digits: u32,
     top_k: usize,
+    ordering: Option<&Bound<'py, PyDict>>,
     hnsw_producers: Option<&Bound<'py, PyDict>>,
     knn_producers: Option<&Bound<'py, PyDict>>,
     data_format: &str,
@@ -3318,6 +3481,7 @@ fn search<'py>(
         base,
     )?;
     let declared = collect_weights(weights)?;
+    let ordering = collect_ordering(ordering)?;
     // Read before the GIL is released, with every other Python-side argument:
     // the rule is owned Rust data by the time the ladder runs.
     let decay = decay_rule(decay, k).map_err(PyValueError::new_err)?;
@@ -3326,8 +3490,11 @@ fn search<'py>(
     let result = py
         .detach(|| {
             let precision = Precision::new(scale_digits).map_err(|error| error.to_string())?;
-            let profile = build_profile(&declared, decay, precision)?;
-            run_search(&call, &profile)
+            let mut profile = build_profile(&declared, decay, precision)?;
+            if let Some(catalog) = &ordering {
+                profile = profile.with_ordering(catalog.policy().clone());
+            }
+            run_search(&call, &profile, ordering.clone())
         })
         .map_err(PyValueError::new_err)?;
     search_dict(py, &result)

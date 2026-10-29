@@ -842,6 +842,7 @@ impl std::error::Error for ExecutionError {
 /// to tell a stratum that ended from a stratum it stopped reading.
 #[derive(Debug)]
 pub struct RankedStreamImpl<'d> {
+    score_prefix_bounded: bool,
     workspace: Option<purrdf_sparql_eval::WorkspaceCapability>,
     /// Where the rows come from: a read already materialised, or one produced as
     /// this stream is pulled.
@@ -993,7 +994,7 @@ impl purrdf_hash::error::StructuredError for RowSource<'_> {
 
 impl purrdf_hash::error::StructuredError for RankedStreamImpl<'_> {
     purrdf_hash::error_visit! {
-        @record self { workspace, source, pulled, exhausted, exclusion, materialised,
+        @record self { score_prefix_bounded, workspace, source, pulled, exhausted, exclusion, materialised,
             run_invalidated, native_failure } => "retrieval-ranked-stream" {
             "source" => Record(&self.source),
             "pulled" => Unsigned(u128::from(self.pulled)),
@@ -1577,6 +1578,7 @@ impl<'d> RankedStreamImpl<'d> {
         // an enormous read as a tiny one.
         let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
         Self {
+            score_prefix_bounded: false,
             workspace: None,
             source: RowSource::Materialised {
                 rows: RankedRowsStorage::Caller(rows.into_iter()),
@@ -1599,6 +1601,7 @@ impl<'d> RankedStreamImpl<'d> {
     ) -> Self {
         let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
         Self {
+            score_prefix_bounded: false,
             workspace: Some(workspace.clone()),
             source: RowSource::Materialised {
                 rows: RankedRowsStorage::Native(rows.into_iter()),
@@ -1626,6 +1629,7 @@ impl<'d> RankedStreamImpl<'d> {
         Self {
             workspace: Some(workspace.clone()),
             source: RowSource::OnDemand { read, ended: None },
+            score_prefix_bounded: false,
             pulled: 0,
             exhausted: false,
             exclusion: None,
@@ -1638,6 +1642,15 @@ impl<'d> RankedStreamImpl<'d> {
     /// Borrow the original native authority without detaching row ownership.
     pub fn workspace(&self) -> Option<&purrdf_sparql_eval::WorkspaceCapability> {
         self.workspace.as_ref()
+    }
+
+    pub(crate) const fn with_score_prefix_bounded(mut self, bounded: bool) -> Self {
+        self.score_prefix_bounded = bounded;
+        self
+    }
+
+    pub(crate) const fn score_prefix_bounded(&self) -> bool {
+        self.score_prefix_bounded
     }
 
     /// Record how many rows the read that produced these rows really returned.
