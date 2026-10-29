@@ -40,8 +40,13 @@ pub enum ProfileRefusal {
     TieBreakTag {
         /// Encoded discriminator.
         found: u8,
-        /// Accepted discriminator.
-        expected: u8,
+        /// Largest accepted discriminator; tags from zero through this value are valid.
+        maximum: u8,
+    },
+    /// The caller-ordering leading-key discriminator is neither zero nor one.
+    LeadingKeyTag {
+        /// Encoded discriminator.
+        found: u8,
     },
     /// A stratum count cannot be represented by the wire count.
     StrataCount {
@@ -110,10 +115,11 @@ impl purrdf_hash::error::StructuredError for ProfileRefusal {
         DecayTag { found } => "fusion-profile-decay-tag" { "found" => Unsigned(u128::from(*found)) },
         DuplicateStratum { stratum } => "fusion-profile-duplicate-stratum" { "stratum" => Iri(stratum.as_str()) },
         StratumOrder { previous, current } => "fusion-profile-stratum-order" { "previous" => Iri(previous.as_str()), "current" => Iri(current.as_str()) },
-        TieBreakTag { found, expected } => "fusion-profile-tie-break-tag" {
+        TieBreakTag { found, maximum } => "fusion-profile-tie-break-tag" {
             "found" => Unsigned(u128::from(*found)),
-            "expected" => Unsigned(u128::from(*expected)),
+            "maximum" => Unsigned(u128::from(*maximum)),
         },
+        LeadingKeyTag { found } => "fusion-profile-leading-key-tag" { "found" => Unsigned(u128::from(*found)) },
         StrataCount { count, limit, source } => "fusion-profile-strata-count" {
             "count" => Unsigned(*count as u128),
             "limit" => Unsigned(u128::from(*limit)),
@@ -153,7 +159,14 @@ impl core::fmt::Display for ProfileRefusal {
             Self::StratumOrder { .. } => {
                 f.write_str("fusion profile strata must be ordered ascending")
             }
-            Self::TieBreakTag { found, .. } => write!(f, "unknown tie-break tag {found}"),
+            Self::TieBreakTag { found, maximum } => write!(
+                f,
+                "unknown tie-break tag {found}; accepted tags are zero through {maximum}"
+            ),
+            Self::LeadingKeyTag { found } => write!(
+                f,
+                "unknown leading-key tag {found}; accepted tags are zero and one"
+            ),
             Self::StrataCount { .. } => f.write_str("too many strata"),
             Self::Contributions { found, strata } => write!(
                 f,

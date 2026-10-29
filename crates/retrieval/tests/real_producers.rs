@@ -3686,9 +3686,23 @@ fn caller_keys_reach_deep_real_text_rows_and_cannot_retag_score_prefix_plans() {
             &*data,
             &env,
             &law,
-            catalog,
+            catalog.clone(),
         ))
         .unwrap();
+        let scoped = block_on(purrdf_retrieval::search_scoped_ordered(
+            &request,
+            &registry,
+            &NoStatistics,
+            &*data,
+            &env,
+            &law,
+            &purrdf_retrieval::ConstraintBindings::new(&[]),
+            &OriginalClosedScope,
+            catalog,
+        ))
+        .expect("successful materialised statuses retain their ordered streams");
+        assert_eq!(scoped.result.rows, result.rows);
+        assert_eq!(scoped.result.evidence_id, result.evidence_id);
         assert_eq!(entities(&result), [format!("<{}>", ex("b"))]);
         assert_eq!(result.rows[0].contributions[0].1, 2);
         assert_eq!(
