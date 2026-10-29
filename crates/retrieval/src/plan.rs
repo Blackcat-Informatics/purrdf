@@ -1058,7 +1058,12 @@ impl Plan {
                 });
             }
         }
-        for (stratum, &depth) in &self.stratum_depths {
+        if !matches!(self.read_bound, ReadBound::CallerOrdered(_)) {
+            return Ok(());
+        }
+        let mut depths: Vec<_> = self.stratum_depths.iter().collect();
+        depths.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        for (stratum, &depth) in depths {
             let inputs = self.stratum_derivations.get(stratum).ok_or_else(|| {
                 PlanError::DepthWithoutDerivation {
                     stratum: stratum.as_str().to_owned(),

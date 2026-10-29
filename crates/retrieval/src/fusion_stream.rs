@@ -3245,7 +3245,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 }
                 .into());
             }
-            self.check_ordering_evidence(index)?;
+            self.check_callback_ordering(index)?;
             rows_materialised.push(settlement.rows_materialised)?;
         }
         for index in 0..self.streams.len() {
@@ -3574,6 +3574,30 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 stratum: self.streams[index].0.as_str().to_owned(),
             }
             .into());
+        }
+        Ok(())
+    }
+
+    fn check_callback_ordering(&mut self, index: usize) -> Result<(), FusionError> {
+        self.check_ordering_evidence(index)?;
+        if self.exhausted[index] {
+            return Ok(());
+        }
+        let Some(statuses) = &mut self.ordering else {
+            return Ok(());
+        };
+        let next = self.streams[index].1.unread_key_bound();
+        match next.cmp_best(&statuses[index].unread) {
+            core::cmp::Ordering::Less => {
+                return Err(crate::OrderingError::BoundLoosened {
+                    stratum: self.streams[index].0.as_str().to_owned(),
+                }
+                .into());
+            }
+            core::cmp::Ordering::Greater => {
+                statuses[index].unread = next.clone_admitted(&self.workspace)?;
+            }
+            core::cmp::Ordering::Equal => {}
         }
         Ok(())
     }
@@ -4413,7 +4437,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             // the frontier exactly as it found it — the discipline every other
             // refusal in this engine keeps.
             self.check_verdict_against_declaration(index, &id, verdict)?;
-            self.check_ordering_evidence(index)?;
+            self.check_callback_ordering(index)?;
             // The signature the candidate is filed under before the answer is
             // recorded, so it can be re-filed under the one the answer leaves.
             let before = self
@@ -5793,6 +5817,8 @@ mod tests {
         ordering_after_settle: Option<std::sync::Arc<crate::OrderCatalog>>,
         ordering_after_exclusion: Option<std::sync::Arc<crate::OrderCatalog>>,
         key_bounds: Option<Vec<crate::LeadingBound>>,
+        key_bound_after_settle: Option<crate::LeadingBound>,
+        key_bound_after_exclusion: Option<crate::LeadingBound>,
         domain_override: Option<crate::LeadingBound>,
         fidelity: RankFidelity,
         items: Vec<Term>,
@@ -5816,6 +5842,8 @@ mod tests {
                 ordering_after_settle: None,
                 ordering_after_exclusion: None,
                 key_bounds: None,
+                key_bound_after_settle: None,
+                key_bound_after_exclusion: None,
                 domain_override: None,
                 fidelity: RankFidelity::EXACT,
                 items,
@@ -5927,6 +5955,9 @@ mod tests {
             if let Some(ordering) = self.ordering_after_settle.take() {
                 self.ordering = Some(ordering);
             }
+            if let Some(bound) = self.key_bound_after_settle.take() {
+                self.key_bounds = Some(vec![bound; self.items.len() + 1]);
+            }
             Ok(crate::ReadSettlement {
                 attestation: self.attestation(),
                 rows_materialised: self.rows_materialised(),
@@ -5950,6 +5981,9 @@ mod tests {
             }
             if let Some(ordering) = self.ordering_after_exclusion.take() {
                 self.ordering = Some(ordering);
+            }
+            if let Some(bound) = self.key_bound_after_exclusion.take() {
+                self.key_bounds = Some(vec![bound; self.items.len() + 1]);
             }
             Ok(if self.holds.contains(candidate) {
                 ExclusionVerdict::Possible
@@ -6220,6 +6254,90 @@ mod tests {
                 crate::OrderingError::EvidenceChanged { .. }
             ))
         ));
+
+        for settle in [true, false] {
+            let mut run = if settle {
+                let mut stream =
+                    keyed_stream(&["same"], ordering_catalog(true, &[("same", 0, 0)]), weight);
+                stream.key_bound_after_settle = Some(crate::LeadingBound::Unbounded);
+                keyed_fusion(vec![stream], weight)
+            } else {
+                let catalog =
+                    ordering_catalog(true, &[("same", 0, 0), ("other", 1, 0), ("tail", 2, 0)]);
+                let first = keyed_stream(&["same", "tail"], catalog.clone(), weight).answering();
+                let mut second = keyed_stream(&["other", "tail"], catalog, weight).answering();
+                second.key_bound_after_exclusion = Some(crate::LeadingBound::Unbounded);
+                keyed_fusion(vec![first, second], weight)
+            };
+            let result = if settle {
+                poll_once_expect_ready(run.trailer()).map(|_| ())
+            } else {
+                poll_once_expect_ready(run.next()).map(|_| ())
+            };
+            for result in [
+                result,
+                poll_once_expect_ready(run.next()).map(|_| ()),
+                poll_once_expect_ready(run.trailer()).map(|_| ()),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::BoundLoosened { .. }
+                    ))
+                ));
+            }
+        }
+
+        for bound in [crate::LeadingBound::Unbounded, crate::LeadingBound::Empty] {
+            let tightened = matches!(bound, crate::LeadingBound::Empty);
+            let mut stream =
+                keyed_stream(&["same"], ordering_catalog(true, &[("same", 0, 0)]), weight);
+            stream.key_bounds = Some(vec![crate::LeadingBound::Unbounded; 2]);
+            stream.key_bound_after_settle = Some(bound);
+            let mut run = keyed_fusion(vec![stream], weight);
+            poll_once_expect_ready(run.trailer()).expect("equal or tighter live suffix is valid");
+            assert!(!run.exhausted[0], "the callback did not terminate the read");
+            if tightened {
+                run.streams[0].1.key_bound_after_settle = Some(crate::LeadingBound::Unbounded);
+                assert!(matches!(
+                    poll_once_expect_ready(run.trailer()),
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::BoundLoosened { .. }
+                    ))
+                ));
+                assert!(matches!(
+                    poll_once_expect_ready(run.next()),
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::BoundLoosened { .. }
+                    ))
+                ));
+            } else {
+                assert_eq!(drain(&mut run).len(), 1);
+                assert!(run.exhausted[0]);
+                poll_once_expect_ready(run.trailer())
+                    .expect("an ended read may retain a conservative getter");
+            }
+        }
+
+        let catalog = ordering_catalog(true, &[("same", 0, 0), ("other", 1, 0), ("tail", 2, 0)]);
+        for bound in [
+            crate::LeadingBound::Unbounded,
+            crate::LeadingBound::Inclusive(
+                catalog
+                    .keys(&Term::new("<http://example.org/tail>"))
+                    .expect("fixture tail key")
+                    .leading
+                    .clone(),
+            ),
+        ] {
+            let first = keyed_stream(&["same", "tail"], catalog.clone(), weight).answering();
+            let mut second = keyed_stream(&["other", "tail"], catalog.clone(), weight).answering();
+            second.key_bounds = Some(vec![crate::LeadingBound::Unbounded; 3]);
+            second.key_bound_after_exclusion = Some(bound);
+            let mut run = keyed_fusion(vec![first, second], weight);
+            assert_eq!(drain(&mut run).len(), 3);
+            poll_once_expect_ready(run.trailer()).expect("equal or tighter lookup suffix is valid");
+        }
     }
 
     fn candidate(index: u64) -> Term {
