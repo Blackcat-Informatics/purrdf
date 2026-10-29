@@ -62,6 +62,7 @@ pub fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
 /// rather than declared.
 pub fn unique_items() -> StreamContract {
     StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,

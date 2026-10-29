@@ -426,6 +426,8 @@ enum UnitQuery {
 /// them, and a bound spelled beside the depth is a bound that can disagree with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedQuery {
+    /// The producer's explicit rank output, absent for assigned ordinals.
+    rank: Option<usize>,
     /// The registered producer IRI the branch calls.
     producer: String,
     /// The subject-side argument list, in declared position order.
@@ -517,6 +519,12 @@ impl RenderedQuery {
                 format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})"),
             ),
         };
+        if let Some(position) = self.rank {
+            use core::fmt::Write as _;
+            // INVARIANT: fmt::Write for String cannot return fmt::Error.
+            write!(projected, " ?{RANK_NAME}").expect("string formatting");
+            write!(projections, " (?c{position} AS ?{RANK_NAME})").expect("string formatting");
+        }
         if retain {
             for (position, argument) in self.arguments().enumerate() {
                 if matches!(argument, UnitArgument::Free) {
@@ -1924,6 +1932,8 @@ pub(crate) const CANDIDATE_NAME: &str = "candidate";
 /// so a unit compiled for a producer that names no block per row is
 /// byte-identical to the one this compiler emitted before blocks existed.
 pub(crate) const BLOCK_NAME: &str = "block";
+/// The explicit producer rank column of a shared-rank stream.
+pub(crate) const RANK_NAME: &str = "rank";
 
 /// Admit `plan` against `env` and emit its per-stratum SPARQL units.
 ///
@@ -3182,6 +3192,20 @@ fn emit_query(
     let arguments = render_slots(invocation).map_err(|error| unrenderable(binding, &error))?;
     let (subject_arguments, object_arguments) = arguments.split_at(subject);
     Ok(RenderedQuery {
+        rank: match declaration.rank_source {
+            purrdf_sparql_eval::RankSource::Ordinal => None,
+            purrdf_sparql_eval::RankSource::Shared { position }
+                if position < total && !invocation.mode.is_bound(position) =>
+            {
+                Some(position)
+            }
+            purrdf_sparql_eval::RankSource::Shared { .. } => {
+                return Err(malformed(
+                    binding,
+                    "projects its shared rank from a position that is not a free argument",
+                ));
+            }
+        },
         producer: binding.producer.clone(),
         subject: subject_arguments.to_vec(),
         object: object_arguments.to_vec(),
@@ -3313,6 +3337,7 @@ mod tests {
                     position: 2,
                     datatype: INTEGER.to_owned(),
                 }),
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -3501,6 +3526,7 @@ mod tests {
     /// at 0, a constant seed at 1, the producer's depth at 2, and a free projection at 3.
     fn self_bounding() -> RenderedQuery {
         RenderedQuery {
+            rank: None,
             producer: "https://example.org/pf/neighbours".to_owned(),
             subject: vec![UnitArgument::Free],
             object: vec![

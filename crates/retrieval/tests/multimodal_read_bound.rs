@@ -875,6 +875,7 @@ fn generational_registry(
                 stratum: kernel_iri(stratum.as_str()),
                 accepted_terms: accepted_terms(predicate),
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -2029,6 +2030,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry<'static> {
                 stratum: kernel_iri(entry.stratum().as_str()),
                 accepted_terms: accepted_terms(entry.name),
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: entry.duplicates,
                 fidelity: RankFidelity::EXACT,
@@ -2649,6 +2651,7 @@ fn oracle_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedSt
                         rows_emitted: emitted,
                     },
                     contract: StreamContract::new(
+                        purrdf_sparql_eval::RankLaw::Ordinal,
                         DuplicatePolicy::Unique,
                         RankFidelity::EXACT,
                         CandidateDomains::within(entry.tags.iter().map(|tag| {

@@ -846,11 +846,14 @@ pub fn parse_integer_typed(
     Ok(value)
 }
 
-pub(crate) fn read_integer_typed(
-    lexical: &str,
-    datatype: XsdDatatype,
-) -> Result<i128, NumericReadError> {
-    if !is_integer_lexical(lexical) {
+/// Read an integer-family lexical into the bounded `i128` value space without
+/// allocating a value or diagnostic. The caller applies XML whitespace collapse
+/// before reading and supplies an integer-family datatype.
+///
+/// # Errors
+/// Returns the original lexical or datatype/range refusal, borrowing no input.
+pub fn read_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128, NumericReadError> {
+    if !datatype.is_integer_family() || !is_integer_lexical(lexical) {
         return Err(NumericReadError::Invalid);
     }
     let value = lexical
@@ -879,8 +882,10 @@ pub fn parse_decimal(s: &str) -> Result<crate::exact::Decimal, XsdError> {
 /// A borrowed classification of the bounded numeric readers. Exact fallback
 /// and physical sizing inspect it without first allocating an owned diagnostic.
 #[derive(Debug)]
-pub(crate) enum NumericReadError {
+pub enum NumericReadError {
+    /// The input is outside the numeric lexical space.
     Invalid,
+    /// The input exceeds the bounded representation or its datatype facets.
     OutOfRange(&'static str),
 }
 

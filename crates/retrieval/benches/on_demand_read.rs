@@ -252,6 +252,7 @@ fn registry(shape: Shape, rows: u64) -> PropertyFunctionRegistry<'static> {
                     }],
                 }],
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: CANDIDATE_POSITION,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,

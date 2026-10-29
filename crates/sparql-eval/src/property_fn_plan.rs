@@ -4476,6 +4476,7 @@ mod content_fingerprint_tests {
             stratum: purrdf_core::parse_iri(stratum).expect("fixture IRI"),
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: crate::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             // The fixture producer is an in-memory table read end to end.

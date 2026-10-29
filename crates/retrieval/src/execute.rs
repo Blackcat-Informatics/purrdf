@@ -1515,8 +1515,7 @@ pub enum StreamEnding {
     Exhausted,
     /// The planned depth stopped the read, and a further row existed.
     DepthReached {
-        /// The last 1-based rank the stream carries, which is the planned depth
-        /// and also the number of rows the stream holds.
+        /// The last emitted positive rank, independent of the planned row depth.
         rank: u64,
     },
     /// The producer's own declared row bound stopped the read, so whether a further
@@ -1528,8 +1527,7 @@ pub enum StreamEnding {
     /// could not be asked for one more. See this module's header, and
     /// [`ProducerReceipt::RowBoundReached`] for why neither neighbour is true of it.
     RowBoundReached {
-        /// The last 1-based rank the stream carries, which is both the planned depth
-        /// and the declared row bound the read stopped at.
+        /// The last emitted positive rank, independent of the declared row bound.
         rank: u64,
     },
     /// The query text was a caller's, and it is the stopper the read actually had, so
@@ -1549,8 +1547,8 @@ pub enum StreamEnding {
     /// ends [`Self::DepthReached`]: something further existed whatever the text
     /// bounded.
     SuppliedQueryEnded {
-        /// The last 1-based rank the stream carries, which is the number of rows it
-        /// holds. Zero for a read that returned nothing — which is not a claim that
+        /// The last emitted positive rank, independent of row count.
+        /// Zero for a read that returned nothing — which is not a claim that
         /// there was nothing to return.
         rank: u64,
     },
@@ -1908,10 +1906,9 @@ impl<'d> RankedStreamImpl<'d> {
     /// A [`StreamEnding::Exhausted`] stream reports the rows it actually
     /// emitted; a [`StreamEnding::DepthReached`] stream reports the rank the
     /// depth stopped it at, and a [`StreamEnding::RowBoundReached`] stream the rank
-    /// its producer's own declaration stopped it at. Fusion measures every one of
-    /// those numbers against the rows it pulled and refuses a disagreement
-    /// ([`ProtocolError::ForgedReceipt`]), which is why the rank is the depth
-    /// the rows were truncated to and not the number of rows the unit returned.
+    /// its producer's own declaration stopped it at. Fusion measures row counts
+    /// and last ranks separately and refuses a disagreement
+    /// ([`ProtocolError::ForgedReceipt`]). Probe rows do not change the last rank emitted.
     ///
     /// # Errors
     ///
@@ -2408,19 +2405,23 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                     engine.open_call_cursor_admitted(&prepared, options(), &scope_workspace)
                 }
                 .and_then(|cursor| {
-                    CandidateColumns::locate(cursor.variables(), &unit.contract.domains)
-                        .map(|columns| (cursor, columns))
-                        .map_err(|reason| {
-                            purrdf_sparql_eval::RetainedDiagnostic::render(
-                                "native-sparql-query-eval",
-                                &format_args!("stratum {}: {reason}", unit.stratum),
-                                &scope_workspace,
-                            )
-                            .map_or_else(
-                                purrdf_sparql_eval::EvaluationFailure::Evaluation,
-                                purrdf_sparql_eval::EvaluationFailure::RetainedDiagnostic,
-                            )
-                        })
+                    CandidateColumns::locate(
+                        cursor.variables(),
+                        &unit.contract.domains,
+                        unit.contract.rank_law,
+                    )
+                    .map(|columns| (cursor, columns))
+                    .map_err(|reason| {
+                        purrdf_sparql_eval::RetainedDiagnostic::render(
+                            "native-sparql-query-eval",
+                            &format_args!("stratum {}: {reason}", unit.stratum),
+                            &scope_workspace,
+                        )
+                        .map_or_else(
+                            purrdf_sparql_eval::EvaluationFailure::Evaluation,
+                            purrdf_sparql_eval::EvaluationFailure::RetainedDiagnostic,
+                        )
+                    })
                 });
             match opened {
                 Ok((cursor, columns)) => {
@@ -2468,6 +2469,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                         reach: unit.reach(),
                         materialised: 0,
                         established: 0,
+                        last_rank: 0,
                         retained,
                         candidates: index_candidates.then(|| candidates.clone()),
                         dataset,
@@ -2617,6 +2619,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                         &receipt.variables,
                         known_rows.clone(),
                         &unit.contract.domains,
+                        unit.contract.rank_law,
                         &scope_workspace,
                     )
                     .map_err(ExecutionError::NativeFailure)?;
@@ -2769,6 +2772,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                             &cells.variables,
                             cells.rows.iter().map(|row| row.cells.as_slice()),
                             &unit.contract.domains,
+                            unit.contract.rank_law,
                             &scope_workspace,
                         )
                         .map_err(ExecutionError::NativeFailure)?;
@@ -3147,7 +3151,7 @@ fn bound_to_depth<R: RankedRows>(
     }
     if ranked.len() > ceiling {
         ranked.truncate_rows(ceiling);
-        let rank = u64::from(depth);
+        let rank = ranked.last().map_or(0, |row| row.0);
         return Ok((
             ranked,
             StreamEnding::DepthReached { rank },
@@ -3159,7 +3163,7 @@ fn bound_to_depth<R: RankedRows>(
     // the bound this layer renders is only the outermost one, and a `LIMIT` inside a
     // caller's sub-`SELECT` decides the read before it is reached.
     if reach == ReadReach::Unknown {
-        let rank = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+        let rank = ranked.last().map_or(0, |row| row.0);
         return Ok((
             ranked,
             StreamEnding::SuppliedQueryEnded { rank },
@@ -3173,7 +3177,7 @@ fn bound_to_depth<R: RankedRows>(
     if matches!(reach, ReadReach::AtDepth) && ranked.len() == ceiling
         || matches!(reach, ReadReach::AtBound(bound) if u64::try_from(ranked.len()) == Ok(bound))
     {
-        let rank = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+        let rank = ranked.last().map_or(0, |row| row.0);
         return Ok((
             ranked,
             StreamEnding::RowBoundReached { rank },
@@ -3302,6 +3306,7 @@ fn rank_candidates(
         variables,
         rows.iter().map(Vec::as_slice),
         domains,
+        purrdf_sparql_eval::RankLaw::Ordinal,
         &purrdf_sparql_eval::WorkspaceCapability::resident(),
     )
     .map(|rows| {
@@ -3315,9 +3320,10 @@ fn rank_candidate_rows<'a, C: std::borrow::Borrow<TermValue> + 'a>(
     variables: &[impl AsRef<str> + fmt::Debug],
     rows: impl IntoIterator<Item = &'a [Option<C>]>,
     domains: &CandidateDomains,
+    law: purrdf_sparql_eval::RankLaw,
     workspace: &purrdf_sparql_eval::WorkspaceCapability,
 ) -> Result<purrdf_sparql_eval::AdmittedVec<(u64, Term, RowBlock)>, purrdf_sparql_eval::EvalError> {
-    let columns = CandidateColumns::locate(variables, domains).map_err(|error| {
+    let columns = CandidateColumns::locate(variables, domains, law).map_err(|error| {
         purrdf_sparql_eval::NativeDiagnostic::error(
             purrdf_sparql_eval::NativeDiagnosticKind::Data,
             error,
@@ -3341,6 +3347,8 @@ fn rank_candidate_rows<'a, C: std::borrow::Borrow<TermValue> + 'a>(
 /// two schedules rank a row by one reading of it.
 #[derive(Debug)]
 pub(crate) struct CandidateColumns {
+    /// Required producer rank column for a declared shared-rank stream.
+    rank: Option<usize>,
     /// The `?candidate` column.
     candidate: usize,
     /// The `?block` column, present exactly when the producer declared a position to
@@ -3360,6 +3368,7 @@ impl CandidateColumns {
     pub(crate) fn locate(
         variables: &[impl AsRef<str> + fmt::Debug],
         domains: &CandidateDomains,
+        law: purrdf_sparql_eval::RankLaw,
     ) -> Result<Self, String> {
         let candidate = variables
             .iter()
@@ -3368,6 +3377,17 @@ impl CandidateColumns {
                 format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
             })?;
         Ok(Self {
+            rank: match law {
+                purrdf_sparql_eval::RankLaw::Ordinal => None,
+                purrdf_sparql_eval::RankLaw::Shared => Some(
+                    variables
+                        .iter()
+                        .position(|name| name.as_ref() == crate::compile::RANK_NAME)
+                        .ok_or_else(|| {
+                            "a shared-rank unit must project its producer's ?rank column".to_owned()
+                        })?,
+                ),
+            },
             candidate,
             block: variables
                 .iter()
@@ -3378,6 +3398,37 @@ impl CandidateColumns {
 
     /// One ranked row retains the native producer's original lexical authority.
     pub(crate) fn rank_admitted<C: std::borrow::Borrow<TermValue>>(
+        &self,
+        row: &[Option<C>],
+        rank: u64,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<(u64, Term, RowBlock), purrdf_sparql_eval::EvalError> {
+        let rank = if let Some(column) = self.rank {
+            let value = row
+                .get(column)
+                .and_then(Option::as_ref)
+                .map(std::borrow::Borrow::borrow);
+            match value {
+                Some(TermValue::Literal { lexical_form, datatype, .. }) =>
+                    purrdf_xsd::XsdDatatype::from_iri(datatype)
+                        .filter(|datatype| datatype.is_integer_family())
+                        .and_then(|datatype| purrdf_xsd::numeric::read_integer_typed(
+                            purrdf_lex::terminals::trim_ws(lexical_form), datatype).ok())
+                        .and_then(|value| u64::try_from(value).ok())
+                        .filter(|rank| *rank > 0),
+                _ => None,
+            }.ok_or_else(|| purrdf_sparql_eval::NativeDiagnostic::error(
+                purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                format_args!("row {rank} must supply a positive integer-family ?rank representable as u64, got {value:?}"), workspace))?
+        } else {
+            rank
+        };
+        self.identity_admitted(row, rank, workspace)
+    }
+
+    /// Read an original candidate observation without assigning a rank to an
+    /// undecided scoped row. Its evidence retains its original producer rank.
+    pub(crate) fn identity_admitted<C: std::borrow::Borrow<TermValue>>(
         &self,
         row: &[Option<C>],
         rank: u64,
@@ -3462,6 +3513,8 @@ struct CallRead<'d, D: DatasetView + Sync> {
     materialised: u64,
     /// Established ranks advance independently of unknown scope rows.
     established: u64,
+    /// Last rank handed to the consumer, excluding the probe row.
+    last_rank: u64,
     /// The original live receipt, sharing the actual admitted row owner.
     retained: Option<crate::ScopedRows>,
     /// The index an exclusion lookup binds candidates through, when any stratum of
@@ -3515,15 +3568,17 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
                 // else is a verified exhaustion.
                 let ending = match self.reach {
                     ReadReach::Unknown => StreamEnding::SuppliedQueryEnded {
-                        rank: self.established,
+                        rank: self.last_rank,
                     },
                     ReadReach::AtDepth if self.established == u64::from(self.depth) => {
                         StreamEnding::RowBoundReached {
-                            rank: u64::from(self.depth),
+                            rank: self.last_rank,
                         }
                     }
                     ReadReach::AtBound(bound) if self.established == bound => {
-                        StreamEnding::RowBoundReached { rank: bound }
+                        StreamEnding::RowBoundReached {
+                            rank: self.last_rank,
+                        }
                     }
                     ReadReach::AtDepth | ReadReach::AtBound(_) | ReadReach::PastDepth => {
                         StreamEnding::Exhausted
@@ -3600,9 +3655,10 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
             };
             if self.established > u64::from(self.depth) {
                 return Ok(ReadStep::Ended(StreamEnding::DepthReached {
-                    rank: u64::from(self.depth),
+                    rank: self.last_rank,
                 }));
             }
+            self.last_rank = ranked.0;
             return Ok(ReadStep::Row(ranked));
         }
     }
@@ -4097,6 +4153,39 @@ mod tests {
         )
         .expect_err("a unit with no candidate column cannot be ranked");
         assert!(reason.contains(CANDIDATE_NAME), "{reason}");
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let candidate = TermValue::iri("http://example.org/member");
+        let variables = [CANDIDATE_NAME, crate::compile::RANK_NAME];
+        for (variables, row) in [
+            (&variables[..1], vec![Some(candidate.clone())]),
+            (&variables[..], vec![Some(candidate.clone()), None]),
+        ] {
+            let reason = super::rank_candidate_rows(
+                variables,
+                std::iter::once(row.as_slice()),
+                &CandidateDomains::Unrestricted,
+                purrdf_sparql_eval::RankLaw::Shared,
+                &workspace,
+            )
+            .unwrap_err();
+            assert!(reason.to_string().contains("?rank"));
+        }
+        let row = [
+            Some(candidate),
+            Some(TermValue::typed_literal(
+                "1",
+                purrdf_core::datatype::XSD_INTEGER,
+            )),
+        ];
+        let ranked = super::rank_candidate_rows(
+            &variables,
+            std::iter::once(row.as_slice()),
+            &CandidateDomains::Unrestricted,
+            purrdf_sparql_eval::RankLaw::Shared,
+            &workspace,
+        )
+        .unwrap();
+        assert_eq!(ranked[0].0, 1);
     }
 
     // -----------------------------------------------------------------------

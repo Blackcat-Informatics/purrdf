@@ -97,6 +97,7 @@ fn ranked_declaration() -> RankedDeclaration {
             }],
         }],
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         // The fixture producer is exhaustive over its own table.

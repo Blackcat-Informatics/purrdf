@@ -980,6 +980,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry<'st
             stratum: purrdf_core::parse_iri("http://example.org/stratum/a").expect("fixture IRI"),
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,

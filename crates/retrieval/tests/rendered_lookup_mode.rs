@@ -104,6 +104,7 @@ fn registry(
                     position: 2,
                     datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
                 }),
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,

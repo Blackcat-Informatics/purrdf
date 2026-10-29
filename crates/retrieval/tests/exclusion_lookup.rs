@@ -167,6 +167,7 @@ fn register(
             stratum: purrdf_core::parse_iri(&ex("stratum/producer")).expect("fixture IRI"),
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity {
@@ -488,7 +489,13 @@ fn row(rank: u64, item: &str, block: Option<&str>) -> RankedRow<Term> {
 
 /// A contract over `domains`, declaring `basis`.
 fn contract(domains: CandidateDomains, basis: ExclusionBasis) -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, RankFidelity::EXACT, domains, basis)
+    StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        domains,
+        basis,
+    )
 }
 
 /// Fuse the two scripted streams at `top_k`.
@@ -822,6 +829,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
     );
     let mut right_stream = ScriptedStream::new(
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             right.fidelity,
             CandidateDomains::within([domain_tag(SHARED)]),

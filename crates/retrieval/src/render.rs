@@ -1146,6 +1146,8 @@ mod tests {
     /// and the binding's dict are both rendered from that one method, neither
     /// surface can carry it without the other.
     const DOCUMENTED_COUNTERS: [&str; crate::OBSERVED_COUNTER_COUNT] = [
+        "rows_pulled",
+        "shared_ranks_observed",
         "separates_to",
         "ranks_pulled",
         "collisions_observed",
@@ -1158,6 +1160,9 @@ mod tests {
         rows_materialised: Option<u64>,
     ) -> crate::StratumResolution {
         crate::StratumResolution {
+            rank_law: crate::RankLaw::Ordinal,
+            rows_pulled: 68,
+            shared_ranks_observed: 2,
             separation,
             ranks_pulled: 66,
             collisions_observed: 2,
@@ -1175,7 +1180,7 @@ mod tests {
             measured.counters().iter().map(|c| c.reading).collect();
         assert_eq!(
             readings,
-            [400, 66, 2, 65, 67].map(crate::CounterReading::Number),
+            [68, 2, 400, 66, 2, 65, 67].map(crate::CounterReading::Number),
             "every field reaches its own counter, none swapped for a neighbour's"
         );
     }
@@ -1194,7 +1199,7 @@ mod tests {
         let text = super::observed_resolution(&map);
         assert_eq!(
             text,
-            "http://example.org/stratum/text separates_to=beyond-any-plan ranks_pulled=66 \
+            "http://example.org/stratum/text rows_pulled=68 shared_ranks_observed=2 separates_to=beyond-any-plan ranks_pulled=66 \
              collisions_observed=2 exclusion_lookups=65 rows_materialised=unreported\n"
         );
         let rendered_names: Vec<&str> = text

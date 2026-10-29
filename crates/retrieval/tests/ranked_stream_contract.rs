@@ -32,6 +32,7 @@ fn declaration(fidelity: RankFidelity) -> RankedDeclaration {
         stratum: purrdf_core::parse_iri("http://example.org/stratum/vector").expect("fixture IRI"),
         accepted_terms: Vec::new(),
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity,
@@ -121,6 +122,7 @@ fn a_hand_built_contract_states_the_same_three_terms() {
     // uses, and it must be able to say everything `declared` can say -- or a
     // hand-built approximate producer would be unable to disclose itself.
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity {
             completeness: Completeness::Lossy {

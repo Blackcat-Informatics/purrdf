@@ -1462,6 +1462,7 @@ impl<A: Arithmetic> EmbeddingKnnRelation<A> {
                 position: KNN_COUNT,
                 datatype: depth_datatype,
             }),
+            rank_source: crate::RankSource::Ordinal,
             candidate_position: KNN_NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
             // Passed through, never asserted here, for the reason `domains` is.

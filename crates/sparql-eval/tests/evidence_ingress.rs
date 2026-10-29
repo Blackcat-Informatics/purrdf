@@ -1218,6 +1218,7 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
                 }],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity {
