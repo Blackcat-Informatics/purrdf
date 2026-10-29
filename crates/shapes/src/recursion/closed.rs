@@ -126,9 +126,19 @@ pub(crate) fn named_conformance<'a>(
     else {
         return None;
     };
+    matches!(node.as_ref(), NodeExpr::This)
+        .then(|| named_reference(shape, owner))
+        .flatten()
+}
+
+/// A canonical named handle into this exact original catalog. Cloned handles
+/// retain their reference and metadata; equal names in foreign domains do not.
+pub(crate) fn named_reference<'a>(
+    shape: &'a crate::shapes::Shape,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
     let owner = owner?;
-    (matches!(node.as_ref(), NodeExpr::This)
-        && matches!(shape.id, Term::NamedNode(_))
+    (matches!(shape.id, Term::NamedNode(_))
         && super::model::canonical_handle(shape)
         && shape
             .owner
@@ -136,6 +146,20 @@ pub(crate) fn named_conformance<'a>(
             .is_none_or(|target| Arc::ptr_eq(owner, target))
         && owner.definition(&shape.id).is_some())
     .then_some(shape)
+}
+
+/// A where operand is the original bare reference, not an exported root with
+/// its own targets. Check that representation before the general root proof:
+/// its ownerless branch checks every metadata field without descending into a
+/// caller-built tree of owned where targets.
+pub(crate) fn named_where_reference<'a>(
+    shape: &'a crate::shapes::Shape,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    if shape.owner.is_some() {
+        return None;
+    }
+    named_reference(shape, owner)
 }
 
 /// The original kind of an admitted dependency-graph occurrence.

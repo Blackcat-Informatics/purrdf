@@ -1941,9 +1941,7 @@ pub(crate) fn expected_derived_triples(
             data,
             &shape.id,
             &shape.targets,
-            &binding,
-            lowered.classes(),
-            Some(model),
+            lowered.target_binding(&binding, lowered.classes(), Some(model)),
         )?;
         let plan = lowered.untargeted_plan(definition, 0, &binding)?;
         for property in plan
@@ -2048,9 +2046,11 @@ impl<'a> RulePlan<'a> {
             data,
             &self.shape.id,
             &self.shape.targets,
-            &self.binding,
-            self.lowered.classes(),
-            self.shape.owner.as_ref(),
+            self.lowered.target_binding(
+                &self.binding,
+                self.lowered.classes(),
+                self.shape.owner.as_ref(),
+            ),
         )
         .map(|nodes| {
             // The rules engine drives the owned-term SHACL-AF surfaces, so this is one of

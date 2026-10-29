@@ -52,6 +52,7 @@
 //! focus graph is the data graph; there are no variable bindings.
 
 use ::purrdf_rdf::{IdSet, TermId};
+use purrdf_lex::allocation::{Memory, Resident};
 
 use crate::constraints::conforms_with_id_depth;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
@@ -104,9 +105,13 @@ pub(crate) fn declared_shape_targets(data: &ShaclData, shape: &Term) -> Vec<Term
 pub(crate) fn where_targets(
     data: &ShaclData,
     shape: &Shape,
-    request: &crate::engine::ValidationRequest,
-    model: Option<&std::sync::Arc<crate::shapes::ModelOwner>>,
+    targets: crate::plan::TargetBinding<'_>,
 ) -> Result<Vec<TermId>, crate::error::ShapesError> {
+    let request = targets.binding.validation_request();
+    if request.recursion.is_some() {
+        return where_targets_with_plan(data, targets.named_where_plan(shape)?);
+    }
+    let model = targets.model;
     let lowered = crate::plan::lower_shapes_in_model(std::iter::once(shape), model)?;
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
     binding.set_validation_request(request);
@@ -114,22 +119,35 @@ pub(crate) fn where_targets(
     if let Some(owner) = model {
         plan = plan.with_origin(owner).with_model(owner);
     }
+    where_targets_with_plan(data, plan)
+}
+
+fn where_targets_with_plan(
+    data: &ShaclData,
+    plan: crate::plan::ShapePlan<'_>,
+) -> Result<Vec<TermId>, crate::error::ShapesError> {
+    let request = plan.binding().validation_request();
     data.prepare_class_membership();
     let narrowed = narrowing(
         data,
-        shape,
+        plan.shape(),
         &request.conformance_disallows,
-        model.map(std::sync::Arc::as_ref),
+        plan.model().map(std::sync::Arc::as_ref),
         0,
     )?;
     let candidates: &[TermId] = match &narrowed {
         Some(ids) => ids,
         None => data.graph_nodes(),
     };
+    if request.recursion.is_some() {
+        return crate::constraints::fixed_point::conforming_targets(data, plan, candidates);
+    }
     let mut out: Vec<TermId> = Vec::new();
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
     for &node in candidates {
         if conforms_with_id_depth(data, &FocusNode::Interned(node), plan, 0)? {
-            out.push(node);
+            memory.push(&mut out, node)?;
         }
     }
     Ok(out)
