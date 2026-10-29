@@ -267,6 +267,32 @@ pub fn pack_shapes_product_with_shapes_graph(
     shapes_graph: Option<&str>,
     imports: &ShapesImportList<'_>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
+    pack_shapes_product_with_options(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        imports,
+        &engine::ValidationOptions::default(),
+    )
+}
+
+/// Pack a shapes document under the complete request selected before admission.
+///
+/// # Errors
+/// Preserves original parse, import, model and preparation refusals.
+pub fn pack_shapes_product_with_options(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    imports: &ShapesImportList<'_>,
+    options: &engine::ValidationOptions,
+) -> Result<Vec<u8>, ShapesProductRefusal> {
+    options
+        .shacl_profile
+        .resolve_xpath(options.xpath_regex)
+        .map_err(|error| {
+            request_refusal(purrdf_shapes::report::CompleteValidationError::XPathProfile(error))
+        })?;
     let shapes_graph = shapes_graph
         .map(|raw| engine::resolve_shapes_graph_iri(raw, shapes_base))
         .transpose()
@@ -284,7 +310,15 @@ pub fn pack_shapes_product_with_shapes_graph(
     if let Some(document_base) = document_base {
         table.declare_loaded(document_base);
     }
-    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, shapes_graph, None, &table)
+    pack_shapes_product_from_dataset_with_options(
+        &dataset,
+        &prefixes,
+        shapes_base,
+        shapes_graph,
+        None,
+        &table,
+        options,
+    )
 }
 
 /// Write an already-READ shapes dataset out as a prepared product under
@@ -329,15 +363,40 @@ pub fn pack_shapes_product_from_dataset(
     box_role_vocab: Option<BoxRoleVocab>,
     imports: &ShapesImports,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
-    let shapes = purrdf_shapes::shapes::from_dataset_with_base(
+    pack_shapes_product_from_dataset_with_options(
+        dataset,
+        doc_prefixes,
+        base,
+        shapes_graph,
+        box_role_vocab,
+        imports,
+        &engine::ValidationOptions::default(),
+    )
+}
+
+/// Pack a read dataset through the same requested admission as text packing.
+///
+/// # Errors
+/// Preserves original model, import, profile and preparation refusals.
+pub fn pack_shapes_product_from_dataset_with_options(
+    dataset: &Arc<RdfDataset>,
+    doc_prefixes: &[(String, String)],
+    base: Option<&str>,
+    shapes_graph: Option<String>,
+    box_role_vocab: Option<BoxRoleVocab>,
+    imports: &ShapesImports,
+    options: &engine::ValidationOptions,
+) -> Result<Vec<u8>, ShapesProductRefusal> {
+    let shapes = purrdf_shapes::shapes::from_dataset_with_options(
         dataset,
         base,
         doc_prefixes,
         box_role_vocab,
         shapes_graph,
         imports,
+        options,
     )
-    .map_err(ShapesProductRefusal::Shapes)?;
+    .map_err(request_refusal)?;
     prepared_to_product(&PreparedShapes::new(Arc::new(shapes)))
         .map_err(ShapesProductRefusal::Admission)
 }
@@ -1165,6 +1224,41 @@ mod tests {
         };
         assert_eq!(cycle.members(), ["<http://example.org/S>"]);
         assert_eq!(cycle.edges().len(), 1);
+    }
+
+    #[test]
+    fn recursion_options_reach_both_catalog_pack_paths_before_admission() {
+        use purrdf_shapes::engine::ValidationOptions;
+        use purrdf_shapes::recursion::{RecursionOptions, RecursionSemantics};
+        let source = "@prefix sh: <http://www.w3.org/ns/shacl#> . <http://example.org/S> sh:node <http://example.org/S> .";
+        let document = parse_turtle_document(source, None).expect("document");
+        let dataset = parse_turtle_to_dataset(source, None).expect("dataset");
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            let options = ValidationOptions::default().with_recursion(RecursionOptions {
+                semantics,
+                max_pairs: u64::MAX,
+                max_iterations: u64::MAX,
+            });
+            let text = super::pack_shapes_product_with_options(source, None, None, &[], &options)
+                .expect("selected text pack");
+            let parsed = super::pack_shapes_product_from_dataset_with_options(
+                &dataset,
+                &document.prefixes,
+                None,
+                None,
+                None,
+                &purrdf_shapes::ShapesImports::new(),
+                &options,
+            )
+            .expect("selected dataset pack");
+            assert_eq!(text, parsed);
+            super::restore_shapes_product_with_options(&text, &options, None, false)
+                .expect("selected product admission");
+            assert!(
+                admit_shapes_product(&text).is_err(),
+                "default restore must not invent a selection"
+            );
+        }
     }
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\

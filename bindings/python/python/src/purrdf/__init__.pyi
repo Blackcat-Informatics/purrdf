@@ -1680,6 +1680,9 @@ class _Shapes:
     # validation and `prepare()` carry it. `shacl_profile` is the stable id of the exact
     # dated SHACL law the shapes graph is loaded and every validation answers under (see
     # `shapes.validate`); None is the compatibility law.
+    # `recursion` selects "lfp" or "gfp" with both explicit unsigned 64-bit
+    # limits. Prepared execution retains the request; products require it again
+    # on restore. Read `conforms` even when ordinary `results` is empty.
     def __init__(
         self,
         shapes_ttl: str,
@@ -1689,6 +1692,9 @@ class _Shapes:
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
         shacl_profile: str | None = None,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
     ) -> None: ...
     # `xpath_regex` (here, on `validate_store`, on `PreparedShapes.validate_nt` and
     # `validate_store_changes`, and on `shapes.validate`) selects the dated XPath law sh:pattern and every SHACL-SPARQL
@@ -1849,14 +1855,40 @@ class _ShapesProduct:
     def identity_digest(self) -> str: ...
     # Ordered `(label, rendered_value)` pairs: the ORDER is the identity.
     def identity_components(self) -> list[tuple[str, str]]: ...
-    def admit(self) -> _PreparedShapes: ...
+    def admit(
+        self,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
     # Admit only the product whose `identity_digest()` is `expected_identity`; a
     # different binding raises with `.dimension == "shapes-graph"`.
-    def admit_expecting(self, expected_identity: str) -> _PreparedShapes: ...
-    def rebuild(self) -> _PreparedShapes: ...
+    def admit_expecting(
+        self,
+        expected_identity: str,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
+    def rebuild(
+        self,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
     # Rebuild only the product whose `identity_digest()` is `expected_identity`; a
     # different binding raises with `.dimension == "shapes-graph"`.
-    def rebuild_expecting(self, expected_identity: str) -> _PreparedShapes: ...
+    def rebuild_expecting(
+        self,
+        expected_identity: str,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
     def certify(self) -> None: ...
 
 class shapes:
@@ -1888,6 +1920,9 @@ class shapes:
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
     ) -> bytes: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
@@ -1963,6 +1998,9 @@ class shapes:
         subclass_of_in_shapes_graph: bool = False,
         xpath_regex: str | None = None,
         shacl_profile: str | None = None,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by

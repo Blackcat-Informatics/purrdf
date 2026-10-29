@@ -28,6 +28,45 @@ use purrdf_shapes::{ShapesError, ShapesImports};
 use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 
+/// Decode an explicit recursive SHACL request before shapes are admitted.
+/// Omission retains the engine's default; both limits retain their full width,
+/// including zero, whose operational meaning belongs to the native evaluator.
+///
+/// # Errors
+/// Refuses an unknown mode or any incomplete selection.
+pub fn requested_shacl_recursion(
+    mode: Option<&str>,
+    max_pairs: Option<u64>,
+    max_iterations: Option<u64>,
+) -> Result<Option<purrdf_shapes::recursion::RecursionOptions>, String> {
+    use purrdf_shapes::recursion::{RecursionOptions, RecursionSemantics};
+
+    let Some(mode) = mode else {
+        return if max_pairs.is_none() && max_iterations.is_none() {
+            Ok(None)
+        } else {
+            Err("recursion limits require an explicit lfp or gfp selection".to_owned())
+        };
+    };
+    let semantics = match mode {
+        "lfp" => RecursionSemantics::Lfp,
+        "gfp" => RecursionSemantics::Gfp,
+        _ => {
+            return Err(format!(
+                "unknown recursion mode {mode:?}; expected lfp or gfp"
+            ));
+        }
+    };
+    let (Some(max_pairs), Some(max_iterations)) = (max_pairs, max_iterations) else {
+        return Err("recursion requires both max_pairs and max_iterations".to_owned());
+    };
+    Ok(Some(RecursionOptions {
+        semantics,
+        max_pairs,
+        max_iterations,
+    }))
+}
+
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// resulting SHACL report to a SARIF 2.1.0 JSON string.
 ///
@@ -451,6 +490,37 @@ mod tests {
     use purrdf_lex::json::{self, Object, Value};
 
     use super::*;
+
+    #[test]
+    fn recursion_request_preserves_selection_and_full_width_limits() {
+        use purrdf_shapes::recursion::RecursionSemantics;
+        assert!(
+            requested_shacl_recursion(None, None, None)
+                .unwrap()
+                .is_none()
+        );
+        for (mode, semantics) in [
+            ("lfp", RecursionSemantics::Lfp),
+            ("gfp", RecursionSemantics::Gfp),
+        ] {
+            let request = requested_shacl_recursion(Some(mode), Some(0), Some(u64::MAX))
+                .expect("explicit request")
+                .unwrap();
+            assert_eq!(request.semantics, semantics);
+            assert_eq!(request.max_pairs, 0);
+            assert_eq!(request.max_iterations, u64::MAX);
+        }
+        for (mode, pairs, iterations) in [
+            (None, Some(1), None),
+            (None, None, Some(1)),
+            (Some("lfp"), None, None),
+            (Some("gfp"), Some(1), None),
+            (Some("lfp"), None, Some(1)),
+            (Some("other"), Some(1), Some(1)),
+        ] {
+            assert!(requested_shacl_recursion(mode, pairs, iterations).is_err());
+        }
+    }
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
