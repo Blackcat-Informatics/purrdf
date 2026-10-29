@@ -347,15 +347,15 @@ cryptography==50.0.2 \
     --hash=sha256:fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
     # via
-    #   -r python-publisher-requirements.in
+    #   -r scripts/python-publisher-requirements.in
     #   pyopenssl
     #   pypi-attestations
     #   rfc3161-client
     #   secretstorage
     #   sigstore
-dnspython==2.8.0 \
-    --hash=sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af \
-    --hash=sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f
+dnspython==2.9.0 \
+    --hash=sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9 \
+    --hash=sha256:b44dc6b18f07a8b1c56676a19fbfdb5209415b046a9cece286baafa87ff3f7f1
     # via email-validator
 docutils==0.23 \
     --hash=sha256:25d013af9bf23bc1c7b2b093dff4208166c53a94786c9e447808335ef1185fea \
@@ -609,7 +609,7 @@ pyopenssl==26.4.0 \
 pypi-attestations==0.0.30 \
     --hash=sha256:14ff13c76bbef02a483c2b77532da02bfd746b5141b881f355e06b9807434423 \
     --hash=sha256:b3a9c53f6cb89e5e7b5b70e6cfca97cfc66008c1ed54087355e06e40071cef21
-    # via -r python-publisher-requirements.in
+    # via -r scripts/python-publisher-requirements.in
 readme-renderer==46.0 \
     --hash=sha256:af3e964914f6310a33ff67b72a4bdd940bed8d7c3bdecd2d14f40edf284bfe90 \
     --hash=sha256:d0dae1f74bb273b534770cb4cccb6bb78735540afdb03c2146f4e19dcd412560
@@ -618,7 +618,7 @@ requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed
     # via
-    #   -r python-publisher-requirements.in
+    #   -r scripts/python-publisher-requirements.in
     #   pypi-attestations
     #   requests-toolbelt
     #   sigstore
@@ -670,7 +670,7 @@ sigstore==4.5.0 \
     --hash=sha256:020d3e07f622b2916bf453e66ff6ff0711e1fdc5ab69e8bd8902f71d9fcb316f \
     --hash=sha256:f045b207f2e12605cf775ec38e89c5eda625d71ffa7830477db65e47ec2bc8b2
     # via
-    #   -r python-publisher-requirements.in
+    #   -r scripts/python-publisher-requirements.in
     #   pypi-attestations
 sigstore-models==0.0.6 \
     --hash=sha256:5201a68f4d7d0f8bec1e2f4378eb646b084c52609a4e31db8c385095fff68b2e \
@@ -686,12 +686,12 @@ tuf==7.0.1 \
     --hash=sha256:5ada1db78da3518fa851e28588f4b2249b8662a28ae528f54afa2a1de541fb31 \
     --hash=sha256:d30434bda6e079ab303fb30d1b3006d939a10ca34783b1573d61cd9b802fa45c
     # via
-    #   -r python-publisher-requirements.in
+    #   -r scripts/python-publisher-requirements.in
     #   sigstore
 twine==7.0.0 \
     --hash=sha256:85cdb29c518efef867360ae4acd4b0dfd61c8654a22fca08e6f8539f05022177 \
     --hash=sha256:b854164df26db268af05f49aa5c0344b10e27a494343ff05b1e0bad3b135f5a7
-    # via -r python-publisher-requirements.in
+    # via -r scripts/python-publisher-requirements.in
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
@@ -708,7 +708,7 @@ urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
     # via
-    #   -r python-publisher-requirements.in
+    #   -r scripts/python-publisher-requirements.in
     #   id
     #   requests
     #   tuf
