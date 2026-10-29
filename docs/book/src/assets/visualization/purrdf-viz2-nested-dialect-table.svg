@@ -65,7 +65,7 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 .edge.reifies .edge-path,.legend-line.reifies{stroke:#b65c00;stroke-width:2.8;stroke-dasharray:10 4}
 .edge.annotation .edge-path,.legend-line.annotation{stroke:#257942;stroke-width:2.3}
 .edge.quoted .edge-path{stroke:#6f4ba8;stroke-width:1.7;stroke-dasharray:3 5}
-.edge-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
+.edge-label-box,.interaction-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
 .edge.assertion .edge-label-box{fill:#eef9fa;stroke:#66a8b0}
 .edge.role .edge-label-box{fill:#f7f8fa;stroke:#aeb7c2}
 .edge.reifies .edge-label-box{fill:#fff6e9;stroke:#d18a3d}
@@ -96,150 +96,150 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <g id="svg-table" class="statement-table">
 <g id="svg-table-cell-0-0" class="table-cell header">
 <rect class="table-cell-shape" x="36" y="36" width="320" height="42" rx="0"/>
-<text id="svg-table-label-0-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-0)"><title>Statement</title><tspan x="196" y="62">Statement</tspan></text>
+<text id="svg-table-label-0-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-0)"><title>Statement</title><tspan x="196" y="62" textLength="72" lengthAdjust="spacingAndGlyphs">Statement</tspan></text>
 </g>
 <g id="svg-table-cell-0-1" class="table-cell header">
 <rect class="table-cell-shape" x="356" y="36" width="128" height="42" rx="0"/>
-<text id="svg-table-label-0-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-1)"><title>Asserted in</title><tspan x="420" y="62">Asserted in</tspan></text>
+<text id="svg-table-label-0-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-1)"><title>Asserted in</title><tspan x="420" y="62" textLength="88" lengthAdjust="spacingAndGlyphs">Asserted in</tspan></text>
 </g>
 <g id="svg-table-cell-0-2" class="table-cell header">
 <rect class="table-cell-shape" x="484" y="36" width="96" height="42" rx="0"/>
-<text id="svg-table-label-0-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-2)"><title>Reifiers</title><tspan x="532" y="62">Reifiers</tspan></text>
+<text id="svg-table-label-0-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-2)"><title>Reifiers</title><tspan x="532" y="62" textLength="64" lengthAdjust="spacingAndGlyphs">Reifiers</tspan></text>
 </g>
 <g id="svg-table-cell-0-3" class="table-cell header">
 <rect class="table-cell-shape" x="580" y="36" width="112" height="42" rx="0"/>
-<text id="svg-table-label-0-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-3)"><title>Annotations</title><tspan x="636" y="62">Annotations</tspan></text>
+<text id="svg-table-label-0-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-3)"><title>Annotations</title><tspan x="636" y="62" textLength="88" lengthAdjust="spacingAndGlyphs">Annotations</tspan></text>
 </g>
 <g id="svg-table-cell-0-4" class="table-cell header">
 <rect class="table-cell-shape" x="692" y="36" width="128" height="42" rx="0"/>
-<text id="svg-table-label-0-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-4)"><title>Referenced by</title><tspan x="756" y="62">Referenced by</tspan></text>
+<text id="svg-table-label-0-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-4)"><title>Referenced by</title><tspan x="756" y="62" textLength="104" lengthAdjust="spacingAndGlyphs">Referenced by</tspan></text>
 </g>
 <g id="svg-table-cell-0-5" class="table-cell header">
 <rect class="table-cell-shape" x="820" y="36" width="96" height="42" rx="0"/>
-<text id="svg-table-label-0-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-5)"><title>Depth</title><tspan x="868" y="62">Depth</tspan></text>
+<text id="svg-table-label-0-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-5)"><title>Depth</title><tspan x="868" y="62" textLength="40" lengthAdjust="spacingAndGlyphs">Depth</tspan></text>
 </g>
 <g id="svg-table-cell-0-6" class="table-cell header">
 <rect class="table-cell-shape" x="916" y="36" width="272" height="42" rx="0"/>
-<text id="svg-table-label-0-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-6)"><title>Diagnostics</title><tspan x="1052" y="62">Diagnostics</tspan></text>
+<text id="svg-table-label-0-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-6)"><title>Diagnostics</title><tspan x="1052" y="62" textLength="88" lengthAdjust="spacingAndGlyphs">Diagnostics</tspan></text>
 </g>
 <g id="svg-table-cell-1-0" class="table-cell odd">
 <rect class="table-cell-shape" x="36" y="78" width="320" height="42" rx="0"/>
-<text id="svg-table-label-1-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-0)"><title>ex:alice —ex:knows→ ex:bob</title><tspan x="196" y="104">ex:alice —ex:knows→ ex:bob</tspan></text>
+<text id="svg-table-label-1-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-0)"><title>ex:alice —ex:knows→ ex:bob</title><tspan x="196" y="104" textLength="208" lengthAdjust="spacingAndGlyphs">ex:alice —ex:knows→ ex:bob</tspan></text>
 </g>
 <g id="svg-table-cell-1-1" class="table-cell odd">
 <rect class="table-cell-shape" x="356" y="78" width="128" height="42" rx="0"/>
-<text id="svg-table-label-1-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-1)"><title></title><tspan x="420" y="104"></tspan></text>
+<text id="svg-table-label-1-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-1)"><title></title><tspan x="420" y="104" textLength="0" lengthAdjust="spacingAndGlyphs"></tspan></text>
 </g>
 <g id="svg-table-cell-1-2" class="table-cell odd">
 <rect class="table-cell-shape" x="484" y="78" width="96" height="42" rx="0"/>
-<text id="svg-table-label-1-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-2)"><title>1</title><tspan x="532" y="104">1</tspan></text>
+<text id="svg-table-label-1-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-2)"><title>1</title><tspan x="532" y="104" textLength="8" lengthAdjust="spacingAndGlyphs">1</tspan></text>
 </g>
 <g id="svg-table-cell-1-3" class="table-cell odd">
 <rect class="table-cell-shape" x="580" y="78" width="112" height="42" rx="0"/>
-<text id="svg-table-label-1-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-3)"><title>1</title><tspan x="636" y="104">1</tspan></text>
+<text id="svg-table-label-1-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-3)"><title>1</title><tspan x="636" y="104" textLength="8" lengthAdjust="spacingAndGlyphs">1</tspan></text>
 </g>
 <g id="svg-table-cell-1-4" class="table-cell odd">
 <rect class="table-cell-shape" x="692" y="78" width="128" height="42" rx="0"/>
-<text id="svg-table-label-1-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-4)"><title>2</title><tspan x="756" y="104">2</tspan></text>
+<text id="svg-table-label-1-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-4)"><title>2</title><tspan x="756" y="104" textLength="8" lengthAdjust="spacingAndGlyphs">2</tspan></text>
 </g>
 <g id="svg-table-cell-1-5" class="table-cell odd">
 <rect class="table-cell-shape" x="820" y="78" width="96" height="42" rx="0"/>
-<text id="svg-table-label-1-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-5)"><title>0</title><tspan x="868" y="104">0</tspan></text>
+<text id="svg-table-label-1-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-5)"><title>0</title><tspan x="868" y="104" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-1-6" class="table-cell odd">
 <rect class="table-cell-shape" x="916" y="78" width="272" height="42" rx="0"/>
-<text id="svg-table-label-1-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-6)"><title></title><tspan x="1052" y="104"></tspan></text>
+<text id="svg-table-label-1-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-6)"><title></title><tspan x="1052" y="104" textLength="0" lengthAdjust="spacingAndGlyphs"></tspan></text>
 </g>
 <g id="svg-table-cell-2-0" class="table-cell even">
 <rect class="table-cell-shape" x="36" y="120" width="320" height="56" rx="0"/>
-<text id="svg-table-label-2-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-0)"><title>"generalized subject" —ex:describes→ ex:extension-case</title><tspan x="196" y="144">"generalized subject" —ex:describes→</tspan><tspan x="196" y="162">ex:extension-case</tspan></text>
+<text id="svg-table-label-2-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-0)"><title>"generalized subject" —ex:describes→ ex:extension-case</title><tspan x="196" y="144" textLength="288" lengthAdjust="spacingAndGlyphs">"generalized subject" —ex:describes→</tspan><tspan x="196" y="162" textLength="136" lengthAdjust="spacingAndGlyphs">ex:extension-case</tspan></text>
 </g>
 <g id="svg-table-cell-2-1" class="table-cell even">
 <rect class="table-cell-shape" x="356" y="120" width="128" height="56" rx="0"/>
-<text id="svg-table-label-2-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-1)"><title>ex:extensions</title><tspan x="420" y="153">ex:extensions</tspan></text>
+<text id="svg-table-label-2-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-1)"><title>ex:extensions</title><tspan x="420" y="153" textLength="104" lengthAdjust="spacingAndGlyphs">ex:extensions</tspan></text>
 </g>
 <g id="svg-table-cell-2-2" class="table-cell even">
 <rect class="table-cell-shape" x="484" y="120" width="96" height="56" rx="0"/>
-<text id="svg-table-label-2-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-2)"><title>0</title><tspan x="532" y="153">0</tspan></text>
+<text id="svg-table-label-2-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-2)"><title>0</title><tspan x="532" y="153" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-2-3" class="table-cell even">
 <rect class="table-cell-shape" x="580" y="120" width="112" height="56" rx="0"/>
-<text id="svg-table-label-2-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-3)"><title>0</title><tspan x="636" y="153">0</tspan></text>
+<text id="svg-table-label-2-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-3)"><title>0</title><tspan x="636" y="153" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-2-4" class="table-cell even">
 <rect class="table-cell-shape" x="692" y="120" width="128" height="56" rx="0"/>
-<text id="svg-table-label-2-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-4)"><title>0</title><tspan x="756" y="153">0</tspan></text>
+<text id="svg-table-label-2-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-4)"><title>0</title><tspan x="756" y="153" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-2-5" class="table-cell even">
 <rect class="table-cell-shape" x="820" y="120" width="96" height="56" rx="0"/>
-<text id="svg-table-label-2-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-5)"><title>0</title><tspan x="868" y="153">0</tspan></text>
+<text id="svg-table-label-2-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-5)"><title>0</title><tspan x="868" y="153" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-2-6" class="table-cell even">
 <rect class="table-cell-shape" x="916" y="120" width="272" height="56" rx="0"/>
-<text id="svg-table-label-2-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-6)"><title>viz-dialect-generalized-subject</title><tspan x="1052" y="153">viz-dialect-generalized-subject</tspan></text>
+<text id="svg-table-label-2-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-6)"><title>viz-dialect-generalized-subject</title><tspan x="1052" y="153" textLength="248" lengthAdjust="spacingAndGlyphs">viz-dialect-generalized-subject</tspan></text>
 </g>
 <g id="svg-table-cell-3-0" class="table-cell odd">
 <rect class="table-cell-shape" x="36" y="176" width="320" height="42" rx="0"/>
-<text id="svg-table-label-3-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-0)"><title>S:2cadfeae —ex:reportedBy→ ex:carol</title><tspan x="196" y="202">S:2cadfeae —ex:reportedBy→ ex:carol</tspan></text>
+<text id="svg-table-label-3-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-0)"><title>S:2cadfeae —ex:reportedBy→ ex:carol</title><tspan x="196" y="202" textLength="280" lengthAdjust="spacingAndGlyphs">S:2cadfeae —ex:reportedBy→ ex:carol</tspan></text>
 </g>
 <g id="svg-table-cell-3-1" class="table-cell odd">
 <rect class="table-cell-shape" x="356" y="176" width="128" height="42" rx="0"/>
-<text id="svg-table-label-3-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-1)"><title>ex:reports</title><tspan x="420" y="202">ex:reports</tspan></text>
+<text id="svg-table-label-3-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-1)"><title>ex:reports</title><tspan x="420" y="202" textLength="80" lengthAdjust="spacingAndGlyphs">ex:reports</tspan></text>
 </g>
 <g id="svg-table-cell-3-2" class="table-cell odd">
 <rect class="table-cell-shape" x="484" y="176" width="96" height="42" rx="0"/>
-<text id="svg-table-label-3-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-2)"><title>0</title><tspan x="532" y="202">0</tspan></text>
+<text id="svg-table-label-3-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-2)"><title>0</title><tspan x="532" y="202" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-3-3" class="table-cell odd">
 <rect class="table-cell-shape" x="580" y="176" width="112" height="42" rx="0"/>
-<text id="svg-table-label-3-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-3)"><title>0</title><tspan x="636" y="202">0</tspan></text>
+<text id="svg-table-label-3-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-3)"><title>0</title><tspan x="636" y="202" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-3-4" class="table-cell odd">
 <rect class="table-cell-shape" x="692" y="176" width="128" height="42" rx="0"/>
-<text id="svg-table-label-3-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-4)"><title>1</title><tspan x="756" y="202">1</tspan></text>
+<text id="svg-table-label-3-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-4)"><title>1</title><tspan x="756" y="202" textLength="8" lengthAdjust="spacingAndGlyphs">1</tspan></text>
 </g>
 <g id="svg-table-cell-3-5" class="table-cell odd">
 <rect class="table-cell-shape" x="820" y="176" width="96" height="42" rx="0"/>
-<text id="svg-table-label-3-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-5)"><title>1</title><tspan x="868" y="202">1</tspan></text>
+<text id="svg-table-label-3-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-5)"><title>1</title><tspan x="868" y="202" textLength="8" lengthAdjust="spacingAndGlyphs">1</tspan></text>
 </g>
 <g id="svg-table-cell-3-6" class="table-cell odd">
 <rect class="table-cell-shape" x="916" y="176" width="272" height="42" rx="0"/>
-<text id="svg-table-label-3-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-6)"><title>viz-dialect-symmetric-subject</title><tspan x="1052" y="202">viz-dialect-symmetric-subject</tspan></text>
+<text id="svg-table-label-3-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-3-6)"><title>viz-dialect-symmetric-subject</title><tspan x="1052" y="202" textLength="232" lengthAdjust="spacingAndGlyphs">viz-dialect-symmetric-subject</tspan></text>
 </g>
 <g id="svg-table-cell-4-0" class="table-cell even">
 <rect class="table-cell-shape" x="36" y="218" width="320" height="42" rx="0"/>
-<text id="svg-table-label-4-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-0)"><title>ex:audit-node —ex:checks→ S:ed1e883a</title><tspan x="196" y="244">ex:audit-node —ex:checks→ S:ed1e883a</tspan></text>
+<text id="svg-table-label-4-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-0)"><title>ex:audit-node —ex:checks→ S:ed1e883a</title><tspan x="196" y="244" textLength="288" lengthAdjust="spacingAndGlyphs">ex:audit-node —ex:checks→ S:ed1e883a</tspan></text>
 </g>
 <g id="svg-table-cell-4-1" class="table-cell even">
 <rect class="table-cell-shape" x="356" y="218" width="128" height="42" rx="0"/>
-<text id="svg-table-label-4-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-1)"><title>ex:audit</title><tspan x="420" y="244">ex:audit</tspan></text>
+<text id="svg-table-label-4-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-1)"><title>ex:audit</title><tspan x="420" y="244" textLength="64" lengthAdjust="spacingAndGlyphs">ex:audit</tspan></text>
 </g>
 <g id="svg-table-cell-4-2" class="table-cell even">
 <rect class="table-cell-shape" x="484" y="218" width="96" height="42" rx="0"/>
-<text id="svg-table-label-4-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-2)"><title>0</title><tspan x="532" y="244">0</tspan></text>
+<text id="svg-table-label-4-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-2)"><title>0</title><tspan x="532" y="244" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-4-3" class="table-cell even">
 <rect class="table-cell-shape" x="580" y="218" width="112" height="42" rx="0"/>
-<text id="svg-table-label-4-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-3)"><title>0</title><tspan x="636" y="244">0</tspan></text>
+<text id="svg-table-label-4-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-3)"><title>0</title><tspan x="636" y="244" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-4-4" class="table-cell even">
 <rect class="table-cell-shape" x="692" y="218" width="128" height="42" rx="0"/>
-<text id="svg-table-label-4-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-4)"><title>0</title><tspan x="756" y="244">0</tspan></text>
+<text id="svg-table-label-4-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-4)"><title>0</title><tspan x="756" y="244" textLength="8" lengthAdjust="spacingAndGlyphs">0</tspan></text>
 </g>
 <g id="svg-table-cell-4-5" class="table-cell even">
 <rect class="table-cell-shape" x="820" y="218" width="96" height="42" rx="0"/>
-<text id="svg-table-label-4-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-5)"><title>2</title><tspan x="868" y="244">2</tspan></text>
+<text id="svg-table-label-4-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-5)"><title>2</title><tspan x="868" y="244" textLength="8" lengthAdjust="spacingAndGlyphs">2</tspan></text>
 </g>
 <g id="svg-table-cell-4-6" class="table-cell even">
 <rect class="table-cell-shape" x="916" y="218" width="272" height="42" rx="0"/>
-<text id="svg-table-label-4-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-6)"><title></title><tspan x="1052" y="244"></tspan></text>
+<text id="svg-table-label-4-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-4-6)"><title></title><tspan x="1052" y="244" textLength="0" lengthAdjust="spacingAndGlyphs"></tspan></text>
 </g>
 </g>
 <g id="svg-legend" class="legend">
 <g id="svg-legend-table" class="legend-entry legend-table">
 <rect class="legend-entry-shape" x="36" y="316" width="260" height="54" rx="4"/>
 <path class="legend-line assertion" d="M 48 343 H 92" marker-end="url(#arrow-assertion)"/>
-<text id="svg-legend-table-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-table-label)"><title>one row per structural statement</title><tspan x="196" y="339">one row per structural</tspan><tspan x="196" y="357">statement</tspan></text>
+<text id="svg-legend-table-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-table-label)"><title>one row per structural statement</title><tspan x="196" y="339" textLength="176" lengthAdjust="spacingAndGlyphs">one row per structural</tspan><tspan x="196" y="357" textLength="72" lengthAdjust="spacingAndGlyphs">statement</tspan></text>
 </g>
 </g>
 </svg>

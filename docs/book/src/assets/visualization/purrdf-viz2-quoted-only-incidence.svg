@@ -83,7 +83,7 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 .edge.reifies .edge-path,.legend-line.reifies{stroke:#b65c00;stroke-width:2.8;stroke-dasharray:10 4}
 .edge.annotation .edge-path,.legend-line.annotation{stroke:#257942;stroke-width:2.3}
 .edge.quoted .edge-path{stroke:#6f4ba8;stroke-width:1.7;stroke-dasharray:3 5}
-.edge-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
+.edge-label-box,.interaction-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
 .edge.assertion .edge-label-box{fill:#eef9fa;stroke:#66a8b0}
 .edge.role .edge-label-box{fill:#f7f8fa;stroke:#aeb7c2}
 .edge.reifies .edge-label-box{fill:#fff6e9;stroke:#d18a3d}
@@ -116,10 +116,10 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <path id="svg-edge-annotation-197635ed93d4556b-path" class="edge-path" d="M 200 575 H 372 Q 380 575 380 567 V 546 Q 380 538 388 538 H 560" marker-end="url(#arrow-edge-annotation-197635ed93d4556b)" style="stroke:hsl(136,55%,31%)"/>
 <path class="edge-label-leader" d="M 390 489 L 390 538"/>
 <rect class="edge-label-box" x="302" y="476" width="176" height="26" rx="4"/>
-<text id="svg-edge-annotation-197635ed93d4556b-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-197635ed93d4556b-label)"><title>prov:wasAttributedTo</title><tspan x="390" y="494">prov:wasAttributedTo</tspan></text>
+<text id="svg-edge-annotation-197635ed93d4556b-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-197635ed93d4556b-label)"><title>prov:wasAttributedTo</title><tspan x="390" y="494" textLength="160" lengthAdjust="spacingAndGlyphs">prov:wasAttributedTo</tspan></text>
 <g id="svg-edge-annotation-197635ed93d4556b-badge-0" class="edge-badge graph">
 <rect class="badge-shape" x="302" y="506" width="109" height="18" rx="4"/>
-<text id="svg-edge-annotation-197635ed93d4556b-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-197635ed93d4556b-badge-0-label)"><title>ex:provenance</title><tspan x="356" y="520">ex:provenance</tspan></text>
+<text id="svg-edge-annotation-197635ed93d4556b-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-197635ed93d4556b-badge-0-label)"><title>ex:provenance</title><tspan x="356" y="520" textLength="104" lengthAdjust="spacingAndGlyphs">ex:provenance</tspan></text>
 </g>
 </g>
 <g id="svg-edge-annotation-550905ba2e7c280e-group" class="edge annotation" data-scene-id="edge-annotation-550905ba2e7c280e">
@@ -127,10 +127,10 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <path id="svg-edge-annotation-550905ba2e7c280e-path" class="edge-path" d="M 212 701 H 381 Q 389 701 389 693 V 648 Q 389 640 397 640 H 567" marker-end="url(#arrow-edge-annotation-550905ba2e7c280e)" style="stroke:hsl(143,55%,31%)"/>
 <path class="edge-label-leader" d="M 398 591 L 398 640"/>
 <rect class="edge-label-box" x="338" y="578" width="120" height="26" rx="4"/>
-<text id="svg-edge-annotation-550905ba2e7c280e-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-550905ba2e7c280e-label)"><title>ex:confidence</title><tspan x="398" y="596">ex:confidence</tspan></text>
+<text id="svg-edge-annotation-550905ba2e7c280e-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-550905ba2e7c280e-label)"><title>ex:confidence</title><tspan x="398" y="596" textLength="104" lengthAdjust="spacingAndGlyphs">ex:confidence</tspan></text>
 <g id="svg-edge-annotation-550905ba2e7c280e-badge-0" class="edge-badge graph">
 <rect class="badge-shape" x="338" y="608" width="109" height="18" rx="4"/>
-<text id="svg-edge-annotation-550905ba2e7c280e-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-550905ba2e7c280e-badge-0-label)"><title>ex:provenance</title><tspan x="392" y="622">ex:provenance</tspan></text>
+<text id="svg-edge-annotation-550905ba2e7c280e-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-550905ba2e7c280e-badge-0-label)"><title>ex:provenance</title><tspan x="392" y="622" textLength="104" lengthAdjust="spacingAndGlyphs">ex:provenance</tspan></text>
 </g>
 </g>
 <g id="svg-edge-annotation-7d114008b605d06e-group" class="edge annotation" data-scene-id="edge-annotation-7d114008b605d06e">
@@ -138,10 +138,10 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <path id="svg-edge-annotation-7d114008b605d06e-path" class="edge-path" d="M 212 715 H 378 Q 386 715 386 723 V 734 Q 386 742 394 742 H 560" marker-end="url(#arrow-edge-annotation-7d114008b605d06e)" style="stroke:hsl(141,54%,31%)"/>
 <path class="edge-label-leader" d="M 473 801 L 473 742"/>
 <rect class="edge-label-box" x="385" y="788" width="176" height="26" rx="4"/>
-<text id="svg-edge-annotation-7d114008b605d06e-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-7d114008b605d06e-label)"><title>prov:wasAttributedTo</title><tspan x="473" y="806">prov:wasAttributedTo</tspan></text>
+<text id="svg-edge-annotation-7d114008b605d06e-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-7d114008b605d06e-label)"><title>prov:wasAttributedTo</title><tspan x="473" y="806" textLength="160" lengthAdjust="spacingAndGlyphs">prov:wasAttributedTo</tspan></text>
 <g id="svg-edge-annotation-7d114008b605d06e-badge-0" class="edge-badge graph">
 <rect class="badge-shape" x="385" y="818" width="109" height="18" rx="4"/>
-<text id="svg-edge-annotation-7d114008b605d06e-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-7d114008b605d06e-badge-0-label)"><title>ex:provenance</title><tspan x="439" y="832">ex:provenance</tspan></text>
+<text id="svg-edge-annotation-7d114008b605d06e-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-annotation-7d114008b605d06e-badge-0-label)"><title>ex:provenance</title><tspan x="439" y="832" textLength="104" lengthAdjust="spacingAndGlyphs">ex:provenance</tspan></text>
 </g>
 </g>
 <g id="svg-edge-object-cccbccc1d1228cf9-group" class="edge role" data-scene-id="edge-object-cccbccc1d1228cf9">
@@ -149,38 +149,38 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <path id="svg-edge-object-cccbccc1d1228cf9-path" class="edge-path" d="M 182 359 H 279 Q 287 359 287 367 V 417 Q 287 425 295 425 H 392" marker-end="url(#arrow-edge-object-cccbccc1d1228cf9)" style="stroke:hsl(216,16%,47%)"/>
 <path class="edge-label-leader" d="M 339 448 L 339 425"/>
 <rect class="edge-label-box" x="307" y="435" width="64" height="26" rx="4"/>
-<text id="svg-edge-object-cccbccc1d1228cf9-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-object-cccbccc1d1228cf9-label)"><title>object</title><tspan x="339" y="453">object</tspan></text>
+<text id="svg-edge-object-cccbccc1d1228cf9-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-object-cccbccc1d1228cf9-label)"><title>object</title><tspan x="339" y="453" textLength="48" lengthAdjust="spacingAndGlyphs">object</tspan></text>
 </g>
 <g id="svg-edge-object-fb13eebe492ed5b6-group" class="edge role" data-scene-id="edge-object-fb13eebe492ed5b6">
 <title>statement object</title><desc>ex:erin fills the object port of ex:dave —ex:didNotSee→ ex:erin.</desc>
 <path id="svg-edge-object-fb13eebe492ed5b6-path" class="edge-path" d="M 182 387 H 263 Q 271 387 271 379 V 241 Q 271 233 279 233 H 392" marker-end="url(#arrow-edge-object-fb13eebe492ed5b6)" style="stroke:hsl(212,19%,47%)"/>
 <path class="edge-label-leader" d="M 331 256 L 331 233"/>
 <rect class="edge-label-box" x="299" y="243" width="64" height="26" rx="4"/>
-<text id="svg-edge-object-fb13eebe492ed5b6-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-object-fb13eebe492ed5b6-label)"><title>object</title><tspan x="331" y="261">object</tspan></text>
+<text id="svg-edge-object-fb13eebe492ed5b6-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-object-fb13eebe492ed5b6-label)"><title>object</title><tspan x="331" y="261" textLength="48" lengthAdjust="spacingAndGlyphs">object</tspan></text>
 </g>
 <g id="svg-edge-predicate-cccbccc1d1228cf9-group" class="edge role" data-scene-id="edge-predicate-cccbccc1d1228cf9">
 <title>statement predicate</title><desc>ex:saw fills the predicate port of ex:dave —ex:saw→ ex:erin.</desc>
 <path id="svg-edge-predicate-cccbccc1d1228cf9-path" class="edge-path" d="M 182 475 H 263 Q 271 475 271 467 V 399 Q 271 391 279 391 H 392" marker-end="url(#arrow-edge-predicate-cccbccc1d1228cf9)" style="stroke:hsl(217,17%,47%)"/>
 <path class="edge-label-leader" d="M 331 322 L 331 391"/>
 <rect class="edge-label-box" x="287" y="309" width="88" height="26" rx="4"/>
-<text id="svg-edge-predicate-cccbccc1d1228cf9-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-predicate-cccbccc1d1228cf9-label)"><title>predicate</title><tspan x="331" y="327">predicate</tspan></text>
+<text id="svg-edge-predicate-cccbccc1d1228cf9-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-predicate-cccbccc1d1228cf9-label)"><title>predicate</title><tspan x="331" y="327" textLength="72" lengthAdjust="spacingAndGlyphs">predicate</tspan></text>
 </g>
 <g id="svg-edge-predicate-fb13eebe492ed5b6-group" class="edge role" data-scene-id="edge-predicate-fb13eebe492ed5b6">
 <title>statement predicate</title><desc>ex:didNotSee fills the predicate port of ex:dave —ex:didNotSee→ ex:erin.</desc>
 <path id="svg-edge-predicate-fb13eebe492ed5b6-path" class="edge-path" d="M 188 169 H 282 Q 290 169 290 177 V 191 Q 290 199 298 199 H 392" marker-end="url(#arrow-edge-predicate-fb13eebe492ed5b6)" style="stroke:hsl(212,16%,47%)"/>
 <path class="edge-label-leader" d="M 301 130 L 290 169"/>
 <rect class="edge-label-box" x="257" y="117" width="88" height="26" rx="4"/>
-<text id="svg-edge-predicate-fb13eebe492ed5b6-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-predicate-fb13eebe492ed5b6-label)"><title>predicate</title><tspan x="301" y="135">predicate</tspan></text>
+<text id="svg-edge-predicate-fb13eebe492ed5b6-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-predicate-fb13eebe492ed5b6-label)"><title>predicate</title><tspan x="301" y="135" textLength="72" lengthAdjust="spacingAndGlyphs">predicate</tspan></text>
 </g>
 <g id="svg-edge-reifies-a2a0c656952bf486-group" class="edge reifies" data-scene-id="edge-reifies-a2a0c656952bf486">
 <title>reifies</title><desc>ex:witness-account reifies statement cccbccc1d1228cf9 in graph graph:25d55bcc0d21e0b9.</desc>
 <path id="svg-edge-reifies-a2a0c656952bf486-path" class="edge-path" d="M 212 729 H 236 Q 244 729 244 721 V 298 Q 244 290 252 290 H 494 Q 502 290 502 298 V 322" marker-end="url(#arrow-edge-reifies-a2a0c656952bf486)" style="stroke:hsl(28,99%,36%)"/>
 <path class="edge-label-leader" d="M 333 385 L 244 385"/>
 <rect class="edge-label-box" x="297" y="372" width="72" height="26" rx="4"/>
-<text id="svg-edge-reifies-a2a0c656952bf486-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-a2a0c656952bf486-label)"><title>reifies</title><tspan x="333" y="390">reifies</tspan></text>
+<text id="svg-edge-reifies-a2a0c656952bf486-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-a2a0c656952bf486-label)"><title>reifies</title><tspan x="333" y="390" textLength="56" lengthAdjust="spacingAndGlyphs">reifies</tspan></text>
 <g id="svg-edge-reifies-a2a0c656952bf486-badge-0" class="edge-badge graph">
 <rect class="badge-shape" x="282" y="402" width="102" height="18" rx="4"/>
-<text id="svg-edge-reifies-a2a0c656952bf486-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-a2a0c656952bf486-badge-0-label)"><title>ex:testimony</title><tspan x="333" y="416">ex:testimony</tspan></text>
+<text id="svg-edge-reifies-a2a0c656952bf486-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-a2a0c656952bf486-badge-0-label)"><title>ex:testimony</title><tspan x="333" y="416" textLength="96" lengthAdjust="spacingAndGlyphs">ex:testimony</tspan></text>
 </g>
 </g>
 <g id="svg-edge-reifies-d54922ca09143b76-group" class="edge reifies" data-scene-id="edge-reifies-d54922ca09143b76">
@@ -188,10 +188,10 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <path id="svg-edge-reifies-d54922ca09143b76-path" class="edge-path" d="M 200 603 H 208 Q 216 603 216 595 V 106 Q 216 98 224 98 H 494 Q 502 98 502 106 V 130" marker-end="url(#arrow-edge-reifies-d54922ca09143b76)" style="stroke:hsl(28,100%,36%)"/>
 <path class="edge-label-leader" d="M 359 49 L 359 98"/>
 <rect class="edge-label-box" x="323" y="36" width="72" height="26" rx="4"/>
-<text id="svg-edge-reifies-d54922ca09143b76-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-d54922ca09143b76-label)"><title>reifies</title><tspan x="359" y="54">reifies</tspan></text>
+<text id="svg-edge-reifies-d54922ca09143b76-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-d54922ca09143b76-label)"><title>reifies</title><tspan x="359" y="54" textLength="56" lengthAdjust="spacingAndGlyphs">reifies</tspan></text>
 <g id="svg-edge-reifies-d54922ca09143b76-badge-0" class="edge-badge graph">
 <rect class="badge-shape" x="308" y="66" width="102" height="18" rx="4"/>
-<text id="svg-edge-reifies-d54922ca09143b76-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-d54922ca09143b76-badge-0-label)"><title>ex:testimony</title><tspan x="359" y="80">ex:testimony</tspan></text>
+<text id="svg-edge-reifies-d54922ca09143b76-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-reifies-d54922ca09143b76-badge-0-label)"><title>ex:testimony</title><tspan x="359" y="80" textLength="96" lengthAdjust="spacingAndGlyphs">ex:testimony</tspan></text>
 </g>
 </g>
 <g id="svg-edge-subject-cccbccc1d1228cf9-group" class="edge role" data-scene-id="edge-subject-cccbccc1d1228cf9">
@@ -199,35 +199,35 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <path id="svg-edge-subject-cccbccc1d1228cf9-path" class="edge-path" d="M 182 257 H 279 Q 287 257 287 265 V 348 Q 287 356 295 356 H 392" marker-end="url(#arrow-edge-subject-cccbccc1d1228cf9)" style="stroke:hsl(215,16%,47%)"/>
 <path class="edge-label-leader" d="M 419 310 L 392 356"/>
 <rect class="edge-label-box" x="383" y="297" width="72" height="26" rx="4"/>
-<text id="svg-edge-subject-cccbccc1d1228cf9-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-subject-cccbccc1d1228cf9-label)"><title>subject</title><tspan x="419" y="315">subject</tspan></text>
+<text id="svg-edge-subject-cccbccc1d1228cf9-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-subject-cccbccc1d1228cf9-label)"><title>subject</title><tspan x="419" y="315" textLength="56" lengthAdjust="spacingAndGlyphs">subject</tspan></text>
 </g>
 <g id="svg-edge-subject-fb13eebe492ed5b6-group" class="edge role" data-scene-id="edge-subject-fb13eebe492ed5b6">
 <title>statement subject</title><desc>ex:dave fills the subject port of ex:dave —ex:didNotSee→ ex:erin.</desc>
 <path id="svg-edge-subject-fb13eebe492ed5b6-path" class="edge-path" d="M 182 285 H 247 Q 255 285 255 277 V 172 Q 255 164 263 164 H 392" marker-end="url(#arrow-edge-subject-fb13eebe492ed5b6)" style="stroke:hsl(213,18%,47%)"/>
 <path class="edge-label-leader" d="M 363 118 L 363 164"/>
 <rect class="edge-label-box" x="327" y="105" width="72" height="26" rx="4"/>
-<text id="svg-edge-subject-fb13eebe492ed5b6-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-subject-fb13eebe492ed5b6-label)"><title>subject</title><tspan x="363" y="123">subject</tspan></text>
+<text id="svg-edge-subject-fb13eebe492ed5b6-label" class="edge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-edge-subject-fb13eebe492ed5b6-label)"><title>subject</title><tspan x="363" y="123" textLength="56" lengthAdjust="spacingAndGlyphs">subject</tspan></text>
 </g>
 <g id="svg-node-statement-cccbccc1d1228cf9-group" class="node statement" data-scene-id="node-statement-cccbccc1d1228cf9">
 <title>quoted structural statement</title><desc>ex:dave —ex:saw→ ex:erin. Not asserted. 1 reifier(s), 2 annotation(s), 1 incoming reference(s). Dialect: RDF 1.2.</desc>
 <rect id="svg-node-statement-cccbccc1d1228cf9-shape" class="node-shape" x="392" y="322" width="220" height="138" rx="6"/>
 <rect class="statement-inner" x="396" y="326" width="212" height="130" rx="6"/>
-<text id="svg-node-statement-cccbccc1d1228cf9-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-label)"><title>S:cccbccc1</title><tspan x="502" y="348">S:cccbccc1</tspan></text>
+<text id="svg-node-statement-cccbccc1d1228cf9-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-label)"><title>S:cccbccc1</title><tspan x="502" y="348" textLength="80" lengthAdjust="spacingAndGlyphs">S:cccbccc1</tspan></text>
 <g id="svg-node-statement-cccbccc1d1228cf9-badge-0" class="node-badge quoted">
 <rect class="badge-shape" x="408" y="360" width="95" height="18" rx="4"/>
-<text id="svg-node-statement-cccbccc1d1228cf9-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-0-label)"><title>quoted only</title><tspan x="455" y="374">quoted only</tspan></text>
+<text id="svg-node-statement-cccbccc1d1228cf9-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-0-label)"><title>quoted only</title><tspan x="455" y="374" textLength="88" lengthAdjust="spacingAndGlyphs">quoted only</tspan></text>
 </g>
 <g id="svg-node-statement-cccbccc1d1228cf9-badge-1" class="node-badge reifier-count">
 <rect class="badge-shape" x="408" y="382" width="102" height="18" rx="4"/>
-<text id="svg-node-statement-cccbccc1d1228cf9-badge-1-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-1-label)"><title>1 reifier(s)</title><tspan x="459" y="396">1 reifier(s)</tspan></text>
+<text id="svg-node-statement-cccbccc1d1228cf9-badge-1-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-1-label)"><title>1 reifier(s)</title><tspan x="459" y="396" textLength="96" lengthAdjust="spacingAndGlyphs">1 reifier(s)</tspan></text>
 </g>
 <g id="svg-node-statement-cccbccc1d1228cf9-badge-2" class="node-badge annotation-count">
 <rect class="badge-shape" x="408" y="404" width="123" height="18" rx="4"/>
-<text id="svg-node-statement-cccbccc1d1228cf9-badge-2-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-2-label)"><title>2 annotation(s)</title><tspan x="469" y="418">2 annotation(s)</tspan></text>
+<text id="svg-node-statement-cccbccc1d1228cf9-badge-2-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-2-label)"><title>2 annotation(s)</title><tspan x="469" y="418" textLength="120" lengthAdjust="spacingAndGlyphs">2 annotation(s)</tspan></text>
 </g>
 <g id="svg-node-statement-cccbccc1d1228cf9-badge-3" class="node-badge reference-count">
 <rect class="badge-shape" x="408" y="426" width="116" height="18" rx="4"/>
-<text id="svg-node-statement-cccbccc1d1228cf9-badge-3-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-3-label)"><title>1 reference(s)</title><tspan x="466" y="440">1 reference(s)</tspan></text>
+<text id="svg-node-statement-cccbccc1d1228cf9-badge-3-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-cccbccc1d1228cf9-badge-3-label)"><title>1 reference(s)</title><tspan x="466" y="440" textLength="112" lengthAdjust="spacingAndGlyphs">1 reference(s)</tspan></text>
 </g>
 <circle id="svg-node-statement-cccbccc1d1228cf9-port-subject" class="node-port" cx="392" cy="356" r="3"/>
 <circle id="svg-node-statement-cccbccc1d1228cf9-port-predicate" class="node-port" cx="392" cy="391" r="3"/>
@@ -239,22 +239,22 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <title>quoted structural statement</title><desc>ex:dave —ex:didNotSee→ ex:erin. Not asserted. 1 reifier(s), 1 annotation(s), 1 incoming reference(s). Dialect: RDF 1.2.</desc>
 <rect id="svg-node-statement-fb13eebe492ed5b6-shape" class="node-shape" x="392" y="130" width="220" height="138" rx="6"/>
 <rect class="statement-inner" x="396" y="134" width="212" height="130" rx="6"/>
-<text id="svg-node-statement-fb13eebe492ed5b6-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-label)"><title>S:fb13eebe</title><tspan x="502" y="156">S:fb13eebe</tspan></text>
+<text id="svg-node-statement-fb13eebe492ed5b6-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-label)"><title>S:fb13eebe</title><tspan x="502" y="156" textLength="80" lengthAdjust="spacingAndGlyphs">S:fb13eebe</tspan></text>
 <g id="svg-node-statement-fb13eebe492ed5b6-badge-0" class="node-badge quoted">
 <rect class="badge-shape" x="408" y="168" width="95" height="18" rx="4"/>
-<text id="svg-node-statement-fb13eebe492ed5b6-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-0-label)"><title>quoted only</title><tspan x="455" y="182">quoted only</tspan></text>
+<text id="svg-node-statement-fb13eebe492ed5b6-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-0-label)"><title>quoted only</title><tspan x="455" y="182" textLength="88" lengthAdjust="spacingAndGlyphs">quoted only</tspan></text>
 </g>
 <g id="svg-node-statement-fb13eebe492ed5b6-badge-1" class="node-badge reifier-count">
 <rect class="badge-shape" x="408" y="190" width="102" height="18" rx="4"/>
-<text id="svg-node-statement-fb13eebe492ed5b6-badge-1-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-1-label)"><title>1 reifier(s)</title><tspan x="459" y="204">1 reifier(s)</tspan></text>
+<text id="svg-node-statement-fb13eebe492ed5b6-badge-1-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-1-label)"><title>1 reifier(s)</title><tspan x="459" y="204" textLength="96" lengthAdjust="spacingAndGlyphs">1 reifier(s)</tspan></text>
 </g>
 <g id="svg-node-statement-fb13eebe492ed5b6-badge-2" class="node-badge annotation-count">
 <rect class="badge-shape" x="408" y="212" width="123" height="18" rx="4"/>
-<text id="svg-node-statement-fb13eebe492ed5b6-badge-2-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-2-label)"><title>1 annotation(s)</title><tspan x="469" y="226">1 annotation(s)</tspan></text>
+<text id="svg-node-statement-fb13eebe492ed5b6-badge-2-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-2-label)"><title>1 annotation(s)</title><tspan x="469" y="226" textLength="120" lengthAdjust="spacingAndGlyphs">1 annotation(s)</tspan></text>
 </g>
 <g id="svg-node-statement-fb13eebe492ed5b6-badge-3" class="node-badge reference-count">
 <rect class="badge-shape" x="408" y="234" width="116" height="18" rx="4"/>
-<text id="svg-node-statement-fb13eebe492ed5b6-badge-3-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-3-label)"><title>1 reference(s)</title><tspan x="466" y="248">1 reference(s)</tspan></text>
+<text id="svg-node-statement-fb13eebe492ed5b6-badge-3-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-statement-fb13eebe492ed5b6-badge-3-label)"><title>1 reference(s)</title><tspan x="466" y="248" textLength="112" lengthAdjust="spacingAndGlyphs">1 reference(s)</tspan></text>
 </g>
 <circle id="svg-node-statement-fb13eebe492ed5b6-port-subject" class="node-port" cx="392" cy="164" r="3"/>
 <circle id="svg-node-statement-fb13eebe492ed5b6-port-predicate" class="node-port" cx="392" cy="199" r="3"/>
@@ -265,38 +265,38 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <g id="svg-node-term-1dd041881c6720d0-group" class="node iri" data-scene-id="node-term-1dd041881c6720d0">
 <title>IRI resource</title><desc>IRI resource: ex:didNotSee.</desc>
 <rect id="svg-node-term-1dd041881c6720d0-shape" class="node-shape" x="60" y="145" width="128" height="48" rx="6"/>
-<text id="svg-node-term-1dd041881c6720d0-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-1dd041881c6720d0-label)"><title>https://example.org/didNotSee</title><tspan x="124" y="171">ex:didNotSee</tspan></text>
+<text id="svg-node-term-1dd041881c6720d0-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-1dd041881c6720d0-label)"><title>https://example.org/didNotSee</title><tspan x="124" y="171" textLength="96" lengthAdjust="spacingAndGlyphs">ex:didNotSee</tspan></text>
 <circle id="svg-node-term-1dd041881c6720d0-port-in" class="node-port" cx="60" cy="169" r="3"/>
 <circle id="svg-node-term-1dd041881c6720d0-port-out" class="node-port" cx="188" cy="169" r="3"/>
 </g>
 <g id="svg-node-term-41745cc4e880986c-group" class="node iri" data-scene-id="node-term-41745cc4e880986c">
 <title>IRI resource</title><desc>IRI resource: ex:saw.</desc>
 <rect id="svg-node-term-41745cc4e880986c-shape" class="node-shape" x="66" y="451" width="116" height="48" rx="6"/>
-<text id="svg-node-term-41745cc4e880986c-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-41745cc4e880986c-label)"><title>https://example.org/saw</title><tspan x="124" y="477">ex:saw</tspan></text>
+<text id="svg-node-term-41745cc4e880986c-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-41745cc4e880986c-label)"><title>https://example.org/saw</title><tspan x="124" y="477" textLength="48" lengthAdjust="spacingAndGlyphs">ex:saw</tspan></text>
 <circle id="svg-node-term-41745cc4e880986c-port-in" class="node-port" cx="66" cy="475" r="3"/>
 <circle id="svg-node-term-41745cc4e880986c-port-out" class="node-port" cx="182" cy="475" r="3"/>
 </g>
 <g id="svg-node-term-490dc0429d4f0799-group" class="node literal" data-scene-id="node-term-490dc0429d4f0799">
 <title>literal</title><desc>literal: "0.61".</desc>
 <rect id="svg-node-term-490dc0429d4f0799-shape" class="node-shape" x="437" y="616" width="130" height="48" rx="6"/>
-<text id="svg-node-term-490dc0429d4f0799-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-490dc0429d4f0799-label)"><title>0.61 datatype http://www.w3.org/2001/XMLSchema#decimal</title><tspan x="502" y="642">"0.61"</tspan></text>
+<text id="svg-node-term-490dc0429d4f0799-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-490dc0429d4f0799-label)"><title>0.61 datatype http://www.w3.org/2001/XMLSchema#decimal</title><tspan x="502" y="642" textLength="48" lengthAdjust="spacingAndGlyphs">"0.61"</tspan></text>
 <circle id="svg-node-term-490dc0429d4f0799-port-in" class="node-port" cx="437" cy="640" r="3"/>
 <circle id="svg-node-term-490dc0429d4f0799-port-out" class="node-port" cx="567" cy="640" r="3"/>
 </g>
 <g id="svg-node-term-54094e7623bbac83-group" class="node iri" data-scene-id="node-term-54094e7623bbac83">
 <title>IRI resource</title><desc>IRI resource: ex:dave.</desc>
 <rect id="svg-node-term-54094e7623bbac83-shape" class="node-shape" x="66" y="247" width="116" height="48" rx="6"/>
-<text id="svg-node-term-54094e7623bbac83-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-54094e7623bbac83-label)"><title>https://example.org/dave</title><tspan x="124" y="273">ex:dave</tspan></text>
+<text id="svg-node-term-54094e7623bbac83-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-54094e7623bbac83-label)"><title>https://example.org/dave</title><tspan x="124" y="273" textLength="56" lengthAdjust="spacingAndGlyphs">ex:dave</tspan></text>
 <circle id="svg-node-term-54094e7623bbac83-port-in" class="node-port" cx="66" cy="271" r="3"/>
 <circle id="svg-node-term-54094e7623bbac83-port-out" class="node-port" cx="182" cy="271" r="3"/>
 </g>
 <g id="svg-node-term-6a4d8305a11913d9-group" class="node iri reifier" data-scene-id="node-term-6a4d8305a11913d9">
 <title>IRI resource</title><desc>IRI resource: ex:counterclaim.</desc>
 <rect id="svg-node-term-6a4d8305a11913d9-shape" class="node-shape" x="48" y="553" width="152" height="72" rx="6"/>
-<text id="svg-node-term-6a4d8305a11913d9-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-6a4d8305a11913d9-label)"><title>https://example.org/counterclaim</title><tspan x="124" y="579">ex:counterclaim</tspan></text>
+<text id="svg-node-term-6a4d8305a11913d9-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-6a4d8305a11913d9-label)"><title>https://example.org/counterclaim</title><tspan x="124" y="579" textLength="120" lengthAdjust="spacingAndGlyphs">ex:counterclaim</tspan></text>
 <g id="svg-node-term-6a4d8305a11913d9-badge-0" class="node-badge reifier">
 <rect class="badge-shape" x="64" y="591" width="67" height="18" rx="4"/>
-<text id="svg-node-term-6a4d8305a11913d9-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-6a4d8305a11913d9-badge-0-label)"><title>reifier</title><tspan x="97" y="605">reifier</tspan></text>
+<text id="svg-node-term-6a4d8305a11913d9-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-6a4d8305a11913d9-badge-0-label)"><title>reifier</title><tspan x="97" y="605" textLength="56" lengthAdjust="spacingAndGlyphs">reifier</tspan></text>
 </g>
 <circle id="svg-node-term-6a4d8305a11913d9-port-in" class="node-port" cx="48" cy="589" r="3"/>
 <circle id="svg-node-term-6a4d8305a11913d9-port-out" class="node-port" cx="200" cy="589" r="3"/>
@@ -304,17 +304,17 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <g id="svg-node-term-6cb9851bd5580397-group" class="node iri" data-scene-id="node-term-6cb9851bd5580397">
 <title>IRI resource</title><desc>IRI resource: ex:grace.</desc>
 <rect id="svg-node-term-6cb9851bd5580397-shape" class="node-shape" x="444" y="514" width="116" height="48" rx="6"/>
-<text id="svg-node-term-6cb9851bd5580397-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-6cb9851bd5580397-label)"><title>https://example.org/grace</title><tspan x="502" y="540">ex:grace</tspan></text>
+<text id="svg-node-term-6cb9851bd5580397-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-6cb9851bd5580397-label)"><title>https://example.org/grace</title><tspan x="502" y="540" textLength="64" lengthAdjust="spacingAndGlyphs">ex:grace</tspan></text>
 <circle id="svg-node-term-6cb9851bd5580397-port-in" class="node-port" cx="444" cy="538" r="3"/>
 <circle id="svg-node-term-6cb9851bd5580397-port-out" class="node-port" cx="560" cy="538" r="3"/>
 </g>
 <g id="svg-node-term-d87434b389804970-group" class="node iri reifier" data-scene-id="node-term-d87434b389804970">
 <title>IRI resource</title><desc>IRI resource: ex:witness-account.</desc>
 <rect id="svg-node-term-d87434b389804970-shape" class="node-shape" x="36" y="679" width="176" height="72" rx="6"/>
-<text id="svg-node-term-d87434b389804970-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-d87434b389804970-label)"><title>https://example.org/witness-account</title><tspan x="124" y="705">ex:witness-account</tspan></text>
+<text id="svg-node-term-d87434b389804970-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-d87434b389804970-label)"><title>https://example.org/witness-account</title><tspan x="124" y="705" textLength="144" lengthAdjust="spacingAndGlyphs">ex:witness-account</tspan></text>
 <g id="svg-node-term-d87434b389804970-badge-0" class="node-badge reifier">
 <rect class="badge-shape" x="52" y="717" width="67" height="18" rx="4"/>
-<text id="svg-node-term-d87434b389804970-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-d87434b389804970-badge-0-label)"><title>reifier</title><tspan x="85" y="731">reifier</tspan></text>
+<text id="svg-node-term-d87434b389804970-badge-0-label" class="badge-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-d87434b389804970-badge-0-label)"><title>reifier</title><tspan x="85" y="731" textLength="56" lengthAdjust="spacingAndGlyphs">reifier</tspan></text>
 </g>
 <circle id="svg-node-term-d87434b389804970-port-in" class="node-port" cx="36" cy="715" r="3"/>
 <circle id="svg-node-term-d87434b389804970-port-out" class="node-port" cx="212" cy="715" r="3"/>
@@ -322,14 +322,14 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <g id="svg-node-term-e6cab0a5d7062005-group" class="node iri" data-scene-id="node-term-e6cab0a5d7062005">
 <title>IRI resource</title><desc>IRI resource: ex:erin.</desc>
 <rect id="svg-node-term-e6cab0a5d7062005-shape" class="node-shape" x="66" y="349" width="116" height="48" rx="6"/>
-<text id="svg-node-term-e6cab0a5d7062005-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-e6cab0a5d7062005-label)"><title>https://example.org/erin</title><tspan x="124" y="375">ex:erin</tspan></text>
+<text id="svg-node-term-e6cab0a5d7062005-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-e6cab0a5d7062005-label)"><title>https://example.org/erin</title><tspan x="124" y="375" textLength="56" lengthAdjust="spacingAndGlyphs">ex:erin</tspan></text>
 <circle id="svg-node-term-e6cab0a5d7062005-port-in" class="node-port" cx="66" cy="373" r="3"/>
 <circle id="svg-node-term-e6cab0a5d7062005-port-out" class="node-port" cx="182" cy="373" r="3"/>
 </g>
 <g id="svg-node-term-eaf80ba157035a7f-group" class="node iri" data-scene-id="node-term-eaf80ba157035a7f">
 <title>IRI resource</title><desc>IRI resource: ex:frank.</desc>
 <rect id="svg-node-term-eaf80ba157035a7f-shape" class="node-shape" x="444" y="718" width="116" height="48" rx="6"/>
-<text id="svg-node-term-eaf80ba157035a7f-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-eaf80ba157035a7f-label)"><title>https://example.org/frank</title><tspan x="502" y="744">ex:frank</tspan></text>
+<text id="svg-node-term-eaf80ba157035a7f-label" class="node-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-node-term-eaf80ba157035a7f-label)"><title>https://example.org/frank</title><tspan x="502" y="744" textLength="64" lengthAdjust="spacingAndGlyphs">ex:frank</tspan></text>
 <circle id="svg-node-term-eaf80ba157035a7f-port-in" class="node-port" cx="444" cy="742" r="3"/>
 <circle id="svg-node-term-eaf80ba157035a7f-port-out" class="node-port" cx="560" cy="742" r="3"/>
 </g>
@@ -337,32 +337,32 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 <g id="svg-legend-statement" class="legend-entry legend-statement">
 <rect class="legend-entry-shape" x="36" y="892" width="260" height="54" rx="4"/>
 <rect class="legend-symbol quoted" x="48" y="908" width="44" height="22" rx="4"/>
-<text id="svg-legend-statement-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-statement-label)"><title>exact structural RDF statement</title><tspan x="196" y="915">exact structural RDF</tspan><tspan x="196" y="933">statement</tspan></text>
+<text id="svg-legend-statement-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-statement-label)"><title>exact structural RDF statement</title><tspan x="196" y="915" textLength="160" lengthAdjust="spacingAndGlyphs">exact structural RDF</tspan><tspan x="196" y="933" textLength="72" lengthAdjust="spacingAndGlyphs">statement</tspan></text>
 </g>
 <g id="svg-legend-subject" class="legend-entry legend-subject">
 <rect class="legend-entry-shape" x="308" y="892" width="260" height="54" rx="4"/>
 <path class="legend-line role" d="M 320 919 H 364" marker-end="url(#arrow-role)"/>
-<text id="svg-legend-subject-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-subject-label)"><title>statement subject role</title><tspan x="468" y="924">statement subject role</tspan></text>
+<text id="svg-legend-subject-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-subject-label)"><title>statement subject role</title><tspan x="468" y="924" textLength="176" lengthAdjust="spacingAndGlyphs">statement subject role</tspan></text>
 </g>
 <g id="svg-legend-predicate" class="legend-entry legend-predicate">
 <rect class="legend-entry-shape" x="36" y="956" width="260" height="54" rx="4"/>
 <path class="legend-line role" d="M 48 983 H 92" marker-end="url(#arrow-role)"/>
-<text id="svg-legend-predicate-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-predicate-label)"><title>statement predicate role</title><tspan x="196" y="979">statement predicate</tspan><tspan x="196" y="997">role</tspan></text>
+<text id="svg-legend-predicate-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-predicate-label)"><title>statement predicate role</title><tspan x="196" y="979" textLength="152" lengthAdjust="spacingAndGlyphs">statement predicate</tspan><tspan x="196" y="997" textLength="32" lengthAdjust="spacingAndGlyphs">role</tspan></text>
 </g>
 <g id="svg-legend-object" class="legend-entry legend-object">
 <rect class="legend-entry-shape" x="308" y="956" width="260" height="54" rx="4"/>
 <path class="legend-line role" d="M 320 983 H 364" marker-end="url(#arrow-role)"/>
-<text id="svg-legend-object-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-object-label)"><title>statement object role</title><tspan x="468" y="988">statement object role</tspan></text>
+<text id="svg-legend-object-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-object-label)"><title>statement object role</title><tspan x="468" y="988" textLength="168" lengthAdjust="spacingAndGlyphs">statement object role</tspan></text>
 </g>
 <g id="svg-legend-reifies" class="legend-entry legend-reifies">
 <rect class="legend-entry-shape" x="36" y="1020" width="260" height="54" rx="4"/>
 <path class="legend-line reifies" d="M 48 1047 H 92" marker-end="url(#arrow-reifies)"/>
-<text id="svg-legend-reifies-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-reifies-label)"><title>reifier-to-statement relation</title><tspan x="196" y="1043">reifier-to-statement</tspan><tspan x="196" y="1061">relation</tspan></text>
+<text id="svg-legend-reifies-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-reifies-label)"><title>reifier-to-statement relation</title><tspan x="196" y="1043" textLength="160" lengthAdjust="spacingAndGlyphs">reifier-to-statement</tspan><tspan x="196" y="1061" textLength="64" lengthAdjust="spacingAndGlyphs">relation</tspan></text>
 </g>
 <g id="svg-legend-annotation" class="legend-entry legend-annotation">
 <rect class="legend-entry-shape" x="308" y="1020" width="260" height="54" rx="4"/>
 <path class="legend-line annotation" d="M 320 1047 H 364" marker-end="url(#arrow-annotation)"/>
-<text id="svg-legend-annotation-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-annotation-label)"><title>ordinary relation from a reifier</title><tspan x="468" y="1043">ordinary relation from</tspan><tspan x="468" y="1061">a reifier</tspan></text>
+<text id="svg-legend-annotation-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-annotation-label)"><title>ordinary relation from a reifier</title><tspan x="468" y="1043" textLength="176" lengthAdjust="spacingAndGlyphs">ordinary relation from</tspan><tspan x="468" y="1061" textLength="72" lengthAdjust="spacingAndGlyphs">a reifier</tspan></text>
 </g>
 </g>
 </svg>
