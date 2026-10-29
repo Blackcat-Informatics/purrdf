@@ -35,14 +35,15 @@
 //! Every IRI below is this test's own, in the host's role. PurRDF mints no vocabulary.
 
 use purrdf_core::purremb_fixture::Identities;
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, ExclusionBasis, Fixed, FusionProfile, Iri,
-    RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics, Term, TopK, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, ExclusionBasis, FusionProfile, Iri, RECIP_K,
+    RankFidelity, RequestTerm, RetrievalRequest, Score, Statistics, Term, TopK, plan, search,
 };
 use purrdf::sparql::{
     EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, InternedOutcome, KnnGuard, KnnObservations,
@@ -288,9 +289,9 @@ fn fixture_statistics() -> FixtureStatistics {
 fn fixture_profile() -> FusionProfile {
     let weights = [iri(TEXT_STRATUM), iri(KNN_STRATUM)]
         .into_iter()
-        .map(|stratum| (stratum, Fixed::ONE))
+        .map(|stratum| (stratum, PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 
@@ -300,7 +301,7 @@ fn fixture_profile() -> FusionProfile {
 
 /// One row of a fused answer: the candidate, its fused score, and which stratum
 /// contributed what at which rank.
-type AnswerRow = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+type AnswerRow = (Term, Score, Vec<(Iri, u64, Score)>);
 
 /// What one run cost and what it answered, every figure read off either the answer's
 /// trailer or a relation's own counter.

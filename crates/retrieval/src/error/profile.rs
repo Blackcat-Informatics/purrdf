@@ -29,6 +29,13 @@ pub enum ProfileRefusal {
         /// The original stratum owner.
         stratum: Iri,
     },
+    /// The canonical stratum map is not ascending.
+    StratumOrder {
+        /// Previous stratum.
+        previous: Iri,
+        /// Current stratum.
+        current: Iri,
+    },
     /// The tie-break discriminator is unknown.
     TieBreakTag {
         /// Encoded discriminator.
@@ -51,13 +58,6 @@ pub enum ProfileRefusal {
         found: u32,
         /// Actual number of strata.
         strata: u32,
-    },
-    /// The encoded fixed-point scale differs from this build's.
-    Scale {
-        /// Encoded scale.
-        found: u32,
-        /// Accepted scale.
-        expected: u32,
     },
     /// The rounding discriminator is unknown.
     RoundingTag {
@@ -109,6 +109,7 @@ impl purrdf_hash::error::StructuredError for ProfileRefusal {
         },
         DecayTag { found } => "fusion-profile-decay-tag" { "found" => Unsigned(u128::from(*found)) },
         DuplicateStratum { stratum } => "fusion-profile-duplicate-stratum" { "stratum" => Iri(stratum.as_str()) },
+        StratumOrder { previous, current } => "fusion-profile-stratum-order" { "previous" => Iri(previous.as_str()), "current" => Iri(current.as_str()) },
         TieBreakTag { found, expected } => "fusion-profile-tie-break-tag" {
             "found" => Unsigned(u128::from(*found)),
             "expected" => Unsigned(u128::from(*expected)),
@@ -121,10 +122,6 @@ impl purrdf_hash::error::StructuredError for ProfileRefusal {
         Contributions { found, strata } => "fusion-profile-contributions" {
             "found" => Unsigned(u128::from(*found)),
             "strata" => Unsigned(u128::from(*strata)),
-        },
-        Scale { found, expected } => "fusion-profile-scale" {
-            "found" => Unsigned(u128::from(*found)),
-            "expected" => Unsigned(u128::from(*expected)),
         },
         RoundingTag { found, expected } => "fusion-profile-rounding-tag" {
             "found" => Unsigned(u128::from(*found)),
@@ -153,15 +150,15 @@ impl core::fmt::Display for ProfileRefusal {
             ),
             Self::DecayTag { found } => write!(f, "unknown decay rule tag {found}"),
             Self::DuplicateStratum { .. } => f.write_str("fusion profile repeats a stratum"),
+            Self::StratumOrder { .. } => {
+                f.write_str("fusion profile strata must be ordered ascending")
+            }
             Self::TieBreakTag { found, .. } => write!(f, "unknown tie-break tag {found}"),
             Self::StrataCount { .. } => f.write_str("too many strata"),
             Self::Contributions { found, strata } => write!(
                 f,
                 "profile states a contribution maximum of {found} over {strata} strata; a candidate may surface at most once per stratum"
             ),
-            Self::Scale { found, expected } => {
-                write!(f, "profile scale {found} is not this build's {expected}")
-            }
             Self::RoundingTag { found, .. } => write!(f, "unknown rounding tag {found}"),
             Self::ItemEncodingTag { found, .. } => write!(f, "unknown item-encoding tag {found}"),
             Self::CandidateVanished { .. } => {

@@ -30,6 +30,7 @@
 //! claimed.
 
 use purrdf_core::purremb_fixture::Identities;
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,11 +43,11 @@ use purrdf_core::{
     TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDepths, Completeness, DecayRule, Fixed, FusionError,
-    FusionProfile, Iri, OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter,
-    ReadSchedule, RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult,
-    Statistics, Term, TopK, compile, compile_candidates, contribution, execute, execute_within,
-    fuse, plan, plan_candidates, search, union,
+    AdmissionEnvironment, CandidateDepths, Completeness, DecayRule, FusionError, FusionProfile,
+    Iri, OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, ReadSchedule,
+    RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics, Term,
+    TopK, compile, compile_candidates, contribution, execute, execute_within, fuse, plan,
+    plan_candidates, search, union,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
@@ -1440,9 +1441,9 @@ impl Statistics for NoStatistics {
 /// stratum count, not a separate parameter.
 fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
-    weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
-    weights.insert(iri(KNN_STRATUM), Fixed::ONE);
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    weights.insert(iri(TEXT_STRATUM), PRECISION_12.score(PRECISION_12.scale()));
+    weights.insert(iri(KNN_STRATUM), PRECISION_12.score(PRECISION_12.scale()));
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 
@@ -1554,7 +1555,7 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
         let sum = row
             .contributions
             .iter()
-            .fold(Fixed::ZERO, |total, (_, _, value)| {
+            .fold(PRECISION_12.score(0), |total, (_, _, value)| {
                 total.checked_add(*value).expect("no fixed-point overflow")
             });
         assert_eq!(sum, row.score, "contributions sum to the fused score");
@@ -1562,8 +1563,8 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
 
     // The exact reciprocal-rank arithmetic, so the numbers are pinned and not
     // merely ordered: unit weight over `K + rank`, summed.
-    let one_at_rank_one =
-        contribution(Fixed::ONE, 1, K).expect("a unit weight at rank one is in range");
+    let one_at_rank_one = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K)
+        .expect("a unit weight at rank one is in range");
     let expected_top = one_at_rank_one
         .checked_add(one_at_rank_one)
         .expect("two rank-one contributions sum within the fixed-point range");
@@ -2121,8 +2122,8 @@ fn two_runs_over_the_same_index_state_carry_one_evidence_id() {
 /// with no weighted stream would assert nothing about the producer's rows.
 fn one_stratum_profile(stratum: &str) -> FusionProfile {
     let mut weights = BTreeMap::new();
-    weights.insert(iri(stratum), Fixed::ONE);
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    weights.insert(iri(stratum), PRECISION_12.score(PRECISION_12.scale()));
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 

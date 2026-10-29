@@ -11,14 +11,15 @@
 // uses every helper; an unused-here helper is used there.
 #![allow(dead_code, unreachable_pub)]
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::sync::{Arc, Mutex};
 
 use purrdf_core::TermValue;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_retrieval::fixture::iri;
 use purrdf_retrieval::{
-    DecayRule, DomainTag, Fixed, FusedRow, FusionProfile, Iri, RECIP_K, RequestTerm,
-    RetrievalRequest, TopK,
+    DecayRule, DomainTag, FusedRow, FusionProfile, Iri, ProducerStatus, RECIP_K, RequestTerm,
+    RetrievalRequest, Score, TopK, contribution_under,
 };
 use purrdf_sparql_eval::{
     EvalError, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, ServiceLevel,
@@ -61,13 +62,27 @@ pub fn profile() -> FusionProfile {
     FusionProfile::with_decay(
         strata()
             .into_iter()
-            .map(|stratum| (stratum, Fixed::ONE))
+            .map(|stratum| (stratum, PRECISION_12.score(PRECISION_12.scale())))
             .collect(),
         DecayRule::ReciprocalRank {
             k: u32::try_from(RECIP_K).expect("the smoothing constant fits"),
         },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
+}
+
+/// A stopped live stream's ceiling under the fixture's weight-one rank law.
+#[must_use]
+pub fn ceiling_at(rank: u64) -> ProducerStatus {
+    ProducerStatus::CeilingReached {
+        bound: contribution_under(
+            DecayRule::ReciprocalRank { k: RECIP_K as u32 },
+            PRECISION_12.score(PRECISION_12.scale()),
+            rank,
+        )
+        .expect("the fixture contribution is in range"),
+    }
 }
 
 /// A producer ranking `{prefix}entity{index:06}` for every index below [`ROWS`],
@@ -204,7 +219,7 @@ pub fn expected_entities() -> Vec<String> {
 }
 
 /// A fused answer as `(entity, score)` pairs, in rank order.
-pub fn scored(rows: &[FusedRow]) -> Vec<(String, Fixed)> {
+pub fn scored(rows: &[FusedRow]) -> Vec<(String, Score)> {
     rows.iter()
         .map(|row| (row.entity.as_str().to_owned(), row.score))
         .collect()

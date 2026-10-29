@@ -124,11 +124,11 @@ use core::fmt;
 use core::ops::Bound;
 use purrdf_sparql_eval::{AdmittedMap, AdmittedOrderedSet};
 
+use crate::score::{Precision, RawScore, Score};
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, IndexGeneration, PfAttestation,
     RankFidelity, ServiceLevel,
 };
-use purrdf_text::Fixed;
 
 use crate::canonical::Writer;
 use crate::error::FusionError;
@@ -358,7 +358,7 @@ pub enum ProducerStatus {
     CeilingReached {
         /// The inclusive bound at which it stopped: every row at or above this
         /// contribution was read, and the rows below it were not.
-        bound: Fixed,
+        bound: Score,
     },
     /// The producer could not run.
     ExecutionFailed {
@@ -498,10 +498,10 @@ pub struct FusedRow {
     /// were summed, and it stays replayable either way — it is a fact about
     /// this fusion's own arithmetic. It does not, and cannot, certify that the
     /// summands were all the summands there were.
-    pub score: Fixed,
+    pub score: Score,
     /// Per-stratum provenance: `(stratum, rank, contribution)`.
     pub contributions:
-        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<(Iri, u64, Fixed)>>,
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<(Iri, u64, Score)>>,
     /// Where this row's **true** score lies, given what its producers declared.
     ///
     /// [`Self::score`] is the exact sum of the contributions that arrived;
@@ -525,7 +525,7 @@ pub struct FusedRow {
     /// [`Self::interval`] carries the size of that gap, and
     /// [`FusionTrailer::certain_prefix`] is where it is turned into an answer
     /// about membership.
-    pub threshold_witness: Fixed,
+    pub threshold_witness: Score,
 }
 
 /// What one stratum's rank resolution actually cost this fusion.
@@ -789,7 +789,7 @@ pub enum ScoreInterval {
         /// one whose domains rule it out, with one exception: an index attested
         /// short still contributes its rank-one residual, because its "I hold
         /// no entry for it" is exactly what a document it is missing would say.
-        deficit: Fixed,
+        deficit: Score,
         /// How much a degraded stratum could have OVER-contributed to this row.
         ///
         /// This is the term a one-sided reading misses. Reciprocal-rank fusion
@@ -802,7 +802,7 @@ pub enum ScoreInterval {
         ///
         /// Zero for a row no degraded stratum named, and zero for every row
         /// when every stratum was exhaustive.
-        inflation: Fixed,
+        inflation: Score,
     },
     /// A stratum whose declared order is
     /// [`OrderFidelity::Perturbed`](crate::OrderFidelity::Perturbed) named this
@@ -945,6 +945,8 @@ pub enum ScoreExactness {
 /// mid-stream entitles it to claim otherwise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusionTrailer {
+    /// Explicit decimal units shared by all scores, even for an empty result.
+    pub precision: Precision,
     /// Every producer's own status, keyed by its stratum.
     pub statuses: purrdf_sparql_eval::SharedWorkspace<
         purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
@@ -1274,7 +1276,7 @@ pub struct FusionTrailer {
     /// voice: where a stratum declared a perturbed order, an emitted rank bounds
     /// nothing, so no finite ceiling on an unemitted candidate exists and none is
     /// invented. The responsible strata are named in [`Self::exactness`].
-    pub unemitted_ceiling: Option<Fixed>,
+    pub unemitted_ceiling: Option<Score>,
 }
 
 // Canonical discriminators for the evidence encoding. One tag space per enum,
@@ -1398,7 +1400,7 @@ impl FusionTrailer {
     /// is relied on, so no iteration order can reach the digest; the framing is
     /// what makes the encoding injective, so no two different maps can share
     /// bytes by running their fields together; the little-endian integers are
-    /// what make it identical on every target, wasm32 included.
+    /// what make it identical on every target, `wasm32` included.
     ///
     /// Public because an identity nobody can re-derive is an identity nobody
     /// can audit. A caller holding a trailer can recompute
@@ -1472,6 +1474,9 @@ impl FusionTrailer {
             &workspace,
         )?;
         for (stratum, status) in statuses {
+            if let ProducerStatus::CeilingReached { bound } = &status {
+                bound.require_precision(self.precision)?;
+            }
             if !completed.contains_key(&stratum) {
                 completed.insert(
                     stratum.clone_admitted(&workspace)?,
@@ -1547,9 +1552,8 @@ impl FusionTrailer {
     ///   interval is zero-width, so the pairwise term is the emitted order
     ///   itself; and nothing outside `rows` can reach them either, because a row
     ///   is certified only over a threshold that bounds every candidate still to
-    ///   come and that threshold only falls as reading proceeds. Taken as a
-    ///   short-circuit because it is both the common case and the one answer no
-    ///   arithmetic can improve on.
+    ///   come and that threshold only falls as reading proceeds. The same
+    ///   interval comparison derives this result for exact and degraded answers.
     /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
     ///   could outscore anything, so nothing above it is safe either, and a
     ///   prefix "certain except for one unbounded rival" is not certain.
@@ -1581,39 +1585,43 @@ impl FusionTrailer {
     /// `rows` is assumed to be in this fusion's emitted order, which is the
     /// order [`FusionStream::next`] yields and the order
     /// [`FusionResult`](crate::FusionResult) stores.
-    #[must_use]
-    pub fn certain_prefix(&self, rows: &[FusedRow]) -> usize {
+    /// # Errors
+    /// Refuses scores or bounds in different precision from this trailer and
+    /// intervals whose endpoints cannot be represented, including inflation
+    /// greater than the observed score. Validation precedes uncertainty exits.
+    pub fn certain_prefix(&self, rows: &[FusedRow]) -> Result<usize, FusionError> {
+        if let Some(bound) = self.unemitted_ceiling {
+            bound.require_precision(self.precision)?;
+        }
+        for row in rows {
+            row.score.require_precision(self.precision)?;
+            if let ScoreInterval::Bounded { inflation, deficit } = row.interval {
+                row.score.checked_sub(inflation)?;
+                row.score.checked_add(deficit)?;
+            }
+        }
         // One unbounded row poisons the whole ranking: it could be worth
         // anything, so no row can be certain of outranking it.
         if rows
             .iter()
             .any(|row| matches!(row.interval, ScoreInterval::Unbounded { .. }))
         {
-            return 0;
+            return Ok(0);
         }
         // And an absentee nothing bounds poisons it the same way: `None` is the
         // identical refusal, made about the candidates this answer never named.
         let Some(unemitted) = self.unemitted_ceiling else {
-            return 0;
+            return Ok(0);
         };
-        // See the degenerate cases above: an exhaustive answer is certain in
-        // whole, and this is the path that does not pay to re-derive it.
-        if matches!(self.exactness, ScoreExactness::Exact) {
-            return rows.len();
-        }
 
         // The inflation term is a sum of contributions that are themselves
         // summands of `score`, so it cannot exceed it and this subtraction
-        // cannot underflow. The fallback is stated anyway, and it is chosen to
-        // fail in the direction that cannot mislead: a lower floor makes a row
-        // harder to certify, so a broken invariant would SHORTEN the prefix and
-        // under-claim. The opposite fallback would lengthen it and assert
-        // certainty this engine had not established.
+        // cannot underflow. A failure means that a row was forged or the
+        // contribution-subset invariant is broken; it must not become a
+        // plausible numeric floor.
         let floor = |row: &FusedRow| match &row.interval {
-            ScoreInterval::Bounded { inflation, .. } => {
-                row.score.checked_sub(*inflation).unwrap_or(Fixed::ZERO)
-            }
-            ScoreInterval::Unbounded { .. } => Fixed::ZERO,
+            ScoreInterval::Bounded { inflation, .. } => row.score.checked_sub(*inflation),
+            ScoreInterval::Unbounded { .. } => Ok(Score::zero(row.score.precision())),
         };
         let ceiling = |row: &FusedRow| match &row.interval {
             ScoreInterval::Bounded { deficit, .. } => row.score.checked_add(*deficit).ok(),
@@ -1626,10 +1634,10 @@ impl FusionTrailer {
         // suffix is empty — and `suffix_unbounded` records a later row whose
         // ceiling overflowed, which no row can be proved to beat.
         let mut certain = rows.len();
-        let mut suffix_ceiling: Option<Fixed> = None;
+        let mut suffix_ceiling: Option<Score> = None;
         let mut suffix_unbounded = false;
         for (position, row) in rows.iter().enumerate().rev() {
-            let mine = floor(row);
+            let mine = floor(row)?;
             let settled = !suffix_unbounded
                 && suffix_ceiling.is_none_or(|rival| mine >= rival)
                 && mine >= unemitted;
@@ -1648,7 +1656,7 @@ impl FusionTrailer {
                 None => suffix_unbounded = true,
             }
         }
-        certain
+        Ok(certain)
     }
 }
 
@@ -1656,7 +1664,7 @@ impl FusionTrailer {
 #[derive(Clone, Debug)]
 struct Head {
     rank: u64,
-    contribution: Fixed,
+    contribution: RawScore,
     item: Term,
     /// The block the producer said this row was drawn from, already measured
     /// against the stream's own declaration in [`FusionStream::fetch`].
@@ -1709,8 +1717,8 @@ struct BlockWitness {
 /// A candidate's accumulated NRA state.
 #[derive(Debug)]
 struct CandidateState {
-    lower_bound: Fixed,
-    contributions: purrdf_sparql_eval::AdmittedVec<(Iri, u64, Fixed)>,
+    lower_bound: RawScore,
+    contributions: purrdf_sparql_eval::AdmittedVec<(Iri, u64, RawScore)>,
     /// The streams that have named this candidate.
     ///
     /// It answers two questions, and the second is why no separate field holds
@@ -1795,7 +1803,7 @@ impl CandidateState {
     /// known to score.
     fn new(workspace: &purrdf_sparql_eval::WorkspaceCapability) -> Self {
         Self {
-            lower_bound: Fixed::ZERO,
+            lower_bound: RawScore::ZERO,
             contributions: purrdf_sparql_eval::AdmittedVec::new(workspace),
             seen_streams: AdmittedOrderedSet::new(workspace),
             block: None,
@@ -1940,7 +1948,7 @@ struct Signature {
 /// frontier.
 #[derive(Clone, Debug)]
 struct RankKey {
-    score: Fixed,
+    score: RawScore,
     best_rank: u64,
     id: CandidateId,
 }
@@ -1948,7 +1956,7 @@ struct RankKey {
 /// A [`RankKey`] read through borrowed parts, so a key can be found in — and
 /// taken out of — an ordered set without cloning the term it carries.
 trait RankOrder {
-    fn score(&self) -> Fixed;
+    fn score(&self) -> RawScore;
     fn best_rank(&self) -> u64;
     fn term(&self) -> &str;
 }
@@ -1964,7 +1972,7 @@ fn rank_order(left: &dyn RankOrder, right: &dyn RankOrder) -> core::cmp::Orderin
 }
 
 impl RankOrder for RankKey {
-    fn score(&self) -> Fixed {
+    fn score(&self) -> RawScore {
         self.score
     }
     fn best_rank(&self) -> u64 {
@@ -1977,13 +1985,13 @@ impl RankOrder for RankKey {
 
 /// A lookup key for a [`RankKey`], borrowing the term rather than owning it.
 struct RankProbe<'a> {
-    score: Fixed,
+    score: RawScore,
     best_rank: u64,
     term: &'a str,
 }
 
 impl RankOrder for RankProbe<'_> {
-    fn score(&self) -> Fixed {
+    fn score(&self) -> RawScore {
         self.score
     }
     fn best_rank(&self) -> u64 {
@@ -2230,7 +2238,7 @@ struct Degradation {
     /// asked — so [`FusionStream::rank_one_contribution`] re-derives on that
     /// arm, and a caller sees the same error, from the same operands, at the
     /// same point in the read as it always has.
-    rank_one: purrdf_sparql_eval::AdmittedVec<Option<Fixed>>,
+    rank_one: purrdf_sparql_eval::AdmittedVec<Option<RawScore>>,
     /// The stream index serving each stratum.
     ///
     /// First entry wins, exactly as the linear scan it replaces did: a caller
@@ -2269,7 +2277,7 @@ pub struct FusionStream<'p, S: RankedStream> {
     rank_laws: purrdf_sparql_eval::AdmittedVec<purrdf_sparql_eval::RankLaw>,
     shared_ranks_observed: purrdf_sparql_eval::AdmittedVec<u64>,
     rows_pulled: purrdf_sparql_eval::AdmittedVec<u64>,
-    last_contribution: purrdf_sparql_eval::AdmittedVec<Option<Fixed>>,
+    last_contribution: purrdf_sparql_eval::AdmittedVec<Option<RawScore>>,
     /// Per-stream count of adjacent ranks whose contributions were equal.
     ///
     /// Counted by [`Self::count_collision`] against the previous row's
@@ -2410,7 +2418,7 @@ pub struct FusionStream<'p, S: RankedStream> {
     /// pulls, so a bounded [`TopK`](crate::TopK) bounds it and a drain pays for
     /// something strictly smaller than the frontier entry it replaces.
     emitted: EmittedTable,
-    threshold: Fixed,
+    threshold: RawScore,
     /// Whether the most recently emitted row took its place over a rival it tied
     /// with exactly on score.
     ///
@@ -2685,7 +2693,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             selection: SelectionIndex::new(&workspace),
             selection_visits: 0,
             emitted: EmittedTable::default(),
-            threshold: Fixed::ZERO,
+            threshold: RawScore::ZERO,
             last_row_won_a_tie: false,
             workspace,
             terminal_failure: None,
@@ -2774,7 +2782,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                         let weight = self.profile.weight(&self.streams[index].0).ok_or_else(|| FusionError::UnknownStratum {
                             stratum: self.streams[index].0.as_str().to_owned(),
                         })?;
-                        let contribution = crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?;
+                        let contribution = RawScore::from_raw(crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?.into_raw());
                         observations.push((index, Head { rank, contribution, item, block }))?;
                     }
                 }
@@ -2917,13 +2925,18 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                     });
                 return Ok(Some(FusedRow {
                     entity: id,
-                    score: lower_bound,
+                    score: lower_bound.scaled(self.profile.precision()),
                     contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(
-                        contributions,
+                        purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                            contributions.into_iter().map(|(stratum, rank, value)| {
+                                (stratum, rank, value.scaled(self.profile.precision()))
+                            }),
+                            &self.workspace,
+                        )?,
                         &self.workspace,
                     )?,
                     interval,
-                    threshold_witness: self.threshold,
+                    threshold_witness: self.threshold.scaled(self.profile.precision()),
                 }));
             }
             match self.best_head_index() {
@@ -3035,8 +3048,12 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 continue;
             };
             let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
-            self.statuses
-                .insert(stratum, ProducerStatus::CeilingReached { bound })?;
+            self.statuses.insert(
+                stratum,
+                ProducerStatus::CeilingReached {
+                    bound: bound.scaled(self.profile.precision()),
+                },
+            )?;
         }
         // Derived per stratum at trailer time, from counters the row loop
         // already maintains. Nothing here runs per row: `separation` is a map
@@ -3130,6 +3147,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         };
 
         Ok(FusionTrailer {
+            precision: self.profile.precision(),
             statuses: purrdf_sparql_eval::SharedWorkspace::new_admitted(
                 purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
                     self.statuses.iter().map(|(stratum, status)| {
@@ -3232,12 +3250,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     ///   particular candidate and maximizes over every block one could lie in —
     ///   and what it cannot see is the strata that may have failed to name it at
     ///   all. Each degraded stratum is therefore charged its rank-one
-    ///   contribution on top, whether it is open or exhausted: a stratum that
+    ///   contribution, whether it is open or exhausted: a stratum that
     ///   could have missed the candidate could have missed it at rank one. A
-    ///   degraded stream that is also open is charged twice over, which is a
-    ///   looser bound and not a wrong one — and so is a degraded stream that
-    ///   declared a narrow domain, because the licence [`Self::could_name`]
-    ///   takes needs a candidate to narrow by and there is no candidate here.
+    ///   degraded stream is charged once at rank one instead of its live
+    ///   head. Domain declarations still narrow which blocks it may name.
     /// * **named, and never certified** — still in the frontier when reading
     ///   stopped, either because the caller's [`TopK`](crate::TopK) was
     ///   satisfied or because nothing settled it. This is the population an
@@ -3271,19 +3287,12 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// One pass over the frontier, once, at the end of a fusion — not on the row
     /// loop. [`Self::score_interval`] is the same read the emission path already
     /// performs per row, and it allocates nothing on the bounded path.
-    fn unemitted_ceiling(&self) -> Result<Option<Fixed>, FusionError> {
+    fn unemitted_ceiling(&self) -> Result<Option<Score>, FusionError> {
         if self.fidelities.iter().any(RankFidelity::order_is_unbounded) {
             return Ok(None);
         }
 
-        let mut ceiling = self.compute_threshold()?;
-        for index in 0..self.streams.len() {
-            if self.is_degraded(index) {
-                ceiling = ceiling
-                    .checked_add(self.rank_one_contribution(index)?)
-                    .map_err(|_| FusionError::Overflow)?;
-            }
-        }
+        let mut ceiling = self.compute_threshold_under(true)?;
 
         for state in self.frontier.values() {
             let ScoreInterval::Bounded { deficit, .. } = self.score_interval(state)? else {
@@ -3295,14 +3304,14 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             };
             let reach = state
                 .lower_bound
-                .checked_add(deficit)
+                .checked_add(RawScore::from_raw(deficit.into_raw()))
                 .map_err(|_| FusionError::Overflow)?;
             if reach > ceiling {
                 ceiling = reach;
             }
         }
 
-        Ok(Some(ceiling))
+        Ok(Some(ceiling.scaled(self.profile.precision())))
     }
 
     /// Pull the first head of every stream.
@@ -3407,10 +3416,11 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             if rank == expected_rank {
                 self.shared_ranks_observed[index] += 1;
             } else {
-                self.count_collision(index, producer_contribution);
+                self.count_collision(index, RawScore::from_raw(producer_contribution.into_raw()));
             }
 
-            self.last_contribution[index] = Some(producer_contribution);
+            self.last_contribution[index] =
+                Some(RawScore::from_raw(producer_contribution.into_raw()));
             self.last_ranks[index] = rank;
             self.rows_pulled[index] += 1;
 
@@ -3440,7 +3450,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             if !repeated {
                 return Ok(Some(Head {
                     rank,
-                    contribution: expected,
+                    contribution: RawScore::from_raw(expected.into_raw()),
                     item,
                     block,
                 }));
@@ -3478,7 +3488,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// conforming streams for the consumer's own quantization. The count is
     /// reported per stratum in the fused trailer, where it is an exact
     /// observation rather than a bound inferred from the profile.
-    fn count_collision(&mut self, index: usize, contribution: Fixed) {
+    fn count_collision(&mut self, index: usize, contribution: RawScore) {
         if self.last_contribution[index] == Some(contribution) {
             self.collisions_observed[index] += 1;
         }
@@ -3501,6 +3511,9 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// caller's own text makes no claim there at all — which is exactly why those
     /// endings are not `Exhausted`.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
+        if let ProducerReceipt::CeilingReached { bound } = &receipt {
+            bound.require_precision(self.profile.precision())?;
+        }
         let actual = self.rows_pulled[index];
         crate::ranked_stream::validate_receipt(&receipt, actual, self.last_ranks[index])?;
         let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
@@ -3513,7 +3526,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
 
     /// The index of the stream whose head has the highest contribution.
     fn best_head_index(&self) -> Option<usize> {
-        let mut best: Option<(usize, Fixed)> = None;
+        let mut best: Option<(usize, RawScore)> = None;
         for (index, head) in self.heads.iter().enumerate() {
             let Some(head) = head else { continue };
             match best {
@@ -3588,17 +3601,33 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// [`DuplicatePolicy::Unique`] promise already meet — a promise about unread
     /// rows is checked where the rows arrive, and reading further to check it
     /// would spend exactly the reading the declaration exists to save.
-    fn compute_threshold(&self) -> Result<Fixed, FusionError> {
+    fn compute_threshold(&self) -> Result<RawScore, FusionError> {
+        self.compute_threshold_under(false)
+    }
+
+    // A degraded producer is charged once, at rank one, even while it has a
+    // live head. The observed head and the missing-row bound are alternatives
+    // for one stratum's contribution, never two independent contributions.
+    fn compute_threshold_under(&self, include_degraded: bool) -> Result<RawScore, FusionError> {
+        let contribution_at = |index: usize| -> Result<Option<RawScore>, FusionError> {
+            if include_degraded && self.is_degraded(index) {
+                self.rank_one_contribution(index).map(Some)
+            } else {
+                Ok(self.heads[index].as_ref().map(|head| head.contribution))
+            }
+        };
         // The floor of every block's sum: a stream that may name anything may
         // name the unseen item, whichever block it is in. It is also the whole
         // answer when no open stream restricts itself, and the honest bound for
         // an unseen item lying in a block no restricted stream declared.
-        let mut unrestricted = Fixed::ZERO;
-        for (index, head) in self.heads.iter().enumerate() {
-            let Some(head) = head else { continue };
+        let mut unrestricted = RawScore::ZERO;
+        for index in 0..self.heads.len() {
+            let Some(contribution) = contribution_at(index)? else {
+                continue;
+            };
             if matches!(self.domains[index], CandidateDomains::Unrestricted) {
                 unrestricted = unrestricted
-                    .checked_add(head.contribution)
+                    .checked_add(contribution)
                     .map_err(|_| FusionError::Overflow)?;
             }
         }
@@ -3608,8 +3637,8 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         // Collected into an ordered set so the scan is over distinct tags and
         // is identical on every target.
         let mut blocks = AdmittedOrderedSet::new(&self.workspace);
-        for (index, head) in self.heads.iter().enumerate() {
-            if head.is_none() {
+        for index in 0..self.heads.len() {
+            if contribution_at(index)?.is_none() {
                 continue;
             }
             if let Some(tags) = self.domains[index].tags() {
@@ -3620,15 +3649,17 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         }
         for &block in blocks.iter() {
             let mut sum = unrestricted;
-            for (index, head) in self.heads.iter().enumerate() {
-                let Some(head) = head else { continue };
+            for index in 0..self.heads.len() {
+                let Some(contribution) = contribution_at(index)? else {
+                    continue;
+                };
                 match &self.domains[index] {
                     // Already counted in the floor.
                     CandidateDomains::Unrestricted => {}
                     CandidateDomains::Within(tags) => {
                         if tags.contains(block) {
                             sum = sum
-                                .checked_add(head.contribution)
+                                .checked_add(contribution)
                                 .map_err(|_| FusionError::Overflow)?;
                         }
                     }
@@ -3646,7 +3677,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     ///
     /// Membership, not arithmetic. `U(x) == L(x)` was standing in for this
     /// question and cannot answer it: a live head whose contribution is
-    /// [`Fixed::ZERO`] adds nothing to the sum, so an open stream that has not
+    /// [`RawScore::ZERO`] adds nothing to the sum, so an open stream that has not
     /// yet reached `x` is indistinguishable from an exhausted one. Certifying
     /// on that sum emits `x` and removes it from the frontier while a stream
     /// that could still name it is open — a candidate certified on a score that
@@ -4086,7 +4117,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     ///
     /// # The refusal is propagated, never rendered as a zero bound
     ///
-    /// Reporting `Fixed::ZERO` where the arithmetic gave out would say "nothing
+    /// Reporting `RawScore::ZERO` where the arithmetic gave out would say "nothing
     /// was withheld" at exactly the moment nothing is known — a bound on the
     /// read silently becoming a value, which is the fault this whole protocol
     /// exists to remove.
@@ -4105,7 +4136,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             return Ok(ScoreInterval::Unbounded { perturbed });
         }
 
-        let mut deficit = Fixed::ZERO;
+        let mut deficit = RawScore::ZERO;
         for index in 0..self.streams.len() {
             if state.seen_streams.contains(&index) {
                 continue;
@@ -4132,14 +4163,14 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 head.contribution
             } else {
                 // Exhaustive, closed, and it never named `x`. It owes nothing.
-                Fixed::ZERO
+                RawScore::ZERO
             };
             deficit = deficit
                 .checked_add(residual)
                 .map_err(|_| FusionError::Overflow)?;
         }
 
-        let mut inflation = Fixed::ZERO;
+        let mut inflation = RawScore::ZERO;
         // Skipped whole where nothing declared a shortfall: every summand would
         // be a contribution from a stream that promised to have missed nothing,
         // so the loop could only accumulate zero. The table it reads to decide
@@ -4158,7 +4189,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             }
         }
 
-        Ok(ScoreInterval::Bounded { deficit, inflation })
+        Ok(ScoreInterval::Bounded {
+            deficit: deficit.scaled(self.profile.precision()),
+            inflation: inflation.scaled(self.profile.precision()),
+        })
     }
 
     /// Whether stream `index` may have failed to name a row that was due: it
@@ -4203,7 +4237,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// precomputed table records only that the arithmetic gave out, and this
     /// re-derives the error so that a caller sees the same variant, from the
     /// same operands, at the same point in the read as it always has.
-    fn rank_one_contribution(&self, index: usize) -> Result<Fixed, FusionError> {
+    fn rank_one_contribution(&self, index: usize) -> Result<RawScore, FusionError> {
         self.degradation
             .as_ref()
             .and_then(|degradation| degradation.rank_one[index])
@@ -4218,13 +4252,14 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// Free of `self` so [`Self::new`] can fill the precomputed table with the
     /// very function [`Self::rank_one_contribution`] falls back to, leaving one
     /// definition of the value and one definition of its refusal.
-    fn rank_one_under(profile: &FusionProfile, stratum: &Iri) -> Result<Fixed, FusionError> {
+    fn rank_one_under(profile: &FusionProfile, stratum: &Iri) -> Result<RawScore, FusionError> {
         let Some(weight) = profile.weight(stratum) else {
             // A stratum the profile does not weight contributes nothing to any
             // score, so it can withhold nothing either.
-            return Ok(Fixed::ZERO);
+            return Ok(RawScore::ZERO);
         };
         crate::reciprocal_rank::contribution_under(profile.decay(), weight, 1)
+            .map(|score| RawScore::from_raw(score.into_raw()))
     }
 
     /// `U(x)`: `L(x)` plus the current head of every stream that could still
@@ -4241,7 +4276,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// `U(x)` with a contribution that will never arrive and would keep `x`
     /// blocking rivals it cannot actually beat. Where every stream declares
     /// [`CandidateDomains::Unrestricted`] this is the sum it always was.
-    fn upper_bound(&self, state: &CandidateState) -> Result<Fixed, FusionError> {
+    fn upper_bound(&self, state: &CandidateState) -> Result<RawScore, FusionError> {
         let mut bound = state.lower_bound;
         for (index, head) in self.heads.iter().enumerate() {
             if state.seen_streams.contains(&index) {
@@ -4400,7 +4435,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         if best.score <= self.threshold {
             return Ok(None);
         }
-        let mut ceiling: Option<Fixed> = None;
+        let mut ceiling: Option<RawScore> = None;
         for (signature, members) in &self.selection.groups {
             *visits += 1;
             if !signature.reach.intersects(&open) {
@@ -4493,7 +4528,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// stream, and within a group the first key at or after `score` is the
     /// best-placed one scoring at most `score`, so one ordered lookup per final
     /// group answers it.
-    fn has_final_rival_at(&self, score: Fixed, visits: &mut u64) -> Result<bool, FusionError> {
+    fn has_final_rival_at(&self, score: RawScore, visits: &mut u64) -> Result<bool, FusionError> {
         let open = self.open_streams()?;
         let probe = RankProbe {
             score,
@@ -4525,8 +4560,8 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// The summed contribution of the open heads of the streams in `reach`:
     /// what [`Self::upper_bound`] adds to `L(x)` for a candidate whose
     /// signature's `reach` this is, summed in the same stream order.
-    fn heads_within(&self, reach: &StreamSet) -> Result<Fixed, FusionError> {
-        let mut sum = Fixed::ZERO;
+    fn heads_within(&self, reach: &StreamSet) -> Result<RawScore, FusionError> {
+        let mut sum = RawScore::ZERO;
         for (index, head) in self.heads.iter().enumerate() {
             if !reach.contains(index) {
                 continue;
@@ -5028,7 +5063,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         // at all for a candidate already placed or a row that named no block.
         let placement = Self::placement_for(index, &head.block, placed);
         let lower_bound = existing
-            .map_or(Fixed::ZERO, |state| state.lower_bound)
+            .map_or(RawScore::ZERO, |state| state.lower_bound)
             .checked_add(head.contribution)
             .map_err(|_| FusionError::Overflow)?;
         let contribution_count = existing.map_or(0, |state| state.contributions.len()) + 1;
@@ -5148,13 +5183,14 @@ mod tests {
     //! Selection read off [`SelectionIndex`] against the pairwise definition it
     //! replaces, pass by pass, and the work it does counted rather than timed.
 
+    use crate::fixture::PRECISION_12;
     use std::collections::{BTreeMap, BTreeSet};
     use std::task::{Context, Poll, Waker};
 
+    use crate::Score;
     use purrdf_sparql_eval::{
         CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, RankFidelity,
     };
-    use purrdf_text::Fixed;
 
     use super::{FusedRow, FusionStream, RankOrder, RankProbe};
     use crate::error::FusionError;
@@ -5172,7 +5208,7 @@ mod tests {
     /// A weight of `10^-9`, at which adjacent ranks share a contribution from
     /// the first pair and every rank past 940 contributes exactly zero — the
     /// plateau regime, and past rank 940 one plateau as long as the streams.
-    const COLLIDING: Fixed = Fixed::from_raw(1_000);
+    const COLLIDING: Score = Score::from_raw(1_000, PRECISION_12);
 
     #[test]
     fn native_stream_sets_match_independent_membership_and_word_order() {
@@ -5237,7 +5273,7 @@ mod tests {
         emitted: usize,
         next_attempts: usize,
         native_refusal: bool,
-        weight: Fixed,
+        weight: Score,
         k: u32,
         domains: CandidateDomains,
         /// The block every row is drawn from, where the stream declared one.
@@ -5246,7 +5282,7 @@ mod tests {
     }
 
     impl Listed {
-        fn new(items: Vec<Term>, weight: Fixed) -> Self {
+        fn new(items: Vec<Term>, weight: Score) -> Self {
             let holds = items.iter().cloned().collect();
             Self {
                 items,
@@ -5339,9 +5375,13 @@ mod tests {
 
     #[test]
     fn original_native_refusal_stops_repeated_pulls_and_successful_trailers() {
-        let mut producer = Listed::new(vec![candidate(0)], Fixed::ONE);
+        let mut producer =
+            Listed::new(vec![candidate(0)], PRECISION_12.score(PRECISION_12.scale()));
         producer.native_refusal = true;
-        let mut run = fusion(vec![(stratum(0), producer)], Fixed::ONE);
+        let mut run = fusion(
+            vec![(stratum(0), producer)],
+            PRECISION_12.score(PRECISION_12.scale()),
+        );
         let expect_original = |error| {
             assert!(matches!(
                 error,
@@ -5363,7 +5403,7 @@ mod tests {
     /// Three strata over one universe of `total`, each permuting it within
     /// blocks of four — identity, block reversal, rotation by half a block — so
     /// every candidate is confirmed by every stratum within one block of ranks.
-    fn permuted(total: u64, weight: Fixed) -> FusionStream<'static, Listed> {
+    fn permuted(total: u64, weight: Score) -> FusionStream<'static, Listed> {
         let streams = (0..3)
             .map(|stream| {
                 let items = (0..total)
@@ -5386,7 +5426,7 @@ mod tests {
     /// Two strata, the second swapping every adjacent pair, so the candidates of
     /// each pair sit at ranks one and two apart in opposite orders and score
     /// exactly alike: the tie-break decides every row.
-    fn tied(total: u64, weight: Fixed) -> FusionStream<'static, Listed> {
+    fn tied(total: u64, weight: Score) -> FusionStream<'static, Listed> {
         let straight = (0..total).map(candidate).collect();
         let swapped = (0..total).map(|index| candidate(index ^ 1)).collect();
         fusion(
@@ -5403,7 +5443,7 @@ mod tests {
     /// answering lookups, plus an unrestricted stratum that answers none. The
     /// shape where finality is settled by answers, both `Excluded` and
     /// `Possible`, and where a signature moves on an answer rather than a row.
-    fn answering(total: u64, weight: Fixed) -> FusionStream<'static, Listed> {
+    fn answering(total: u64, weight: Score) -> FusionStream<'static, Listed> {
         let everything: Vec<Term> = (0..total).map(candidate).collect();
         let evens: Vec<Term> = (0..total)
             .rev()
@@ -5429,13 +5469,14 @@ mod tests {
         )
     }
 
-    fn fusion(streams: Vec<(Iri, Listed)>, weight: Fixed) -> FusionStream<'static, Listed> {
-        let weights: BTreeMap<Iri, Fixed> = streams
+    fn fusion(streams: Vec<(Iri, Listed)>, weight: Score) -> FusionStream<'static, Listed> {
+        let weights: BTreeMap<Iri, Score> = streams
             .iter()
             .map(|(iri, _)| (iri.clone(), weight))
             .collect();
-        let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-            .expect("the fixture profile is valid");
+        let profile =
+            FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+                .expect("the fixture profile is valid");
         FusionStream::new(streams, profile).expect("resident fusion setup")
     }
 
@@ -5504,10 +5545,10 @@ mod tests {
                     .expect("the fixture obeys the protocol")
                     .expect("a selected candidate is emitted");
                 assert_eq!(Some(&row.entity), indexed.as_ref());
-                let rival = fusion
-                    .frontier
-                    .values()
-                    .any(|rival| rival.lower_bound == row.score && fusion.is_final(rival));
+                let rival = fusion.frontier.values().any(|rival| {
+                    rival.lower_bound.scaled(fusion.profile.precision()) == row.score
+                        && fusion.is_final(rival)
+                });
                 assert_eq!(
                     fusion.last_row_won_a_tie, rival,
                     "the tie flag disagrees with a scan of the rivals"
@@ -5559,17 +5600,22 @@ mod tests {
                 true,
                 false,
             ),
-            ("unit weight", || permuted(400, Fixed::ONE), false, false),
+            (
+                "unit weight",
+                || permuted(400, PRECISION_12.score(PRECISION_12.scale())),
+                false,
+                false,
+            ),
             (
                 "exact ties, unit weight",
-                || tied(300, Fixed::ONE),
+                || tied(300, PRECISION_12.score(PRECISION_12.scale())),
                 true,
                 false,
             ),
             ("exact ties, collided", || tied(300, COLLIDING), true, false),
             (
                 "answered lookups, unit weight",
-                || answering(300, Fixed::ONE),
+                || answering(300, PRECISION_12.score(PRECISION_12.scale())),
                 false,
                 true,
             ),
@@ -5658,7 +5704,7 @@ mod tests {
     /// merely reaches the tie. `first` and `second` are the terms of those two,
     /// which decide the order the pairwise walk meets them in.
     fn beyond_the_range(first: &str, second: &str) -> FusionStream<'static, Listed> {
-        let huge = Fixed::from_raw(i128::MAX);
+        let huge = Score::from_raw(u128::MAX, PRECISION_12);
         let only = Iri::parse("http://example.org/stratum/only").expect("the fixture IRI is valid");
         let listed = |items: &[&str]| {
             let mut stream = Listed::new(items.iter().map(|item| Term::new(*item)).collect(), huge);
@@ -5679,6 +5725,7 @@ mod tests {
         let profile = FusionProfile::with_decay(
             BTreeMap::from([(only, huge)]),
             DecayRule::ReciprocalRank { k: 1 },
+            PRECISION_12,
         )
         .expect("one stratum at the top of the range is a valid profile");
         let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");

@@ -784,11 +784,25 @@ pub enum FusionError {
     /// The original native layout, allocation or workspace admission refusal.
     NativeFailure(purrdf_sparql_eval::EvalError),
     /// A checked arithmetic step left the range it is computed in: a
-    /// fixed-point addition, the profile's derived ceiling
-    /// (`max_weight × stratum count`), or a stratum count too large for the
+    /// score addition, the exact sum of rank-one contributions, or a stratum
+    /// count too large for the
     /// `u32` the canonical profile encoding writes. A wrapped value would be a
     /// wrong order presented as a right one, so it is refused.
     Overflow,
+    /// A decimal precision exceeded the unsigned representation's 38 digits.
+    InvalidPrecision {
+        /// Rejected fractional digit count.
+        digits: u32,
+    },
+    /// Values from different decimal laws were combined.
+    PrecisionMismatch {
+        /// Required precision.
+        expected: crate::Precision,
+        /// Supplied precision.
+        got: crate::Precision,
+    },
+    /// The exact resolution search violated its proven candidate bounds.
+    ResolutionInvariant,
 
     /// A ranked stream violated the input protocol.
     Protocol(Box<crate::ranked_stream::ProtocolError>),
@@ -842,7 +856,7 @@ pub enum FusionError {
         /// The stratum whose weight was rejected, as its canonical IRI text.
         stratum: String,
         /// The rejected weight.
-        weight: purrdf_text::Fixed,
+        weight: crate::Score,
     },
 
     /// A weight handed to the threshold-crossing derivation was not strictly
@@ -860,7 +874,7 @@ pub enum FusionError {
     /// wrong one.
     NonPositiveCrossingWeight {
         /// The rejected weight.
-        weight: purrdf_text::Fixed,
+        weight: crate::Score,
     },
 
     /// A stream emitted under a stratum the profile declares no weight for.
@@ -1029,6 +1043,9 @@ impl purrdf_hash::error::StructuredError for FusionError {
     purrdf_hash::error_visit! {
         NativeFailure(cause) => "fusion-native-failure" { "cause" => Cause(cause) },
         Overflow => "fusion-overflow" {},
+        InvalidPrecision { digits } => "fusion-invalid-precision" { "digits" => Unsigned(u128::from(*digits)) },
+        PrecisionMismatch { expected, got } => "fusion-precision-mismatch" { "expected" => Unsigned(u128::from(expected.digits())), "got" => Unsigned(u128::from(got.digits())) },
+        ResolutionInvariant => "fusion-resolution-invariant" {},
         Protocol(cause) => "fusion-protocol" { "cause" => Cause(cause.as_ref()) },
         InvalidK { k } => "fusion-invalid-k" { "k" => Unsigned(u128::from(*k)) },
         InvalidRank { rank } => "fusion-invalid-rank" { "rank" => Unsigned(u128::from(*rank)) },
@@ -1050,7 +1067,10 @@ impl purrdf_hash::error::StructuredError for FusionError {
 impl std::fmt::Display for FusionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Overflow => write!(f, "fusion overflowed the fixed-point range"),
+            Self::Overflow => write!(f, "fusion overflowed the unsigned score range"),
+            Self::InvalidPrecision { digits } => write!(f, "fusion precision {digits} exceeds 38 decimal digits"),
+            Self::PrecisionMismatch { expected, got } => write!(f, "fusion precision differs: expected {}, got {} decimal digits", expected.digits(), got.digits()),
+            Self::ResolutionInvariant => f.write_str("resolution search exceeded its proven sufficient weight; candidate advancement invariant failed"),
             Self::NativeFailure(err) => err.fmt(f),
             Self::Protocol(err) => write!(f, "ranked-stream protocol violation: {err}"),
             Self::InvalidK { k } => write!(f, "fusion profile K must be at least 1, got {k}"),

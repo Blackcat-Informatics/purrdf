@@ -236,9 +236,9 @@
 //! the same [`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)
 //! rather than reported as the stratum's ending.
 
+use crate::Score;
 use purrdf_core::DatasetView;
 use purrdf_sparql_eval::{PfAttestation, PropertyFunctionRegistry};
-use purrdf_text::Fixed;
 
 use crate::admission::{AdmissionEnvironment, AdmissionError};
 use crate::compile::{CompiledRetrieval, PlannedResolution, ReadSchedule, compile};
@@ -1105,7 +1105,7 @@ pub struct RankedStreamAdapter<'d> {
     /// The contract the stratum's producer declared these rows under.
     contract: StreamContract,
     /// The profile's weight for this stream's stratum.
-    weight: Fixed,
+    weight: Score,
     /// The profile's decay rule, carrying its smoothing constant.
     decay: DecayRule,
     /// The pinned plan these rows descend from, when the caller named one.

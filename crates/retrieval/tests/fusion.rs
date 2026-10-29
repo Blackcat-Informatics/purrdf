@@ -8,6 +8,7 @@
 //! the fused order from first principles and must agree with the engine.
 
 use purrdf_hash::error::ErrorValue;
+use purrdf_retrieval::fixture::PRECISION_12;
 use purrdf_testkit::error_capture::Capture;
 use purrdf_testkit::rng::xorshift64_next;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -16,11 +17,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag,
-    DuplicatePolicy, EvidenceId, ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile,
+    DuplicatePolicy, EvidenceId, ExclusionVerdict, FusedRow, FusionError, FusionProfile,
     FusionProfileId, FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth,
     OrderFidelity, PfAttestation, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
     RankFidelity, RankedRow, RankedStream, RankedStreamImpl, RequestTerm, RetrievalRequest,
-    RowBlock, ScoreExactness, ScoreInterval, ServiceLevel, Statistics, StreamContract,
+    RowBlock, Score, ScoreExactness, ScoreInterval, ServiceLevel, Statistics, StreamContract,
     StreamEnding, Term, ToleratedDepth, TopK, contribution, contribution_under,
 };
 use purrdf_sparql_eval::{
@@ -208,7 +209,7 @@ impl RankedStream for MockStream {
 }
 
 /// A well-formed row at `rank` for `weight` under `k`.
-fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> Step {
+fn row(rank: u64, weight: Score, k: u32, item: &str) -> Step {
     Step::Row(RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
@@ -224,7 +225,7 @@ fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> Step {
 /// A restricted stream owes this on every row: its declaration is a promise
 /// about where its candidates lie, and the block is where an individual row
 /// backs it.
-fn row_in(rank: u64, weight: Fixed, k: u32, item: &str, block: &str) -> Step {
+fn row_in(rank: u64, weight: Score, k: u32, item: &str, block: &str) -> Step {
     Step::Row(RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
@@ -246,17 +247,29 @@ async fn run_fuse(streams: Vec<(Iri, MockStream)>, profile: &FusionProfile) -> F
 // 1. An item in two strata sums both contributions exactly.
 #[test]
 fn cross_stratum_sum_is_the_checked_sum() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
-    let c1 = contribution(Fixed::ONE, 1, K).expect("fits");
-    let c2 = contribution(Fixed::ONE, 1, K).expect("fits");
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
+    let c1 = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
+    let c2 = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
@@ -273,15 +286,21 @@ fn cross_stratum_sum_is_the_checked_sum() {
 // 2. Output is ordered by fused score descending.
 #[test]
 fn output_is_score_descending() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = vec![
         (
             stratum("text"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "a"),
-                    row(2, Fixed::ONE, K, "b"),
-                    row(3, Fixed::ONE, K, "c"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                 ],
                 exhausted(3),
             ),
@@ -289,7 +308,10 @@ fn output_is_score_descending() {
         (
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "d"), row(2, Fixed::ONE, K, "e")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "d"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "e"),
+                ],
                 exhausted(2),
             ),
         ),
@@ -309,15 +331,27 @@ fn output_is_score_descending() {
 // 3. Equal-score candidates are ordered by the declared tie-break.
 #[test]
 fn equal_scores_use_the_declared_tie_break() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
@@ -338,19 +372,19 @@ fn equal_scores_use_the_declared_tie_break() {
 // per-candidate ceiling ever comes into play for any of them individually.
 // The overflow instead comes from `compute_threshold`, which sums the current
 // head of every stream regardless of candidate identity: three heads at
-// `weight * reciprocal(1 + 1) = weight / 2` each, with `weight == i128::MAX`,
+// `weight * reciprocal(1 + 1) = weight / 2` each, with `weight == u128::MAX`,
 // sum past the fixed-point range on the third addition.
 //
 // The profile weights *one* stratum, and the three streams are all tagged with
-// it, so the admitted ceiling is one whole `i128::MAX` and the profile itself
+// it, so the admitted ceiling is `floor(u128::MAX / 2)` and the profile itself
 // constructs. That shape is the reason this drives `FusionStream` directly:
 // `fuse` refuses a repeated stratum before a row is read. A profile weighting
 // three strata could not reach here at all — its own ceiling would be
-// `3 * i128::MAX` and construction would refuse it, which is the derived
+// `3 * floor(u128::MAX / 2)` and construction would refuse it, which is the derived
 // ceiling doing exactly its job.
 #[test]
 fn checked_addition_overflow_is_refused() {
-    let huge = Fixed::from_raw(i128::MAX);
+    let huge = Score::from_raw(u128::MAX, PRECISION_12);
     let profile = profile(&[("only", huge)], 1);
     let only = stratum("only");
     let streams = vec![
@@ -380,7 +414,7 @@ fn checked_addition_overflow_is_refused() {
 //     fixed-point range, not about three streams or about summing.
 #[test]
 fn a_checked_addition_inside_the_range_is_not_refused() {
-    let large = Fixed::from_raw(i128::MAX / 4);
+    let large = Score::from_raw(u128::MAX / 4, PRECISION_12);
     let profile = profile(&[("only", large)], 1);
     let only = stratum("only");
     let streams = vec![
@@ -424,9 +458,9 @@ fn golden_path() -> std::path::PathBuf {
 async fn golden_fusion() -> FusionResult<Term> {
     let profile = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::from_raw(500_000_000_000)),
-            ("geo", Fixed::from_raw(250_000_000_000)),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", Score::from_raw(500_000_000_000, PRECISION_12)),
+            ("geo", Score::from_raw(250_000_000_000, PRECISION_12)),
         ],
         K,
     );
@@ -435,9 +469,9 @@ async fn golden_fusion() -> FusionResult<Term> {
             stratum("text"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "alpha"),
-                    row(2, Fixed::ONE, K, "beta"),
-                    row(3, Fixed::ONE, K, "gamma"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "alpha"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "beta"),
+                    row(3, PRECISION_12.score(PRECISION_12.scale()), K, "gamma"),
                 ],
                 exhausted(3),
             ),
@@ -446,8 +480,18 @@ async fn golden_fusion() -> FusionResult<Term> {
             stratum("vector"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::from_raw(500_000_000_000), K, "alpha"),
-                    row(2, Fixed::from_raw(500_000_000_000), K, "delta"),
+                    row(
+                        1,
+                        Score::from_raw(500_000_000_000, PRECISION_12),
+                        K,
+                        "alpha",
+                    ),
+                    row(
+                        2,
+                        Score::from_raw(500_000_000_000, PRECISION_12),
+                        K,
+                        "delta",
+                    ),
                 ],
                 exhausted(2),
             ),
@@ -456,8 +500,13 @@ async fn golden_fusion() -> FusionResult<Term> {
             stratum("geo"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::from_raw(250_000_000_000), K, "beta"),
-                    row(2, Fixed::from_raw(250_000_000_000), K, "epsilon"),
+                    row(1, Score::from_raw(250_000_000_000, PRECISION_12), K, "beta"),
+                    row(
+                        2,
+                        Score::from_raw(250_000_000_000, PRECISION_12),
+                        K,
+                        "epsilon",
+                    ),
                 ],
                 exhausted(2),
             ),
@@ -471,9 +520,9 @@ async fn golden_fusion() -> FusionResult<Term> {
 fn differential_against_eager_oracle() {
     let profile = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::from_raw(700_000_000_000)),
-            ("geo", Fixed::from_raw(300_000_000_000)),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", Score::from_raw(700_000_000_000, PRECISION_12)),
+            ("geo", Score::from_raw(300_000_000_000, PRECISION_12)),
         ],
         K,
     );
@@ -482,9 +531,9 @@ fn differential_against_eager_oracle() {
             stratum("text"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "a"),
-                    row(2, Fixed::ONE, K, "b"),
-                    row(3, Fixed::ONE, K, "c"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                 ],
                 exhausted(3),
             ),
@@ -493,8 +542,8 @@ fn differential_against_eager_oracle() {
             stratum("vector"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::from_raw(700_000_000_000), K, "b"),
-                    row(2, Fixed::from_raw(700_000_000_000), K, "d"),
+                    row(1, Score::from_raw(700_000_000_000, PRECISION_12), K, "b"),
+                    row(2, Score::from_raw(700_000_000_000, PRECISION_12), K, "d"),
                 ],
                 exhausted(2),
             ),
@@ -503,8 +552,8 @@ fn differential_against_eager_oracle() {
             stratum("geo"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::from_raw(300_000_000_000), K, "c"),
-                    row(2, Fixed::from_raw(300_000_000_000), K, "e"),
+                    row(1, Score::from_raw(300_000_000_000, PRECISION_12), K, "c"),
+                    row(2, Score::from_raw(300_000_000_000, PRECISION_12), K, "e"),
                 ],
                 exhausted(2),
             ),
@@ -514,30 +563,33 @@ fn differential_against_eager_oracle() {
 
     // Eager oracle: sum the profile's contribution for every (item, weight,
     // rank), then order by score descending, best rank ascending, term ascending.
-    let mut expected: BTreeMap<&str, (Fixed, u64)> = BTreeMap::new();
-    let scripted: [(&str, Fixed, u64); 7] = [
-        ("a", Fixed::ONE, 1),
-        ("b", Fixed::ONE, 2),
-        ("c", Fixed::ONE, 3),
-        ("b", Fixed::from_raw(700_000_000_000), 1),
-        ("d", Fixed::from_raw(700_000_000_000), 2),
-        ("c", Fixed::from_raw(300_000_000_000), 1),
-        ("e", Fixed::from_raw(300_000_000_000), 2),
+    let mut expected: BTreeMap<&str, (Score, u64)> = BTreeMap::new();
+    let scripted: [(&str, Score, u64); 7] = [
+        ("a", PRECISION_12.score(PRECISION_12.scale()), 1),
+        ("b", PRECISION_12.score(PRECISION_12.scale()), 2),
+        ("c", PRECISION_12.score(PRECISION_12.scale()), 3),
+        ("b", Score::from_raw(700_000_000_000, PRECISION_12), 1),
+        ("d", Score::from_raw(700_000_000_000, PRECISION_12), 2),
+        ("c", Score::from_raw(300_000_000_000, PRECISION_12), 1),
+        ("e", Score::from_raw(300_000_000_000, PRECISION_12), 2),
     ];
     for (item, weight, rank) in scripted {
         let value = contribution(weight, rank, K).expect("fits");
-        let entry = expected.entry(item).or_insert((Fixed::ZERO, u64::MAX));
+        let entry = expected
+            .entry(item)
+            .or_insert((PRECISION_12.score(0), u64::MAX));
         entry.0 = entry.0.checked_add(value).expect("fits");
         entry.1 = entry.1.min(rank);
     }
-    let mut oracle: Vec<(&str, Fixed, u64)> = expected
+    let mut oracle: Vec<(&str, Score, u64)> = expected
         .into_iter()
         .map(|(item, (score, rank))| (item, score, rank))
         .collect();
     oracle.sort_by(|left, right| {
         right
             .1
-            .cmp(&left.1)
+            .partial_cmp(&left.1)
+            .expect("scores use the same fixture precision")
             .then(left.2.cmp(&right.2))
             .then(left.0.cmp(right.0))
     });
@@ -559,8 +611,8 @@ fn differential_against_eager_oracle() {
 // 7. Every protocol violation is a typed error, never a plausible order.
 #[test]
 fn protocol_violations_are_typed() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
-    let weight = Fixed::ONE;
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
+    let weight = PRECISION_12.score(PRECISION_12.scale());
 
     let out_of_order = vec![(
         stratum("text"),
@@ -663,7 +715,7 @@ fn protocol_violations_are_typed() {
         MockStream::new(
             vec![Step::Row(RankedRow::new(
                 1,
-                Fixed::from_raw(1),
+                Score::from_raw(1, PRECISION_12),
                 Term::new("a"),
                 RowBlock::Undeclared,
             ))],
@@ -697,8 +749,8 @@ fn protocol_violations_are_typed() {
 /// every row it emitted.
 #[test]
 fn a_backwards_rank_and_a_skipped_rank_are_refused_while_their_valid_neighbours_fuse() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
-    let weight = Fixed::ONE;
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
+    let weight = PRECISION_12.score(PRECISION_12.scale());
 
     // The neighbour of the backwards stream: two items at 1 then 2, which is the
     // law kept exactly.
@@ -789,71 +841,92 @@ fn a_backwards_rank_and_a_skipped_rank_are_refused_while_their_valid_neighbours_
 
 #[test]
 fn shared_ranks_retain_equal_contributions_and_count_rows_independently() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
-    let mut contract = unique_items();
-    contract.rank_law = purrdf_retrieval::RankLaw::Shared;
-    for receipt in [
-        exhausted(3),
-        ProducerReceipt::DepthReached { rank: 7 },
-        ProducerReceipt::RowBoundReached { rank: 7 },
-        ProducerReceipt::SuppliedQueryEnded { rank: 7 },
+    let precision = purrdf_retrieval::Precision::new(18).unwrap();
+    let weight = precision.score(200 * precision.scale());
+    for decay in [
+        DecayRule::ReciprocalRank { k: K },
+        DecayRule::WeightedReciprocalRank { k: K },
     ] {
-        let stream = MockStream::new(
-            vec![
-                row(1, Fixed::ONE, K, "b"),
-                row(1, Fixed::ONE, K, "a"),
-                row(7, Fixed::ONE, K, "c"),
-            ],
-            receipt,
+        let profile = FusionProfile::with_decay(
+            BTreeMap::from([(stratum("text"), weight)]),
+            decay,
+            precision,
         )
-        .declaring(contract.clone());
-        let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-            vec![(stratum("text"), stream)],
+        .unwrap();
+        let make_row = |rank, item: &str| {
+            Step::Row(RankedRow::new(
+                rank,
+                contribution_under(decay, weight, rank).unwrap(),
+                Term::new(item),
+                RowBlock::Undeclared,
+            ))
+        };
+        let mut contract = unique_items();
+        contract.rank_law = purrdf_retrieval::RankLaw::Shared;
+        for receipt in [
+            exhausted(3),
+            ProducerReceipt::DepthReached { rank: 7 },
+            ProducerReceipt::RowBoundReached { rank: 7 },
+            ProducerReceipt::SuppliedQueryEnded { rank: 7 },
+        ] {
+            let stream = MockStream::new(
+                vec![make_row(1, "b"), make_row(1, "a"), make_row(7, "c")],
+                receipt,
+            )
+            .declaring(contract.clone());
+            let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+                vec![(stratum("text"), stream)],
+                &profile,
+                TOP_K,
+            ))
+            .unwrap();
+            assert_eq!(fused.rows.len(), 3);
+            assert_eq!(fused.rows[0].entity, Term::new("a"));
+            assert_eq!(fused.rows[1].entity, Term::new("b"));
+            assert_eq!(fused.rows[0].score, fused.rows[1].score);
+            let expected = match decay {
+                DecayRule::ReciprocalRank { .. } => 200 * (precision.scale() / 61),
+                DecayRule::WeightedReciprocalRank { .. } => 200 * precision.scale() / 61,
+            };
+            assert_eq!(fused.rows[0].score, precision.score(expected));
+            let cost = &fused.trailer.resolution[&stratum("text")];
+            assert_eq!(
+                (
+                    cost.rows_pulled,
+                    cost.ranks_pulled,
+                    cost.shared_ranks_observed,
+                    cost.collisions_observed
+                ),
+                (3, 7, 1, 0)
+            );
+        }
+        let forged = MockStream::new(
+            vec![make_row(1, "a"), make_row(1, "b")],
+            ProducerReceipt::DepthReached { rank: 2 },
+        )
+        .declaring(contract);
+        let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            vec![(stratum("text"), forged)],
             &profile,
             TOP_K,
         ))
-        .unwrap();
-        assert_eq!(fused.rows.len(), 3);
-        assert_eq!(fused.rows[0].entity, Term::new("a"));
-        assert_eq!(fused.rows[1].entity, Term::new("b"));
-        assert_eq!(fused.rows[0].score, fused.rows[1].score);
-        let cost = &fused.trailer.resolution[&stratum("text")];
-        assert_eq!(
-            (
-                cost.rows_pulled,
-                cost.ranks_pulled,
-                cost.shared_ranks_observed,
-                cost.collisions_observed
-            ),
-            (3, 7, 1, 0)
+        .unwrap_err();
+        assert!(
+            matches!(error, FusionError::Protocol(error) if matches!(*error, ProtocolError::ForgedReceipt { declared: 2, actual: 1 }))
         );
     }
-    let forged = MockStream::new(
-        vec![row(1, Fixed::ONE, K, "a"), row(1, Fixed::ONE, K, "b")],
-        ProducerReceipt::DepthReached { rank: 2 },
-    )
-    .declaring(contract);
-    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        vec![(stratum("text"), forged)],
-        &profile,
-        TOP_K,
-    ))
-    .unwrap_err();
-    assert!(
-        matches!(error, FusionError::Protocol(error) if matches!(*error, ProtocolError::ForgedReceipt { declared: 2, actual: 1 }))
-    );
 }
 
 #[test]
 fn shared_rank_law_refuses_descending_and_zero_without_changing_duplicate_policy() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let mut contract = allowed_duplicates();
     contract.rank_law = purrdf_retrieval::RankLaw::Shared;
     let repeated = MockStream::new(
         vec![
-            row(1, Fixed::ONE, K, "a"),
-            row(1, Fixed::ONE, K, "a"),
-            row(1, Fixed::ONE, K, "b"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
         ],
         exhausted(3),
     )
@@ -870,7 +943,10 @@ fn shared_rank_law_refuses_descending_and_zero_without_changing_duplicate_policy
     let mut unique = contract.clone();
     unique.duplicates = DuplicatePolicy::Unique;
     let repeated = MockStream::new(
-        vec![row(1, Fixed::ONE, K, "a"), row(1, Fixed::ONE, K, "a")],
+        vec![
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+        ],
         exhausted(2),
     )
     .declaring(unique);
@@ -884,10 +960,13 @@ fn shared_rank_law_refuses_descending_and_zero_without_changing_duplicate_policy
         "a unique producer must refuse a repeated identity: {result:?}"
     );
     for steps in [
-        vec![row(2, Fixed::ONE, K, "a"), row(1, Fixed::ONE, K, "b")],
+        vec![
+            row(2, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+        ],
         vec![Step::Row(RankedRow::new(
             0,
-            Fixed::ZERO,
+            PRECISION_12.score(0),
             Term::new("a"),
             RowBlock::Undeclared,
         ))],
@@ -902,14 +981,23 @@ fn shared_rank_law_refuses_descending_and_zero_without_changing_duplicate_policy
 // 8. Dropping a live fusion drops every stream; receipts cannot be forged.
 #[test]
 fn drop_cancellation_and_receipts() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let text_counter = Arc::new(AtomicUsize::new(0));
     let vector_counter = Arc::new(AtomicUsize::new(0));
     let streams = vec![
         (
             stratum("text"),
             MockStream::tracked(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                ],
                 exhausted(2),
                 Arc::clone(&text_counter),
             ),
@@ -917,7 +1005,7 @@ fn drop_cancellation_and_receipts() {
         (
             stratum("vector"),
             MockStream::tracked(
-                vec![row(1, Fixed::ONE, K, "c")],
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "c")],
                 exhausted(1),
                 Arc::clone(&vector_counter),
             ),
@@ -943,7 +1031,10 @@ fn drop_cancellation_and_receipts() {
     // A receipt that under-reports the emitted rows is refused.
     let forged = vec![(
         stratum("text"),
-        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(9)),
+        MockStream::new(
+            vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+            exhausted(9),
+        ),
     )];
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         forged, &profile, TOP_K,
@@ -963,24 +1054,27 @@ fn drop_cancellation_and_receipts() {
 fn trailer_preserves_each_producer_status() {
     let profile = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::ONE),
-            ("geo", Fixed::ONE),
-            ("embedding", Fixed::ONE),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+            ("geo", PRECISION_12.score(PRECISION_12.scale())),
+            ("embedding", PRECISION_12.score(PRECISION_12.scale())),
         ],
         K,
     );
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "b")],
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
                 ProducerReceipt::CeilingReached {
-                    bound: Fixed::from_raw(5),
+                    bound: Score::from_raw(5, PRECISION_12),
                 },
             ),
         ),
@@ -1008,7 +1102,7 @@ fn trailer_preserves_each_producer_status() {
     assert_eq!(
         statuses.get(&stratum("vector")),
         Some(&ProducerStatus::CeilingReached {
-            bound: Fixed::from_raw(5)
+            bound: Score::from_raw(5, PRECISION_12)
         })
     );
     assert_eq!(
@@ -1026,11 +1120,14 @@ fn trailer_preserves_each_producer_status() {
 // 9b. The trailer names the pinned plan when one is attached.
 #[test]
 fn trailer_names_the_pinned_plan() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let pinned = plan_id("fusion-plan");
     let streams = vec![(
         stratum("text"),
-        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        MockStream::new(
+            vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+            exhausted(1),
+        ),
     )];
     let mut fusion = FusionStream::new(streams, profile.clone())
         .expect("resident fusion setup")
@@ -1048,19 +1145,31 @@ fn trailer_names_the_pinned_plan() {
 // hold rows, and the witness names the threshold that certified it.
 #[test]
 fn threshold_witness_is_recorded_before_exhaustion() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = vec![
         (
             stratum("text"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "x")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "x"),
+                ],
                 exhausted(2),
             ),
         ),
         (
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "y")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "y"),
+                ],
                 exhausted(2),
             ),
         ),
@@ -1068,14 +1177,14 @@ fn threshold_witness_is_recorded_before_exhaustion() {
     let result = block_on(run_fuse(streams, &profile));
     assert_eq!(result.rows.len(), 3);
     assert_eq!(result.rows[0].entity, Term::new("a"));
-    let tail = contribution(Fixed::ONE, 2, K).expect("fits");
+    let tail = contribution(PRECISION_12.score(PRECISION_12.scale()), 2, K).expect("fits");
     assert_eq!(
         result.rows[0].threshold_witness,
         tail.checked_add(tail).expect("fits"),
         "the witness must be the live threshold at certification"
     );
     assert!(
-        result.rows[0].threshold_witness > Fixed::ZERO,
+        result.rows[0].threshold_witness > PRECISION_12.score(0),
         "certification happened while streams still held rows"
     );
 }
@@ -1085,8 +1194,8 @@ fn threshold_witness_is_recorded_before_exhaustion() {
 fn contributions_sum_to_the_fused_score() {
     let profile = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::from_raw(700_000_000_000)),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", Score::from_raw(700_000_000_000, PRECISION_12)),
         ],
         K,
     );
@@ -1094,14 +1203,22 @@ fn contributions_sum_to_the_fused_score() {
         (
             stratum("text"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                ],
                 exhausted(2),
             ),
         ),
         (
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::from_raw(700_000_000_000), K, "b")],
+                vec![row(
+                    1,
+                    Score::from_raw(700_000_000_000, PRECISION_12),
+                    K,
+                    "b",
+                )],
                 exhausted(1),
             ),
         ),
@@ -1109,7 +1226,7 @@ fn contributions_sum_to_the_fused_score() {
     let result = block_on(run_fuse(streams, &profile));
     assert_eq!(result.rows.len(), 2, "a and b are the two fused candidates");
     for fused in &result.rows {
-        let mut sum = Fixed::ZERO;
+        let mut sum = PRECISION_12.score(0);
         for (_, _, score) in &fused.contributions {
             sum = sum.checked_add(*score).expect("fits");
         }
@@ -1121,61 +1238,151 @@ fn contributions_sum_to_the_fused_score() {
 //     every field.
 #[test]
 fn profile_construction_is_validated() {
-    let weights = |weight: Fixed| {
+    let weights = |weight: Score| {
         let mut map = BTreeMap::new();
         map.insert(stratum("text"), weight);
         map
     };
 
     assert!(matches!(
-        FusionProfile::with_decay(weights(Fixed::ONE), DecayRule::ReciprocalRank { k: 0 }),
+        FusionProfile::with_decay(
+            weights(PRECISION_12.score(PRECISION_12.scale())),
+            DecayRule::ReciprocalRank { k: 0 },
+            PRECISION_12
+        ),
         Err(FusionError::InvalidK { k: 0 })
     ));
     assert!(matches!(
-        FusionProfile::with_decay(BTreeMap::new(), DecayRule::ReciprocalRank { k: K }),
+        FusionProfile::with_decay(
+            BTreeMap::new(),
+            DecayRule::ReciprocalRank { k: K },
+            PRECISION_12
+        ),
         Err(FusionError::EmptyWeights)
     ));
     assert!(matches!(
-        FusionProfile::with_decay(weights(Fixed::ZERO), DecayRule::ReciprocalRank { k: K }),
-        Err(FusionError::NonPositiveWeight { .. })
-    ));
-    assert!(matches!(
         FusionProfile::with_decay(
-            weights(Fixed::from_raw(-1)),
-            DecayRule::ReciprocalRank { k: K }
+            weights(PRECISION_12.score(0)),
+            DecayRule::ReciprocalRank { k: K },
+            PRECISION_12
         ),
         Err(FusionError::NonPositiveWeight { .. })
     ));
-    // The ceiling is `max_weight * strata`, so two strata at the top of the
-    // range is the smallest profile whose own ceiling does not fit. The valid
-    // neighbour is directly below: one stratum at the same weight has a ceiling
-    // of exactly `i128::MAX` and constructs.
+    // Three full-width rank-one contributions overflow, while two fit.
+    let precision = purrdf_retrieval::Precision::new(18).unwrap();
+    let full = precision.score(u128::MAX);
+    let two = FusionProfile::with_decay(
+        BTreeMap::from([(stratum("text"), full), (stratum("vector"), full)]),
+        DecayRule::WeightedReciprocalRank { k: 1 },
+        precision,
+    )
+    .expect("two halves fit the full unsigned range");
+    assert_eq!(two.ceiling().into_raw(), u128::MAX - 1);
+    assert_eq!(
+        FusionProfile::from_canonical_bytes(&two.canonical_bytes()).unwrap(),
+        two
+    );
+    let other_precision = purrdf_retrieval::Precision::new(19).unwrap();
+    let other = FusionProfile::with_decay(
+        two.weights()
+            .iter()
+            .map(|(stratum, weight)| (stratum.clone(), other_precision.score(weight.into_raw())))
+            .collect(),
+        two.decay(),
+        other_precision,
+    )
+    .unwrap();
+    assert_eq!(two.ceiling().into_raw(), other.ceiling().into_raw());
+    assert_ne!(
+        two.id(),
+        other.id(),
+        "precision alone changes the law even when raw weighted scores coincide"
+    );
+
+    let streams = ["text", "vector"]
+        .into_iter()
+        .map(|name| {
+            (
+                stratum(name),
+                MockStream::new(vec![row(1, full, 1, name)], exhausted(1))
+                    .declaring(lossy_contract()),
+            )
+        })
+        .collect();
+    let bounded = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams,
+        &two,
+        TopK::new(0),
+    ))
+    .unwrap();
+    assert_eq!(
+        bounded.trailer.unemitted_ceiling,
+        Some(two.ceiling()),
+        "open degraded heads are charged once, without overflowing a representable bound"
+    );
+    let wrong = MockStream::new(
+        vec![],
+        ProducerReceipt::CeilingReached {
+            bound: PRECISION_12.score(0),
+        },
+    );
+    assert!(matches!(
+        block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            vec![(stratum("text"), wrong)],
+            &two,
+            TOP_K
+        )),
+        Err(FusionError::PrecisionMismatch { .. })
+    ));
+
     assert!(matches!(
         FusionProfile::with_decay(
             BTreeMap::from([
-                (stratum("text"), Fixed::from_raw(i128::MAX)),
-                (stratum("vector"), Fixed::from_raw(i128::MAX)),
+                (stratum("text"), full),
+                (stratum("vector"), full),
+                (stratum("geo"), full)
             ]),
-            DecayRule::ReciprocalRank { k: K }
+            DecayRule::WeightedReciprocalRank { k: 1 },
+            precision,
         ),
         Err(FusionError::Overflow)
     ));
-    let at_the_top = FusionProfile::with_decay(
-        weights(Fixed::from_raw(i128::MAX)),
-        DecayRule::ReciprocalRank { k: K },
-    )
-    .expect("one stratum still fits");
-    assert_eq!(at_the_top.ceiling(), Fixed::from_raw(i128::MAX));
-
-    // The contribution maximum is the stratum count, not an argument, and the
-    // ceiling is that count times the largest weight.
-    let baseline = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
-    let same = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    assert!(matches!(
+        FusionProfile::with_decay(
+            BTreeMap::from([(stratum("text"), full)]),
+            DecayRule::WeightedReciprocalRank { k: 1 },
+            PRECISION_12,
+        ),
+        Err(FusionError::PrecisionMismatch { .. })
+    ));
+    assert!(matches!(
+        purrdf_retrieval::Precision::new(39),
+        Err(FusionError::InvalidPrecision { digits: 39 })
+    ));
+    // The contribution maximum is the stratum count; the score ceiling sums
+    // the exact rank-one contributions.
+    let baseline = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
+    let same = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     assert_eq!(baseline.max_contributions(), 2, "two weights, two strata");
     assert_eq!(
         baseline.ceiling(),
-        Fixed::ONE.checked_add(Fixed::ONE).expect("fits"),
-        "the ceiling is max_weight * strata"
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K)
+            .unwrap()
+            .checked_add(contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).unwrap())
+            .unwrap(),
+        "the ceiling is the exact sum of rank-one contributions"
     );
     assert_eq!(baseline.id(), same.id(), "identical profiles share an id");
     assert_eq!(
@@ -1183,16 +1390,28 @@ fn profile_construction_is_validated() {
         baseline
     );
 
-    let different_k = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K + 1);
-    let different_weight = profile(&[("text", Fixed::ONE), ("vector", Fixed::from_raw(2))], K);
+    let different_k = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K + 1,
+    );
+    let different_weight = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", Score::from_raw(2, PRECISION_12)),
+        ],
+        K,
+    );
     // A third stratum raises the derived contribution maximum, and the identity
     // records it: the field is still in the canonical bytes even though it is
     // no longer supplied.
     let more_strata = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::ONE),
-            ("geo", Fixed::ONE),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+            ("geo", PRECISION_12.score(PRECISION_12.scale())),
         ],
         K,
     );
@@ -1212,7 +1431,13 @@ fn profile_construction_is_validated() {
 // caller handed over.
 #[test]
 fn a_declared_contribution_maximum_must_match_the_stratum_count() {
-    let two = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let two = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let bytes = two.canonical_bytes();
     assert_eq!(
         FusionProfile::from_canonical_bytes(&bytes).expect("its own bytes decode"),
@@ -1222,7 +1447,7 @@ fn a_declared_contribution_maximum_must_match_the_stratum_count() {
 
     // The maximum is the `u32` immediately after the tie-break tag, which is
     // the fourth byte from the end (scale u32, rounding u8, item encoding u8).
-    let offset = bytes.len() - 4 - 1 - 1 - 4;
+    let offset = bytes.len() - 1 - 1 - 4;
     for forged in [1_u32, 3, 8] {
         let mut tampered = bytes.clone();
         tampered[offset..offset + 4].copy_from_slice(&forged.to_le_bytes());
@@ -1255,7 +1480,7 @@ fn a_declared_contribution_maximum_must_match_the_stratum_count() {
 
 #[test]
 fn duplicate_profile_strata_keep_the_original_key_and_first_fault() {
-    let one = profile(&[("text", Fixed::ONE)], K);
+    let one = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let original = one.canonical_bytes();
     assert_eq!(FusionProfile::from_canonical_bytes(&original).unwrap(), one);
     let key = stratum("text");
@@ -1285,13 +1510,12 @@ fn duplicate_profile_strata_keep_the_original_key_and_first_fault() {
 
 #[test]
 fn profile_wire_fields_retain_native_discriminators() {
-    let one = profile(&[("text", Fixed::ONE)], K);
+    let one = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let original = one.canonical_bytes();
     assert_eq!(FusionProfile::from_canonical_bytes(&original).unwrap(), one);
     for (offset, width, code) in [
         (0, 2, "fusion-profile-version"),
-        (original.len() - 11, 1, "fusion-profile-tie-break-tag"),
-        (original.len() - 6, 4, "fusion-profile-scale"),
+        (original.len() - 7, 1, "fusion-profile-tie-break-tag"),
         (original.len() - 2, 1, "fusion-profile-rounding-tag"),
         (original.len() - 1, 1, "fusion-profile-item-encoding-tag"),
     ] {
@@ -1318,92 +1542,43 @@ fn profile_wire_fields_retain_native_discriminators() {
     }
 }
 
-// 11c. Decoded bytes are held to the weight law, which is what makes the
-//      profile's contribution curve non-increasing for every stream fused.
-//
-// Fusion re-derives every row's contribution and refuses a disagreement, so a
-// stream cannot present a value that rises with rank *provided the profile's own
-// curve never rises*. That holds for a strictly positive weight and fails for a
-// negative one: the truncated rule multiplies a shrinking reciprocal by a
-// negative weight and the product climbs toward zero, so every adjacent pair
-// rises. `with_decay` refuses such a weight, and this test is the other door —
-// hand-built canonical bytes — held to the same law.
-
-/// The raw magnitude the negative-weight cases below use: one whole unit, so
-/// the truncated rule's reciprocal still carries it at both ranks compared.
-const NEGATIVE_WEIGHT_UNITS: i128 = 1_000_000_000_000;
-
+// Decoded unsigned profiles enforce the same positive-weight law as construction.
 #[test]
 fn decoded_profile_bytes_are_held_to_the_positive_weight_law() {
-    // One stratum, so the weight is the last `i128` before the fixed tail:
-    // tie-break tag (1), contribution maximum (4), scale (4), rounding (1),
-    // item encoding (1).
-    const TAIL: usize = 1 + 4 + 4 + 1 + 1;
-    let smallest = Fixed::from_raw(1);
+    let smallest = PRECISION_12.score(1);
     let bytes = profile(&[("text", smallest)], K).canonical_bytes();
-    let offset = bytes.len() - TAIL - 16;
-    assert_eq!(
-        i128::from_le_bytes(
-            bytes[offset..offset + 16]
-                .try_into()
-                .expect("sixteen bytes are sixteen bytes")
-        ),
-        1,
-        "the field this test rewrites is the stratum weight"
-    );
-
-    // The valid neighbour, and it is the *nearest* one: a single raw unit is the
-    // smallest weight a profile admits at all. It decodes, and the curve it
-    // decodes to never rises.
-    let decoded =
-        FusionProfile::from_canonical_bytes(&bytes).expect("the smallest positive weight decodes");
-    let mut previous = contribution_under(decoded.decay(), smallest, 1).expect("rank one fits");
-    for rank in 2..512 {
-        let current =
-            contribution_under(decoded.decay(), smallest, rank).expect("a 1-based rank fits");
-        assert!(
-            current <= previous,
-            "a decoded profile's curve rose from {previous:?} to {current:?} at rank {rank}"
-        );
-        previous = current;
-    }
-
-    // The invalid case. Zero and a negative raw unit are both refused, and the
-    // negative one is refused before anything can observe the rise it would
-    // otherwise produce at every rank.
-    for forged in [0_i128, -1, -NEGATIVE_WEIGHT_UNITS] {
-        let mut tampered = bytes.clone();
-        tampered[offset..offset + 16].copy_from_slice(&forged.to_le_bytes());
-        assert!(
-            matches!(
-                FusionProfile::from_canonical_bytes(&tampered),
-                Err(FusionError::NonPositiveWeight { .. })
-            ),
-            "canonical bytes declaring a weight of {forged} must be refused"
-        );
-    }
-
-    // What the refusal above is protecting: read directly, a negative weight's
-    // contribution rises with every rank, so a stream emitting exactly the value
-    // the profile computes would carry a rising sequence into fusion.
-    let negative = Fixed::from_raw(-NEGATIVE_WEIGHT_UNITS);
-    let decay = DecayRule::ReciprocalRank { k: K };
-    assert!(
-        contribution_under(decay, negative, 2).expect("rank two fits")
-            > contribution_under(decay, negative, 1).expect("rank one fits"),
-        "a negative weight is the case the profile refuses, and this is why"
-    );
+    let decoded = FusionProfile::from_canonical_bytes(&bytes).expect("one raw unit decodes");
+    assert_eq!(decoded.weight(&stratum("text")), Some(smallest));
+    let offset = bytes.len() - 7 - 16;
+    let mut zero = bytes.clone();
+    zero[offset..offset + 16].copy_from_slice(&0_u128.to_le_bytes());
+    assert!(matches!(
+        FusionProfile::from_canonical_bytes(&zero),
+        Err(FusionError::NonPositiveWeight { .. })
+    ));
+    let mut obsolete = bytes.clone();
+    obsolete[..2].copy_from_slice(&1_u16.to_le_bytes());
+    assert!(matches!(
+        FusionProfile::from_canonical_bytes(&obsolete),
+        Err(FusionError::MalformedProfile(_))
+    ));
+    let mut bad_scale = bytes;
+    bad_scale[2..6].copy_from_slice(&39_u32.to_le_bytes());
+    assert!(matches!(
+        FusionProfile::from_canonical_bytes(&bad_scale),
+        Err(FusionError::InvalidPrecision { digits: 39 })
+    ));
 }
 
 // 12. Canonical profile bytes and fused output are target-independent.
 //
 // The bytes are asserted against a fixed digest captured on this target; the
-// same construction on wasm32-unknown-unknown is proven to compile and to
+// same construction on `wasm32-unknown-unknown` is proven to compile and to
 // produce byte-identical input by the pure-field encoding. The fused rendering
 // is checked against the same golden the native test uses.
 #[test]
 fn native_and_wasm_share_canonical_bytes_and_output() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     assert_eq!(
         profile.canonical_bytes(),
         profile.canonical_bytes(),
@@ -1451,23 +1626,38 @@ fn native_and_wasm_share_canonical_bytes_and_output() {
 //     error at all.
 #[test]
 fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     assert_eq!(profile.max_contributions(), 2, "two strata, two weights");
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
         // The third stream repeats a stratum the profile weights once. Each
         // stream keeps its own per-stream uniqueness set, so nothing below this
         // level can see that `a` is about to be counted a third time.
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
     ];
     let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
@@ -1502,9 +1692,9 @@ fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
 fn a_candidate_in_every_stratum_fuses_rather_than_refusing() {
     let profile = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::ONE),
-            ("geo", Fixed::ONE),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+            ("geo", PRECISION_12.score(PRECISION_12.scale())),
         ],
         K,
     );
@@ -1516,15 +1706,39 @@ fn a_candidate_in_every_stratum_fuses_rather_than_refusing() {
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "doc-everywhere")], exhausted(1)),
+            MockStream::new(
+                vec![row(
+                    1,
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    K,
+                    "doc-everywhere",
+                )],
+                exhausted(1),
+            ),
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "doc-everywhere")], exhausted(1)),
+            MockStream::new(
+                vec![row(
+                    1,
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    K,
+                    "doc-everywhere",
+                )],
+                exhausted(1),
+            ),
         ),
         (
             stratum("geo"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "doc-everywhere")], exhausted(1)),
+            MockStream::new(
+                vec![row(
+                    1,
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    K,
+                    "doc-everywhere",
+                )],
+                exhausted(1),
+            ),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
@@ -1532,8 +1746,8 @@ fn a_candidate_in_every_stratum_fuses_rather_than_refusing() {
     assert_eq!(result.rows[0].entity, Term::new("doc-everywhere"));
     assert_eq!(result.rows[0].contributions.len(), 3);
 
-    let per_stratum = contribution(Fixed::ONE, 1, K).expect("fits");
-    let mut expected = Fixed::ZERO;
+    let per_stratum = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
+    let mut expected = PRECISION_12.score(0);
     for _ in 0..3 {
         expected = expected.checked_add(per_stratum).expect("fits");
     }
@@ -1543,28 +1757,15 @@ fn a_candidate_in_every_stratum_fuses_rather_than_refusing() {
     );
 }
 
-// 15. `ceiling() == max_weight * strata`, but every reciprocal-rank
-//     contribution is *strictly* below its stratum's weight: `K >= 1`
-//     (`InvalidK`) and `rank >= 1` (`InvalidRank`) force
-//     `reciprocal(K + rank) <= 1/2`. So the true achievable maximum under a
-//     valid contribution count is exactly half the declared ceiling, never the
-//     ceiling itself. This fixture drives every stratum to that true maximum —
-//     equal max weight, `K = 1`, `rank = 1`, one contribution per stratum,
-//     one contribution per stratum — and proves the fused score lands,
-//     exactly, at `ceiling() / 2`.
-//
-//     This is why the ceiling needs no runtime check and no refusal of its own:
-//     the most aggressive legitimate load the arithmetic can produce still stops
-//     at half of it, so a sum held to the contribution count is held below the
-//     ceiling for free. The property is asserted here rather than assumed.
+// The maximum legitimate rank-one sum reaches the exact admitted ceiling.
 #[test]
-fn maximal_legitimate_score_stays_below_the_ceiling() {
-    // Two. `Fixed::from_integer` takes the number a reader means; the
-    // neighbouring `Fixed::from_raw(2)` would be two raw units, `2 * 10^-12`.
-    let weight = Fixed::from_integer(2).expect("two is representable");
+fn maximal_legitimate_score_reaches_the_exact_ceiling() {
+    // Two. `Score::from_integer` takes the number a reader means; the
+    // neighbouring `Score::from_raw(2, PRECISION_12)` would be two raw units, `2 * 10^-12`.
+    let weight = Score::from_integer(2, PRECISION_12).expect("two is representable");
     let k = 1;
     let names = ["s0", "s1", "s2", "s3"];
-    let weights: Vec<(&str, Fixed)> = names.iter().copied().map(|name| (name, weight)).collect();
+    let weights: Vec<(&str, Score)> = names.iter().copied().map(|name| (name, weight)).collect();
     let profile = profile(&weights, k);
 
     let streams: Vec<(Iri, MockStream)> = names
@@ -1582,48 +1783,25 @@ fn maximal_legitimate_score_stays_below_the_ceiling() {
     assert_eq!(result.rows[0].contributions.len(), 4);
 
     let per_contribution = contribution(weight, 1, k).expect("fits");
-    let mut expected = Fixed::ZERO;
+    let mut expected = PRECISION_12.score(0);
     for _ in 0..4 {
         expected = expected.checked_add(per_contribution).expect("fits");
     }
     assert_eq!(result.rows[0].score, expected);
-    assert!(
-        expected < profile.ceiling(),
-        "the maximal legitimate score must stay strictly below the declared ceiling"
-    );
     assert_eq!(
-        expected.checked_add(expected).expect("fits"),
+        expected,
         profile.ceiling(),
-        "the true achievable maximum is exactly half the declared ceiling, because \
-         K >= 1 and rank >= 1 cap every reciprocal-rank contribution at weight / 2"
+        "the full rank-one sum reaches the admitted ceiling"
     );
 }
 
-// 16. The contribution count is the refusal, at the one configuration whose raw
-//     arithmetic lands exactly on the declared ceiling.
-//
-//     Two equal-weight, rank-1, `K = 1` contributions under a profile that
-//     weights one stratum, and therefore admits one contribution: the sum is
-//     exactly `ceiling()`, and it is refused as
-//     `MaxContributionsExceeded` — because reaching that sum at all requires
-//     contributing twice under a one-stratum profile. Every configuration with a
-//     valid contribution count stops at `ceiling() / 2` (test 15), which is why
-//     the score has no second, ceiling-shaped refusal behind this one: nothing
-//     could reach it. This drives `FusionStream` directly (bypassing `fuse`'s
-//     duplicate-stratum guard) because getting here needs two streams sharing
-//     one stratum tag, which `fuse` itself refuses before fusion ever begins.
-//
-//     As in test 13, the mechanism is the shared stratum tag and not a repeat
-//     within one stream: `a` is named by the second stream while the first has
-//     already ended but `a` is still in the frontier un-emitted — it cannot
-//     have certified, because the second stream is open and has not named it —
-//     so nothing is in the emitted map and the contribution count is what the
-//     second contribution crosses.
+// More than one contribution under one stratum remains a protocol failure,
+// even where its arithmetic would fit the unsigned representation.
 #[test]
-fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
-    // Two. `Fixed::from_integer` takes the number a reader means; the
-    // neighbouring `Fixed::from_raw(2)` would be two raw units, `2 * 10^-12`.
-    let weight = Fixed::from_integer(2).expect("two is representable");
+fn a_sum_exceeding_the_ceiling_is_refused_by_the_contribution_count() {
+    // Two. `Score::from_integer` takes the number a reader means; the
+    // neighbouring `Score::from_raw(2, PRECISION_12)` would be two raw units, `2 * 10^-12`.
+    let weight = Score::from_integer(2, PRECISION_12).expect("two is representable");
     let k = 1;
     let profile = profile(&[("dup", weight)], k);
     let dup = stratum("dup");
@@ -1642,13 +1820,7 @@ fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
     // anything: confirm the arithmetic the comment above claims before
     // asserting on the behaviour it implies.
     let per_contribution = contribution(weight, 1, k).expect("fits");
-    assert_eq!(
-        per_contribution
-            .checked_add(per_contribution)
-            .expect("fits"),
-        profile.ceiling(),
-        "two rank-1, K=1 contributions at the max weight must sum to exactly the ceiling"
-    );
+    assert!(per_contribution.checked_add(per_contribution).unwrap() > profile.ceiling());
 
     let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
     let result = block_on(async {
@@ -1688,9 +1860,9 @@ fn five_candidates() -> Vec<(Iri, MockStream)> {
             stratum("text"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "a"),
-                    row(2, Fixed::ONE, K, "b"),
-                    row(3, Fixed::ONE, K, "c"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                 ],
                 exhausted(3),
             ),
@@ -1698,7 +1870,10 @@ fn five_candidates() -> Vec<(Iri, MockStream)> {
         (
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "d"), row(2, Fixed::ONE, K, "e")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "d"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "e"),
+                ],
                 exhausted(2),
             ),
         ),
@@ -1707,7 +1882,13 @@ fn five_candidates() -> Vec<(Iri, MockStream)> {
 
 #[test]
 fn fuse_returns_at_most_k_rows_in_the_declared_order() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
 
     let whole = block_on(run_fuse(five_candidates(), &profile));
     assert_eq!(whole.rows.len(), 5, "the fixture holds five candidates");
@@ -1749,7 +1930,13 @@ fn a_bound_larger_than_the_answer_returns_everything_and_refuses_nothing() {
     // The valid neighbour of the bound above, and the one this repository treats
     // as exactly as severe: asking for more rows than exist is not an error, not
     // a truncation, and not an empty answer. It is every row there was.
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let generous = block_on(async {
         purrdf_retrieval::fuse::<MockStream, Term>(
             five_candidates(),
@@ -1780,16 +1967,22 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     // under the bound, and must not be: a bound that stopped the reading leaves
     // the text stratum incomplete, and a trailer that said `Exhausted` anyway
     // would be asserting completeness the fusion never established.
-    let profile = profile(&[("text", Fixed::ONE), ("geo", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("geo", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = || {
         vec![
             (
                 stratum("text"),
                 MockStream::new(
                     vec![
-                        row(1, Fixed::ONE, K, "a"),
-                        row(2, Fixed::ONE, K, "b"),
-                        row(3, Fixed::ONE, K, "c"),
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                        row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                     ],
                     exhausted(3),
                 ),
@@ -1813,7 +2006,8 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     // rank `r`'s contribution: everything at or above it was read, and what lies
     // below it was not.
     let stopped_at = |rank| ProducerStatus::CeilingReached {
-        bound: contribution(Fixed::ONE, rank, K).expect("the fixture contribution fits"),
+        bound: contribution(PRECISION_12.score(PRECISION_12.scale()), rank, K)
+            .expect("the fixture contribution fits"),
     };
 
     // A prefix: one row of three, and the report is already whole — every
@@ -1914,10 +2108,17 @@ fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
     // top-k exists for would be gone — with the rows returned looking exactly
     // the same either way, which is why this is counted rather than eyeballed.
     const ROWS: u64 = 500;
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let pulls = Arc::new(AtomicUsize::new(0));
     let steps = (1..=ROWS)
-        .map(|rank| row(rank, Fixed::ONE, K, &format!("item-{rank:04}")))
+        .map(|rank| {
+            row(
+                rank,
+                PRECISION_12.score(PRECISION_12.scale()),
+                K,
+                &format!("item-{rank:04}"),
+            )
+        })
         .collect();
     let streams = vec![(
         stratum("text"),
@@ -1939,8 +2140,12 @@ fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
     assert_eq!(
         bounded.trailer.statuses.get(&stratum("text")),
         Some(&ProducerStatus::CeilingReached {
-            bound: contribution(Fixed::ONE, u64::try_from(pulled).expect("a small count"), K)
-                .expect("the fixture contribution fits")
+            bound: contribution(
+                PRECISION_12.score(PRECISION_12.scale()),
+                u64::try_from(pulled).expect("a small count"),
+                K
+            )
+            .expect("the fixture contribution fits")
         }),
         "the stratum is closed at the contribution of the last row read from it"
     );
@@ -1951,7 +2156,14 @@ fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
     // trailer reports.
     let pulls = Arc::new(AtomicUsize::new(0));
     let steps = (1..=3)
-        .map(|rank| row(rank, Fixed::ONE, K, &format!("item-{rank:04}")))
+        .map(|rank| {
+            row(
+                rank,
+                PRECISION_12.score(PRECISION_12.scale()),
+                K,
+                &format!("item-{rank:04}"),
+            )
+        })
         .collect();
     let streams = vec![(
         stratum("text"),
@@ -1978,18 +2190,32 @@ fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
 //     refusal rather than an answer filed under one of them.
 #[test]
 fn the_trailer_names_a_plan_only_when_every_stream_names_the_same_one() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let first = plan_id("first-plan");
     let second = plan_id("second-plan");
     let streams = |left: Option<PlanId>, right: Option<PlanId>| {
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).pinned(left),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                )
+                .pinned(left),
             ),
             (
                 stratum("vector"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)).pinned(right),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
+                    exhausted(1),
+                )
+                .pinned(right),
             ),
         ]
     };
@@ -2036,7 +2262,7 @@ fn the_trailer_names_a_plan_only_when_every_stream_names_the_same_one() {
 //     a producer cannot use the first to hide rows it emitted.
 #[test]
 fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
 
     // The producer was handed terms it does not serve and says so. It emits no
     // rows, and the trailer keeps the reason it emitted none.
@@ -2078,7 +2304,7 @@ fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
         vec![(
             stratum("text"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a")],
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
                 ProducerReceipt::TermsRejected,
             ),
         )],
@@ -2112,7 +2338,7 @@ fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
 // every rank.
 
 /// A weight that is legal (strictly positive) and contributes exactly zero.
-const ZERO_CONTRIBUTING_WEIGHT: Fixed = Fixed::from_raw(1);
+const ZERO_CONTRIBUTING_WEIGHT: Score = Score::from_raw(1, PRECISION_12);
 
 #[test]
 fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
@@ -2120,23 +2346,27 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
     // nothing, so that is asserted rather than assumed.
     assert_eq!(
         contribution(ZERO_CONTRIBUTING_WEIGHT, 1, K).expect("fits"),
-        Fixed::ZERO,
+        PRECISION_12.score(0),
         "one raw unit of weight truncates to nothing at the declared scale"
     );
     assert_eq!(
         contribution(ZERO_CONTRIBUTING_WEIGHT, 2, K).expect("fits"),
-        Fixed::ZERO
+        PRECISION_12.score(0)
     );
     assert!(
-        ZERO_CONTRIBUTING_WEIGHT > Fixed::ZERO,
+        ZERO_CONTRIBUTING_WEIGHT > PRECISION_12.score(0),
         "and the profile admits it, so this is a configuration a caller can write"
     );
 
     let profile = profile(
-        &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
+        &[
+            ("dense", PRECISION_12.score(PRECISION_12.scale())),
+            ("sparse", ZERO_CONTRIBUTING_WEIGHT),
+        ],
         K,
     );
-    let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
+    let dense_contribution =
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
 
     // `a` is the dense stratum's only row, and the sparse stratum names it at
     // rank two — after a row the fusion has not read yet. At the moment `a`
@@ -2146,7 +2376,10 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
     let streams = vec![
         (
             stratum("dense"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("sparse"),
@@ -2196,7 +2429,7 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
     );
     assert_eq!(
         fused_a.contributions[1],
-        (stratum("sparse"), 2, Fixed::ZERO)
+        (stratum("sparse"), 2, PRECISION_12.score(0))
     );
 }
 
@@ -2211,7 +2444,10 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
 #[test]
 fn an_exhausted_zero_contribution_stream_delays_no_certification() {
     let profile = profile(
-        &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
+        &[
+            ("dense", PRECISION_12.score(PRECISION_12.scale())),
+            ("sparse", ZERO_CONTRIBUTING_WEIGHT),
+        ],
         K,
     );
     let pulls = Arc::new(AtomicUsize::new(0));
@@ -2220,9 +2456,9 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
             stratum("dense"),
             MockStream::counted(
                 vec![
-                    row(1, Fixed::ONE, K, "a"),
-                    row(2, Fixed::ONE, K, "b"),
-                    row(3, Fixed::ONE, K, "c"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                 ],
                 exhausted(3),
                 Arc::clone(&pulls),
@@ -2288,13 +2524,22 @@ fn dense_and_sparse(dense: MockStream) -> Vec<(Iri, MockStream)> {
         (stratum("dense"), dense),
         (
             stratum("sparse"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "q")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "q")],
+                exhausted(1),
+            ),
         ),
     ]
 }
 
 fn dense_sparse_profile() -> FusionProfile {
-    profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K)
+    profile(
+        &[
+            ("dense", PRECISION_12.score(PRECISION_12.scale())),
+            ("sparse", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    )
 }
 
 /// A declared-`Unique` stream's repeat is refused while the earlier occurrence
@@ -2313,7 +2558,10 @@ fn a_declared_unique_streams_repeat_is_refused() {
     // That makes this the in-frontier arm specifically, and the assertion below
     // therefore pins the arm as well as the outcome.
     let streams = dense_and_sparse(MockStream::new(
-        vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+        vec![
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(2, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+        ],
         exhausted(2),
     ));
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
@@ -2337,11 +2585,17 @@ fn a_declared_unique_streams_repeat_is_refused() {
     let shared = vec![
         (
             stratum("dense"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("sparse"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         ),
     ];
     let fused = block_on(run_fuse(shared, &profile));
@@ -2378,11 +2632,14 @@ fn a_declared_unique_streams_repeat_is_refused() {
 fn a_unique_declarations_repeat_is_refused_past_the_frontier_and_allowed_is_the_remedy() {
     // One stratum, so `a` certifies the moment it is read and the repeat arrives
     // after it left the frontier — which is the arm this test exists for.
-    let profile = profile(&[("dense", Fixed::ONE)], K);
+    let profile = profile(&[("dense", PRECISION_12.score(PRECISION_12.scale()))], K);
     let repeated = vec![(
         stratum("dense"),
         MockStream::new(
-            vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+            vec![
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            ],
             exhausted(2),
         ),
     )];
@@ -2408,7 +2665,10 @@ fn a_unique_declarations_repeat_is_refused_past_the_frontier_and_allowed_is_the_
     let deduplicated = vec![(
         stratum("dense"),
         MockStream::new(
-            vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+            vec![
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            ],
             exhausted(2),
         )
         .declaring(allowed_duplicates()),
@@ -2422,7 +2682,7 @@ fn a_unique_declarations_repeat_is_refused_past_the_frontier_and_allowed_is_the_
     );
     assert_eq!(
         fused.rows[0].score,
-        contribution(Fixed::ONE, 1, K).expect("fits"),
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits"),
         "and at its best — first, lowest — rank"
     );
 }
@@ -2437,9 +2697,9 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
     let streams = dense_and_sparse(
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
-                row(2, Fixed::ONE, K, "a"),
-                row(3, Fixed::ONE, K, "b"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(3, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
             ],
             exhausted(3),
         )
@@ -2447,7 +2707,7 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
     );
     let fused = block_on(run_fuse(streams, &profile));
 
-    let dense_contribution = |entity: &str| -> Vec<(u64, Fixed)> {
+    let dense_contribution = |entity: &str| -> Vec<(u64, Score)> {
         fused
             .rows
             .iter()
@@ -2470,14 +2730,20 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
     );
     assert_eq!(
         dense_contribution("a"),
-        vec![(1, contribution(Fixed::ONE, 1, K).expect("fits"))],
+        vec![(
+            1,
+            contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits")
+        )],
         "and at the BEST rank the stream gave it, which is its first"
     );
     // The row after the repeat is not renumbered: rank 3 is still rank 3, so a
     // dropped duplicate does not silently promote its successors.
     assert_eq!(
         dense_contribution("b"),
-        vec![(3, contribution(Fixed::ONE, 3, K).expect("fits"))],
+        vec![(
+            3,
+            contribution(PRECISION_12.score(PRECISION_12.scale()), 3, K).expect("fits")
+        )],
         "a discarded duplicate leaves every later rank exactly where it was"
     );
     // The producer is still charged for the row it emitted, so a receipt that
@@ -2494,9 +2760,9 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
         let streams = dense_and_sparse(
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "a"),
-                    row(2, Fixed::ONE, K, "b"),
-                    row(3, Fixed::ONE, K, "c"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                 ],
                 exhausted(3),
             )
@@ -2527,14 +2793,14 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
 /// fixing the wrong producer is the same as fixing none.
 #[test]
 fn the_reported_single_stratum_repeat_is_refused_naming_the_item_and_the_stratum() {
-    let profile = profile(&[("dense", Fixed::ONE)], K);
+    let profile = profile(&[("dense", PRECISION_12.score(PRECISION_12.scale()))], K);
     let streams = vec![(
         stratum("dense"),
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
-                row(2, Fixed::ONE, K, "b"),
-                row(3, Fixed::ONE, K, "a"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                row(3, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
             ],
             exhausted(3),
         ),
@@ -2565,9 +2831,9 @@ fn the_reported_single_stratum_repeat_is_refused_naming_the_item_and_the_stratum
         stratum("dense"),
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
-                row(2, Fixed::ONE, K, "b"),
-                row(3, Fixed::ONE, K, "c"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
             ],
             exhausted(3),
         ),
@@ -2678,9 +2944,9 @@ fn no_fused_answer_ever_contains_one_entity_twice() {
                 // the bound that cannot be what stopped the run.
                 for bound in 0..=longest + 1 {
                     configurations += 1;
-                    let weights: Vec<(&str, Fixed)> = NAMES[..stratum_count]
+                    let weights: Vec<(&str, Score)> = NAMES[..stratum_count]
                         .iter()
-                        .map(|name| (*name, Fixed::ONE))
+                        .map(|name| (*name, PRECISION_12.score(PRECISION_12.scale())))
                         .collect();
                     let profile = profile(&weights, K);
                     let streams: Vec<(Iri, MockStream)> = scripts
@@ -2692,7 +2958,7 @@ fn no_fused_answer_ever_contains_one_entity_twice() {
                                 .enumerate()
                                 .map(|(offset, item)| {
                                     let rank = u64::try_from(offset + 1).expect("small rank");
-                                    row(rank, Fixed::ONE, K, item)
+                                    row(rank, PRECISION_12.score(PRECISION_12.scale()), K, item)
                                 })
                                 .collect();
                             let emitted = u64::try_from(script.len()).expect("short script");
@@ -2781,7 +3047,7 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
     // small enough that the truncation collides makes two adjacent ranks carry
     // one value. `monotone_depth` is the exact rank at which that first happens,
     // and one raw unit of weight collides immediately.
-    let weight = Fixed::from_raw(1);
+    let weight = Score::from_raw(1, PRECISION_12);
     let profile = profile(&[("thin", weight)], K);
     let first = contribution(weight, 1, K).expect("fits");
     let second = contribution(weight, 2, K).expect("fits");
@@ -2848,15 +3114,15 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
     // `DecayRule` (`reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank`),
     // and enforced where a stream meets it, by this re-derivation. There is no
     // second, ordering-shaped refusal behind it: nothing could reach one.
-    let first_rank = contribution(Fixed::ONE, 1, K).expect("fits");
-    let risen = Fixed::from_raw(first_rank.into_raw() + 1);
+    let first_rank = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
+    let risen = Score::from_raw(first_rank.into_raw() + 1, PRECISION_12);
     for contract in [unique_items(), allowed_duplicates()] {
-        let heavy = crate::profile(&[("thin", Fixed::ONE)], K);
+        let heavy = crate::profile(&[("thin", PRECISION_12.score(PRECISION_12.scale()))], K);
         let streams = vec![(
             stratum("thin"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "a"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
                     Step::Row(RankedRow::new(
                         2,
                         risen,
@@ -2883,14 +3149,9 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
 }
 
 // ---------------------------------------------------------------------------
-// 21. A second decay rule, added without moving the first one's numbers.
-//
-// `DecayRule` is additive-variant-extensible and its tag is folded into the
-// profile's canonical bytes, so a new variant must leave every previously
-// issued identity exactly where it was. The tests below pin that in the only
-// way that is worth anything — against a spelling of the encoding written out
-// by hand rather than read back from the writer under test — and then pin what
-// the new rule buys: depth, in exchange for weight.
+// Explicit unsigned precision has one versioned layout for both decay laws.
+// The scale 12 fixtures retain their arithmetic, while the encoding names
+// their unsigned units and selected rounding law.
 // ---------------------------------------------------------------------------
 
 /// The canonical encoding of a `ReciprocalRank` profile, spelled out field by
@@ -2899,10 +3160,11 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
 /// Written independently of `Writer` on purpose. A golden captured by calling
 /// the encoder proves only that the encoder agrees with itself; this one fails
 /// if a field is reordered, widened, or given a new tag.
-fn hand_spelled_profile_bytes(strata: &[(&str, i128)], k: u32, max_contributions: u32) -> Vec<u8> {
+fn hand_spelled_profile_bytes(strata: &[(&str, u128)], k: u32, max_contributions: u32) -> Vec<u8> {
     let mut bytes = Vec::new();
     // version: u16 le
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&12_u32.to_le_bytes());
     // decay tag: ReciprocalRank is discriminator zero
     bytes.push(0);
     // K: u32 le
@@ -2918,29 +3180,29 @@ fn hand_spelled_profile_bytes(strata: &[(&str, i128)], k: u32, max_contributions
     // tie-break tag, then max contributions
     bytes.push(0);
     bytes.extend_from_slice(&max_contributions.to_le_bytes());
-    // declared scale, rounding direction, item encoding
-    bytes.extend_from_slice(&12_u32.to_le_bytes());
+    // rounding direction and item encoding
     bytes.push(0);
     bytes.push(0);
     bytes
 }
 
 #[test]
-fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
-    let existing = profile(&[("text", Fixed::ONE), ("vector", Fixed::from_raw(500))], K);
-    // The contribution maximum is spelled out as two, which is what the two
-    // strata above derive. This is also the identity-stability claim: the
-    // encoder below is written by hand from the documented layout and is
-    // unchanged, so these are byte-for-byte the bytes a caller who used to pass
-    // `weights.len()` explicitly already had. Only a caller who passed
-    // something else — this fixture passed eight, a bound nothing could reach —
-    // moves, and moves onto the identity the field always meant.
+fn scale_bearing_unsigned_profile_bytes_match_the_declared_layout() {
+    let existing = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", Score::from_raw(500, PRECISION_12)),
+        ],
+        K,
+    );
+    // The independent spelling records the explicit units, both unsigned
+    // weights and the contribution maximum derived from the two strata.
     let expected =
         hand_spelled_profile_bytes(&[("text", 1_000_000_000_000), ("vector", 500)], K, 2);
     assert_eq!(
         existing.canonical_bytes(),
         expected,
-        "adding a decay variant must not move the encoding of the first one"
+        "unsigned weights and explicit precision have one canonical layout"
     );
     assert_eq!(
         existing.max_contributions(),
@@ -2954,7 +3216,7 @@ fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
     );
     assert_eq!(
         existing.id().to_hex(),
-        "c7c47d73ddb4a430142c86a73acd2eedc32b514c38ccefb8627995e6dadb0a6e",
+        "b931f5b83535e6a8565d29979423248aaa049750b6c0c6a8475857cbef61e05f",
         "the digest of a profile that names its stratum count is frozen"
     );
     assert_eq!(
@@ -2966,14 +3228,16 @@ fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
     // And the numbers themselves: `contribution` is the tag-zero arithmetic,
     // unchanged at every rank a caller might have recorded.
     for (rank, raw) in [
-        (1_u64, 16_393_442_622_i128),
+        (1_u64, 16_393_442_622_u128),
         (2, 16_129_032_258),
         (10, 14_285_714_285),
         (1_000, 943_396_226),
         (1_000_000, 999_940),
     ] {
         assert_eq!(
-            contribution(Fixed::ONE, rank, K).expect("fits").into_raw(),
+            contribution(PRECISION_12.score(PRECISION_12.scale()), rank, K)
+                .expect("fits")
+                .into_raw(),
             raw,
             "the truncated rule's value at rank {rank} is frozen"
         );
@@ -2996,7 +3260,7 @@ fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
 fn every_profile_the_separation_derivation_accepted_before_still_builds_with_its_identity() {
     for k in [1_u32, 60, u32::MAX] {
         for raw in [
-            1_i128,
+            1_u128,
             1_000,
             500_000_000_000,
             1_000_000_000_000,
@@ -3007,11 +3271,11 @@ fn every_profile_the_separation_derivation_accepted_before_still_builds_with_its
                 DecayRule::WeightedReciprocalRank { k },
             ] {
                 let weights = BTreeMap::from([
-                    (stratum("text"), Fixed::from_raw(raw)),
-                    (stratum("vector"), Fixed::from_raw(1)),
+                    (stratum("text"), Score::from_raw(raw, PRECISION_12)),
+                    (stratum("vector"), Score::from_raw(1, PRECISION_12)),
                 ]);
-                let profile =
-                    FusionProfile::with_decay(weights.clone(), decay).unwrap_or_else(|error| {
+                let profile = FusionProfile::with_decay(weights.clone(), decay, PRECISION_12)
+                    .unwrap_or_else(|error| {
                         panic!("{decay:?} at weight raw {raw} must still build: {error}")
                     });
                 assert!(
@@ -3026,7 +3290,7 @@ fn every_profile_the_separation_derivation_accepted_before_still_builds_with_its
                 );
                 assert_eq!(
                     profile.id(),
-                    FusionProfile::with_decay(weights, decay)
+                    FusionProfile::with_decay(weights, decay, PRECISION_12)
                         .expect("the same declaration builds twice")
                         .id(),
                     "{decay:?} at weight raw {raw}: one declaration is one identity"
@@ -3038,24 +3302,35 @@ fn every_profile_the_separation_derivation_accepted_before_still_builds_with_its
 
 #[test]
 fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
-    let weights: BTreeMap<Iri, Fixed> = BTreeMap::from([(stratum("text"), Fixed::ONE)]);
-    let truncated = FusionProfile::with_decay(weights.clone(), DecayRule::ReciprocalRank { k: K })
-        .expect("valid");
-    let folded = FusionProfile::with_decay(weights, DecayRule::WeightedReciprocalRank { k: K })
-        .expect("valid");
+    let weights: BTreeMap<Iri, Score> =
+        BTreeMap::from([(stratum("text"), PRECISION_12.score(PRECISION_12.scale()))]);
+    let truncated = FusionProfile::with_decay(
+        weights.clone(),
+        DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
+    )
+    .expect("valid");
+    let folded = FusionProfile::with_decay(
+        weights,
+        DecayRule::WeightedReciprocalRank { k: K },
+        PRECISION_12,
+    )
+    .expect("valid");
 
     assert_eq!(
         truncated.canonical_bytes(),
-        profile(&[("text", Fixed::ONE)], K).canonical_bytes(),
-        "`new` is `with_decay` under the first rule"
+        profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K).canonical_bytes(),
+        "the fixture helper declares the same first rule and precision"
     );
     assert_ne!(
         truncated.id(),
         folded.id(),
         "a different rule is a different law and therefore a different identity"
     );
-    assert_eq!(truncated.canonical_bytes()[2], 0, "tag zero");
-    assert_eq!(folded.canonical_bytes()[2], 1, "tag one");
+    // Layout version 2 starts with the version (two bytes) and precision (four).
+    const DECAY_TAG_OFFSET: usize = 6;
+    assert_eq!(truncated.canonical_bytes()[DECAY_TAG_OFFSET], 0, "tag zero");
+    assert_eq!(folded.canonical_bytes()[DECAY_TAG_OFFSET], 1, "tag one");
 
     assert_eq!(
         FusionProfile::from_canonical_bytes(&folded.canonical_bytes()).expect("round-trips"),
@@ -3064,7 +3339,7 @@ fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
 
     // An unassigned tag is refused rather than read as a rule this build knows.
     let mut unknown = folded.canonical_bytes();
-    unknown[2] = 2;
+    unknown[DECAY_TAG_OFFSET] = 2;
     let error = FusionProfile::from_canonical_bytes(&unknown).unwrap_err();
     assert_eq!(
         error.to_string(),
@@ -3080,10 +3355,10 @@ fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
 
 /// The weight the deep fixtures run at: two hundred, which under the weighted
 /// rule buys a monotone range above fourteen million ranks.
-const DEEP_WEIGHT_UNITS: i64 = 200;
+const DEEP_WEIGHT_UNITS: u128 = 200;
 
-fn deep_weight() -> Fixed {
-    Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable")
+fn deep_weight() -> Score {
+    Score::from_integer(DEEP_WEIGHT_UNITS, PRECISION_12).expect("two hundred is representable")
 }
 
 #[test]
@@ -3091,6 +3366,7 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     let folded = FusionProfile::with_decay(
         BTreeMap::from([(stratum("text"), deep_weight())]),
         DecayRule::WeightedReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile");
     let bound = folded
@@ -3125,6 +3401,7 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     let truncated = FusionProfile::with_decay(
         BTreeMap::from([(stratum("text"), deep_weight())]),
         DecayRule::ReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .expect("valid");
     let shallow = truncated
@@ -3158,14 +3435,18 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
 // ---------------------------------------------------------------------------
 
 /// A profile over one stratum named `deep`, at `weight` under `decay`.
-fn deep_profile(decay: DecayRule, weight: Fixed) -> FusionProfile {
-    FusionProfile::with_decay(BTreeMap::from([(stratum("deep"), weight)]), decay)
-        .expect("a strictly positive weight is a valid profile")
+fn deep_profile(decay: DecayRule, weight: Score) -> FusionProfile {
+    FusionProfile::with_decay(
+        BTreeMap::from([(stratum("deep"), weight)]),
+        decay,
+        PRECISION_12,
+    )
+    .expect("a strictly positive weight is a valid profile")
 }
 
 /// `rows` well-formed rows: contiguous ranks from one, distinct items, and the
 /// exact contribution the profile computes for each rank.
-fn deep_stream(decay: DecayRule, weight: Fixed, rows: u64) -> MockStream {
+fn deep_stream(decay: DecayRule, weight: Score, rows: u64) -> MockStream {
     let steps = (1..=rows)
         .map(|rank| {
             Step::Row(RankedRow::new(
@@ -3181,7 +3462,7 @@ fn deep_stream(decay: DecayRule, weight: Fixed, rows: u64) -> MockStream {
 
 /// The first rank whose contribution equals its successor's, found by walking.
 /// Independent of `monotone_depth`, so a test can cross-check it.
-fn first_collision_by_walking(decay: DecayRule, weight: Fixed, limit: u64) -> Option<u64> {
+fn first_collision_by_walking(decay: DecayRule, weight: Score, limit: u64) -> Option<u64> {
     (1..limit).find(|&rank| {
         let here = contribution_under(decay, weight, rank).expect("fits");
         let next = contribution_under(decay, weight, rank + 1).expect("fits");
@@ -3199,7 +3480,7 @@ fn first_collision_by_walking(decay: DecayRule, weight: Fixed, limit: u64) -> Op
 /// does not — so that is the truth this walk returns.
 fn deepest_rank_within_width_by_walking(
     decay: DecayRule,
-    weight: Fixed,
+    weight: Score,
     max_width: u64,
     limit: u64,
 ) -> u64 {
@@ -3230,7 +3511,7 @@ fn deepest_rank_within_width_by_walking(
 /// sequence) precisely at the boundary `deepest_rank_within_width` cares
 /// about: a run that extends past `depth_limit` is only partially observed
 /// by a read truncated there, and this is what measures the part that was.
-fn truncated_class_width(decay: DecayRule, weight: Fixed, depth_limit: u64, rank: u64) -> u64 {
+fn truncated_class_width(decay: DecayRule, weight: Score, depth_limit: u64, rank: u64) -> u64 {
     let target = contribution_under(decay, weight, rank).expect("fits");
     let mut lo = rank;
     while lo > 1 {
@@ -3259,7 +3540,7 @@ fn a_strictly_descending_stream_fuses_past_the_decay_collision() {
     // rank 972, well inside a 1400-row stream, and every one of those rows is
     // well formed in every respect a producer controls.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
 
     // Witness one, and the reason this fixture tests anything: bare arithmetic
@@ -3316,7 +3597,7 @@ fn a_small_top_k_certifies_early_and_never_reaches_the_collision() {
     // five: fusion certifies the top five and never pulls to the collision, so a
     // regression test written this way reports a false all-clear.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
 
     let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
@@ -3347,7 +3628,7 @@ fn two_ranks_fuse_at_the_weight_that_used_to_refuse_them() {
     // contribution. This is the exact case that was refused as
     // `RepeatedContribution` at rank two.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
 
     let first = contribution_under(decay, weight, 1).expect("fits");
@@ -3375,8 +3656,8 @@ fn every_weight_in_the_measurement_table_fuses() {
     // stops separating ranks; none of them is a protocol violation and all three
     // answer. The two lighter ones used to be refused.
     let decay = DecayRule::ReciprocalRank { k: K };
-    for raw in [1_000_i128, 1_000_000, 100_000_000] {
-        let weight = Fixed::from_raw(raw);
+    for raw in [1_000_u128, 1_000_000, 100_000_000] {
+        let weight = Score::from_raw(raw, PRECISION_12);
         let profile = deep_profile(decay, weight);
         let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
             vec![(stratum("deep"), deep_stream(decay, weight, 1_400))],
@@ -3403,7 +3684,7 @@ fn both_decay_rules_fuse_past_their_own_collision() {
     // The tests above exercise only the truncated rule. The weighted rule has
     // its own boundary, near `sqrt(w_raw) - k` rather than near `sqrt(S)`, and
     // the same law applies there: a collision is quantization, not a violation.
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     for decay in [
         DecayRule::ReciprocalRank { k: K },
         DecayRule::WeightedReciprocalRank { k: K },
@@ -3433,7 +3714,7 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
     // did not compute is still refused — the equality arm was the only thing
     // removed, and it was never what checked the value.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let plateau = contribution_under(decay, weight, 1).expect("fits");
     assert_eq!(
@@ -3444,7 +3725,7 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
 
     // THE INVALID CASE: rank two carries a value that is neither rising nor the
     // profile's own.
-    let forged = Fixed::from_raw(plateau.into_raw() - 1);
+    let forged = Score::from_raw(plateau.into_raw() - 1, PRECISION_12);
     let streams = vec![(
         stratum("deep"),
         MockStream::new(
@@ -3527,7 +3808,7 @@ fn a_zero_top_k_still_reports_one_rank_pulled() {
     // "untouched" — see `an_empty_stream_reports_zero_ranks_pulled` below, which
     // is the case this one does not cover.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         vec![(stratum("deep"), deep_stream(decay, weight, 10))],
@@ -3554,7 +3835,7 @@ fn an_empty_stream_reports_zero_ranks_pulled() {
     // Zero therefore reports "this stream yielded no rows", not "this stream was
     // never asked" — it was asked, and it answered with its receipt.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
 
     let empty = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
@@ -3608,12 +3889,21 @@ fn the_resolution_map_keys_every_weighted_stream_including_one_that_yielded_noth
     // how a caller learns none did. An absent key would have to be told apart
     // from a stratum the profile never weighted, which is a different fact
     // entirely.
-    let profile = profile(&[("dense", Fixed::ONE), ("barren", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("dense", PRECISION_12.score(PRECISION_12.scale())),
+            ("barren", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = vec![
         (
             stratum("dense"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                ],
                 exhausted(2),
             ),
         ),
@@ -3669,7 +3959,7 @@ fn fusion_past_the_collision_is_deterministic() {
     // total. Two runs over identical inputs, compared row for row including
     // every score and every provenance entry.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let run = || {
         block_on(purrdf_retrieval::fuse::<MockStream, Term>(
@@ -3680,6 +3970,7 @@ fn fusion_past_the_collision_is_deterministic() {
             &FusionProfile::with_decay(
                 BTreeMap::from([(stratum("deep"), weight), (stratum("other"), weight)]),
                 decay,
+                PRECISION_12,
             )
             .expect("valid"),
             TopK::new(400),
@@ -3712,7 +4003,7 @@ fn fusion_past_the_collision_is_deterministic() {
 
 /// Whether `candidate` separates every adjacent pair of ranks up to `depth`,
 /// recomputed from the published contribution rather than from the search.
-fn reaches_depth(decay: DecayRule, candidate: Fixed, depth: u64) -> bool {
+fn reaches_depth(decay: DecayRule, candidate: Score, depth: u64) -> bool {
     (1..depth).all(|rank| {
         let here = contribution_under(decay, candidate, rank).expect("fits");
         let next = contribution_under(decay, candidate, rank + 1).expect("fits");
@@ -3733,7 +4024,7 @@ fn weight_for_depth_names_a_weight_that_reaches_it() {
     ] {
         for depth in [2_u64, 10, 500, 5_000] {
             let weight = decay
-                .weight_for_depth(depth)
+                .weight_for_depth(PRECISION_12, depth)
                 .unwrap_or_else(|error| panic!("{decay:?} depth {depth}: {error:?}"));
             assert!(
                 reaches_depth(decay, weight, depth),
@@ -3759,11 +4050,11 @@ fn no_weight_lighter_than_the_one_named_reaches_the_depth() {
     ] {
         for depth in [2_u64, 10] {
             let weight = decay
-                .weight_for_depth(depth)
+                .weight_for_depth(PRECISION_12, depth)
                 .unwrap_or_else(|error| panic!("{decay:?} depth {depth}: {error:?}"));
             for raw in 1..weight.into_raw() {
                 assert!(
-                    !reaches_depth(decay, Fixed::from_raw(raw), depth),
+                    !reaches_depth(decay, Score::from_raw(raw, PRECISION_12), depth),
                     "{decay:?}: raw weight {raw} reaches depth {depth}, so {weight:?} is not \
                      the minimum and the answer overstates what that depth costs"
                 );
@@ -3779,20 +4070,22 @@ fn reaching_a_depth_is_not_monotone_in_the_weight() {
     // silently over-reporting. Under both rules the minimum weight for depth two
     // is immediately followed by a *heavier* weight that does not reach it.
     for (decay, minimum) in [
-        (DecayRule::ReciprocalRank { k: K }, 62_i128),
-        (DecayRule::WeightedReciprocalRank { k: K }, 61_i128),
+        (DecayRule::ReciprocalRank { k: K }, 62_u128),
+        (DecayRule::WeightedReciprocalRank { k: K }, 61_u128),
     ] {
         assert_eq!(
-            decay.weight_for_depth(2).expect("depth two is reachable"),
-            Fixed::from_raw(minimum),
+            decay
+                .weight_for_depth(PRECISION_12, 2)
+                .expect("depth two is reachable"),
+            Score::from_raw(minimum, PRECISION_12),
             "{decay:?}: the minimum weight for depth two is the witness's lighter half"
         );
         assert!(
-            reaches_depth(decay, Fixed::from_raw(minimum), 2),
+            reaches_depth(decay, Score::from_raw(minimum, PRECISION_12), 2),
             "{decay:?}: raw {minimum} must reach depth two"
         );
         assert!(
-            !reaches_depth(decay, Fixed::from_raw(minimum + 1), 2),
+            !reaches_depth(decay, Score::from_raw(minimum + 1, PRECISION_12), 2),
             "{decay:?}: raw {} must NOT reach depth two — that inversion is what a \
              binary search over the predicate would straddle",
             minimum + 1
@@ -3807,7 +4100,7 @@ fn weight_for_depth_refuses_only_where_no_weight_can_reach() {
     // early, because a bound drawn conservatively here would refuse depths the
     // arithmetic in fact delivers.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let saturation = deep_profile(decay, Fixed::ONE)
+    let saturation = deep_profile(decay, PRECISION_12.score(PRECISION_12.scale()))
         .monotone_depth(&stratum("deep"))
         .expect("weighted")
         .rank()
@@ -3819,7 +4112,7 @@ fn weight_for_depth_refuses_only_where_no_weight_can_reach() {
     // weaker assertion, and so would a weight that does not in fact reach the
     // depth it was asked for.
     let weight = decay
-        .weight_for_depth(saturation)
+        .weight_for_depth(PRECISION_12, saturation)
         .expect("the saturation depth itself is reachable");
     assert!(weight.into_raw() > 0);
     assert_eq!(
@@ -3832,7 +4125,7 @@ fn weight_for_depth_refuses_only_where_no_weight_can_reach() {
     );
 
     // And one rank past it, which no weight reaches.
-    match decay.weight_for_depth(saturation + 1) {
+    match decay.weight_for_depth(PRECISION_12, saturation + 1) {
         Err(FusionError::DepthUnreachable {
             depth,
             saturates_at,
@@ -3860,14 +4153,14 @@ fn weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_p
     // consumer's own internal clamp.
     let folded = DecayRule::WeightedReciprocalRank { k: K };
     let weight = folded
-        .weight_for_depth(DEEPEST_PLAN_DEPTH)
+        .weight_for_depth(PRECISION_12, DEEPEST_PLAN_DEPTH)
         .expect("the deepest expressible depth is reachable under the folded rule");
     assert!(
         weight.into_raw() > 0,
         "a depth a plan can record must be priced, not refused"
     );
 
-    match folded.weight_for_depth(DEEPEST_PLAN_DEPTH + 1) {
+    match folded.weight_for_depth(PRECISION_12, DEEPEST_PLAN_DEPTH + 1) {
         Err(FusionError::DepthBeyondPlanRange { depth, limit }) => {
             assert_eq!(depth, DEEPEST_PLAN_DEPTH + 1);
             assert_eq!(limit, DEEPEST_PLAN_DEPTH);
@@ -3880,7 +4173,7 @@ fn weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_p
     // refuses for the range instead, because that is the first fact about the
     // request that is wrong, and it is wrong whatever the rule.
     let truncated = DecayRule::ReciprocalRank { k: K };
-    match truncated.weight_for_depth(DEEPEST_PLAN_DEPTH) {
+    match truncated.weight_for_depth(PRECISION_12, DEEPEST_PLAN_DEPTH) {
         Err(FusionError::DepthUnreachable { saturates_at, .. }) => assert!(
             saturates_at < DEEPEST_PLAN_DEPTH,
             "a saturation report must name a rank the rule actually reached, got {saturates_at}"
@@ -3889,7 +4182,7 @@ fn weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_p
             panic!("expected the truncated rule to saturate well inside the range, got {other:?}")
         }
     }
-    match truncated.weight_for_depth(DEEPEST_PLAN_DEPTH + 1) {
+    match truncated.weight_for_depth(PRECISION_12, DEEPEST_PLAN_DEPTH + 1) {
         Err(FusionError::DepthBeyondPlanRange { depth, limit }) => {
             assert_eq!(depth, DEEPEST_PLAN_DEPTH + 1);
             assert_eq!(limit, DEEPEST_PLAN_DEPTH);
@@ -3906,10 +4199,10 @@ fn the_plan_range_refusal_and_the_saturation_refusal_are_different_variants() {
     // saturation where none occurred, so the distinction is pinned here.
     let truncated = DecayRule::ReciprocalRank { k: K };
     let saturated = truncated
-        .weight_for_depth(DEEPEST_PLAN_DEPTH)
+        .weight_for_depth(PRECISION_12, DEEPEST_PLAN_DEPTH)
         .expect_err("the truncated rule cannot reach the plan's deepest depth");
     let out_of_range = DecayRule::WeightedReciprocalRank { k: K }
-        .weight_for_depth(DEEPEST_PLAN_DEPTH + 1)
+        .weight_for_depth(PRECISION_12, DEEPEST_PLAN_DEPTH + 1)
         .expect_err("no plan can record a depth past its 32-bit field");
 
     assert!(
@@ -3951,15 +4244,15 @@ fn weight_for_depth_refuses_a_depth_of_zero_and_answers_a_depth_of_one() {
         DecayRule::ReciprocalRank { k: K },
         DecayRule::WeightedReciprocalRank { k: K },
     ] {
-        match decay.weight_for_depth(0) {
+        match decay.weight_for_depth(PRECISION_12, 0) {
             Err(FusionError::InvalidRank { rank }) => assert_eq!(rank, 0),
             other => panic!("{decay:?}: expected a depth of zero to be refused, got {other:?}"),
         }
         assert_eq!(
             decay
-                .weight_for_depth(1)
+                .weight_for_depth(PRECISION_12, 1)
                 .expect("a single rank is a real depth"),
-            Fixed::from_raw(1),
+            Score::from_raw(1, PRECISION_12),
             "{decay:?}: one rank has no adjacent pair, so the lightest weight there is buys it"
         );
     }
@@ -3973,7 +4266,7 @@ fn the_truncated_rule_saturates_where_no_weight_can_lift_it() {
     // why `weight_for_depth` has a wall to report and why a caller that needs
     // more depth must change the rule rather than the weight.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let unit = deep_profile(decay, Fixed::ONE)
+    let unit = deep_profile(decay, PRECISION_12.score(PRECISION_12.scale()))
         .monotone_depth(&stratum("deep"))
         .expect("weighted")
         .rank()
@@ -3983,7 +4276,7 @@ fn the_truncated_rule_saturates_where_no_weight_can_lift_it() {
         "a unit weight orders about a million ranks, got {unit}"
     );
 
-    let heavy = Fixed::from_integer(1_000_000).expect("representable");
+    let heavy = Score::from_integer(1_000_000, PRECISION_12).expect("representable");
     let heavier = deep_profile(decay, heavy)
         .monotone_depth(&stratum("deep"))
         .expect("weighted")
@@ -4013,7 +4306,7 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
     // keeps growing past it, and reporting only "crossed / did not cross" would
     // flatten a curve spanning orders of magnitude into one bit.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let stratum = stratum("deep");
     let bound = profile
@@ -4095,7 +4388,7 @@ fn deepest_rank_within_width_matches_an_independently_walked_truth_at_several_to
     // independent walk, not in place of it: the walk is what actually proves
     // the arithmetic, the literal numbers just document what it produces here.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let stratum = stratum("deep");
 
@@ -4142,7 +4435,7 @@ fn deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in()
     // are asserted, per the repository's rule that a bound must be checked on
     // both the refused side and the neighbouring valid side.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let stratum = stratum("deep");
 
@@ -4191,7 +4484,7 @@ fn the_class_at_the_reported_depth_is_the_run_the_bounded_read_never_finishes() 
     // ranks longer than the tolerance rather than one, so equality would be a
     // claim this arithmetic does not make.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let stratum = stratum("deep");
 
@@ -4248,14 +4541,14 @@ fn the_bound_at_the_reported_depth_holds_where_the_width_is_nowhere_near_the_tol
     //
     // Every magnitude here was executed against this fixture.
     for (raw, decay, measured_width) in [
-        (100_i128, DecayRule::ReciprocalRank { k: K }, 40_u64),
+        (100_u128, DecayRule::ReciprocalRank { k: K }, 40_u64),
         (100, DecayRule::WeightedReciprocalRank { k: K }, 40),
         (121, DecayRule::ReciprocalRank { k: K }, 60),
         (121, DecayRule::WeightedReciprocalRank { k: K }, 61),
         (200, DecayRule::ReciprocalRank { k: K }, 6),
         (1_000, DecayRule::ReciprocalRank { k: K }, 2),
     ] {
-        let weight = Fixed::from_raw(raw);
+        let weight = Score::from_raw(raw, PRECISION_12);
         let profile = deep_profile(decay, weight);
         let stratum = stratum("deep");
 
@@ -4307,7 +4600,7 @@ fn a_tolerance_of_zero_is_refused_at_both_altitudes_and_a_tolerance_of_one_answe
     // Both altitudes are asserted, each beside its neighbouring valid case, per
     // the repository's rule that a refusal is proved from both sides.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let unweighted = stratum("never/declared");
     let stratum = stratum("deep");
@@ -4368,10 +4661,10 @@ fn a_depth_that_outruns_every_plan_is_saturation_and_not_the_ceiling_as_a_number
     // neither has a bound inside any plan's reach. A plan records a per-stratum
     // depth as a 32-bit rank, so there is nothing in that range left to report.
     let decay = DecayRule::WeightedReciprocalRank { k: K };
-    let scale = Fixed::ONE.into_raw();
+    let scale = PRECISION_12.score(PRECISION_12.scale()).into_raw();
     for weight in [
-        Fixed::from_raw(20_000_000 * scale),
-        Fixed::from_raw(1_000_000_000 * scale),
+        Score::from_raw(20_000_000 * scale, PRECISION_12),
+        Score::from_raw(1_000_000_000 * scale, PRECISION_12),
     ] {
         assert_eq!(
             decay
@@ -4392,7 +4685,7 @@ fn a_depth_that_outruns_every_plan_is_saturation_and_not_the_ceiling_as_a_number
 
     // The neighbouring weight below the wall answers with a real depth, so the
     // saturating pair above is about the wall and not about the question.
-    let below = Fixed::from_raw(18_000_000 * scale);
+    let below = Score::from_raw(18_000_000 * scale, PRECISION_12);
     let measured = decay
         .deepest_rank_within_width(below, 1)
         .expect("the arithmetic evaluates");
@@ -4412,7 +4705,7 @@ fn an_operand_the_decay_rule_refuses_is_propagated_rather_than_measured_as_a_cla
     // is reachable from the public surface with nothing else out of the
     // ordinary.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
     let profile = deep_profile(decay, weight);
     let stratum = stratum("deep");
 
@@ -4444,7 +4737,7 @@ fn the_decay_rule_reports_a_class_width_with_no_stratum_in_the_question() {
     // language binding, a profile author sizing a weight) would otherwise have
     // to invent an IRI to ask through, and an invented IRI is a minted one.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
 
     assert_eq!(
         decay
@@ -4484,7 +4777,7 @@ fn the_decay_rule_reports_a_class_width_with_no_stratum_in_the_question() {
     // same rank: the truncated rule has already lost resolution there and the
     // folded one still has it.
     let folded = DecayRule::WeightedReciprocalRank { k: K };
-    let heavy = Fixed::from_integer(1000).expect("a thousand is representable");
+    let heavy = Score::from_integer(1000, PRECISION_12).expect("a thousand is representable");
     let deep = deep_profile(decay, heavy)
         .monotone_depth(&stratum)
         .expect("weighted")
@@ -4519,12 +4812,12 @@ fn a_class_with_no_end_inside_a_plans_range_is_a_saturation_point_and_not_a_widt
     // rank one, so the class is the whole expressible range in both cases. A
     // bare number reported them as the identical width 4_294_967_295, which a
     // caller could log, plot, or divide by.
-    for raw in [1_i128, 50] {
+    for raw in [1_u128, 50] {
         for decay in [
             DecayRule::ReciprocalRank { k: K },
             DecayRule::WeightedReciprocalRank { k: K },
         ] {
-            let weight = Fixed::from_raw(raw);
+            let weight = Score::from_raw(raw, PRECISION_12);
             assert_eq!(
                 decay
                     .class_width(weight, 1)
@@ -4564,12 +4857,12 @@ fn a_class_with_no_end_inside_a_plans_range_is_a_saturation_point_and_not_a_widt
     // 100 whose class is forty ranks; both are far lighter than the 1_000_000
     // the rest of these tests use, and neither saturates.
     for (raw, decay, measured_width) in [
-        (99_i128, DecayRule::ReciprocalRank { k: K }, 38_u64),
+        (99_u128, DecayRule::ReciprocalRank { k: K }, 38_u64),
         (99, DecayRule::WeightedReciprocalRank { k: K }, 39),
         (100, DecayRule::ReciprocalRank { k: K }, 40),
         (100, DecayRule::WeightedReciprocalRank { k: K }, 40),
     ] {
-        let weight = Fixed::from_raw(raw);
+        let weight = Score::from_raw(raw, PRECISION_12);
         assert_eq!(
             decay
                 .class_width(weight, 1)
@@ -4594,7 +4887,7 @@ fn the_decay_rules_stratum_free_class_width_refuses_the_operands_it_cannot_evalu
     // most favourable thing this algebra can say, and returning it where
     // nothing was computed would be a false claim about an answer's quality.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let weight = Fixed::from_raw(1_000_000);
+    let weight = Score::from_raw(1_000_000, PRECISION_12);
 
     assert!(
         matches!(
@@ -4636,7 +4929,7 @@ fn a_stratum_this_profile_does_not_weight_is_an_absence_and_never_a_refusal() {
     // "the arithmetic could not be evaluated" — and collapsing either into the
     // other loses the one a caller needs to act on.
     let decay = DecayRule::ReciprocalRank { k: K };
-    let profile = deep_profile(decay, Fixed::from_raw(1_000_000));
+    let profile = deep_profile(decay, Score::from_raw(1_000_000, PRECISION_12));
     let unweighted = stratum("never/declared");
 
     assert!(
@@ -4698,7 +4991,7 @@ async fn collided_fusion() -> FusionResult<Term> {
 async fn collided_fusion_at(top_k: TopK) -> FusionResult<Term> {
     // One thousand raw units is `10^-9`: ranks one and two already share a
     // contribution, so every row below is decided by the tie-break.
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = profile(&[("text", weight), ("vector", weight)], K);
     let decay = DecayRule::ReciprocalRank { k: K };
     let scripted = |names: [&str; 4]| {
@@ -4889,11 +5182,23 @@ fn cut_on_a_tie_turns_on_the_bound_and_on_nothing_else() {
 /// whole engine exists to compute.
 #[test]
 fn two_streams_tagged_with_one_stratum_are_refused_while_two_distinct_strata_fuse() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let producers = || {
         (
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         )
     };
 
@@ -4924,7 +5229,7 @@ fn two_streams_tagged_with_one_stratum_are_refused_while_two_distinct_strata_fus
         2,
         "distinct strata contribute once each rather than being refused"
     );
-    let per_stratum = contribution(Fixed::ONE, 1, K).expect("fits");
+    let per_stratum = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
     assert_eq!(
         fused.rows[0].score,
         per_stratum.checked_add(per_stratum).expect("fits"),
@@ -4947,18 +5252,24 @@ fn a_stream_whose_stratum_the_profile_never_weights_is_refused_while_the_weighte
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                ),
             ),
             (
                 stratum("vector"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
+                    exhausted(1),
+                ),
             ),
         ]
     };
 
     // The violation: the profile weights `text` and says nothing about
     // `vector`, which is the stratum the second stream is tagged with.
-    let partial = profile(&[("text", Fixed::ONE)], K);
+    let partial = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         streams(),
         &partial,
@@ -4975,7 +5286,13 @@ fn a_stream_whose_stratum_the_profile_never_weights_is_refused_while_the_weighte
 
     // THE NEIGHBOURING CASE: the identical streams under a profile that does
     // declare the second stratum. Both producers reach the answer.
-    let complete = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let complete = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(streams(), &complete));
     assert_eq!(
         fused
@@ -5006,7 +5323,7 @@ fn a_stream_whose_stratum_the_profile_never_weights_is_refused_while_the_weighte
 /// failed request.
 #[test]
 fn a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is_reported() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
 
     // The violation: a row went out, and then the producer broke. A clean
     // receipt can no longer describe what this stream did.
@@ -5014,7 +5331,7 @@ fn a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is
         stratum("text"),
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
                 Step::Fail(ProtocolError::ErrorAfterRows { rows_before: 1 }),
             ],
             exhausted(0),
@@ -5038,7 +5355,10 @@ fn a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is
     // variable, and the row must reach the answer.
     let intact = vec![(
         stratum("text"),
-        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        MockStream::new(
+            vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+            exhausted(1),
+        ),
     )];
     let fused = block_on(run_fuse(intact, &profile));
     assert_eq!(
@@ -5091,7 +5411,7 @@ fn a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is
 /// property of the stream rather than of the moment it was asked.
 #[test]
 fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end_fuse() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
 
     // The violation, at the fusion boundary: the producer emits a row and then
     // reports that it has no end to declare.
@@ -5099,7 +5419,7 @@ fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end
         stratum("text"),
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
                 Step::Fail(ProtocolError::NeverEndingSource),
             ],
             exhausted(0),
@@ -5123,7 +5443,10 @@ fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end
     // its end. It fuses, and the trailer reports the count it declared.
     let terminating = vec![(
         stratum("text"),
-        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        MockStream::new(
+            vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+            exhausted(1),
+        ),
     )];
     let fused = block_on(run_fuse(terminating, &profile));
     assert_eq!(fused.rows.len(), 1);
@@ -5180,7 +5503,8 @@ fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end
 /// constructed — it computes a contribution, and it fuses a stream.
 #[test]
 fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused() {
-    let one_weight = || BTreeMap::from([(stratum("text"), Fixed::ONE)]);
+    let one_weight =
+        || BTreeMap::from([(stratum("text"), PRECISION_12.score(PRECISION_12.scale()))]);
 
     // The violation: a smoothing constant of zero. Rank one would then carry the
     // whole weight and the reciprocal would be undefined at rank zero.
@@ -5188,7 +5512,7 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
         DecayRule::ReciprocalRank { k: 0 },
         DecayRule::WeightedReciprocalRank { k: 0 },
     ] {
-        let result = FusionProfile::with_decay(one_weight(), decay);
+        let result = FusionProfile::with_decay(one_weight(), decay, PRECISION_12);
         assert!(
             matches!(result, Err(FusionError::InvalidK { k: 0 })),
             "expected InvalidK for {decay:?}, got {result:?}"
@@ -5201,21 +5525,29 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
         DecayRule::ReciprocalRank { k: 1 },
         DecayRule::WeightedReciprocalRank { k: 1 },
     ] {
-        let smallest = FusionProfile::with_decay(one_weight(), decay)
+        let smallest = FusionProfile::with_decay(one_weight(), decay, PRECISION_12)
             .expect("K = 1 is the smallest constant the law admits");
         assert_eq!(smallest.k_parameter(), 1);
         assert_eq!(smallest.decay(), decay);
-        let value = contribution_under(smallest.decay(), Fixed::ONE, 1)
-            .expect("the admitted constant computes a contribution at rank one");
+        let value = contribution_under(
+            smallest.decay(),
+            PRECISION_12.score(PRECISION_12.scale()),
+            1,
+        )
+        .expect("the admitted constant computes a contribution at rank one");
         assert!(
-            value > Fixed::ZERO,
+            value > PRECISION_12.score(0),
             "a profile at the boundary produces a real contribution, got {value:?}"
         );
     }
 
     // The violation: no stratum weights at all. Checked under a valid `K`, so
     // the dimension under test is the only one that can fail.
-    let result = FusionProfile::with_decay(BTreeMap::new(), DecayRule::ReciprocalRank { k: K });
+    let result = FusionProfile::with_decay(
+        BTreeMap::new(),
+        DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
+    );
     assert!(
         matches!(result, Err(FusionError::EmptyWeights)),
         "expected EmptyWeights, got {result:?}"
@@ -5224,25 +5556,35 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
     // THE NEIGHBOURING CASE: exactly one weight, which is the smallest set that
     // is not empty. It constructs, it derives a contribution maximum of one, and
     // it fuses a stream under the stratum it names.
-    let single = FusionProfile::with_decay(one_weight(), DecayRule::ReciprocalRank { k: K })
-        .expect("one stratum weight is a profile");
+    let single = FusionProfile::with_decay(
+        one_weight(),
+        DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
+    )
+    .expect("one stratum weight is a profile");
     assert_eq!(
         single.max_contributions(),
         1,
         "one stratum, one contribution maximum"
     );
-    assert_eq!(single.weight(&stratum("text")), Some(Fixed::ONE));
+    assert_eq!(
+        single.weight(&stratum("text")),
+        Some(PRECISION_12.score(PRECISION_12.scale()))
+    );
     let fused = block_on(run_fuse(
         vec![(
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            ),
         )],
         &single,
     ));
     assert_eq!(fused.rows.len(), 1, "a one-stratum profile fuses");
     assert_eq!(
         fused.rows[0].score,
-        contribution(Fixed::ONE, 1, K).expect("fits")
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits")
     );
 }
 
@@ -5280,8 +5622,13 @@ fn attests_short(generation: &str, reason: &str) -> PfAttestation {
 // happened, and this is the channel it says it on.
 #[test]
 fn a_depth_ending_is_carried_and_its_rank_is_still_measured_against_the_rows() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
-    let scripted = || vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")];
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
+    let scripted = || {
+        vec![
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+        ]
+    };
 
     let stopped = block_on(run_fuse(
         vec![(
@@ -5333,7 +5680,7 @@ fn a_depth_ending_is_carried_and_its_rank_is_still_measured_against_the_rows() {
         vec![(
             stratum("text"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a")],
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
                 ProducerReceipt::DepthReached { rank: 1 },
             ),
         )],
@@ -5352,27 +5699,37 @@ fn a_depth_ending_is_carried_and_its_rank_is_still_measured_against_the_rows() {
 fn the_trailer_carries_every_handed_streams_attestation_and_invents_none() {
     let profile = profile(
         &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::ONE),
-            ("geo", Fixed::ONE),
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+            ("geo", PRECISION_12.score(PRECISION_12.scale())),
         ],
         K,
     );
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(attests("a")),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            )
+            .attesting(attests("a")),
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1))
-                .attesting(attests_short("b", "shard 3 of 4 failed to load")),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
+                exhausted(1),
+            )
+            .attesting(attests_short("b", "shard 3 of 4 failed to load")),
         ),
         // The third says nothing at all, which is what a stream that descends
         // from no index honestly reports.
         (
             stratum("geo"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "c")], exhausted(1)),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "c")],
+                exhausted(1),
+            ),
         ),
     ];
 
@@ -5426,14 +5783,14 @@ fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
     // which is exactly the path that would have destroyed an incompleteness
     // held as a terminal fact, because a stopped stream never returns a receipt
     // at all.
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let streams = vec![(
         stratum("text"),
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
-                row(2, Fixed::ONE, K, "b"),
-                row(3, Fixed::ONE, K, "c"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
             ],
             exhausted(3),
         )
@@ -5479,16 +5836,29 @@ fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
 // produced real rows in a real order.
 #[test]
 fn an_incomplete_stratum_makes_the_scores_estimates_without_refusing_the_rows() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = |vector: PfAttestation| {
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                ),
             ),
             (
                 stratum("vector"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)).attesting(vector),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
+                    exhausted(1),
+                )
+                .attesting(vector),
             ),
         ]
     };
@@ -5562,19 +5932,32 @@ fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
     // The injectivity fixtures at the foot of this test need profiles of their
     // own, and they are built here, before the binding below shadows the
     // helper that builds them.
-    let split_profile = profile(&[("ab", Fixed::ONE)], K);
-    let joined_profile = profile(&[("a", Fixed::ONE)], K);
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let split_profile = profile(&[("ab", PRECISION_12.score(PRECISION_12.scale()))], K);
+    let joined_profile = profile(&[("a", PRECISION_12.score(PRECISION_12.scale()))], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = |text: PfAttestation| {
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(text),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                )
+                .attesting(text),
             ),
             (
                 stratum("vector"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1))
-                    .attesting(attests_short("v-1", "one shard offline")),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b")],
+                    exhausted(1),
+                )
+                .attesting(attests_short("v-1", "one shard offline")),
             ),
         ]
     };
@@ -5626,15 +6009,22 @@ fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
     let split = block_on(run_fuse(
         vec![(
             stratum("ab"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(attests("c")),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            )
+            .attesting(attests("c")),
         )],
         &split_profile,
     ));
     let joined = block_on(run_fuse(
         vec![(
             stratum("a"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
-                .attesting(attests("bc")),
+            MockStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                exhausted(1),
+            )
+            .attesting(attests("bc")),
         )],
         &joined_profile,
     ));
@@ -5657,14 +6047,14 @@ fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
 // of them at `open`.
 #[test]
 fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let streams = vec![(
         stratum("text"),
         MockStream::new(
             vec![
-                row(1, Fixed::ONE, K, "a"),
-                row(2, Fixed::ONE, K, "b"),
-                row(3, Fixed::ONE, K, "c"),
+                row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
             ],
             exhausted(3),
         )
@@ -5777,7 +6167,7 @@ struct StratumSpec {
     /// soundness claim below rests on.
     tags: Vec<&'static str>,
     /// This stratum's weight in the fixture profile.
-    weight: Fixed,
+    weight: Score,
     /// The items it emits, in rank order, ranks 1..=len.
     items: Vec<String>,
 }
@@ -5818,7 +6208,7 @@ enum Declared {
 }
 
 fn spec_profile(spec: &[StratumSpec]) -> FusionProfile {
-    let weights: Vec<(&str, Fixed)> = spec
+    let weights: Vec<(&str, Score)> = spec
         .iter()
         .map(|stratum| (stratum.name, stratum.weight))
         .collect();
@@ -5912,27 +6302,28 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
 
 /// The eager oracle: every item's total, computed from the script rather than
 /// from the engine, ordered by the declared total tie-break.
-fn spec_oracle(spec: &[StratumSpec]) -> Vec<(String, Fixed, u64)> {
-    let mut totals: BTreeMap<String, (Fixed, u64)> = BTreeMap::new();
+fn spec_oracle(spec: &[StratumSpec]) -> Vec<(String, Score, u64)> {
+    let mut totals: BTreeMap<String, (Score, u64)> = BTreeMap::new();
     for entry in spec {
         for (index, item) in entry.items.iter().enumerate() {
             let rank = u64::try_from(index + 1).expect("fixture ranks fit");
             let value = contribution(entry.weight, rank, K).expect("fixture contributions fit");
             let seen = totals
                 .entry(item.clone())
-                .or_insert((Fixed::ZERO, u64::MAX));
+                .or_insert((PRECISION_12.score(0), u64::MAX));
             seen.0 = seen.0.checked_add(value).expect("fixture sums fit");
             seen.1 = seen.1.min(rank);
         }
     }
-    let mut ordered: Vec<(String, Fixed, u64)> = totals
+    let mut ordered: Vec<(String, Score, u64)> = totals
         .into_iter()
         .map(|(item, (score, rank))| (item, score, rank))
         .collect();
     ordered.sort_by(|left, right| {
         right
             .1
-            .cmp(&left.1)
+            .partial_cmp(&left.1)
+            .expect("scores use the same fixture precision")
             .then(left.2.cmp(&right.2))
             .then(left.0.cmp(&right.0))
     });
@@ -5973,13 +6364,13 @@ fn disjoint(docs: u64, people: u64) -> Vec<StratumSpec> {
         StratumSpec {
             name: "docs",
             tags: vec![DOMAIN_DOCS],
-            weight: Fixed::ONE,
+            weight: PRECISION_12.score(PRECISION_12.scale()),
             items: block_items("doc", docs),
         },
         StratumSpec {
             name: "people",
             tags: vec![DOMAIN_PEOPLE],
-            weight: Fixed::ONE,
+            weight: PRECISION_12.score(PRECISION_12.scale()),
             items: block_items("person", people),
         },
     ]
@@ -6027,19 +6418,19 @@ fn case_cross_cutting() -> Vec<StratumSpec> {
         StratumSpec {
             name: "docs",
             tags: vec![DOMAIN_DOCS],
-            weight: Fixed::ONE,
+            weight: PRECISION_12.score(PRECISION_12.scale()),
             items: docs,
         },
         StratumSpec {
             name: "people",
             tags: vec![DOMAIN_PEOPLE],
-            weight: Fixed::ONE,
+            weight: PRECISION_12.score(PRECISION_12.scale()),
             items: people,
         },
         StratumSpec {
             name: "prior",
             tags: vec![DOMAIN_DOCS, DOMAIN_PEOPLE],
-            weight: Fixed::ONE,
+            weight: PRECISION_12.score(PRECISION_12.scale()),
             items: mixed,
         },
     ]
@@ -6171,7 +6562,7 @@ fn an_undeclared_read_that_may_ask_bounds_itself_where_the_threshold_falls() {
 
     // (0) One answer, three times. Whatever settles finality, it never settles
     //     which rows come back.
-    let rows = |result: &FusionResult<Term>| -> Vec<(String, Fixed)> {
+    let rows = |result: &FusionResult<Term>| -> Vec<(String, Score)> {
         result
             .rows
             .iter()
@@ -6231,9 +6622,13 @@ fn an_undeclared_read_that_may_ask_bounds_itself_where_the_threshold_falls() {
         .len();
     let crossing = purrdf_retrieval::crossing_rank_at(
         DecayRule::ReciprocalRank { k: K },
-        &vec![Fixed::ONE; namers],
+        PRECISION_12,
+        &vec![PRECISION_12.score(PRECISION_12.scale()); namers],
         deepest,
-        &[Fixed::ONE, Fixed::ONE],
+        &[
+            PRECISION_12.score(PRECISION_12.scale()),
+            PRECISION_12.score(PRECISION_12.scale()),
+        ],
     )
     .expect("the fixture crossing is computable")
     .rank()
@@ -6352,7 +6747,8 @@ fn a_bounded_domain_run_reports_a_ceiling_and_an_exhausted_one_reports_exhaustio
         // test. A head is the last row pulled and is not yet merged, so
         // everything at or above its contribution was read and nothing below
         // it was.
-        let expected = contribution(Fixed::ONE, pulled, K).expect("the fixture contribution fits");
+        let expected = contribution(PRECISION_12.score(PRECISION_12.scale()), pulled, K)
+            .expect("the fixture contribution fits");
         assert_eq!(
             a.trailer.statuses.get(&stratum(name)),
             Some(&ProducerStatus::CeilingReached { bound: expected }),
@@ -6384,7 +6780,8 @@ fn a_bounded_domain_run_reports_a_ceiling_and_an_exhausted_one_reports_exhaustio
     assert_eq!(
         c.trailer.statuses.get(&stratum("people")),
         Some(&ProducerStatus::CeilingReached {
-            bound: contribution(Fixed::ONE, people_pulled, K).expect("the contribution fits"),
+            bound: contribution(PRECISION_12.score(PRECISION_12.scale()), people_pulled, K)
+                .expect("the contribution fits"),
         }),
     );
 }
@@ -6402,7 +6799,7 @@ fn a_bounded_domain_run_reports_a_ceiling_and_an_exhausted_one_reports_exhaustio
 /// have read as far as the draining one, which is the whole thing being
 /// removed. It is checked below as the invariant it really is: a certified
 /// row's score is never beneath the threshold it was certified against.
-fn answer_of(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
+fn answer_of(row: &FusedRow) -> (Term, Score, Vec<(Iri, u64, Score)>) {
     (
         row.entity.clone(),
         row.score,
@@ -6429,7 +6826,7 @@ fn answer_of(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
 fn assert_same_answer(
     declared: &FusionResult<Term>,
     unrestricted: &FusionResult<Term>,
-    oracle: &[(String, Fixed, u64)],
+    oracle: &[(String, Score, u64)],
     top_k: TopK,
     context: &str,
 ) {
@@ -6458,7 +6855,7 @@ fn assert_same_answer(
 
     // And against the oracle, so "both engines agree" cannot be both engines
     // being wrong the same way.
-    let expected: Vec<&(String, Fixed, u64)> = oracle.iter().take(top_k.get()).collect();
+    let expected: Vec<&(String, Score, u64)> = oracle.iter().take(top_k.get()).collect();
     assert_eq!(
         declared.rows.len(),
         expected.len(),
@@ -6582,9 +6979,9 @@ fn differential_spec(index: u64) -> Vec<StratumSpec> {
         chosen
     };
     let weights = [
-        Fixed::ONE,
-        Fixed::from_raw(700_000_000_000),
-        Fixed::from_raw(300_000_000_000),
+        PRECISION_12.score(PRECISION_12.scale()),
+        Score::from_raw(700_000_000_000, PRECISION_12),
+        Score::from_raw(300_000_000_000, PRECISION_12),
     ];
     let docs_items = pick(&mut state, &[DOMAIN_DOCS]);
     let people_items = pick(&mut state, &[DOMAIN_PEOPLE]);
@@ -6667,12 +7064,12 @@ fn the_differential_holds_under_declared_domains_over_many_configurations() {
 /// The smallest weight the fixed-point carries, and the one whose decay collides
 /// immediately: at this weight ranks one and two already share a contribution value.
 ///
-/// `Fixed::ONE` collides too, but not until rank 1_000_941 — past the end of any
-/// fixture here — so a collision assertion over a `case_a` run at `Fixed::ONE` is an
+/// `PRECISION_12.score(PRECISION_12.scale())` collides too, but not until rank 1_000_941 — past the end of any
+/// fixture here — so a collision assertion over a `case_a` run at `PRECISION_12.score(PRECISION_12.scale())` is an
 /// assertion that zero equals zero. It would pass with the collision counter emptied,
 /// and it would pass against the very estimate its own message forbids. This is the
 /// weight the two sibling tests that enter the collided regime already use.
-const COLLIDED_WEIGHT: Fixed = Fixed::from_raw(1);
+const COLLIDED_WEIGHT: Score = Score::from_raw(1, PRECISION_12);
 
 /// [`case_a`] at [`COLLIDED_WEIGHT`]: the same streams, the same blocks, the same
 /// lengths, weighted so that adjacent ranks collide from the second one on.
@@ -6766,7 +7163,13 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
     let shared = "http://example.org/doc/000001";
     let docs = || {
         MockStream::new(
-            vec![row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS)],
+            vec![row_in(
+                1,
+                PRECISION_12.score(PRECISION_12.scale()),
+                K,
+                shared,
+                DOMAIN_DOCS,
+            )],
             ProducerReceipt::Exhausted { rows_emitted: 1 },
         )
     };
@@ -6792,10 +7195,16 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                     // `people` says this candidate came from ITS block, which is
                     // what makes the pair of declarations contradictory rather
                     // than merely unusual.
-                    row_in(1, Fixed::ONE, K, shared, DOMAIN_PEOPLE),
+                    row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        DOMAIN_PEOPLE,
+                    ),
                     row_in(
                         2,
-                        Fixed::ONE,
+                        PRECISION_12.score(PRECISION_12.scale()),
                         K,
                         "http://example.org/person/000001",
                         DOMAIN_PEOPLE,
@@ -6814,7 +7223,13 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
     ];
     let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         in_frontier,
-        &profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K),
+        &profile(
+            &[
+                ("docs", PRECISION_12.score(PRECISION_12.scale())),
+                ("people", PRECISION_12.score(PRECISION_12.scale())),
+            ],
+            K,
+        ),
         TopK::new(10),
     ))
     .expect_err("a declaration this row contradicts must be refused");
@@ -6863,12 +7278,18 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 vec![
                     row_in(
                         1,
-                        Fixed::ONE,
+                        PRECISION_12.score(PRECISION_12.scale()),
                         K,
                         "http://example.org/person/000001",
                         DOMAIN_PEOPLE,
                     ),
-                    row_in(2, Fixed::ONE, K, shared, DOMAIN_PEOPLE),
+                    row_in(
+                        2,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        DOMAIN_PEOPLE,
+                    ),
                 ],
                 exhausted(2),
             )
@@ -6883,7 +7304,13 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
     ];
     let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         after_emission,
-        &profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K),
+        &profile(
+            &[
+                ("docs", PRECISION_12.score(PRECISION_12.scale())),
+                ("people", PRECISION_12.score(PRECISION_12.scale())),
+            ],
+            K,
+        ),
         TopK::new(10),
     ))
     .expect_err("the promise is held for the whole fusion, not only for the frontier");
@@ -6920,7 +7347,13 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
 #[test]
 fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
     let shared = "http://example.org/doc/000001";
-    let law = profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K);
+    let law = profile(
+        &[
+            ("docs", PRECISION_12.score(PRECISION_12.scale())),
+            ("people", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     // Overlapping declarations: both admit `documents`, so a candidate both name
     // is perfectly possible and the declaration-level refusal stays silent.
     let overlapping = || {
@@ -6937,7 +7370,13 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
             (
                 stratum("docs"),
                 MockStream::new(
-                    vec![row_in(1, Fixed::ONE, K, shared, left_block)],
+                    vec![row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        left_block,
+                    )],
                     exhausted(1),
                 )
                 .declaring(overlapping()),
@@ -6945,7 +7384,13 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
             (
                 stratum("people"),
                 MockStream::new(
-                    vec![row_in(1, Fixed::ONE, K, shared, right_block)],
+                    vec![row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        right_block,
+                    )],
                     exhausted(1),
                 )
                 .declaring(overlapping()),
@@ -7011,7 +7456,13 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
 #[test]
 fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses() {
     let shared = "http://example.org/doc/000001";
-    let law = profile(&[("wide", Fixed::ONE), ("people", Fixed::ONE)], K);
+    let law = profile(
+        &[
+            ("wide", PRECISION_12.score(PRECISION_12.scale())),
+            ("people", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let restricted = || {
         StreamContract::new(
             purrdf_sparql_eval::RankLaw::Ordinal,
@@ -7030,7 +7481,13 @@ fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses(
             (
                 stratum("people"),
                 MockStream::new(
-                    vec![row_in(1, Fixed::ONE, K, shared, DOMAIN_PEOPLE)],
+                    vec![row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        DOMAIN_PEOPLE,
+                    )],
                     exhausted(1),
                 )
                 .declaring(restricted()),
@@ -7043,7 +7500,13 @@ fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses(
     // in two blocks, and an unrestricted declaration does not make the claim
     // unfalsifiable — it only means this stream was never obliged to make it.
     let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        pair(row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS)),
+        pair(row_in(
+            1,
+            PRECISION_12.score(PRECISION_12.scale()),
+            K,
+            shared,
+            DOMAIN_DOCS,
+        )),
         &law,
         TopK::new(10),
     ))
@@ -7060,7 +7523,7 @@ fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses(
     // Silent, which is what an unrestricted stream owes: no block, nothing to
     // contradict, and the two streams fuse the shared candidate into one row.
     let quiet = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        pair(row(1, Fixed::ONE, K, shared)),
+        pair(row(1, PRECISION_12.score(PRECISION_12.scale()), K, shared)),
         &law,
         TopK::new(10),
     ))
@@ -7080,7 +7543,7 @@ fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses(
 #[test]
 fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
     let shared = "http://example.org/doc/000001";
-    let law = profile(&[("docs", Fixed::ONE)], K);
+    let law = profile(&[("docs", PRECISION_12.score(PRECISION_12.scale()))], K);
     let repeating = || {
         StreamContract::new(
             purrdf_sparql_eval::RankLaw::Ordinal,
@@ -7095,8 +7558,20 @@ fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
             stratum("docs"),
             MockStream::new(
                 vec![
-                    row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS),
-                    row_in(2, Fixed::ONE, K, shared, second_block),
+                    row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        DOMAIN_DOCS,
+                    ),
+                    row_in(
+                        2,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        shared,
+                        second_block,
+                    ),
                 ],
                 exhausted(2),
             )
@@ -7159,7 +7634,13 @@ fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
 #[test]
 fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise() {
     let shared = "http://example.org/doc/000001";
-    let law = profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K);
+    let law = profile(
+        &[
+            ("docs", PRECISION_12.score(PRECISION_12.scale())),
+            ("people", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     // Each side is a declaration and the row that backs it. A restricted stream
     // owes a block on every row, and both sides name the block the shared
     // candidate is really in — it is one document, and it is in one block, which
@@ -7176,17 +7657,25 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
             ),
         ]
     };
-    let blockless = || row(1, Fixed::ONE, K, shared);
-    let in_docs = || row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS);
+    let blockless = || row(1, PRECISION_12.score(PRECISION_12.scale()), K, shared);
+    let in_docs = || {
+        row_in(
+            1,
+            PRECISION_12.score(PRECISION_12.scale()),
+            K,
+            shared,
+            DOMAIN_DOCS,
+        )
+    };
 
     // (i) No declaration at all: one row, two contributions, the sum of both.
     let unrestricted = block_on(run_fuse(
         both_naming((unique_items(), blockless()), (unique_items(), blockless())),
         &law,
     ));
-    let doubled = contribution(Fixed::ONE, 1, K)
+    let doubled = contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K)
         .expect("fits")
-        .checked_add(contribution(Fixed::ONE, 1, K).expect("fits"))
+        .checked_add(contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits"))
         .expect("fits");
     assert_eq!(unrestricted.rows.len(), 1);
     assert_eq!(unrestricted.rows[0].entity, Term::new(shared));
@@ -7311,10 +7800,14 @@ fn a_declaration_never_moves_the_fusion_profiles_identity() {
 #[test]
 fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification() {
     let law = profile(
-        &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
+        &[
+            ("dense", PRECISION_12.score(PRECISION_12.scale())),
+            ("sparse", ZERO_CONTRIBUTING_WEIGHT),
+        ],
         K,
     );
-    let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
+    let dense_contribution =
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits");
     let target = "http://example.org/doc/000001";
     let same_block = || {
         StreamContract::new(
@@ -7330,7 +7823,13 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
         (
             stratum("dense"),
             MockStream::new(
-                vec![row_in(1, Fixed::ONE, K, target, DOMAIN_DOCS)],
+                vec![row_in(
+                    1,
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    K,
+                    target,
+                    DOMAIN_DOCS,
+                )],
                 exhausted(1),
             )
             .declaring(same_block()),
@@ -7375,7 +7874,10 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
          awaited — the declaration licenses skipping only what it excludes"
     );
     assert_eq!(fused.contributions[0].0, stratum("dense"));
-    assert_eq!(fused.contributions[1], (stratum("sparse"), 2, Fixed::ZERO));
+    assert_eq!(
+        fused.contributions[1],
+        (stratum("sparse"), 2, PRECISION_12.score(0))
+    );
 }
 
 // T6.9's engine-side half: the trailer echoes the declarations the fusion ran
@@ -7464,20 +7966,26 @@ fn lossy_contract() -> StreamContract {
 // trailer alone, and the producer's own string arrives byte for byte.
 #[test]
 fn an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    vec![(row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"))],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    vec![(row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"))],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(lossy_contract()),
@@ -7509,12 +8017,12 @@ fn an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer() 
 // never have to read an absent key as a claim.
 #[test]
 fn an_exhaustive_stratum_is_reported_rather_than_left_out() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let fused = block_on(run_fuse(
         vec![(
             stratum("text"),
             MockStream::new(
-                vec![(row(1, Fixed::ONE, K, "a"))],
+                vec![(row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"))],
                 ProducerReceipt::Exhausted { rows_emitted: 1 },
             ),
         )],
@@ -7534,7 +8042,13 @@ fn an_exhaustive_stratum_is_reported_rather_than_left_out() {
 // producers there were.
 #[test]
 fn the_fidelity_map_is_keyed_like_the_maps_beside_it() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
@@ -7563,12 +8077,12 @@ fn the_fidelity_map_is_keyed_like_the_maps_beside_it() {
 // it to prose.
 #[test]
 fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
-    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let profile = profile(&[("vector", PRECISION_12.score(PRECISION_12.scale()))], K);
     let fused = block_on(run_fuse(
         vec![(
             stratum("vector"),
             MockStream::new(
-                vec![(row(1, Fixed::ONE, K, "a"))],
+                vec![(row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"))],
                 ProducerReceipt::Exhausted { rows_emitted: 1 },
             )
             .declaring(lossy_contract()),
@@ -7602,20 +8116,26 @@ fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
 // it reported before this term existed.
 #[test]
 fn a_fusion_of_exhaustive_producers_is_still_exact() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    vec![(row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"))],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![(row(1, Fixed::ONE, K, "b"))],
+                    vec![(row(1, PRECISION_12.score(PRECISION_12.scale()), K, "b"))],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 ),
             ),
@@ -7643,15 +8163,15 @@ fn a_fusion_of_exhaustive_producers_is_still_exact() {
 // go missing in exactly the runs where the caller read shallowly.
 #[test]
 fn a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity() {
-    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let profile = profile(&[("vector", PRECISION_12.score(PRECISION_12.scale()))], K);
     let mut fusion = FusionStream::new(
         vec![(
             stratum("vector"),
             MockStream::new(
                 vec![
-                    (row(1, Fixed::ONE, K, "a")),
-                    (row(2, Fixed::ONE, K, "b")),
-                    (row(3, Fixed::ONE, K, "c")),
+                    (row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")),
+                    (row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b")),
+                    (row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c")),
                 ],
                 ProducerReceipt::Exhausted { rows_emitted: 3 },
             )
@@ -7680,12 +8200,15 @@ fn a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity() {
 // the first row, so certifying more rows moves the statuses and never this.
 #[test]
 fn the_exactness_verdict_does_not_move_as_a_caller_reads_deeper() {
-    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let profile = profile(&[("vector", PRECISION_12.score(PRECISION_12.scale()))], K);
     let mut fusion = FusionStream::new(
         vec![(
             stratum("vector"),
             MockStream::new(
-                vec![(row(1, Fixed::ONE, K, "a")), (row(2, Fixed::ONE, K, "b"))],
+                vec![
+                    (row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")),
+                    (row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b")),
+                ],
                 ProducerReceipt::Exhausted { rows_emitted: 2 },
             )
             .declaring(lossy_contract()),
@@ -7716,7 +8239,7 @@ fn the_exactness_verdict_does_not_move_as_a_caller_reads_deeper() {
 // into the mouth of a producer that never spoke.
 #[test]
 fn a_stratum_added_after_the_fact_declares_nothing() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let fused = block_on(run_fuse(
         vec![(
             stratum("text"),
@@ -7752,7 +8275,7 @@ fn a_stratum_added_after_the_fact_declares_nothing() {
 // ---------------------------------------------------------------------------
 
 /// The interval's two terms, or a panic naming what arrived instead.
-fn bounds(row: &FusedRow) -> (Fixed, Fixed) {
+fn bounds(row: &FusedRow) -> (Score, Score) {
     match &row.interval {
         ScoreInterval::Bounded { deficit, inflation } => (*deficit, *inflation),
         ScoreInterval::Unbounded { perturbed } => {
@@ -7785,12 +8308,15 @@ fn perturbed_contract() -> StreamContract {
 // not earn. A one-sided implementation returns zero here and fails.
 #[test]
 fn a_row_a_lossy_stratum_named_carries_an_inflation_term() {
-    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let profile = profile(&[("vector", PRECISION_12.score(PRECISION_12.scale()))], K);
     let fused = block_on(run_fuse(
         vec![(
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                ],
                 ProducerReceipt::Exhausted { rows_emitted: 2 },
             )
             .declaring(lossy_contract()),
@@ -7801,7 +8327,7 @@ fn a_row_a_lossy_stratum_named_carries_an_inflation_term() {
     for emitted in &fused.rows {
         let (_, inflation) = bounds(emitted);
         assert!(
-            inflation > Fixed::ZERO,
+            inflation > PRECISION_12.score(0),
             "reciprocal-rank fusion scores by RANK, so a row the lossy stratum \
              named may have been promoted by a row it missed -- its whole \
              contribution is therefore suspect, and calling the score a mere \
@@ -7821,12 +8347,15 @@ fn a_row_a_lossy_stratum_named_carries_an_inflation_term() {
 // row, so an answer over undegraded producers reads exactly as it always did.
 #[test]
 fn an_exhaustive_fusion_carries_zero_width_intervals() {
-    let profile = profile(&[("text", Fixed::ONE)], K);
+    let profile = profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K);
     let fused = block_on(run_fuse(
         vec![(
             stratum("text"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                ],
                 ProducerReceipt::Exhausted { rows_emitted: 2 },
             ),
         )],
@@ -7836,21 +8365,78 @@ fn an_exhaustive_fusion_carries_zero_width_intervals() {
     for emitted in &fused.rows {
         assert_eq!(
             bounds(emitted),
-            (Fixed::ZERO, Fixed::ZERO),
+            (PRECISION_12.score(0), PRECISION_12.score(0)),
             "nothing was withheld and nothing was promoted"
         );
     }
     assert_eq!(
         fused.trailer.unemitted_ceiling,
-        Some(Fixed::ZERO),
+        Some(PRECISION_12.score(0)),
         "every stream ran out and none of them could have missed a row, so \
          there is nothing outside this answer worth anything at all"
     );
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         fused.rows.len(),
         "so the whole answer is certain, which is what this engine always said"
     );
+
+    // Public rows remain checked even under an exact trailer or an unknown
+    // absentee bound: malformed intervals must not panic or certify a prefix.
+    let mut supplied: Vec<_> = fused.rows.iter().cloned().collect();
+    supplied[0].interval = ScoreInterval::Bounded {
+        inflation: PRECISION_12.score(supplied[0].score.into_raw() + 1),
+        deficit: PRECISION_12.score(0),
+    };
+    assert!(matches!(
+        fused.trailer.certain_prefix(&supplied),
+        Err(FusionError::Overflow)
+    ));
+    let mut unknown = fused.trailer.clone();
+    unknown.unemitted_ceiling = None;
+    assert!(matches!(
+        unknown.certain_prefix(&supplied),
+        Err(FusionError::Overflow)
+    ));
+    supplied[0].interval = ScoreInterval::Bounded {
+        inflation: PRECISION_12.score(0),
+        deficit: PRECISION_12.score(u128::MAX),
+    };
+    assert!(matches!(
+        fused.trailer.certain_prefix(&supplied),
+        Err(FusionError::Overflow)
+    ));
+    let other = purrdf_retrieval::Precision::new(0).expect("valid precision");
+    for interval in [
+        ScoreInterval::Bounded {
+            inflation: other.score(0),
+            deficit: PRECISION_12.score(0),
+        },
+        ScoreInterval::Bounded {
+            inflation: PRECISION_12.score(0),
+            deficit: other.score(0),
+        },
+    ] {
+        supplied[0].interval = interval;
+        assert!(matches!(
+            fused.trailer.certain_prefix(&supplied),
+            Err(FusionError::PrecisionMismatch { .. })
+        ));
+    }
+    supplied = fused.rows.iter().cloned().collect();
+    supplied[0].score = other.score(0);
+    assert!(matches!(
+        fused.trailer.certain_prefix(&supplied),
+        Err(FusionError::PrecisionMismatch { .. })
+    ));
+    unknown.unemitted_ceiling = Some(other.score(0));
+    assert!(matches!(
+        unknown.certain_prefix(&fused.rows),
+        Err(FusionError::PrecisionMismatch { .. })
+    ));
 }
 
 // T9.3. The `Dom(x)` narrowing. A lossy stratum that PROVABLY cannot name a
@@ -7858,7 +8444,13 @@ fn an_exhaustive_fusion_carries_zero_width_intervals() {
 // per-stratum bound has no way to express this and over-charges here.
 #[test]
 fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let docs = within(&["documents"]);
     let people = within(&["people"]);
 
@@ -7870,7 +8462,13 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                     // The row names the block its stream declared: a restricted
                     // declaration is backed row by row, and an unbacked one is
                     // refused rather than believed.
-                    vec![row_in(1, Fixed::ONE, K, "a", "documents")],
+                    vec![row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        "a",
+                        "documents",
+                    )],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(StreamContract::new(
@@ -7886,7 +8484,13 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                 // named the text stratum's candidate, however much it missed.
                 stratum("vector"),
                 MockStream::new(
-                    vec![row_in(1, Fixed::ONE, K, "z", "people")],
+                    vec![row_in(
+                        1,
+                        PRECISION_12.score(PRECISION_12.scale()),
+                        K,
+                        "z",
+                        "people",
+                    )],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(StreamContract::new(
@@ -7914,14 +8518,14 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
     let (deficit, inflation) = bounds(from_text);
     assert_eq!(
         deficit,
-        Fixed::ZERO,
+        PRECISION_12.score(0),
         "the lossy stratum's declaration proves it could not have named this \
          candidate, so it withheld nothing from it -- charging it anyway would \
          bound the answer by a contribution that was never possible"
     );
     assert_eq!(
         inflation,
-        Fixed::ZERO,
+        PRECISION_12.score(0),
         "and it did not name it, so it promoted nothing either"
     );
 }
@@ -7930,12 +8534,12 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
 // strata rather than by inventing a number.
 #[test]
 fn a_perturbed_order_leaves_no_finite_bound() {
-    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let profile = profile(&[("vector", PRECISION_12.score(PRECISION_12.scale()))], K);
     let fused = block_on(run_fuse(
         vec![(
             stratum("vector"),
             MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a")],
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
                 ProducerReceipt::Exhausted { rows_emitted: 1 },
             )
             .declaring(perturbed_contract()),
@@ -7957,7 +8561,10 @@ fn a_perturbed_order_leaves_no_finite_bound() {
     };
     assert_eq!(unbounded, &iri_members([stratum("vector")]));
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         0,
         "an unbounded row could outscore anything, so nothing is certain of \
          outranking it"
@@ -7972,20 +8579,29 @@ fn a_perturbed_order_leaves_no_finite_bound() {
 fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
     // Two strata. The leader is named by both; the runner-up by one. With the
     // second stratum exhaustive the gap is clean.
-    let separated = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let separated = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let clean = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a")],
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 ),
             ),
@@ -7993,7 +8609,10 @@ fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
         &separated,
     ));
     assert_eq!(
-        clean.trailer.certain_prefix(&clean.rows),
+        clean
+            .trailer
+            .certain_prefix(&clean.rows)
+            .expect("valid emitted intervals"),
         clean.rows.len(),
         "every stratum exhaustive, so every row keeps its place whatever else \
          is true"
@@ -8007,14 +8626,17 @@ fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a")],
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(lossy_contract()),
@@ -8023,7 +8645,11 @@ fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
         &separated,
     ));
     assert!(
-        degraded.trailer.certain_prefix(&degraded.rows) < degraded.rows.len(),
+        degraded
+            .trailer
+            .certain_prefix(&degraded.rows)
+            .expect("valid emitted intervals")
+            < degraded.rows.len(),
         "a declared loss must be able to SHORTEN the certain prefix, or the \
          function is reporting a constant"
     );
@@ -8049,12 +8675,12 @@ fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
 // here and never written.
 #[test]
 fn a_fidelity_declaration_changes_no_certified_row() {
-    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let profile = profile(&[("vector", PRECISION_12.score(PRECISION_12.scale()))], K);
     let script = || {
         vec![
-            row(1, Fixed::ONE, K, "a"),
-            row(2, Fixed::ONE, K, "b"),
-            row(3, Fixed::ONE, K, "c"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+            row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+            row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
         ]
     };
     let ranking = |result: &FusionResult<Term>| {
@@ -8106,8 +8732,15 @@ fn a_fidelity_declaration_changes_no_certified_row() {
 // contribution, because a row it never found could have been due at any rank.
 #[test]
 fn an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
-    let rank_one = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
+    let rank_one =
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fixture contribution");
 
     // `b` is named only by `text`. `vector` is exhausted having named only `a`,
     // so for `b` it is a closed stream that never named it.
@@ -8116,14 +8749,17 @@ fn an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank() {
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a")],
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(lossy_contract()),
@@ -8147,7 +8783,7 @@ fn an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank() {
     );
     assert_eq!(
         inflation,
-        Fixed::ZERO,
+        PRECISION_12.score(0),
         "but it did not name this row, so it promoted nothing here"
     );
 }
@@ -8155,14 +8791,20 @@ fn an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank() {
 // T9.8. Tied scores with zero uncertainty are still certain.
 //
 // Found by the Python suite, whose fixture ties where the Rust fixtures above
-// happen not to. Fixed-point reciprocal-rank decay quantizes adjacent ranks to
+// happen not to. Score-point reciprocal-rank decay quantizes adjacent ranks to
 // one value routinely, so a tie inside an exhaustive answer is the ordinary
 // case, not a corner. A strict comparison reported a certain prefix ending at
 // the tie -- claiming doubt about an answer in which nothing was degraded and
 // nothing could have been different.
 #[test]
 fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     // `a` is named by both strata and leads. `b` and `c` are named once each at
     // the same rank, so they carry identical scores.
     let fused = block_on(run_fuse(
@@ -8170,14 +8812,20 @@ fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "c")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 ),
             ),
@@ -8185,13 +8833,16 @@ fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
         &profile,
     ));
 
-    let scores: Vec<Fixed> = fused.rows.iter().map(|r| r.score).collect();
+    let scores: Vec<Score> = fused.rows.iter().map(|r| r.score).collect();
     assert!(
         scores.windows(2).any(|pair| pair[0] == pair[1]),
         "the fixture must actually tie, or this test proves nothing: {scores:?}"
     );
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         fused.rows.len(),
         "every interval is zero-width, so nothing could have been different and \
          every row keeps its place -- a tie is decided by the engine's own total \
@@ -8203,20 +8854,32 @@ fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
 // the test above a statement about uncertainty rather than a rubber stamp.
 #[test]
 fn tied_rows_stop_being_certain_once_a_stratum_declares_a_loss() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 ),
             ),
             (
                 stratum("vector"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "c")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
+                    ],
                     ProducerReceipt::Exhausted { rows_emitted: 2 },
                 )
                 .declaring(lossy_contract()),
@@ -8226,7 +8889,11 @@ fn tied_rows_stop_being_certain_once_a_stratum_declares_a_loss() {
     ));
 
     assert!(
-        fused.trailer.certain_prefix(&fused.rows) < fused.rows.len(),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals")
+            < fused.rows.len(),
         "now the tied rows could have been ordered differently, because the \
          lossy stratum may have withheld from one and promoted the other"
     );
@@ -8271,14 +8938,26 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
     // made of a contribution the declaration says could be spurious -- and a
     // candidate `vector` never found could have held its rank one, which is
     // worth more than everything `text` has to give.
-    let heavy = Fixed::ONE.checked_add(Fixed::ONE).expect("two fits");
-    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", heavy)], K);
+    let heavy = PRECISION_12
+        .score(PRECISION_12.scale())
+        .checked_add(PRECISION_12.score(PRECISION_12.scale()))
+        .expect("two fits");
+    let fusion_profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", heavy),
+        ],
+        K,
+    );
     let streams = |lossy: bool| {
         let vector = MockStream::new(vec![row(1, heavy, K, "a")], exhausted(1));
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                ),
             ),
             (
                 stratum("vector"),
@@ -8293,7 +8972,10 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
 
     let exhaustive = block_on(run_fuse(streams(false), &fusion_profile));
     assert_eq!(
-        exhaustive.trailer.certain_prefix(&exhaustive.rows),
+        exhaustive
+            .trailer
+            .certain_prefix(&exhaustive.rows)
+            .expect("valid emitted intervals"),
         exhaustive.rows.len(),
         "with both strata exhaustive there is nothing outside the answer: a \
          stratum that found everything it had cannot have hidden a rival"
@@ -8310,7 +8992,8 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
     // The numbers the claim rests on, from the profile rather than from the
     // output: the emitted row's floor is what `text` alone gave it, and the
     // absentee's ceiling is `vector`'s rank one.
-    let from_text = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+    let from_text =
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fixture contribution");
     let held_back = contribution(heavy, 1, K).expect("fixture contribution");
     assert!(
         held_back > from_text,
@@ -8343,7 +9026,10 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
          -- so a prefix computed from them alone certifies the whole answer"
     );
     assert_eq!(
-        degraded.trailer.certain_prefix(&degraded.rows),
+        degraded
+            .trailer
+            .certain_prefix(&degraded.rows)
+            .expect("valid emitted intervals"),
         0,
         "but the answer is not certain: a candidate the lossy stratum never \
          named could have scored the whole of its rank one, which beats \
@@ -8361,10 +9047,18 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
 fn a_rival_left_in_the_frontier_by_the_bound_is_bounded_too() {
     // `vector` is light, so it promotes the leader by very little -- and the
     // runner-up it never named lost by less than that little.
-    let light = Fixed::from_raw(20_000_000_000);
-    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", light)], K);
-    let leader = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
-    let runner_up = contribution(Fixed::ONE, 2, K).expect("fixture contribution");
+    let light = Score::from_raw(20_000_000_000, PRECISION_12);
+    let fusion_profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", light),
+        ],
+        K,
+    );
+    let leader =
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fixture contribution");
+    let runner_up =
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 2, K).expect("fixture contribution");
     let held_back = contribution(light, 1, K).expect("fixture contribution");
     assert!(
         runner_up.checked_add(held_back).expect("a ceiling fits") > leader,
@@ -8377,7 +9071,10 @@ fn a_rival_left_in_the_frontier_by_the_bound_is_bounded_too() {
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     exhausted(2),
                 ),
             ),
@@ -8422,7 +9119,10 @@ fn a_rival_left_in_the_frontier_by_the_bound_is_bounded_too() {
         "nothing in the answer contradicts anything else in it"
     );
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         0,
         "yet the abandoned rival could outscore the row that was kept, so the \
          place is not settled -- a bounded read is where this is decided, and \
@@ -8440,17 +9140,29 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
     // The trailer is real -- a degraded fusion, so no exhaustive short-circuit
     // applies -- and only the two quantities under test are substituted:
     // arbitrary rows, and the ceiling on what the answer does not contain.
-    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fusion_profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                ),
             ),
             (
                 stratum("vector"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
-                    .declaring(lossy_contract()),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                )
+                .declaring(lossy_contract()),
             ),
         ],
         &fusion_profile,
@@ -8464,12 +9176,13 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
     /// The definition, spelled as the suffix scan it is: a row is certain when
     /// its floor reaches every later row's ceiling and the ceiling on what the
     /// answer does not contain. Quadratic, and here for exactly that reason.
-    fn reference(rows: &[FusedRow], unemitted: Fixed) -> usize {
+    fn reference(rows: &[FusedRow], unemitted: Score) -> usize {
         let floor = |row: &FusedRow| match &row.interval {
-            ScoreInterval::Bounded { inflation, .. } => {
-                row.score.checked_sub(*inflation).unwrap_or(Fixed::ZERO)
-            }
-            ScoreInterval::Unbounded { .. } => Fixed::ZERO,
+            ScoreInterval::Bounded { inflation, .. } => row
+                .score
+                .checked_sub(*inflation)
+                .unwrap_or(PRECISION_12.score(0)),
+            ScoreInterval::Unbounded { .. } => PRECISION_12.score(0),
         };
         let ceiling = |row: &FusedRow| match &row.interval {
             ScoreInterval::Bounded { deficit, .. } => row.score.checked_add(*deficit).ok(),
@@ -8512,7 +9225,7 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
                 let inflation = next(score + 1);
                 FusedRow {
                     entity: Term::new(format!("item-{index}")),
-                    score: Fixed::from_raw(i128::from(score)),
+                    score: Score::from_raw(u128::from(score), PRECISION_12),
                     contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(
                         purrdf_sparql_eval::AdmittedVec::new(
                             &purrdf_sparql_eval::WorkspaceCapability::resident(),
@@ -8521,18 +9234,20 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
                     )
                     .expect("resident synthetic contributions"),
                     interval: ScoreInterval::Bounded {
-                        deficit: Fixed::from_raw(i128::from(deficit)),
-                        inflation: Fixed::from_raw(i128::from(inflation)),
+                        deficit: Score::from_raw(u128::from(deficit), PRECISION_12),
+                        inflation: Score::from_raw(u128::from(inflation), PRECISION_12),
                     },
-                    threshold_witness: Fixed::ZERO,
+                    threshold_witness: PRECISION_12.score(0),
                 }
             })
             .collect();
-        let unemitted = Fixed::from_raw(i128::from(next(12)));
+        let unemitted = Score::from_raw(u128::from(next(12)), PRECISION_12);
 
         let mut trailer = fused.trailer.clone();
         trailer.unemitted_ceiling = Some(unemitted);
-        let got = trailer.certain_prefix(&rows);
+        let got = trailer
+            .certain_prefix(&rows)
+            .expect("valid emitted intervals");
         let want = reference(&rows, unemitted);
         assert_eq!(
             got, want,
@@ -8582,19 +9297,31 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
 // the same by a different route. This is the case that goes red for both.
 #[test]
 fn a_depth_bounded_exact_stratum_is_still_exact() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    vec![
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                    ],
                     ProducerReceipt::DepthReached { rank: 2 },
                 ),
             ),
             (
                 stratum("vector"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                ),
             ),
         ],
         &profile,
@@ -8633,12 +9360,21 @@ fn a_depth_bounded_exact_stratum_is_still_exact() {
 #[test]
 fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
     const REASON: &str = "index unavailable: the segment generation was reaped mid-read";
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                ),
             ),
             (
                 stratum("vector"),
@@ -8674,8 +9410,11 @@ fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
         vec![
             (
                 stratum("text"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
-                    .declaring(lossy_contract()),
+                MockStream::new(
+                    vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a")],
+                    exhausted(1),
+                )
+                .declaring(lossy_contract()),
             ),
             (
                 stratum("vector"),
@@ -8700,10 +9439,10 @@ fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
 
 // T10.3. THE HARD-FAILS PROPERTY, executed. `score_interval` documents that a
 // refusal is propagated and NEVER rendered as a zero bound -- reporting
-// `Fixed::ZERO` where the arithmetic gave out would say "nothing was withheld"
+// `PRECISION_12.score(0)` where the arithmetic gave out would say "nothing was withheld"
 // at exactly the moment nothing is known, which is a bound on the read silently
 // becoming a value. Nothing executed it, so a rewrite that answered
-// `.unwrap_or(Fixed::ZERO)` on either summand would have passed every test in
+// `.unwrap_or(PRECISION_12.score(0))` on either summand would have passed every test in
 // this file while publishing a certain-looking answer built on an overflow.
 //
 // # The shape, and why it is the one available
@@ -8729,7 +9468,7 @@ fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
 // earlier, in a function this test is not about.
 #[test]
 fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
-    let huge = Fixed::from_raw(i128::MAX);
+    let huge = Score::from_raw(u128::MAX, PRECISION_12);
     let whole_range = profile(&[("only", huge)], 1);
     let only = stratum("only");
     let mut streams = vec![(
@@ -8755,7 +9494,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
     // real number. Over-refusal is the mirror of the fault above: a rewrite that
     // refused every multiply-charged deficit would pass the assertion above and
     // be wrong about every fusion that fits.
-    let large = Fixed::from_raw(i128::MAX / 8);
+    let large = Score::from_raw(u128::MAX / 8, PRECISION_12);
     let narrow = profile(&[("only", large)], 1);
     let mut streams = vec![(
         only.clone(),
@@ -8784,7 +9523,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
          and the sum is reported as the number it is"
     );
     assert!(
-        deficit > Fixed::ZERO,
+        deficit > PRECISION_12.score(0),
         "the bound the refusal above declined to invent is non-zero here, which \
          is what makes a zero in its place a lie rather than a coincidence"
     );
@@ -8802,7 +9541,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
 //
 // # The arithmetic, spelled out
 //
-// A `Fixed` is a multiple of `10^-12`, and under `ReciprocalRank { k }` a
+// A `Score` is a multiple of `10^-12`, and under `ReciprocalRank { k }` a
 // unit-weighted row at rank `r` contributes exactly `trunc(10^12 / (k + r))`
 // raw units. At `k = 60`:
 //
@@ -8825,16 +9564,22 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
 // agreement is what moves `c` past it.
 #[test]
 fn the_emitted_sequence_matches_an_explicit_expected_order() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("text", PRECISION_12.score(PRECISION_12.scale())),
+            ("vector", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let fused = block_on(run_fuse(
         vec![
             (
                 stratum("text"),
                 MockStream::new(
                     vec![
-                        row(1, Fixed::ONE, K, "a"),
-                        row(2, Fixed::ONE, K, "b"),
-                        row(3, Fixed::ONE, K, "c"),
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "b"),
+                        row(3, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
                     ],
                     exhausted(3),
                 ),
@@ -8843,9 +9588,9 @@ fn the_emitted_sequence_matches_an_explicit_expected_order() {
                 stratum("vector"),
                 MockStream::new(
                     vec![
-                        row(1, Fixed::ONE, K, "c"),
-                        row(2, Fixed::ONE, K, "a"),
-                        row(3, Fixed::ONE, K, "d"),
+                        row(1, PRECISION_12.score(PRECISION_12.scale()), K, "c"),
+                        row(2, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                        row(3, PRECISION_12.score(PRECISION_12.scale()), K, "d"),
                     ],
                     exhausted(3),
                 ),
@@ -8854,16 +9599,28 @@ fn the_emitted_sequence_matches_an_explicit_expected_order() {
         &profile,
     ));
 
-    let emitted: Vec<(Term, Fixed)> = fused
+    let emitted: Vec<(Term, Score)> = fused
         .rows
         .iter()
         .map(|emitted| (emitted.entity.clone(), emitted.score))
         .collect();
-    let expected: Vec<(Term, Fixed)> = vec![
-        (Term::new("a"), Fixed::from_raw(32_522_474_880)),
-        (Term::new("c"), Fixed::from_raw(32_266_458_495)),
-        (Term::new("b"), Fixed::from_raw(16_129_032_258)),
-        (Term::new("d"), Fixed::from_raw(15_873_015_873)),
+    let expected: Vec<(Term, Score)> = vec![
+        (
+            Term::new("a"),
+            Score::from_raw(32_522_474_880, PRECISION_12),
+        ),
+        (
+            Term::new("c"),
+            Score::from_raw(32_266_458_495, PRECISION_12),
+        ),
+        (
+            Term::new("b"),
+            Score::from_raw(16_129_032_258, PRECISION_12),
+        ),
+        (
+            Term::new("d"),
+            Score::from_raw(15_873_015_873, PRECISION_12),
+        ),
     ];
     assert_eq!(
         emitted, expected,

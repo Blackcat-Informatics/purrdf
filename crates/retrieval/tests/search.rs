@@ -11,15 +11,16 @@
 //! proves a full mock search returns the expected rows and trailer. Fixtures use
 //! `example.org` throughout.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
-    FusionProfile, Iri, PlanError, ProducerStatus, ProtocolError, RankedStreamAdapter,
-    ReadSchedule, RetrievalRequest, SearchError, SearchResult, StratumUnit, Term, TopK,
-    UnservedReason, UnservedTerm, compile, execute_within, fuse, plan, search,
+    AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, FusionError, FusionProfile,
+    Iri, PlanError, ProducerStatus, ProtocolError, RankedStreamAdapter, ReadSchedule,
+    RetrievalRequest, Score, SearchError, SearchResult, StratumUnit, Term, TopK, UnservedReason,
+    UnservedTerm, compile, execute_within, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor,
@@ -99,10 +100,19 @@ fn producer_naming_blocks(rows: u64, prefix: &str, blocks: &[&str]) -> Arc<dyn P
 /// to surface in every stratum — the contribution maximum is the stratum count.
 fn fixture_profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
-    weights.insert(iri(&ex("stratum/universal")), Fixed::ONE);
-    weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
-    weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    weights.insert(
+        iri(&ex("stratum/universal")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    weights.insert(
+        iri(&ex("stratum/text")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    weights.insert(
+        iri(&ex("stratum/graph")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 
@@ -468,8 +478,12 @@ fn fusion_error_propagates() {
     // stratum that ran is unweighted, so nothing that ran can contribute and
     // there is no partial answer to return.
     let disjoint = FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/elsewhere")), Fixed::ONE)]),
+        BTreeMap::from([(
+            iri(&ex("stratum/elsewhere")),
+            PRECISION_12.score(PRECISION_12.scale()),
+        )]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the disjoint profile is valid");
 
@@ -506,14 +520,18 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
     // Coarser is not wrong. The declared tie-break is total, so the answer is a
     // pure function of its inputs at every depth, and refusing it rejected a
     // perfectly usable answer over a property of the consumer's own arithmetic.
-    // `Fixed::from_raw(1_000)` is one thousand raw units of `10^-12`, which is
-    // the sub-unit weight this fixture needs; a weight of *one* is `Fixed::ONE`.
+    // `Score::from_raw(1_000, PRECISION_12)` is one thousand raw units of `10^-12`, which is
+    // the sub-unit weight this fixture needs; a weight of *one* is `PRECISION_12.score(PRECISION_12.scale())`.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
     let shallow = FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
+        BTreeMap::from([(
+            iri(&ex("stratum/text")),
+            Score::from_raw(1_000, PRECISION_12),
+        )]),
         DecayRule::ReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile");
 
@@ -593,8 +611,12 @@ fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
     // hundred ranks under the truncated rule, so this plan is admitted and
     // reported as coarse rather than refused.
     let shallow = FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
+        BTreeMap::from([(
+            iri(&ex("stratum/text")),
+            Score::from_raw(1_000, PRECISION_12),
+        )]),
         DecayRule::ReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile");
 
@@ -735,8 +757,12 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
     // Weights one of the three strata the plan reaches. The other two ran and
     // produced rows; they have no weight, so they have no contribution.
     let narrow = FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+        BTreeMap::from([(
+            iri(&ex("stratum/text")),
+            PRECISION_12.score(PRECISION_12.scale()),
+        )]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the narrow profile is valid");
 
@@ -858,7 +884,7 @@ fn end_to_end_search_returns_expected_results() {
         let sum = row
             .contributions
             .iter()
-            .fold(Fixed::ZERO, |total, (_, _, value)| {
+            .fold(PRECISION_12.score(0), |total, (_, _, value)| {
                 total.checked_add(*value).expect("no fixed-point overflow")
             });
         assert_eq!(sum, row.score, "contributions sum to the fused score");
@@ -958,11 +984,23 @@ fn registry_with_a_failing_stratum() -> PropertyFunctionRegistry<'static> {
 /// the producer rather than about the law.
 fn profile_with_the_failing_stratum() -> FusionProfile {
     let mut weights = BTreeMap::new();
-    weights.insert(iri(&ex("stratum/universal")), Fixed::ONE);
-    weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
-    weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
-    weights.insert(iri(&ex("stratum/broken")), Fixed::ONE);
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    weights.insert(
+        iri(&ex("stratum/universal")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    weights.insert(
+        iri(&ex("stratum/text")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    weights.insert(
+        iri(&ex("stratum/graph")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    weights.insert(
+        iri(&ex("stratum/broken")),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 
@@ -1092,8 +1130,9 @@ fn mixed_request() -> RetrievalRequest {
 /// A profile fusing the one stratum `ex:{stratum}` at weight one.
 fn one_stratum_profile(stratum: &str) -> FusionProfile {
     FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex(stratum)), Fixed::ONE)]),
+        BTreeMap::from([(iri(&ex(stratum)), PRECISION_12.score(PRECISION_12.scale()))]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }
@@ -1338,7 +1377,10 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
                 ProducerStatus::CeilingReached { bound },
                 ProducerStatus::Exhausted { rows_emitted },
             ) => {
-                assert!(*bound > Fixed::ZERO, "{stratum} was closed at no row");
+                assert!(
+                    *bound > PRECISION_12.score(0),
+                    "{stratum} was closed at no row"
+                );
                 assert!(*rows_emitted > 0, "{stratum} had rows to stop short of");
             }
             // A stratum with nothing to read, or one that could not run, is the
@@ -1395,8 +1437,12 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
     let stats = statistics_with_the_failing_stratum();
     let env = fixture_env(&registry, &stats);
     let profile = FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/broken")), Fixed::ONE)]),
+        BTreeMap::from([(
+            iri(&ex("stratum/broken")),
+            PRECISION_12.score(PRECISION_12.scale()),
+        )]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid");
     let request = mixed_request();
@@ -1672,7 +1718,7 @@ fn the_same_repeating_relation_declaring_allowed_answers_once_through_search() {
 /// in force at the instant the row certified, so it is a fact about how far the
 /// streams had been read rather than about the answer, and a declaration that
 /// licenses an earlier stop certifies the identical row against a higher one.
-type FusedAnswer = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+type FusedAnswer = (Term, Score, Vec<(Iri, u64, Score)>);
 
 /// The fixture registry, with each producer declaring where its candidates lie.
 ///

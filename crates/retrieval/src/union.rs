@@ -775,8 +775,8 @@ impl CandidateUnion {
     ) -> Result<SharedWorkspace<AdmittedVec<u8>>, purrdf_sparql_eval::EvalError> {
         let workspace = self.candidates.workspace();
         let mut writer = Writer::admitted(workspace);
-        // Version 2 separates row progress from the producer's declared rank law.
-        writer.u16(2);
+        // Version 3 retains separate row/rank progress and carries ceiling precision.
+        writer.u16(3);
         writer.string("candidate-union");
         writer.bytes(self.plan_id.as_bytes());
         writer.u8(u8::from(self.completed_prefix));
@@ -860,7 +860,8 @@ fn write_status(
         }
         Some(ProducerStatus::CeilingReached { bound }) => {
             writer.u8(5);
-            writer.i128(bound.into_raw());
+            writer.u128(bound.into_raw());
+            writer.u32(bound.precision().digits());
         }
         Some(ProducerStatus::ExecutionFailed { reason }) => {
             writer.u8(6);

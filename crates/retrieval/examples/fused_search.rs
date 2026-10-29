@@ -85,7 +85,7 @@ use purrdf_core::{
     TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, parse_iri,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionProfile, Iri, OrderFidelity,
+    AdmissionEnvironment, Completeness, DecayRule, FusionProfile, Iri, OrderFidelity,
     ProducerStatus, RankFidelity, RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval,
     SearchResult, Statistics, Term, TopK, search,
 };
@@ -410,8 +410,8 @@ fn request() -> RetrievalRequest {
 /// in the fused order comes from the ranks the two producers assigned, and none
 /// of it from the law preferring a modality.
 ///
-/// [`Fixed::ONE`] is the number one. The neighbouring constructor
-/// `Fixed::from_raw(1)` is one raw unit — `10^-12` — and since a fusion reads
+/// [`purrdf_retrieval::fixture::PRECISION_12.score(1_000_000_000_000)`] is the number one. The neighbouring constructor
+/// `Score::from_raw(1, PRECISION_12)` is one raw unit — `10^-12` — and since a fusion reads
 /// weights only as ratios, a map that mixed the two would run, refuse nothing,
 /// and rank as though this stratum did not exist. Build a weight map with one
 /// constructor.
@@ -421,11 +421,24 @@ fn request() -> RetrievalRequest {
 /// each.
 fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
-    weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
-    weights.insert(iri(KNN_STRATUM), Fixed::ONE);
-    weights.insert(iri(SAMPLE_STRATUM), Fixed::ONE);
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the host's profile is valid")
+    weights.insert(
+        iri(TEXT_STRATUM),
+        purrdf_retrieval::fixture::PRECISION_12.score(1_000_000_000_000),
+    );
+    weights.insert(
+        iri(KNN_STRATUM),
+        purrdf_retrieval::fixture::PRECISION_12.score(1_000_000_000_000),
+    );
+    weights.insert(
+        iri(SAMPLE_STRATUM),
+        purrdf_retrieval::fixture::PRECISION_12.score(1_000_000_000_000),
+    );
+    FusionProfile::with_decay(
+        weights,
+        DecayRule::ReciprocalRank { k: K },
+        purrdf_retrieval::fixture::PRECISION_12,
+    )
+    .expect("the host's profile is valid")
 }
 
 /// A statistics provider that reports nothing.
@@ -501,7 +514,10 @@ fn report(result: &SearchResult) {
     // excluded.
     println!(
         "  {} of {} rows are certain of their places",
-        result.trailer.certain_prefix(&result.rows),
+        result
+            .trailer
+            .certain_prefix(&result.rows)
+            .expect("valid emitted intervals"),
         result.rows.len()
     );
 
@@ -768,14 +784,14 @@ fn verify(result: &SearchResult) {
         if row.contributions.iter().any(|(s, _, _)| *s == archive) {
             named += 1;
             assert!(
-                *inflation > Fixed::ZERO,
+                *inflation > purrdf_retrieval::fixture::PRECISION_12.score(0),
                 "{}: named by the short index, so its contribution is suspect",
                 row.entity
             );
         } else {
             unnamed += 1;
             assert!(
-                *deficit > Fixed::ZERO,
+                *deficit > purrdf_retrieval::fixture::PRECISION_12.score(0),
                 "{}: the short index could have named it and did not",
                 row.entity
             );

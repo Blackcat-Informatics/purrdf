@@ -51,10 +51,11 @@
 //!             {"lexicon": "empty"},
 //!         )
 //!     },
-//!     weights={"https://example.org/stratum/lexical": retrieval.SCALE},
+//!     weights={"https://example.org/stratum/lexical": 10**18},
 //!     statistics={"source": "host-statistics", "revision": "r1"},
 //!     k=60,
 //!     decay="reciprocal_rank",
+//!     scale_digits=18,
 //!     top_k=10,
 //! )
 //! assert answer["rows"][0]["entity"] == "<https://example.org/a>"
@@ -62,29 +63,18 @@
 //!
 //! # Exactness crosses the boundary intact
 //!
-//! Every weight, score and contribution is `purrdf_retrieval::Fixed` — an exact
-//! base-10 fixed-point value, never a float. It crosses in the only two
-//! spellings that preserve it: a weight arrives as a Python `int` in raw
-//! fixed-point units (`SCALE` is one whole unit, [`SCALE_DIGITS`] its exponent),
-//! and a score leaves as its exact decimal `str`. A `float` weight would be a
-//! binary approximation of the decimal the host wrote, and a `float` score would
-//! be an approximation of a number the fusion law computed exactly, so neither
-//! is accepted or produced.
-//!
-//! Raw units are the whole convention on this side of the boundary, so a weight
-//! of **one** is `retrieval.SCALE`, not the Python literal `1` — which is one
-//! raw unit, `10 ** -SCALE_DIGITS`. A fusion reads weights only as ratios, so a
-//! `weights` dict mixing the two spellings is a factor-of-`10 ** SCALE_DIGITS`
-//! error that runs, refuses nothing, and returns a plausible ranking in which
-//! the smaller stratum has effectively been switched off. Write every weight in
-//! the same spelling: `n * retrieval.SCALE` for a weight of `n`.
+//! Fusion weights are unsigned raw Python integers. Every supplied law names
+//! `scale_digits` explicitly, from zero through 38; one whole unit is
+//! `10 ** scale_digits`. Returned scores and derived weights are dictionaries
+//! containing `raw` and `scale_digits`, so their units survive outside the call.
+//! No float conversion or implicit decimal precision is involved.
 //!
 //! # Nothing is defaulted, because PurRDF mints nothing
 //!
 //! Producers, strata, weights and the statistics provider's own identity are all
 //! caller-supplied. There is no default producer IRI, no default stratum, no
-//! default weight, and no invented statistics revision: `k`, `decay` and `top_k`
-//! are required keywords for the same reason.
+//! default weight, and no invented statistics revision: `k`, `decay`,
+//! `scale_digits` and `top_k` are required search keywords for the same reason.
 //!
 //! `top_k` is required on **all three** entry points, including the two that
 //! execute nothing, because the row bound is a planning input rather than a
@@ -100,7 +90,7 @@
 //! * `"reciprocal_rank"` truncates the reciprocal to the layer's declared scale
 //!   *before* the weight is applied. The inner truncation is a ceiling no weight
 //!   can lift, so this rule stops separating adjacent ranks at the same depth —
-//!   just past a million — for every weight at or above one.
+//!   just past the square root of the scale — for every weight at or above one.
 //! * `"weighted_reciprocal_rank"` folds the weight into the numerator as one
 //!   exactly-rounded division. Its value is never below the other's, and its
 //!   reachable depth grows with the weight, so a heavier stratum is legitimately
@@ -394,7 +384,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use pyo3::create_exception;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 
@@ -405,8 +395,8 @@ use crate::py_shex::data_media_type;
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, CounterReading, CrossingRank, DecayRule,
     DepthCause, Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
-    ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest,
-    ScoreExactness, ScoreInterval, SearchResult, Statistics, Term, ToleratedDepth, TopK,
+    Precision, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest,
+    Score, ScoreExactness, ScoreInterval, SearchResult, Statistics, Term, ToleratedDepth, TopK,
     UnservedReason,
 };
 use crate::text::{
@@ -422,15 +412,6 @@ use purrdf_sparql_eval::{
     RankFidelity, RankedDeclaration, ServiceLevel, TermKind,
 };
 use purrdf_xsd::datatype::XSD_INTEGER;
-
-/// The number of decimal digits in one whole fixed-point unit.
-///
-/// A weight is carried as a Python `int` of raw units, so a weight of one whole
-/// unit is `10 ** SCALE_DIGITS` — the value [`SCALE`] names.
-const SCALE_DIGITS: u32 = crate::text::SCALE_DIGITS;
-
-/// One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
-const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
 
 // ── the host's declarations, as owned Rust data ──────────────────────────────
 
@@ -1017,15 +998,19 @@ fn read_fidelity(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<Ran
 ///
 /// How many contributions a candidate may receive is not an argument: it is the
 /// number of weighted strata, because a candidate surfaces at most once in each.
-fn build_profile(weights: &[(String, i128)], decay: DecayRule) -> Result<FusionProfile, String> {
+fn build_profile(
+    weights: &[(String, u128)],
+    decay: DecayRule,
+    precision: Precision,
+) -> Result<FusionProfile, String> {
     let mut declared = BTreeMap::new();
     for (stratum, raw) in weights {
         declared.insert(
             retrieval_iri("fusion weight stratum", stratum)?,
-            Fixed::from_raw(*raw),
+            precision.score(*raw),
         );
     }
-    FusionProfile::with_decay(declared, decay).map_err(|e| e.to_string())
+    FusionProfile::with_decay(declared, decay, precision).map_err(|e| e.to_string())
 }
 
 /// Plan the call's request against a registry built from its producers.
@@ -1247,7 +1232,7 @@ fn optional_fixed(
     let raw: i128 = value.extract().map_err(|_| {
         PyTypeError::new_err(format!(
             "request term {index} ({kind}): `{field}` must be an integer of raw fixed-point \
-             units (one whole unit is retrieval.SCALE), never a float"
+             units (numeric request endpoints use twelve fractional digits), never a float"
         ))
     })?;
     Ok(Some(Fixed::from_raw(raw)))
@@ -1299,16 +1284,16 @@ fn decay_rule(spelling: &str, k: u32) -> Result<DecayRule, String> {
 
 /// The refusal for a call that named part of a fusion law and not the rest.
 ///
-/// A law is three things together — the per-stratum `weights`, the smoothing
-/// constant `k`, and the `decay` rule saying how a contribution falls off with
-/// rank — and any subset of them names no law at all. Supplying the absent part
+/// A law is four things together — the per-stratum `weights`, the smoothing
+/// constant `k`, the `decay` rule, and `scale_digits` — and any subset of them names no law at all. Supplying the absent part
 /// here would report resolution measured against arithmetic the host never
 /// wrote, so the refusal says which parts arrived and which did not.
-fn partial_fusion_law(weights: bool, k: bool, decay: bool) -> String {
+fn partial_fusion_law([weights, k, decay, scale]: [bool; 4]) -> String {
     let parts = [
         ("`weights`", weights),
         ("the smoothing constant `k`", k),
         ("the `decay` rule", decay),
+        ("`scale_digits`", scale),
     ];
     // A fixed array in a fixed order, so the two lists a message carries are a
     // pure function of which arguments arrived.
@@ -1321,9 +1306,9 @@ fn partial_fusion_law(weights: bool, k: bool, decay: bool) -> String {
             .join(" and ")
     };
     format!(
-        "a fusion law is three things together: `weights`, the smoothing constant `k`, and the \
-         `decay` rule naming how a contribution falls off with rank. This call named {}, and left \
-         {} unnamed. Pass all three to learn what the planned depths cost in rank resolution, or \
+        "a fusion law is four things together: `weights`, the smoothing constant `k`, and the \
+         `decay` rule naming how a contribution falls off with rank, and `scale_digits`. This call named {}, and left \
+         {} unnamed. Pass all four to learn what the planned depths cost in rank resolution, or \
          none of them to compile without naming a law — the missing part is not filled in here, \
          because a resolution measured against arithmetic the caller never wrote is evidence \
          about nothing",
@@ -1926,17 +1911,24 @@ fn read_vector_spec(
 }
 
 /// Collect the `weights` dict: `stratum_iri -> raw fixed-point units`.
-fn collect_weights(weights: &Bound<'_, PyDict>) -> PyResult<Vec<(String, i128)>> {
+fn collect_weights(weights: &Bound<'_, PyDict>) -> PyResult<Vec<(String, u128)>> {
     let mut declared = Vec::with_capacity(weights.len());
     for (key, value) in weights {
         let stratum: String = key
             .extract()
             .map_err(|_| PyTypeError::new_err("fusion weight keys must be stratum IRI strings"))?;
-        let raw: i128 = value.extract().map_err(|_| {
-            PyTypeError::new_err(format!(
-                "fusion weight for <{stratum}> must be an integer of raw fixed-point units \
-                 (one whole unit is retrieval.SCALE), never a float"
-            ))
+        let raw: u128 = value.extract().map_err(|cause: PyErr| {
+            let py = value.py();
+            let message = format!("fusion weight for <{stratum}> must be an unsigned integer of raw fixed-point units within u128: {cause}");
+            let contextual = if cause.is_instance_of::<PyTypeError>(py) {
+                PyTypeError::new_err(message)
+            } else if cause.is_instance_of::<PyOverflowError>(py) {
+                PyOverflowError::new_err(message)
+            } else {
+                return cause;
+            };
+            contextual.set_cause(py, Some(cause));
+            contextual
         })?;
         declared.push((stratum, raw));
     }
@@ -2341,8 +2333,8 @@ fn planned_resolution_dict<'py, 'a>(
             entry
                 .sharing_weights
                 .iter()
-                .map(|weight| weight.into_raw())
-                .collect::<Vec<_>>(),
+                .map(|weight| score_dict(py, *weight))
+                .collect::<PyResult<Vec<_>>>()?,
         )?;
         out.set_item(stratum.as_str(), rendered)?;
     }
@@ -2457,8 +2449,8 @@ fn interval_dict<'py>(py: Python<'py>, interval: &ScoreInterval) -> PyResult<Bou
     match interval {
         ScoreInterval::Bounded { deficit, inflation } => {
             entry.set_item("bounded", true)?;
-            entry.set_item("deficit", deficit.to_decimal_lexical())?;
-            entry.set_item("inflation", inflation.to_decimal_lexical())?;
+            entry.set_item("deficit", score_dict(py, *deficit)?)?;
+            entry.set_item("inflation", score_dict(py, *inflation)?)?;
         }
         ScoreInterval::Unbounded { perturbed } => {
             entry.set_item("bounded", false)?;
@@ -2471,25 +2463,31 @@ fn interval_dict<'py>(py: Python<'py>, interval: &ScoreInterval) -> PyResult<Bou
     Ok(entry)
 }
 
+/// Render one unsigned score with the units needed outside this call.
+fn score_dict(py: Python<'_>, score: Score) -> PyResult<Bound<'_, PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("raw", score.into_raw())?;
+    out.set_item("scale_digits", score.precision().digits())?;
+    Ok(out)
+}
+
 /// Render one fused answer as a dict.
 fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
+    out.set_item("scale_digits", result.trailer.precision.digits())?;
 
     let rows = PyList::empty(py);
     for row in &result.rows {
         let entry = PyDict::new(py);
         entry.set_item("entity", row.entity.as_str())?;
-        entry.set_item("score", row.score.to_decimal_lexical())?;
-        entry.set_item(
-            "threshold_witness",
-            row.threshold_witness.to_decimal_lexical(),
-        )?;
+        entry.set_item("score", score_dict(py, row.score)?)?;
+        entry.set_item("threshold_witness", score_dict(py, row.threshold_witness)?)?;
         let contributions = PyList::empty(py);
         for (stratum, rank, value) in &row.contributions {
             let contribution = PyDict::new(py);
             contribution.set_item("stratum", stratum.as_str())?;
             contribution.set_item("rank", rank)?;
-            contribution.set_item("contribution", value.to_decimal_lexical())?;
+            contribution.set_item("contribution", score_dict(py, *value)?)?;
             contributions.append(contribution)?;
         }
         entry.set_item("contributions", contributions)?;
@@ -2534,7 +2532,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             }
             ProducerStatus::CeilingReached { bound } => {
                 entry.set_item("status", "ceiling_reached")?;
-                entry.set_item("bound", bound.to_decimal_lexical())?;
+                entry.set_item("bound", score_dict(py, *bound)?)?;
             }
             ProducerStatus::ExecutionFailed { reason } => {
                 entry.set_item("status", "execution_failed")?;
@@ -2693,7 +2691,10 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     // possible rather than excluded.
     out.set_item(
         "certain_prefix",
-        result.trailer.certain_prefix(&result.rows),
+        result
+            .trailer
+            .certain_prefix(&result.rows)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
     )?;
 
     // The evidence the verdict above rests on, so a caller can audit it rather
@@ -2713,7 +2714,8 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         result
             .trailer
             .unemitted_ceiling
-            .map(Fixed::to_decimal_lexical),
+            .map(|value| score_dict(py, value))
+            .transpose()?,
     )?;
 
     // Rank resolution at two altitudes, kept apart by name because they answer
@@ -2982,12 +2984,12 @@ fn explain_depth(
 /// `retrieval.weight_for_depth` says what a finer one costs.
 ///
 /// Resolution is measured against a fusion law, so it is reported only when the
-/// call names one: pass `weights`, `k` and `decay` together, exactly as
+/// call names one: pass `weights`, `k`, `decay` and `scale_digits` together, as
 /// [`search`] takes them, and `"planned_resolution"` carries an entry per
-/// weighted stratum. Omit all three and it is empty — this binding invents no law
+/// weighted stratum. Omit all four and it is empty — this binding invents no law
 /// to measure against, and a resolution attributed to a law the host never chose
 /// would be evidence about nothing. Naming some of them and not the rest is a
-/// `ValueError` that says which part is missing, because the three are one law
+/// `ValueError` that says which part is missing, because the four are one law
 /// between them.
 ///
 /// `top_k` is required, as it is on [`plan`] and for the same reason: the depths
@@ -3014,6 +3016,7 @@ fn explain_depth(
     weights=None,
     k=None,
     decay=None,
+    scale_digits=None,
     data_format="turtle",
     base=None,
 ))]
@@ -3033,6 +3036,7 @@ fn compile<'py>(
     weights: Option<&Bound<'py, PyDict>>,
     k: Option<u32>,
     decay: Option<&str>,
+    scale_digits: Option<u32>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -3050,18 +3054,21 @@ fn compile<'py>(
     // A law is its weights, its smoothing constant *and* its decay rule; any
     // part of one names no law at all, and silently supplying the rest would
     // report a resolution measured against arithmetic the host never wrote.
-    let law = match (weights, k, decay) {
-        (Some(weights), Some(k), Some(decay)) => Some((
+    let law = match (weights, k, decay, scale_digits) {
+        (Some(weights), Some(k), Some(decay), Some(scale_digits)) => Some((
             collect_weights(weights)?,
             decay_rule(decay, k).map_err(PyValueError::new_err)?,
+            Precision::new(scale_digits)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
         )),
-        (None, None, None) => None,
-        (weights, k, decay) => {
-            return Err(PyValueError::new_err(partial_fusion_law(
+        (None, None, None, None) => None,
+        (weights, k, decay, scale_digits) => {
+            return Err(PyValueError::new_err(partial_fusion_law([
                 weights.is_some(),
                 k.is_some(),
                 decay.is_some(),
-            )));
+                scale_digits.is_some(),
+            ])));
         }
     };
     // Parsing, index construction, planning and admission run detached.
@@ -3069,7 +3076,7 @@ fn compile<'py>(
         .detach(|| {
             let profile = law
                 .as_ref()
-                .map(|(declared, decay)| build_profile(declared, *decay))
+                .map(|(declared, decay, precision)| build_profile(declared, *decay, *precision))
                 .transpose()?;
             run_compile(&call, profile.as_ref())
         })
@@ -3133,7 +3140,7 @@ fn compile<'py>(
 /// it could not be asked for and whether one exists was NOT observable — which is
 /// why it is not `"exhausted"`, and why reading deeper means raising that producer's
 /// declared bound rather than re-planning. `"ceiling_reached"` (with `"bound"`, an
-/// exact decimal `str`) is a contribution bound: every row at or above it was read
+/// `{raw, scale_digits}` value) bounds contributions: every row at or above it was read
 /// and the rows below were not — usually written by a fusion the caller's `top_k`
 /// stopped. `"supplied_query_ended"` (with `"rank"`) is a unit running a query
 /// text the host wrote rather than one this layer rendered: the layer bounds only
@@ -3244,7 +3251,7 @@ fn compile<'py>(
 /// `retrieval.weight_for_depth` says what a finer answer costs.
 ///
 /// `weights` maps a stratum IRI to its weight in raw fixed-point units, where
-/// `retrieval.SCALE` is one whole unit; see this module's own documentation for
+/// `10 ** scale_digits` is one whole unit; see this module's own documentation for
 /// why every weight in one dict must be written in the same spelling.
 ///
 /// `k`, `decay` and `top_k` are required: fused enumeration is top-k by
@@ -3272,6 +3279,7 @@ fn compile<'py>(
     statistics,
     k,
     decay,
+    scale_digits,
     top_k,
     hnsw_producers=None,
     knn_producers=None,
@@ -3291,6 +3299,7 @@ fn search<'py>(
     statistics: &Bound<'py, PyDict>,
     k: u32,
     decay: &str,
+    scale_digits: u32,
     top_k: usize,
     hnsw_producers: Option<&Bound<'py, PyDict>>,
     knn_producers: Option<&Bound<'py, PyDict>>,
@@ -3316,7 +3325,8 @@ fn search<'py>(
     // execute and fuse. The answer dict is built after the GIL is reacquired.
     let result = py
         .detach(|| {
-            let profile = build_profile(&declared, decay)?;
+            let precision = Precision::new(scale_digits).map_err(|error| error.to_string())?;
+            let profile = build_profile(&declared, decay, precision)?;
             run_search(&call, &profile)
         })
         .map_err(PyValueError::new_err)?;
@@ -3367,13 +3377,23 @@ fn search<'py>(
 /// depth changes its share of every fused score; this reports what the depth
 /// costs, not whether to pay it.
 #[pyfunction]
-#[pyo3(signature = (depth, k, *, decay))]
-fn weight_for_depth(depth: u64, k: u32, decay: &str) -> PyResult<i128> {
+#[pyo3(signature = (depth, k, *, decay, scale_digits))]
+fn weight_for_depth<'py>(
+    py: Python<'py>,
+    depth: u64,
+    k: u32,
+    decay: &str,
+    scale_digits: u32,
+) -> PyResult<Bound<'py, PyDict>> {
     decay_rule(decay, k)
         .map_err(PyValueError::new_err)?
-        .weight_for_depth(depth)
-        .map(Fixed::into_raw)
+        .weight_for_depth(
+            Precision::new(scale_digits)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+            depth,
+        )
         .map_err(|error| PyValueError::new_err(error.to_string()))
+        .and_then(|value| score_dict(py, value))
 }
 
 /// How many consecutive ranks around `rank` a weight of `weight_raw` cannot tell
@@ -3403,7 +3423,7 @@ fn weight_for_depth(depth: u64, k: u32, decay: &str) -> PyResult<i128> {
 /// This asks a question about arithmetic and takes no stratum, because a width
 /// is a property of the rule, its smoothing constant, the weight and the rank and
 /// of nothing else. `weight_raw` is in raw fixed-point units, where
-/// `retrieval.SCALE` is one whole unit.
+/// `10 ** scale_digits` is one whole unit.
 ///
 /// An operand the law cannot evaluate raises `ValueError` rather than returning
 /// a width: a rank of zero, which is not a rank; a smoothing constant of zero;
@@ -3414,9 +3434,15 @@ fn weight_for_depth(depth: u64, k: u32, decay: &str) -> PyResult<i128> {
 /// measured would report the most favourable resolution there is at exactly the
 /// point no resolution was computed.
 #[pyfunction]
-#[pyo3(signature = (weight_raw, k, rank, *, decay))]
-fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<Option<u64>> {
-    if weight_raw <= 0 {
+#[pyo3(signature = (weight_raw, k, rank, *, decay, scale_digits))]
+fn class_width(
+    weight_raw: u128,
+    k: u32,
+    rank: u64,
+    decay: &str,
+    scale_digits: u32,
+) -> PyResult<Option<u64>> {
+    if weight_raw == 0 {
         return Err(PyValueError::new_err(format!(
             "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
              not; a fusion law refuses a non-positive weight where it is declared, so there is \
@@ -3425,7 +3451,12 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<Opt
     }
     decay_rule(decay, k)
         .map_err(PyValueError::new_err)?
-        .class_width(Fixed::from_raw(weight_raw), rank)
+        .class_width(
+            Precision::new(scale_digits)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+                .score(weight_raw),
+            rank,
+        )
         // The saturating case is rendered the way every other wall on this
         // surface is: `None`, because the class has no end inside any plan's
         // reach to count to, not an enormous width.
@@ -3468,7 +3499,7 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<Opt
 /// This asks a question about arithmetic and takes no stratum, exactly as
 /// [`class_width`] does: the answer is a property of the rule, its smoothing
 /// constant, the weight and the tolerance, and of nothing else. `weight_raw`
-/// is in raw fixed-point units, where `retrieval.SCALE` is one whole unit.
+/// is in raw fixed-point units, where `10 ** scale_digits` is one whole unit.
 ///
 /// The curve belongs to the rule, so the depth the two rules report at one
 /// weight and one tolerance legitimately differs, and `decay` —
@@ -3507,14 +3538,15 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<Opt
 /// depth budget once while choosing weights — and not something to put in a hot
 /// loop.
 #[pyfunction]
-#[pyo3(signature = (weight_raw, k, max_width, *, decay))]
+#[pyo3(signature = (weight_raw, k, max_width, *, decay, scale_digits))]
 fn deepest_rank_within_width(
-    weight_raw: i128,
+    weight_raw: u128,
     k: u32,
     max_width: u64,
     decay: &str,
+    scale_digits: u32,
 ) -> PyResult<Option<u64>> {
-    if weight_raw <= 0 {
+    if weight_raw == 0 {
         return Err(PyValueError::new_err(format!(
             "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
              not; a fusion law refuses a non-positive weight where it is declared, so there is \
@@ -3523,7 +3555,12 @@ fn deepest_rank_within_width(
     }
     decay_rule(decay, k)
         .map_err(PyValueError::new_err)?
-        .deepest_rank_within_width(Fixed::from_raw(weight_raw), max_width)
+        .deepest_rank_within_width(
+            Precision::new(scale_digits)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+                .score(weight_raw),
+            max_width,
+        )
         // The saturating case is rendered the way `"separates_to"` renders it
         // on a `search` answer: `None`, because there is no bound inside any
         // plan's reach to report, not an enormous one.
@@ -3571,32 +3608,45 @@ fn deepest_rank_within_width(
 /// The answer is `None` when no rank a plan can express brings the threshold
 /// below the candidate's bound, rendered the way every other wall on this
 /// surface is rather than as an enormous rank. Weights are in raw fixed-point
-/// units, where `retrieval.SCALE` is one whole unit; a non-positive one raises
+/// units, where `10 ** scale_digits` is one whole unit; a zero weight raises
 /// `ValueError`, because the search rests on a threshold that does not rise with
 /// the rank and a non-positive weight does not give one. A `k` of zero, a rank
-/// of zero and an unknown `decay` spelling raise `ValueError` too.
+/// of zero and an unknown `decay` spelling raise `ValueError` too. Negative
+/// weights and weights outside the unsigned 128-bit range raise `OverflowError`
+/// during extraction.
 #[pyfunction]
-#[pyo3(signature = (naming_raw, at_rank, sharing_raw, k, *, decay))]
+#[pyo3(signature = (naming_raw, at_rank, sharing_raw, k, *, decay, scale_digits))]
 fn crossing_rank_at(
-    naming_raw: Vec<i128>,
+    naming_raw: Vec<u128>,
     at_rank: u64,
-    sharing_raw: Vec<i128>,
+    sharing_raw: Vec<u128>,
     k: u32,
     decay: &str,
+    scale_digits: u32,
 ) -> PyResult<Option<u64>> {
     let rule = decay_rule(decay, k).map_err(PyValueError::new_err)?;
-    let weights = |raw: Vec<i128>| raw.into_iter().map(Fixed::from_raw).collect::<Vec<_>>();
-    crate::retrieval::crossing_rank_at(rule, &weights(naming_raw), at_rank, &weights(sharing_raw))
-        .map(CrossingRank::rank)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+    let precision =
+        Precision::new(scale_digits).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let weights = |raw: Vec<u128>| {
+        raw.into_iter()
+            .map(|raw| precision.score(raw))
+            .collect::<Vec<_>>()
+    };
+    crate::retrieval::crossing_rank_at(
+        rule,
+        precision,
+        &weights(naming_raw),
+        at_rank,
+        &weights(sharing_raw),
+    )
+    .map(CrossingRank::rank)
+    .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 /// Register the `purrdf-retrieval` surface on a Python module. Called by the
 /// unified `purrdf_native` cdylib to populate the `purrdf_native.retrieval`
 /// submodule.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("SCALE_DIGITS", SCALE_DIGITS)?;
-    m.add("SCALE", SCALE)?;
     m.add("PlanDocumentError", m.py().get_type::<PlanDocumentError>())?;
     m.add_function(wrap_pyfunction!(plan, m)?)?;
     m.add_function(wrap_pyfunction!(certify_plan, m)?)?;

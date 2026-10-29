@@ -13,6 +13,7 @@
 //! ranking. Every refusal is paired with the neighbouring case that must still
 //! succeed. Fixtures are `example.org` throughout.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
@@ -22,7 +23,7 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, BoundMode, CandidateDomains, CompiledRetrieval, DecayRule,
-    ExecutionError, Fixed, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity,
+    ExecutionError, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity,
     RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult,
     ServiceLevel, Statistics, StratumUnit, StreamContract, Term, TopK, UnitError, compile, execute,
     plan, search,
@@ -393,9 +394,10 @@ fn fixture_profile() -> FusionProfile {
     FusionProfile::with_decay(
         STRATA
             .iter()
-            .map(|stratum| (iri(&ex(stratum)), Fixed::ONE))
+            .map(|stratum| (iri(&ex(stratum)), PRECISION_12.score(PRECISION_12.scale())))
             .collect(),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }

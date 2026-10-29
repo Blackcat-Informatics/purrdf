@@ -348,6 +348,7 @@ use purrdf_sparql_algebra::Child;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::Score;
 use purrdf_sparql_algebra::{
     BlankNode, GraphPattern, NamedNodePattern, ParserOptions, PropertyFunctionCall, Query,
     QueryDataset, SparqlParser, TermPattern, TriplePattern, Variable, pattern_to_select_query,
@@ -356,7 +357,6 @@ use purrdf_sparql_eval::{
     BindingPattern, CallReadShape, CandidateDomains, ColumnSource, ExclusionBasis, PfDescriptor,
     PreparedQuery, PropertyFunctionRegistry, RankedDeclaration, RegistryId,
 };
-use purrdf_text::Fixed;
 
 use crate::admission::{
     AdmissionEnvironment, AdmissionError, BoundMode, MAX_READ_DEPTH, ProbedDepth, RowBound,
@@ -1870,7 +1870,7 @@ pub struct PlannedResolution {
     /// emits no unit, contributes no stream and therefore has no declaration to
     /// meet anyone else's.
     pub sharing_weights:
-        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Fixed>>,
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Score>>,
 }
 
 impl PlannedResolution {

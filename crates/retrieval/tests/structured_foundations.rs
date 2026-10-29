@@ -4,6 +4,7 @@
 //! Borrowed foundation owners used by retrieval and its native failures.
 
 use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_retrieval::fixture::PRECISION_12;
 use purrdf_testkit::error_capture::Capture;
 
 #[global_allocator]
@@ -89,10 +90,10 @@ fn scoped_bases_retain_the_original_iri_and_directive_provenance() {
 }
 
 fn fixed_values_binding_masks_and_registry_ids_keep_their_exact_native_bits() {
-    for raw in [i128::MIN, -1, 0, i128::MAX] {
-        let fixed = purrdf_text::Fixed::from_raw(raw);
+    for raw in [0_u128, 1, u128::MAX] {
+        let fixed = purrdf_retrieval::Score::from_raw(raw, PRECISION_12);
         let captured = Capture::read(&fixed);
-        assert!(matches!(captured.field("raw"), ErrorValue::Signed(value) if value == raw));
+        assert!(matches!(captured.field("raw"), ErrorValue::Unsigned(value) if value == raw));
         assert!(matches!(
             captured.field("scale_digits"),
             ErrorValue::Unsigned(12)
@@ -233,11 +234,11 @@ fn retrieval_protocol_lists_preserve_order_and_full_width_counts() {
     assert_eq!(entries, ["second λ", "first β", "second λ"]);
     let error = purrdf_retrieval::FusionError::NonPositiveWeight {
         stratum: "https://example.org/stratum".into(),
-        weight: purrdf_text::Fixed::from_raw(i128::MIN),
+        weight: purrdf_retrieval::Score::from_raw(0, PRECISION_12),
     };
     assert!(matches!(
         Capture::read(&error).child("weight").field("raw"),
-        ErrorValue::Signed(i128::MIN)
+        ErrorValue::Unsigned(0)
     ));
 }
 
@@ -376,13 +377,17 @@ fn canonical_utf8_refusals_keep_native_causes_after_input_disposal() {
 }
 
 fn profile_decoder_refusals_keep_original_causes_and_owners() {
-    use purrdf_retrieval::{DecayRule, Fixed, FusionProfile, Iri};
+    use purrdf_retrieval::{DecayRule, FusionProfile, Iri};
     use std::collections::BTreeMap;
 
     let spelling = "https://example.org/λ";
     let profile = FusionProfile::with_decay(
-        BTreeMap::from([(Iri::parse(spelling).unwrap(), Fixed::ONE)]),
+        BTreeMap::from([(
+            Iri::parse(spelling).unwrap(),
+            PRECISION_12.score(PRECISION_12.scale()),
+        )]),
         DecayRule::ReciprocalRank { k: 60 },
+        PRECISION_12,
     )
     .unwrap();
     let original = profile.canonical_bytes();

@@ -29,6 +29,7 @@
 //! caller-owned value, and no composition layer is constructed where the test
 //! says a caller stopped below it.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,10 +37,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_core::{FastMap, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
-    DepthInputs, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusionError,
-    FusionProfile, FusionResult, FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId,
-    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedRow,
-    RankedStream, RankedStreamAdapter, RankedStreamImpl, ReadBound, RetrievalRequest, RowBlock,
+    DepthInputs, ExclusionVerdict, ExecutionError, ExecutionResult, FusionError, FusionProfile,
+    FusionResult, FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin,
+    ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedRow, RankedStream,
+    RankedStreamAdapter, RankedStreamImpl, ReadBound, RetrievalRequest, RowBlock, Score,
     ScoreExactness, SearchError, SearchResult, Statistics, StatisticsEntries, StatisticsSnapshot,
     StratumUnit, StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm,
     compile, contribution, execute, fuse, plan, search,
@@ -123,8 +124,9 @@ fn single_statistics(stratum_iri: &str, cardinality: u64) -> MockStatistics {
 /// A profile weighting exactly one stratum.
 fn single_profile(stratum_iri: &str) -> FusionProfile {
     FusionProfile::with_decay(
-        BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]),
+        BTreeMap::from([(iri(stratum_iri), PRECISION_12.score(PRECISION_12.scale()))]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }
@@ -225,7 +227,7 @@ impl RankedStream for ScriptedStream {
 /// declaration owes: an unrestricted producer has made no promise for a row to
 /// back. The domain fixtures in `tests/fusion.rs` are where a named block is
 /// exercised.
-fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> RankedRow<Term> {
+fn row(rank: u64, weight: Score, k: u32, item: &str) -> RankedRow<Term> {
     RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
@@ -1009,15 +1011,27 @@ fn start_at_execute_evaluator_only() {
 
 #[test]
 fn start_at_fuse_hand_built_streams() {
-    let profile = profile(&[("s1", Fixed::ONE), ("s2", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("s1", PRECISION_12.score(PRECISION_12.scale())),
+            ("s2", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = vec![
         (
             stratum("s1"),
-            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "alpha")], exhausted(1)),
+            ScriptedStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "alpha")],
+                exhausted(1),
+            ),
         ),
         (
             stratum("s2"),
-            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "beta")], exhausted(1)),
+            ScriptedStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "beta")],
+                exhausted(1),
+            ),
         ),
     ];
 
@@ -1062,11 +1076,11 @@ fn start_at_fuse_hand_built_streams() {
 
 #[test]
 fn a_hand_built_stream_can_declare_the_depth_that_stopped_it() {
-    let profile = profile(&[("s1", Fixed::ONE)], K);
+    let profile = profile(&[("s1", PRECISION_12.score(PRECISION_12.scale()))], K);
     let scripted = || {
         vec![
-            row(1, Fixed::ONE, K, "alpha"),
-            row(2, Fixed::ONE, K, "beta"),
+            row(1, PRECISION_12.score(PRECISION_12.scale()), K, "alpha"),
+            row(2, PRECISION_12.score(PRECISION_12.scale()), K, "beta"),
         ]
     };
 
@@ -1142,7 +1156,7 @@ struct LazyStream {
     /// How many rows it could emit in total.
     total: u64,
     /// The stratum weight its contributions are computed under.
-    weight: Fixed,
+    weight: Score,
     /// The profile's smoothing constant.
     k: u32,
     /// A shared count of every row pulled from every such stream.
@@ -1196,12 +1210,13 @@ fn frontier_fixture(
     total: u64,
     pulls: &Arc<AtomicUsize>,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = FRONTIER_STRATA
+    let weights: BTreeMap<Iri, Score> = FRONTIER_STRATA
         .iter()
-        .map(|name| (stratum(name), Fixed::ONE))
+        .map(|name| (stratum(name), PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     let streams = FRONTIER_STRATA
         .iter()
         .enumerate()
@@ -1212,7 +1227,7 @@ fn frontier_fixture(
                     stream_index,
                     emitted: 0,
                     total,
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     k: K,
                     pulls: Arc::clone(pulls),
                     item_at: permuted_item,
@@ -1256,7 +1271,7 @@ fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
             row.entity.as_str()
         );
         assert!(
-            row.threshold_witness > Fixed::ZERO,
+            row.threshold_witness > PRECISION_12.score(0),
             "{} was certified with no stream still live, so nothing was awaited",
             row.entity.as_str()
         );
@@ -1286,7 +1301,7 @@ fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
             panic!("{stratum} still held rows, so its status cannot be {status:?}");
         };
         assert!(
-            *bound > Fixed::ZERO,
+            *bound > PRECISION_12.score(0),
             "{stratum} was closed at a bound of zero, which names no row"
         );
     }
@@ -1309,10 +1324,10 @@ fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
 /// `trunc(10^12 / (60 + 1))`, written out rather than asked for: the tie below
 /// has to be arithmetic this file states and the engine must agree with, not
 /// arithmetic the engine states and this file reads back.
-const RANK_1_RAW: i128 = 16_393_442_622;
+const RANK_1_RAW: u128 = 16_393_442_622;
 
 /// The same at rank two: `trunc(10^12 / (60 + 2))`.
-const RANK_2_RAW: i128 = 16_129_032_258;
+const RANK_2_RAW: u128 = 16_129_032_258;
 
 /// How many rows sit behind the tied pair in each stream.
 ///
@@ -1340,8 +1355,8 @@ fn symmetric_tie_item(stream_index: usize, rank: u64) -> Term {
 fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
     // The tie, by hand. A unit-weighted row at 1-based rank `r` contributes
     // `trunc(10^12 / (K + r))`, so the two ranks in play are:
-    assert_eq!(RANK_1_RAW, 1_000_000_000_000 / (i128::from(K) + 1));
-    assert_eq!(RANK_2_RAW, 1_000_000_000_000 / (i128::from(K) + 2));
+    assert_eq!(RANK_1_RAW, 1_000_000_000_000 / (u128::from(K) + 1));
+    assert_eq!(RANK_2_RAW, 1_000_000_000_000 / (u128::from(K) + 2));
 
     // `a` is rank 1 on the left and rank 2 on the right; `b` is rank 2 on the
     // left and rank 1 on the right. Each sum is written in the order its strata
@@ -1355,22 +1370,23 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
     // The engine's contribution is that same arithmetic, so the rows the streams
     // emit below really do carry these two values.
     assert_eq!(
-        contribution(Fixed::ONE, 1, K).expect("fits"),
-        Fixed::from_raw(RANK_1_RAW)
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits"),
+        Score::from_raw(RANK_1_RAW, PRECISION_12)
     );
     assert_eq!(
-        contribution(Fixed::ONE, 2, K).expect("fits"),
-        Fixed::from_raw(RANK_2_RAW)
+        contribution(PRECISION_12.score(PRECISION_12.scale()), 2, K).expect("fits"),
+        Score::from_raw(RANK_2_RAW, PRECISION_12)
     );
 
     let pulls = Arc::new(AtomicUsize::new(0));
-    let weights: BTreeMap<Iri, Fixed> = TIE_STRATA
+    let weights: BTreeMap<Iri, Score> = TIE_STRATA
         .iter()
-        .map(|name| (stratum(name), Fixed::ONE))
+        .map(|name| (stratum(name), PRECISION_12.score(PRECISION_12.scale())))
         .collect();
     // Two strata, so a candidate takes at most two contributions.
-    let tie_profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let tie_profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     let streams: Vec<(Iri, LazyStream)> = TIE_STRATA
         .iter()
         .enumerate()
@@ -1381,7 +1397,7 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
                     stream_index,
                     emitted: 0,
                     total: TIE_TAIL_ROWS,
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     k: K,
                     pulls: Arc::clone(&pulls),
                     item_at: symmetric_tie_item,
@@ -1410,7 +1426,7 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
     for row in [&first, &second] {
         assert_eq!(
             row.score,
-            Fixed::from_raw(a_score),
+            Score::from_raw(a_score, PRECISION_12),
             "{} must carry the hand-computed tied score",
             row.entity.as_str()
         );
@@ -1421,7 +1437,7 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
             row.entity.as_str()
         );
         assert!(
-            row.threshold_witness > Fixed::ZERO,
+            row.threshold_witness > PRECISION_12.score(0),
             "{} was certified with no stream still live, so the tie was settled by \
              exhaustion rather than by the tie-break",
             row.entity.as_str()
@@ -1502,19 +1518,31 @@ fn unfused_rung_applies_no_threshold_to_its_rows() {
 
 #[test]
 fn prefix_reader_incomplete_evidence() {
-    let profile = profile(&[("s1", Fixed::ONE), ("s2", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("s1", PRECISION_12.score(PRECISION_12.scale())),
+            ("s2", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let streams = vec![
         (
             stratum("s1"),
             ScriptedStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "x")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "x"),
+                ],
                 exhausted(2),
             ),
         ),
         (
             stratum("s2"),
             ScriptedStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "y")],
+                vec![
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "a"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "y"),
+                ],
                 exhausted(2),
             ),
         ),
@@ -1529,7 +1557,7 @@ fn prefix_reader_incomplete_evidence() {
     // still held rows: the prefix is provably incomplete and only the trailer
     // may assert otherwise.
     assert!(
-        first.threshold_witness > Fixed::ZERO,
+        first.threshold_witness > PRECISION_12.score(0),
         "certification happened with rows still unread"
     );
 
@@ -1696,7 +1724,10 @@ fn no_stage_takes_a_selector() {
     let fused = block_on(fuse_shape::<ScriptedStream, Term>(
         vec![(
             stratum("seam"),
-            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "alpha")], exhausted(1)),
+            ScriptedStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "alpha")],
+                exhausted(1),
+            ),
         )],
         &seam_profile,
         TOP_K,
@@ -1726,15 +1757,18 @@ async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
             stratum("eq1"),
             ScriptedStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "alpha"),
-                    row(2, Fixed::ONE, K, "beta"),
+                    row(1, PRECISION_12.score(PRECISION_12.scale()), K, "alpha"),
+                    row(2, PRECISION_12.score(PRECISION_12.scale()), K, "beta"),
                 ],
                 exhausted(2),
             ),
         ),
         (
             stratum("eq2"),
-            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "beta")], exhausted(1)),
+            ScriptedStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "beta")],
+                exhausted(1),
+            ),
         ),
     ];
     fuse::<ScriptedStream, Term>(streams, profile, TOP_K)
@@ -1770,7 +1804,13 @@ fn encoding_and_fusion_are_deterministic_in_one_process() {
 
     // The fusion profile's canonical encoding is a pure function of its fields
     // the same way.
-    let profile = profile(&[("eq1", Fixed::ONE), ("eq2", Fixed::ONE)], K);
+    let profile = profile(
+        &[
+            ("eq1", PRECISION_12.score(PRECISION_12.scale())),
+            ("eq2", PRECISION_12.score(PRECISION_12.scale())),
+        ],
+        K,
+    );
     let profile_bytes = profile.canonical_bytes();
     assert_eq!(profile_bytes, profile.canonical_bytes());
     assert_eq!(
@@ -1815,7 +1855,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     // own: the weight and the smoothing constant are read from the profile by
     // the adapter, so it cannot attach a contribution the profile did not
     // authorize.
-    let profile = profile(&[("resume", Fixed::ONE)], K);
+    let profile = profile(&[("resume", PRECISION_12.score(PRECISION_12.scale()))], K);
     let mut streams = Vec::new();
     for stream in execution.streams {
         let adapter =
@@ -1841,7 +1881,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
         let rank = u64::try_from(index + 1).expect("the fixture is small");
         assert_eq!(
             row.score,
-            contribution(Fixed::ONE, rank, K).expect("fits"),
+            contribution(PRECISION_12.score(PRECISION_12.scale()), rank, K).expect("fits"),
             "the bridge attached exactly the profile's contribution for rank {rank}"
         );
     }
@@ -1853,7 +1893,10 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
 
     // A stratum the profile does not weight has no contribution to make, and the
     // bridge says so by refusing to be built rather than by inventing one.
-    let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K);
+    let elsewhere = crate::profile(
+        &[("elsewhere", PRECISION_12.score(PRECISION_12.scale()))],
+        K,
+    );
     assert!(
         RankedStreamAdapter::new(
             RankedStreamImpl::new(
@@ -1912,7 +1955,10 @@ fn executed_stream(
 #[test]
 fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     let profile = profile(
-        &[("splice/left", Fixed::ONE), ("splice/right", Fixed::ONE)],
+        &[
+            ("splice/left", PRECISION_12.score(PRECISION_12.scale())),
+            ("splice/right", PRECISION_12.score(PRECISION_12.scale())),
+        ],
         K,
     );
     let (left_plan, left_stratum, left) = executed_stream("splice/left", &profile);
@@ -2087,7 +2133,7 @@ fn executed_stream_bounded(
 
 #[test]
 fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
-    let profile = profile(&[("bound", Fixed::ONE)], K);
+    let profile = profile(&[("bound", PRECISION_12.score(PRECISION_12.scale()))], K);
 
     // The fixture must really have been cut by the bound, or the refusal below
     // would be protecting nothing: the producer holds three rows and declares ten,
@@ -2191,7 +2237,10 @@ fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
     let unbounded = block_on(fuse::<ScriptedStream, Term>(
         vec![(
             stratum("bound"),
-            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "alpha")], exhausted(1)),
+            ScriptedStream::new(
+                vec![row(1, PRECISION_12.score(PRECISION_12.scale()), K, "alpha")],
+                exhausted(1),
+            ),
         )],
         &profile,
         TopK::new(9),
@@ -2205,7 +2254,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // Ranks are 1-based. `execute` never emits a zero, but the bridge is public
     // and a caller can hand it a stream it built itself, so the violation must
     // come back as the protocol error fusion would raise for the same row.
-    let profile = profile(&[("resume", Fixed::ONE)], K);
+    let profile = profile(&[("resume", PRECISION_12.score(PRECISION_12.scale()))], K);
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(
             vec![(0, Term::new("a"), RowBlock::Undeclared)],
@@ -2243,7 +2292,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
         block_on(adapter.next()).expect("a 1-based rank is well formed"),
         Some(RankedRow::new(
             1,
-            contribution(Fixed::ONE, 1, K).expect("fits"),
+            contribution(PRECISION_12.score(PRECISION_12.scale()), 1, K).expect("fits"),
             Term::new("a"),
             RowBlock::Undeclared
         ))

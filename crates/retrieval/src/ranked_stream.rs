@@ -79,11 +79,11 @@
 //! violation among rows nobody pulled is not detected, and this layer does not
 //! claim otherwise.
 
+use crate::Score;
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, PfAttestation, RankFidelity,
     RankedDeclaration,
 };
-use purrdf_text::Fixed;
 
 use crate::iri::{Iri, Term};
 
@@ -463,7 +463,7 @@ pub struct RankedRow<I> {
     /// The profile's reciprocal-rank contribution for this rank, which fusion
     /// re-derives and refuses on a mismatch
     /// ([`ProtocolError::ContributionMismatch`]).
-    pub contribution: Fixed,
+    pub contribution: Score,
     /// The candidate this row names.
     pub item: I,
     /// The block of the candidate universe this row was drawn from.
@@ -477,7 +477,7 @@ pub struct RankedRow<I> {
 impl<I> RankedRow<I> {
     /// A row that names `block`.
     #[must_use]
-    pub const fn new(rank: u64, contribution: Fixed, item: I, block: RowBlock) -> Self {
+    pub const fn new(rank: u64, contribution: Score, item: I, block: RowBlock) -> Self {
         Self {
             rank,
             contribution,
@@ -633,7 +633,7 @@ pub enum ProducerReceipt {
     /// exhaustion.
     CeilingReached {
         /// The inclusive bound at which it stopped.
-        bound: Fixed,
+        bound: Score,
     },
     /// The producer could not run. It emits no rows.
     ExecutionFailed {
@@ -936,9 +936,9 @@ pub enum ProtocolError {
     /// refusing.
     ContributionMismatch {
         /// The value the profile computes for the stratum and rank.
-        expected: Fixed,
+        expected: Score,
         /// The value the producer supplied.
-        got: Fixed,
+        got: Score,
     },
 
     /// A producer supplied a terminal receipt that contradicts what it emitted

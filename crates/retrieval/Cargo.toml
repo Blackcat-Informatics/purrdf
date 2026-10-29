@@ -46,8 +46,8 @@ purrdf-sparql-eval.workspace = true
 # lookup is written as algebra from a prepared call and serialised by this crate's
 # writer. Nothing else in this crate looks at SPARQL as anything but a string.
 purrdf-sparql-algebra.workspace = true
-# The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
-# so a plan never carries a float where exactness is the whole point.
+# The text producer and its signed numeric request boundaries; fusion weights
+# use this crate's unsigned, explicitly scaled `Score`.
 purrdf-text.workspace = true
 purrdf-xsd.workspace = true
 # Fixed-output-length hashing for the plan identity. Deterministic and keyless,
