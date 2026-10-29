@@ -548,10 +548,158 @@ where
         env,
         profile,
         None,
+        None,
         || crate::execute::resident_operation(dataset).map_err(SearchError::from),
     )
     .await
     .map(|(result, _, _)| result)
+}
+
+/// Run the original search pipeline with an explicit caller-key snapshot.
+/// Stream producers can supply typed keys and bounds directly to `fuse`; the
+/// native text/vector adapters use this optional concrete catalog.
+///
+/// # Errors
+/// Returns original planning/execution failures and typed missing-key, policy,
+/// evidence or certification refusals. A failed weighted source is refused
+/// before a keyed leading-order answer can omit its unknown domain.
+#[allow(clippy::future_not_send)]
+pub async fn search_ordered<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry<'static>,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    catalog: std::sync::Arc<crate::OrderCatalog>,
+) -> Result<SearchResult, SearchError>
+where
+    S: Statistics,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+{
+    let ordered = ordered_request(request, profile, &catalog)?;
+    search_bound(
+        &ordered,
+        registry,
+        statistics,
+        dataset,
+        env,
+        profile,
+        None,
+        Some(catalog),
+        || crate::execute::resident_operation(dataset).map_err(SearchError::from),
+    )
+    .await
+    .map(|(result, _, _)| result)
+}
+
+fn ordered_request(
+    request: &RetrievalRequest,
+    profile: &FusionProfile,
+    catalog: &crate::OrderCatalog,
+) -> Result<RetrievalRequest, SearchError> {
+    if profile.ordering() != Some(catalog.policy()) {
+        return Err(FusionError::from(crate::OrderingError::PolicyMismatch {
+            stratum: "native key catalog".to_owned(),
+        })
+        .into());
+    }
+    let mut ordered = request.clone();
+    if let crate::ReadBound::Bounded(top_k) = ordered.bound {
+        ordered.bound = crate::ReadBound::CallerOrdered(top_k);
+    }
+    Ok(ordered)
+}
+
+/// Run the original scoped pipeline with caller ordering and its key snapshot.
+/// # Errors
+/// Preserves original scope, read, admission and ordering refusals.
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
+pub async fn search_scoped_ordered<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry<'static>,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    bindings: &crate::ConstraintBindings<'_>,
+    source: &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+    catalog: std::sync::Arc<crate::OrderCatalog>,
+) -> Result<crate::ScopedExecution<SearchResult>, SearchError>
+where
+    S: Statistics,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+{
+    let ordered = ordered_request(request, profile, &catalog)?;
+    let (result, scopes, fused) = search_bound(
+        &ordered,
+        registry,
+        statistics,
+        dataset,
+        env,
+        profile,
+        Some((bindings, source)),
+        Some(catalog),
+        || crate::execute::resident_operation(dataset).map_err(SearchError::from),
+    )
+    .await?;
+    Ok(crate::ScopedExecution {
+        result,
+        scopes: scopes.expect("scoped execution retains original unit receipts"),
+        fused,
+    })
+}
+
+/// Run caller-ordered scoped search over an operationally fallible source.
+/// # Errors
+/// Preserves the original source refusal and receipt ahead of any partial answer.
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
+pub async fn search_scoped_fallible_ordered<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry<'static>,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    bindings: &crate::ConstraintBindings<'_>,
+    source: &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+    catalog: std::sync::Arc<crate::OrderCatalog>,
+) -> Result<
+    (crate::ScopedExecution<SearchResult>, D::Evidence),
+    FallibleSearchError<D::Error, D::Evidence>,
+>
+where
+    S: Statistics,
+    D: purrdf_core::FallibleDatasetView + Sync,
+{
+    let ordered =
+        ordered_request(request, profile, &catalog).map_err(FallibleSearchError::Search)?;
+    let (result, evidence) =
+        purrdf_sparql_eval::with_fallible_read(dataset, |operation| async move {
+            search_bound(
+                &ordered,
+                registry,
+                statistics,
+                dataset,
+                env,
+                profile,
+                Some((bindings, source)),
+                Some(catalog),
+                || Ok(operation),
+            )
+            .await
+        })
+        .await
+        .map_err(FallibleSearchError::Read)?;
+    let (result, scopes, fused) = result.map_err(FallibleSearchError::Search)?;
+    Ok((
+        crate::ScopedExecution {
+            result,
+            scopes: scopes.expect("scoped execution retains original unit receipts"),
+            fused,
+        },
+        evidence,
+    ))
 }
 
 /// Run the original search composition with caller-bound hard constraints.
@@ -585,6 +733,7 @@ where
         env,
         profile,
         Some((bindings, source)),
+        None,
         || crate::execute::resident_operation(dataset).map_err(SearchError::from),
     )
     .await?;
@@ -660,6 +809,7 @@ where
                 env,
                 profile,
                 Some((bindings, source)),
+                None,
                 || Ok(operation),
             )
             .await
@@ -695,6 +845,7 @@ async fn search_bound<S, D, F>(
         &crate::ConstraintBindings<'_>,
         &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
     )>,
+    ordering: Option<std::sync::Arc<crate::OrderCatalog>>,
     create_read: F,
 ) -> Result<
     (
@@ -728,7 +879,10 @@ where
     // 3. Read and fuse. Each stratum is read on demand, so the read goes exactly
     //    as deep as the fusion's own stop; see this module's header.
     let operation = create_read()?;
-    let answer = read_and_fuse(&compiled, registry, dataset, profile, scope, &operation).await?;
+    let answer = read_and_fuse(
+        &compiled, registry, dataset, profile, scope, ordering, &operation,
+    )
+    .await?;
     let workspace = answer.rows.workspace();
     let unserved_terms = purrdf_sparql_eval::SharedWorkspace::new_admitted(
         plan.unserved_evidence_admitted(workspace)
@@ -777,6 +931,7 @@ async fn read_and_fuse<D>(
         &crate::ConstraintBindings<'_>,
         &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
     )>,
+    ordering: Option<std::sync::Arc<crate::OrderCatalog>>,
     operation: &purrdf_sparql_eval::ReadOperation<D::ReadError>,
 ) -> Result<Attempt, SearchError>
 where
@@ -821,6 +976,17 @@ where
         mut statuses,
     } = execution;
     let workspace = statuses.workspace().clone();
+    if profile.ordering().is_some()
+        && statuses
+            .iter()
+            .any(|(stratum, _)| profile.weight(stratum).is_some())
+    {
+        return Err(FusionError::from(crate::OrderingError::Uncertified {
+            reason: "a weighted native producer failed before it supplied a full-domain key bound"
+                .to_owned(),
+        })
+        .into());
+    }
     let mut streams: purrdf_sparql_eval::AdmittedVec<(Iri, RankedStreamAdapter<'_>)> =
         purrdf_sparql_eval::AdmittedVec::with_capacity(executed.len(), &workspace)
             .map_err(FusionError::from)?;
@@ -856,7 +1022,7 @@ where
             unweighted_strata.push(stratum).map_err(FusionError::from)?;
             continue;
         }
-        let Some(adapter) = RankedStreamAdapter::new(
+        let Some(mut adapter) = RankedStreamAdapter::new(
             stratum_stream.stream,
             stratum_stream.contract,
             profile,
@@ -865,6 +1031,9 @@ where
             unweighted_strata.push(stratum).map_err(FusionError::from)?;
             continue;
         };
+        if let Some(catalog) = &ordering {
+            adapter = adapter.with_order_catalog(catalog.clone());
+        }
         // The stream carries the plan it was compiled from into the fusion, so
         // the identity the answer reports is the one that travelled with the
         // rows rather than one read back off the plan at the end — and it
@@ -1100,6 +1269,9 @@ struct Attempt {
 /// executor's own, passed through unchanged.
 #[derive(Debug)]
 pub struct RankedStreamAdapter<'d> {
+    key_floor: usize,
+    ordering: Option<std::sync::Arc<crate::OrderCatalog>>,
+    yielded_keys: purrdf_sparql_eval::AdmittedOrderedSet<Term>,
     /// The executor's rows, in rank order.
     inner: RankedStreamImpl<'d>,
     /// The contract the stratum's producer declared these rows under.
@@ -1148,7 +1320,14 @@ impl<'d> RankedStreamAdapter<'d> {
         profile: &FusionProfile,
         stratum: &Iri,
     ) -> Option<Self> {
+        let workspace = stream
+            .workspace()
+            .cloned()
+            .unwrap_or_else(purrdf_sparql_eval::WorkspaceCapability::resident);
         Some(Self {
+            ordering: None,
+            key_floor: 0,
+            yielded_keys: purrdf_sparql_eval::AdmittedOrderedSet::new(&workspace),
             inner: stream,
             contract,
             weight: profile.weight(stratum)?,
@@ -1157,6 +1336,14 @@ impl<'d> RankedStreamAdapter<'d> {
             fused_bound: None,
             attestation: PfAttestation::UNDECLARED,
         })
+    }
+
+    /// Resolve caller keys from an explicitly supplied snapshot. Fusion checks
+    /// that its semantic identity agrees with the profile's ordering law.
+    #[must_use]
+    pub fn with_order_catalog(mut self, catalog: std::sync::Arc<crate::OrderCatalog>) -> Self {
+        self.ordering = Some(catalog);
+        self
     }
 
     /// Name the row bound these rows' depth was derived for.
@@ -1226,6 +1413,39 @@ impl<'d> RankedStreamAdapter<'d> {
 }
 
 impl RankedStream for RankedStreamAdapter<'_> {
+    fn score_prefix_bounded(&self) -> bool {
+        self.inner.score_prefix_bounded()
+    }
+    fn ordering_evidence(&self) -> Option<crate::OrderingEvidence> {
+        self.ordering.as_ref().map(|catalog| catalog.evidence())
+    }
+
+    fn unread_key_bound(&self) -> crate::LeadingBound {
+        self.ordering
+            .as_ref()
+            .map_or(crate::LeadingBound::Unbounded, |catalog| {
+                if self.contract.duplicates == purrdf_sparql_eval::DuplicatePolicy::Allowed {
+                    catalog.evidence().domain
+                } else {
+                    catalog.unread_bound(self.key_floor)
+                }
+            })
+    }
+
+    fn candidate_keys(
+        &self,
+        candidate: &Term,
+    ) -> Result<Option<crate::CandidateKeys>, ProtocolError> {
+        self.ordering
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .keys(candidate)
+                    .cloned()
+                    .map_err(ProtocolError::Ordering)
+            })
+            .transpose()
+    }
     type Item = Term;
 
     fn workspace(&self) -> Option<purrdf_sparql_eval::WorkspaceCapability> {
@@ -1273,7 +1493,21 @@ impl RankedStream for RankedStreamAdapter<'_> {
         // and nothing else: a block derived, defaulted or widened here would be
         // this adapter answering a question only the producer can — the same rule
         // that keeps it from inventing a contract.
-        Ok(Some(RankedRow::new(rank, value, item, block)))
+        let keys = self.candidate_keys(&item)?;
+        if keys.is_some() {
+            let key = item
+                .clone_admitted(self.yielded_keys.workspace())
+                .map_err(ProtocolError::NativeFailure)?;
+            self.yielded_keys
+                .insert(key)
+                .map_err(ProtocolError::NativeFailure)?;
+            if let Some(catalog) = &self.ordering {
+                catalog.advance_cursor(&self.yielded_keys, &mut self.key_floor);
+            }
+        }
+        let mut row = RankedRow::new(rank, value, item, block);
+        row.order_keys = keys;
+        Ok(Some(row))
     }
 
     #[expect(

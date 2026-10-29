@@ -25,6 +25,11 @@ pub use profile::ProfileRefusal;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PlanError {
+    /// A non-prefix read retained a score-prefix depth license.
+    OrderBoundPrefix {
+        /// Stratum whose recorded prefix contradicts the request's read bound.
+        stratum: String,
+    },
     /// A plan's canonical encoding carries a version this build does not write.
     ///
     /// This is a refusal, not a warning: a plan whose layout a newer or older
@@ -486,6 +491,7 @@ impl purrdf_hash::error::StructuredError for PlanError {
         DuplicateSelectivityTerm { section, subject, request_term } => "retrieval-plan-duplicate-selectivity-term" { "section" => Record(section), "subject" => Text(subject), "request_term" => Unsigned(u128::from(*request_term)) },
         DepthNotDerivable { stratum, recorded, derived } => "retrieval-plan-depth-not-derivable" { "stratum" => Iri(stratum), "recorded" => Unsigned(u128::from(*recorded)), "derived" => Unsigned(u128::from(*derived)) },
         DepthWithoutDerivation { stratum } => "retrieval-plan-depth-without-derivation" { "stratum" => Iri(stratum) },
+        OrderBoundPrefix { stratum } => "retrieval-plan-order-bound-prefix" { "stratum" => Iri(stratum) },
         DerivationWithoutDepth { stratum } => "retrieval-plan-derivation-without-depth" { "stratum" => Iri(stratum) },
         DerivationWithoutStatisticsEntry { stratum } => "retrieval-plan-derivation-without-statistics" { "stratum" => Iri(stratum) },
         StatisticsEntryContradictsDerivation { stratum, dimension, snapshot, derivation } => "retrieval-plan-statistics-contradiction" { "stratum" => Iri(stratum), "dimension" => Record(dimension), "snapshot" => Text(snapshot), "derivation" => Text(derivation) },
@@ -585,6 +591,10 @@ impl std::fmt::Display for PlanError {
                 f,
                 "stratum {stratum} records depth {recorded}, but its recorded inputs derive depth {derived}"
             ),
+            Self::OrderBoundPrefix { stratum } => write!(
+                f,
+                "stratum {stratum} retains a score-prefix depth license under a non-prefix read bound; replan before caller-key fusion"
+            ),
             Self::DepthWithoutDerivation { stratum } => write!(
                 f,
                 "stratum {stratum} records a depth with no recorded derivation"
@@ -680,6 +690,7 @@ impl PlanError {
             Self::UnconsultedStatisticsSubject { .. } => "unconsulted-statistics-subject",
             Self::DepthNotDerivable { .. } => "depth-not-derivable",
             Self::DepthWithoutDerivation { .. } => "depth-without-derivation",
+            Self::OrderBoundPrefix { .. } => "order-bound-prefix",
             Self::DerivationWithoutDepth { .. } => "derivation-without-depth",
             Self::DerivationWithoutStatisticsEntry { .. } => "derivation-without-statistics-entry",
             Self::StatisticsEntryContradictsDerivation { .. } => {
@@ -803,6 +814,8 @@ pub enum FusionError {
     },
     /// The exact resolution search violated its proven candidate bounds.
     ResolutionInvariant,
+    /// Original typed caller-key or bound protocol refusal.
+    Ordering(crate::OrderingError),
 
     /// A ranked stream violated the input protocol.
     Protocol(Box<crate::ranked_stream::ProtocolError>),
@@ -1046,6 +1059,7 @@ impl purrdf_hash::error::StructuredError for FusionError {
         InvalidPrecision { digits } => "fusion-invalid-precision" { "digits" => Unsigned(u128::from(*digits)) },
         PrecisionMismatch { expected, got } => "fusion-precision-mismatch" { "expected" => Unsigned(u128::from(expected.digits())), "got" => Unsigned(u128::from(got.digits())) },
         ResolutionInvariant => "fusion-resolution-invariant" {},
+        Ordering(cause) => "fusion-ordering" { "cause" => Cause(cause) },
         Protocol(cause) => "fusion-protocol" { "cause" => Cause(cause.as_ref()) },
         InvalidK { k } => "fusion-invalid-k" { "k" => Unsigned(u128::from(*k)) },
         InvalidRank { rank } => "fusion-invalid-rank" { "rank" => Unsigned(u128::from(*rank)) },
@@ -1071,6 +1085,7 @@ impl std::fmt::Display for FusionError {
             Self::InvalidPrecision { digits } => write!(f, "fusion precision {digits} exceeds 38 decimal digits"),
             Self::PrecisionMismatch { expected, got } => write!(f, "fusion precision differs: expected {}, got {} decimal digits", expected.digits(), got.digits()),
             Self::ResolutionInvariant => f.write_str("resolution search exceeded its proven sufficient weight; candidate advancement invariant failed"),
+            Self::Ordering(error) => error.fmt(f),
             Self::NativeFailure(err) => err.fmt(f),
             Self::Protocol(err) => write!(f, "ranked-stream protocol violation: {err}"),
             Self::InvalidK { k } => write!(f, "fusion profile K must be at least 1, got {k}"),
@@ -1127,6 +1142,7 @@ impl std::error::Error for FusionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NativeFailure(error) => Some(error),
+            Self::Ordering(error) => Some(error),
             Self::Protocol(error) => Some(error.as_ref()),
             Self::MalformedProfile(error) => Some(error.as_ref()),
             _ => None,
@@ -1137,6 +1153,8 @@ impl std::error::Error for FusionError {
 purrdf_lex::variant_from!(FusionError {
     MalformedProfile(PlanError, ProfileRefusal) via ProfileRefusal::boxed
 });
+
+purrdf_lex::variant_from!(FusionError { Ordering(crate::OrderingError) });
 
 impl From<purrdf_sparql_eval::EvalError> for FusionError {
     fn from(error: purrdf_sparql_eval::EvalError) -> Self {
@@ -1150,6 +1168,7 @@ impl From<crate::ranked_stream::ProtocolError> for FusionError {
     fn from(error: crate::ranked_stream::ProtocolError) -> Self {
         match error {
             crate::ranked_stream::ProtocolError::NativeFailure(error) => Self::NativeFailure(error),
+            crate::ranked_stream::ProtocolError::Ordering(error) => Self::Ordering(error),
             error => Self::Protocol(Box::new(error)),
         }
     }

@@ -3625,7 +3625,109 @@ fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
     );
 }
 
+fn caller_keys_reach_deep_real_text_rows_and_cannot_retag_score_prefix_plans() {
+    use purrdf_retrieval::{CandidateKeys, OrderCatalog, OrderingPolicy, Plan, ReadBound};
+
+    let rows = [
+        ("a", "alpha alpha alpha", None),
+        ("b", "alpha beta beta beta", None),
+    ];
+    let data = dataset_of(&rows);
+    let index = TextIndex::from_dataset(&*data, &text_config()).unwrap();
+    let registry = text_only_registry(index);
+    let mut request = lexical_request("alpha");
+    request.bound = ReadBound::Bounded(TopK::new(1));
+    let ordinary = plan(&request, &registry, &NoStatistics).unwrap();
+    let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+
+    for leading in [false, true] {
+        let policy = OrderingPolicy {
+            semantics: iri(&ex("ordering/tier-activation")),
+            leading,
+        };
+        // A one-unit weight makes the score plateau explicit. With leading keys,
+        // a full weight instead proves the lower-ranked row beats a higher score.
+        let weight = if leading { PRECISION_12.scale() } else { 1 };
+        let law = FusionProfile::with_decay(
+            BTreeMap::from([(iri(TEXT_STRATUM), PRECISION_12.score(weight))]),
+            DecayRule::ReciprocalRank { k: K },
+            PRECISION_12,
+        )
+        .unwrap()
+        .with_ordering(policy.clone());
+        assert_eq!(
+            FusionProfile::from_canonical_bytes(&law.canonical_bytes()).unwrap(),
+            law
+        );
+        let entries = [("a", 2), ("b", 1)]
+            .into_iter()
+            .map(|(local, key)| {
+                let prefix = if leading { vec![key] } else { vec![] };
+                (
+                    Term::new(format!("<{}>", ex(local))),
+                    CandidateKeys::new(&prefix, &[key], &workspace).unwrap(),
+                )
+            })
+            .collect();
+        let catalog = Arc::new(OrderCatalog::new(policy, entries).unwrap());
+        let env = AdmissionEnvironment {
+            registry: &registry,
+            statistics: &NoStatistics,
+            fusion_profile: Some(&law),
+        };
+        assert!(
+            compile(&ordinary, &env).is_err(),
+            "score-prefix license cannot serve caller keys"
+        );
+        let result = block_on(purrdf_retrieval::search_ordered(
+            &request,
+            &registry,
+            &NoStatistics,
+            &*data,
+            &env,
+            &law,
+            catalog,
+        ))
+        .unwrap();
+        assert_eq!(entities(&result), [format!("<{}>", ex("b"))]);
+        assert_eq!(result.rows[0].contributions[0].1, 2);
+        assert_eq!(
+            result.rows[0]
+                .order_witness
+                .as_ref()
+                .unwrap()
+                .keys
+                .tie
+                .as_slice(),
+            &[1]
+        );
+        assert_eq!(result.trailer.certain_prefix(&result.rows).unwrap(), 1);
+        let mut ordered_request = request.clone();
+        ordered_request.bound = ReadBound::CallerOrdered(TopK::new(1));
+        let ordered = plan(&ordered_request, &registry, &NoStatistics).unwrap();
+        assert_eq!(ordered.stratum_depths[&iri(TEXT_STRATUM)], 2);
+        assert_eq!(result.plan_id, ordered.id());
+        assert_eq!(
+            Plan::from_canonical_bytes(&ordered.canonical_bytes()).unwrap(),
+            ordered
+        );
+        assert_eq!(Plan::from_json(&ordered.to_json()).unwrap(), ordered);
+
+        let mut retagged = ordered;
+        retagged
+            .stratum_derivations
+            .get_mut(&iri(TEXT_STRATUM))
+            .unwrap()
+            .licensed_prefix = Some(1);
+        assert!(Plan::from_canonical_bytes(&retagged.canonical_bytes()).is_err());
+        assert!(Plan::from_json(&retagged.to_json()).is_err());
+        assert!(retagged.certify().is_err());
+        assert!(compile(&retagged, &env).is_err());
+    }
+}
+
 purrdf_testkit::harness_main!(
+    caller_keys_reach_deep_real_text_rows_and_cannot_retag_score_prefix_plans,
     fallible_scoped_composition_refuses_deferred_exclusions_and_final_descriptor_drift,
     fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal,
     scoped_native_owner_refusal_precedes_original_producer_open,

@@ -283,34 +283,30 @@ impl DecayRule {
     }
 }
 
-/// The declared total order applied to candidates with equal fused scores.
+/// The declared total candidate order, bound into the fusion profile identity.
 ///
-/// The enum is closed and holds the one law this layer ships: fused score
-/// descending, then the candidate's best (minimum) stratum rank ascending, then
-/// canonical term byte order ascending. The final key is total because two
-/// distinct candidates never share a canonical term.
-///
-/// There is deliberately **no** setter for it. A profile carries this law
-/// because it is the only one, and an API to select among one alternative is a
-/// choice a caller cannot make — it would read as a knob while doing nothing. A
-/// second tie-break is an additive variant plus the selector it would then
-/// genuinely need, written when there is a second law to select; the value is
-/// already in the profile's canonical bytes, so adding one re-opens no
-/// previously-issued identity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// The default compares score descending, best stratum rank ascending, then
+/// canonical term ascending. [`FusionProfile::with_ordering`] selects explicit
+/// caller keys: an optional leading key, score descending, caller tie key, then
+/// canonical term. Both policies are total; distinct candidates never share a
+/// canonical term. The additive caller-key tag preserves default profile bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TieBreak {
     /// Score descending, best rank ascending, canonical term ascending.
     #[default]
     ScoreDescStratumRankAscCanonicalTerm,
+    /// Leading key (when declared), score descending, caller tie key, canonical term.
+    CallerKeys(crate::OrderingPolicy),
 }
 
 impl TieBreak {
     /// The canonical discriminator byte for this tie-break.
-    fn tag(self) -> u8 {
+    fn tag(&self) -> u8 {
         match self {
             Self::ScoreDescStratumRankAscCanonicalTerm => {
                 TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM
             }
+            Self::CallerKeys(_) => 1,
         }
     }
 }
@@ -392,8 +388,22 @@ impl FusionProfile {
     }
     /// The declared total ordering after scores.
     #[must_use]
-    pub const fn tie_break(&self) -> TieBreak {
-        self.tie_break
+    pub fn tie_break(&self) -> TieBreak {
+        self.tie_break.clone()
+    }
+    /// Declare the caller's normalized key semantics as part of this law.
+    #[must_use]
+    pub fn with_ordering(mut self, policy: crate::OrderingPolicy) -> Self {
+        self.tie_break = TieBreak::CallerKeys(policy);
+        self
+    }
+    /// The caller-key policy, or absence for the built-in stratum-rank policy.
+    #[must_use]
+    pub const fn ordering(&self) -> Option<&crate::OrderingPolicy> {
+        match &self.tie_break {
+            TieBreak::CallerKeys(policy) => Some(policy),
+            TieBreak::ScoreDescStratumRankAscCanonicalTerm => None,
+        }
     }
     /// At most one contribution per declared stratum.
     #[must_use]
@@ -459,6 +469,10 @@ impl FusionProfile {
             writer.u128(weight.into_raw());
         }
         writer.u8(self.tie_break.tag());
+        if let Some(policy) = self.ordering() {
+            writer.string(policy.semantics.as_str());
+            writer.u8(u8::from(policy.leading));
+        }
         writer.u32(self.max_contributions);
         writer.u8(ROUNDING_TRUNCATE_TOWARD_ZERO);
         writer.u8(ITEM_ENCODING_CANONICAL_LEXICAL);
@@ -510,13 +524,29 @@ impl FusionProfile {
             }
         }
         let tie_break = reader.u8()?;
-        if tie_break != TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM {
+        if tie_break > 1 {
             return Err(ProfileRefusal::TieBreakTag {
                 found: tie_break,
                 expected: TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM,
             }
             .into());
         }
+        let ordering = if tie_break == 1 {
+            let semantics = Iri::parse(&reader.string("caller ordering semantics")?)?;
+            let leading = reader.u8()?;
+            if leading > 1 {
+                return Err(crate::OrderingError::Uncertified {
+                    reason: "canonical ordering leading-key tag is neither zero nor one".to_owned(),
+                }
+                .into());
+            }
+            Some(crate::OrderingPolicy {
+                semantics,
+                leading: leading == 1,
+            })
+        } else {
+            None
+        };
         let maximum = reader.u32()?;
         let strata =
             u32::try_from(weights.len()).map_err(|source| ProfileRefusal::StrataCount {
@@ -548,7 +578,11 @@ impl FusionProfile {
             .into());
         }
         reader.finish()?;
-        Self::with_decay(weights, decay, precision)
+        let mut profile = Self::with_decay(weights, decay, precision)?;
+        if let Some(policy) = ordering {
+            profile = profile.with_ordering(policy);
+        }
+        Ok(profile)
     }
     /// Content identity of the entire scale-bearing law.
     #[must_use]

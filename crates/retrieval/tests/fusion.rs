@@ -9224,6 +9224,7 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
                 // invariant the floor is computed under.
                 let inflation = next(score + 1);
                 FusedRow {
+                    order_witness: None,
                     entity: Term::new(format!("item-{index}")),
                     score: Score::from_raw(u128::from(score), PRECISION_12),
                     contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(

@@ -388,6 +388,9 @@ impl ReadBound {
     pub fn to_json(self) -> Value {
         match self {
             Self::Bounded(top_k) => Object::new().with("Bounded", top_k.to_json()).into(),
+            Self::CallerOrdered(top_k) => {
+                Object::new().with("CallerOrdered", top_k.to_json()).into()
+            }
             Self::Complete => "Complete".into(),
         }
     }
@@ -404,7 +407,14 @@ impl ReadBound {
                 .and_then(TopK::from_json)
                 .map_err(|error| error.within("Bounded"))
                 .map(Self::Bounded),
-            (name, _) => Err(unknown_variant(name, &["Bounded", "Complete"])),
+            ("CallerOrdered", body) => content("CallerOrdered", body)
+                .and_then(TopK::from_json)
+                .map_err(|error| error.within("CallerOrdered"))
+                .map(Self::CallerOrdered),
+            (name, _) => Err(unknown_variant(
+                name,
+                &["Bounded", "CallerOrdered", "Complete"],
+            )),
         }
     }
 }
@@ -814,7 +824,7 @@ impl Plan {
     /// twice.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
         let mut fields = fields_of(value)?;
-        Ok(Self {
+        let plan = Self {
             version: fields.required("version")?,
             request_terms: fields.required_with("request_terms", |value| {
                 items_with(value, RequestTerm::from_json)
@@ -849,7 +859,9 @@ impl Plan {
                 .map(RegistryId::from_raw)?,
             registry_content_fingerprint: fields.required("registry_content_fingerprint")?,
             origin: PlanOrigin::Deserialized,
-        })
+        };
+        plan.validate_order_bound()?;
+        Ok(plan)
     }
 
     /// [`Plan::to_json`], written as compact JSON.

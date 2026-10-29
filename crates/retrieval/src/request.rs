@@ -414,6 +414,11 @@ pub enum ReadBound {
     /// narrows a depth the registry and the statistics already set, or it changes
     /// nothing.
     Bounded(TopK),
+    /// At most this many fused rows under caller keys. Retain the declared
+    /// producer depths: neither leading keys nor ties on quantized scores are
+    /// bounded by a score-ordered prefix. Fusion's full-order bounds decide
+    /// when reading may stop.
+    CallerOrdered(TopK),
     /// Every row the request's strata can yield, to the depth their own
     /// declarations and the statistics allow.
     ///

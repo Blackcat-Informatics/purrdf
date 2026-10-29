@@ -8,6 +8,20 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+Caller ordering is explicit: select `FusionProfile::with_ordering` and plan
+with `ReadBound::CallerOrdered(k)`. The law compares optional leading bytes,
+score descending, caller tie bytes and canonical term; the default law and its
+canonical bytes remain unchanged. Producers supply immutable keys, pinned
+key-snapshot evidence and sound unread bounds. Native `search_ordered` accepts
+an `OrderCatalog` and selects the read bound before planning.
+
+Python `retrieval.search` and `compile` accept `ordering={"semantics": iri,
+"leading": bool, "keys": {canonical_term: (leading_bytes, tie_bytes)}}`.
+`plan(..., caller_ordered=True)` selects the corresponding planning license.
+Ordering on `compile` requires all arithmetic-law arguments. Returned rows carry
+`order_witness`; keyed answers carry source `ordering` evidence and
+`unemitted_order`. Missing keys and insufficient proof raise `ValueError`.
+
 Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 3.x forms:
 
