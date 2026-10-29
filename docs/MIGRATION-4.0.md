@@ -432,6 +432,10 @@ Native callers can select `RecursionSemantics::Lfp` or `Gfp` through
 limits. The same closed structural evaluator serves parse, prepare, bind, direct
 conformance, reports and restored products. No selection still refuses cycles;
 negative/nonmonotone recursive components refuse both selected laws.
+The direct expression `shnex:conformsToShape ( sh:this :Target )` has a positive
+dependency when `:Target` is a canonical named reference in the same original
+catalog. Its conformance question shares the active fixed point and original
+binding, including property-value focuses and restored products.
 `PreparationRefusal::UnqualifiedRecursion` retains the original definition,
 parameter and model/index scope when an expression, query/computed target or
 overlay has no closed dependency proof. The broader dynamic-expression contract
