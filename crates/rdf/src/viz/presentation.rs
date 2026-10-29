@@ -3,7 +3,12 @@
 
 //! Caller-owned presentation over the existing statement incidence model.
 
-use super::*;
+use super::{
+    VizAccessibility, VizElementIndexEntry, VizError, VizExport, VizLayoutLabel, VizLayoutOptions,
+    VizMode, VizPoint, VizProjection, VizRect, VizRelation, VizScene, VizSceneLabel, VizSceneNode,
+    VizSemanticRef, VizSpec, VizStatement, VizTermId, VizValueRef, build_scene,
+};
+use std::collections::{BTreeMap, BTreeSet};
 
 mod json;
 

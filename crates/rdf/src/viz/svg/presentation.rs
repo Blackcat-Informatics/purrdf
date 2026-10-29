@@ -3,8 +3,20 @@
 
 //! Enriched export assembly and emission through the native SVG primitives.
 
-use super::*;
+use super::{
+    VizSvgOptions, assemble_export, escape_xml_text, index_entry, path_data, render_document,
+    render_label_box, render_rect, render_rect_attributes, render_text, xml_attribute,
+};
+use crate::viz::layout::layout_presented;
 use crate::viz::presentation::presentation_error;
+use crate::viz::{
+    VIZ_PRESENTED_SCHEMA_VERSION, VizElementIndexEntry, VizElementKind, VizError, VizExport,
+    VizInteractionLayout, VizLayoutOptions, VizNavigation, VizPresentation, VizPresentationIssue,
+    VizPresentationLayout, VizPresentedExport, VizProjection, VizRegionKind, VizSceneLabel,
+    VizSemanticRef, VizSpec, build_presented_scene, stable_hash_hex,
+};
+use purrdf_lex::json::record::ToJson;
+use std::fmt::Write as _;
 
 /// Build a complete enriched export with authoritative geometry, hashes and index.
 ///
