@@ -3320,15 +3320,17 @@ fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
     assert_eq!(
         truncated.canonical_bytes(),
         profile(&[("text", PRECISION_12.score(PRECISION_12.scale()))], K).canonical_bytes(),
-        "`new` is `with_decay` under the first rule"
+        "the fixture helper declares the same first rule and precision"
     );
     assert_ne!(
         truncated.id(),
         folded.id(),
         "a different rule is a different law and therefore a different identity"
     );
-    assert_eq!(truncated.canonical_bytes()[2], 0, "tag zero");
-    assert_eq!(folded.canonical_bytes()[2], 1, "tag one");
+    // Layout version 2 starts with the version (two bytes) and precision (four).
+    const DECAY_TAG_OFFSET: usize = 6;
+    assert_eq!(truncated.canonical_bytes()[DECAY_TAG_OFFSET], 0, "tag zero");
+    assert_eq!(folded.canonical_bytes()[DECAY_TAG_OFFSET], 1, "tag one");
 
     assert_eq!(
         FusionProfile::from_canonical_bytes(&folded.canonical_bytes()).expect("round-trips"),
@@ -3337,7 +3339,7 @@ fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
 
     // An unassigned tag is refused rather than read as a rule this build knows.
     let mut unknown = folded.canonical_bytes();
-    unknown[2] = 2;
+    unknown[DECAY_TAG_OFFSET] = 2;
     let error = FusionProfile::from_canonical_bytes(&unknown).unwrap_err();
     assert_eq!(
         error.to_string(),
