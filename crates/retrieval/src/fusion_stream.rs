@@ -1400,7 +1400,7 @@ impl FusionTrailer {
     /// is relied on, so no iteration order can reach the digest; the framing is
     /// what makes the encoding injective, so no two different maps can share
     /// bytes by running their fields together; the little-endian integers are
-    /// what make it identical on every target, wasm32 included.
+    /// what make it identical on every target, `wasm32` included.
     ///
     /// Public because an identity nobody can re-derive is an identity nobody
     /// can audit. A caller holding a trailer can recompute
@@ -1552,9 +1552,8 @@ impl FusionTrailer {
     ///   interval is zero-width, so the pairwise term is the emitted order
     ///   itself; and nothing outside `rows` can reach them either, because a row
     ///   is certified only over a threshold that bounds every candidate still to
-    ///   come and that threshold only falls as reading proceeds. Taken as a
-    ///   short-circuit because it is both the common case and the one answer no
-    ///   arithmetic can improve on.
+    ///   come and that threshold only falls as reading proceeds. The same
+    ///   interval comparison derives this result for exact and degraded answers.
     /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
     ///   could outscore anything, so nothing above it is safe either, and a
     ///   prefix "certain except for one unbounded rival" is not certain.
@@ -1586,26 +1585,34 @@ impl FusionTrailer {
     /// `rows` is assumed to be in this fusion's emitted order, which is the
     /// order [`FusionStream::next`] yields and the order
     /// [`FusionResult`](crate::FusionResult) stores.
-    #[must_use]
-    pub fn certain_prefix(&self, rows: &[FusedRow]) -> usize {
+    /// # Errors
+    /// Refuses scores or bounds in different precision from this trailer and
+    /// intervals whose endpoints cannot be represented, including inflation
+    /// greater than the observed score. Validation precedes uncertainty exits.
+    pub fn certain_prefix(&self, rows: &[FusedRow]) -> Result<usize, FusionError> {
+        if let Some(bound) = self.unemitted_ceiling {
+            bound.require_precision(self.precision)?;
+        }
+        for row in rows {
+            row.score.require_precision(self.precision)?;
+            if let ScoreInterval::Bounded { inflation, deficit } = row.interval {
+                row.score.checked_sub(inflation)?;
+                row.score.checked_add(deficit)?;
+            }
+        }
         // One unbounded row poisons the whole ranking: it could be worth
         // anything, so no row can be certain of outranking it.
         if rows
             .iter()
             .any(|row| matches!(row.interval, ScoreInterval::Unbounded { .. }))
         {
-            return 0;
+            return Ok(0);
         }
         // And an absentee nothing bounds poisons it the same way: `None` is the
         // identical refusal, made about the candidates this answer never named.
         let Some(unemitted) = self.unemitted_ceiling else {
-            return 0;
+            return Ok(0);
         };
-        // See the degenerate cases above: an exhaustive answer is certain in
-        // whole, and this is the path that does not pay to re-derive it.
-        if matches!(self.exactness, ScoreExactness::Exact) {
-            return rows.len();
-        }
 
         // The inflation term is a sum of contributions that are themselves
         // summands of `score`, so it cannot exceed it and this subtraction
@@ -1613,11 +1620,8 @@ impl FusionTrailer {
         // contribution-subset invariant is broken; it must not become a
         // plausible numeric floor.
         let floor = |row: &FusedRow| match &row.interval {
-            ScoreInterval::Bounded { inflation, .. } => row
-                .score
-                .checked_sub(*inflation)
-                .expect("inflation is a subset of observed contributions"),
-            ScoreInterval::Unbounded { .. } => Score::zero(row.score.precision()),
+            ScoreInterval::Bounded { inflation, .. } => row.score.checked_sub(*inflation),
+            ScoreInterval::Unbounded { .. } => Ok(Score::zero(row.score.precision())),
         };
         let ceiling = |row: &FusedRow| match &row.interval {
             ScoreInterval::Bounded { deficit, .. } => row.score.checked_add(*deficit).ok(),
@@ -1633,7 +1637,7 @@ impl FusionTrailer {
         let mut suffix_ceiling: Option<Score> = None;
         let mut suffix_unbounded = false;
         for (position, row) in rows.iter().enumerate().rev() {
-            let mine = floor(row);
+            let mine = floor(row)?;
             let settled = !suffix_unbounded
                 && suffix_ceiling.is_none_or(|rival| mine >= rival)
                 && mine >= unemitted;
@@ -1652,7 +1656,7 @@ impl FusionTrailer {
                 None => suffix_unbounded = true,
             }
         }
-        certain
+        Ok(certain)
     }
 }
 

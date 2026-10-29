@@ -950,7 +950,9 @@ fn an_attested_short_index_excluding_a_candidate_still_owes_it_the_residual() {
          exclusion is silent about the documents the index is missing"
     );
     assert_eq!(
-        trailer.certain_prefix(&rows),
+        trailer
+            .certain_prefix(&rows)
+            .expect("valid emitted intervals"),
         0,
         "and `i`'s first place is not certain, because `b` could out-score it"
     );
@@ -1022,9 +1024,16 @@ fn a_lossy_search_excluding_by_membership_discharges_the_residual() {
         [PRECISION_12.score(0), PRECISION_12.score(0)],
         "with a membership exclusion it is owed nothing"
     );
-    assert_eq!(control_trailer.certain_prefix(&control_rows), 0);
     assert_eq!(
-        trailer.certain_prefix(&rows),
+        control_trailer
+            .certain_prefix(&control_rows)
+            .expect("valid emitted intervals"),
+        0
+    );
+    assert_eq!(
+        trailer
+            .certain_prefix(&rows)
+            .expect("valid emitted intervals"),
         2,
         "so both rows are certain where, without the answer, neither was"
     );

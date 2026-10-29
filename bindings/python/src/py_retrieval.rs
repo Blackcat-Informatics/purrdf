@@ -2691,7 +2691,10 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     // possible rather than excluded.
     out.set_item(
         "certain_prefix",
-        result.trailer.certain_prefix(&result.rows),
+        result
+            .trailer
+            .certain_prefix(&result.rows)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
     )?;
 
     // The evidence the verdict above rests on, so a caller can audit it rather
@@ -3605,10 +3608,12 @@ fn deepest_rank_within_width(
 /// The answer is `None` when no rank a plan can express brings the threshold
 /// below the candidate's bound, rendered the way every other wall on this
 /// surface is rather than as an enormous rank. Weights are in raw fixed-point
-/// units, where `10 ** scale_digits` is one whole unit; a non-positive one raises
+/// units, where `10 ** scale_digits` is one whole unit; a zero weight raises
 /// `ValueError`, because the search rests on a threshold that does not rise with
 /// the rank and a non-positive weight does not give one. A `k` of zero, a rank
-/// of zero and an unknown `decay` spelling raise `ValueError` too.
+/// of zero and an unknown `decay` spelling raise `ValueError` too. Negative
+/// weights and weights outside the unsigned 128-bit range raise `OverflowError`
+/// during extraction.
 #[pyfunction]
 #[pyo3(signature = (naming_raw, at_rank, sharing_raw, k, *, decay, scale_digits))]
 fn crossing_rank_at(

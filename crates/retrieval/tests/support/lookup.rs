@@ -73,6 +73,7 @@ pub fn profile() -> FusionProfile {
 }
 
 /// A stopped live stream's ceiling under the fixture's weight-one rank law.
+#[must_use]
 pub fn ceiling_at(rank: u64) -> ProducerStatus {
     ProducerStatus::CeilingReached {
         bound: contribution_under(

@@ -411,7 +411,7 @@ fn request() -> RetrievalRequest {
 /// of it from the law preferring a modality.
 ///
 /// [`purrdf_retrieval::fixture::PRECISION_12.score(1_000_000_000_000)`] is the number one. The neighbouring constructor
-/// `Score::from_raw(1)` is one raw unit — `10^-12` — and since a fusion reads
+/// `Score::from_raw(1, PRECISION_12)` is one raw unit — `10^-12` — and since a fusion reads
 /// weights only as ratios, a map that mixed the two would run, refuse nothing,
 /// and rank as though this stratum did not exist. Build a weight map with one
 /// constructor.
@@ -514,7 +514,10 @@ fn report(result: &SearchResult) {
     // excluded.
     println!(
         "  {} of {} rows are certain of their places",
-        result.trailer.certain_prefix(&result.rows),
+        result
+            .trailer
+            .certain_prefix(&result.rows)
+            .expect("valid emitted intervals"),
         result.rows.len()
     );
 

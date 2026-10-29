@@ -1573,7 +1573,7 @@ fn decoded_profile_bytes_are_held_to_the_positive_weight_law() {
 // 12. Canonical profile bytes and fused output are target-independent.
 //
 // The bytes are asserted against a fixed digest captured on this target; the
-// same construction on wasm32-unknown-unknown is proven to compile and to
+// same construction on `wasm32-unknown-unknown` is proven to compile and to
 // produce byte-identical input by the pure-field encoding. The fused rendering
 // is checked against the same golden the native test uses.
 #[test]
@@ -8376,10 +8376,67 @@ fn an_exhaustive_fusion_carries_zero_width_intervals() {
          there is nothing outside this answer worth anything at all"
     );
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         fused.rows.len(),
         "so the whole answer is certain, which is what this engine always said"
     );
+
+    // Public rows remain checked even under an exact trailer or an unknown
+    // absentee bound: malformed intervals must not panic or certify a prefix.
+    let mut supplied: Vec<_> = fused.rows.iter().cloned().collect();
+    supplied[0].interval = ScoreInterval::Bounded {
+        inflation: PRECISION_12.score(supplied[0].score.into_raw() + 1),
+        deficit: PRECISION_12.score(0),
+    };
+    assert!(matches!(
+        fused.trailer.certain_prefix(&supplied),
+        Err(FusionError::Overflow)
+    ));
+    let mut unknown = fused.trailer.clone();
+    unknown.unemitted_ceiling = None;
+    assert!(matches!(
+        unknown.certain_prefix(&supplied),
+        Err(FusionError::Overflow)
+    ));
+    supplied[0].interval = ScoreInterval::Bounded {
+        inflation: PRECISION_12.score(0),
+        deficit: PRECISION_12.score(u128::MAX),
+    };
+    assert!(matches!(
+        fused.trailer.certain_prefix(&supplied),
+        Err(FusionError::Overflow)
+    ));
+    let other = purrdf_retrieval::Precision::new(0).expect("valid precision");
+    for interval in [
+        ScoreInterval::Bounded {
+            inflation: other.score(0),
+            deficit: PRECISION_12.score(0),
+        },
+        ScoreInterval::Bounded {
+            inflation: PRECISION_12.score(0),
+            deficit: other.score(0),
+        },
+    ] {
+        supplied[0].interval = interval;
+        assert!(matches!(
+            fused.trailer.certain_prefix(&supplied),
+            Err(FusionError::PrecisionMismatch { .. })
+        ));
+    }
+    supplied = fused.rows.iter().cloned().collect();
+    supplied[0].score = other.score(0);
+    assert!(matches!(
+        fused.trailer.certain_prefix(&supplied),
+        Err(FusionError::PrecisionMismatch { .. })
+    ));
+    unknown.unemitted_ceiling = Some(other.score(0));
+    assert!(matches!(
+        unknown.certain_prefix(&fused.rows),
+        Err(FusionError::PrecisionMismatch { .. })
+    ));
 }
 
 // T9.3. The `Dom(x)` narrowing. A lossy stratum that PROVABLY cannot name a
@@ -8504,7 +8561,10 @@ fn a_perturbed_order_leaves_no_finite_bound() {
     };
     assert_eq!(unbounded, &iri_members([stratum("vector")]));
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         0,
         "an unbounded row could outscore anything, so nothing is certain of \
          outranking it"
@@ -8549,7 +8609,10 @@ fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
         &separated,
     ));
     assert_eq!(
-        clean.trailer.certain_prefix(&clean.rows),
+        clean
+            .trailer
+            .certain_prefix(&clean.rows)
+            .expect("valid emitted intervals"),
         clean.rows.len(),
         "every stratum exhaustive, so every row keeps its place whatever else \
          is true"
@@ -8582,7 +8645,11 @@ fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
         &separated,
     ));
     assert!(
-        degraded.trailer.certain_prefix(&degraded.rows) < degraded.rows.len(),
+        degraded
+            .trailer
+            .certain_prefix(&degraded.rows)
+            .expect("valid emitted intervals")
+            < degraded.rows.len(),
         "a declared loss must be able to SHORTEN the certain prefix, or the \
          function is reporting a constant"
     );
@@ -8772,7 +8839,10 @@ fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
         "the fixture must actually tie, or this test proves nothing: {scores:?}"
     );
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         fused.rows.len(),
         "every interval is zero-width, so nothing could have been different and \
          every row keeps its place -- a tie is decided by the engine's own total \
@@ -8819,7 +8889,11 @@ fn tied_rows_stop_being_certain_once_a_stratum_declares_a_loss() {
     ));
 
     assert!(
-        fused.trailer.certain_prefix(&fused.rows) < fused.rows.len(),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals")
+            < fused.rows.len(),
         "now the tied rows could have been ordered differently, because the \
          lossy stratum may have withheld from one and promoted the other"
     );
@@ -8898,7 +8972,10 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
 
     let exhaustive = block_on(run_fuse(streams(false), &fusion_profile));
     assert_eq!(
-        exhaustive.trailer.certain_prefix(&exhaustive.rows),
+        exhaustive
+            .trailer
+            .certain_prefix(&exhaustive.rows)
+            .expect("valid emitted intervals"),
         exhaustive.rows.len(),
         "with both strata exhaustive there is nothing outside the answer: a \
          stratum that found everything it had cannot have hidden a rival"
@@ -8949,7 +9026,10 @@ fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
          -- so a prefix computed from them alone certifies the whole answer"
     );
     assert_eq!(
-        degraded.trailer.certain_prefix(&degraded.rows),
+        degraded
+            .trailer
+            .certain_prefix(&degraded.rows)
+            .expect("valid emitted intervals"),
         0,
         "but the answer is not certain: a candidate the lossy stratum never \
          named could have scored the whole of its rank one, which beats \
@@ -9039,7 +9119,10 @@ fn a_rival_left_in_the_frontier_by_the_bound_is_bounded_too() {
         "nothing in the answer contradicts anything else in it"
     );
     assert_eq!(
-        fused.trailer.certain_prefix(&fused.rows),
+        fused
+            .trailer
+            .certain_prefix(&fused.rows)
+            .expect("valid emitted intervals"),
         0,
         "yet the abandoned rival could outscore the row that was kept, so the \
          place is not settled -- a bounded read is where this is decided, and \
@@ -9162,7 +9245,9 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
 
         let mut trailer = fused.trailer.clone();
         trailer.unemitted_ceiling = Some(unemitted);
-        let got = trailer.certain_prefix(&rows);
+        let got = trailer
+            .certain_prefix(&rows)
+            .expect("valid emitted intervals");
         let want = reference(&rows, unemitted);
         assert_eq!(
             got, want,

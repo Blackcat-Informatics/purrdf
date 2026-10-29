@@ -68,6 +68,8 @@ Standalone scores and derived weights retain their raw units and precision.
 The inverse depth helper now takes `weight_for_depth(precision, depth)`; the
 threshold and crossing helpers also take explicit precision, including for empty
 weight lists. Frontier cells retain raw unsigned values under the owning profile.
+`FusionTrailer::certain_prefix` returns `Result<usize, FusionError>` and refuses
+supplied rows or bounds with mismatched precision or invalid interval arithmetic.
 
 Python fusion calls require `scale_digits`; optional compile-time laws require
 all four of `weights`, `k`, `decay` and `scale_digits`, or none. Returned scores,

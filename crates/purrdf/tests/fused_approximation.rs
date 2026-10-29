@@ -343,7 +343,10 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
 
     // Non-vacuous, and in the direction that matters: a real approximate
     // producer must be able to COST certainty, or the number is decorative.
-    let certain = result.trailer.certain_prefix(&result.rows);
+    let certain = result
+        .trailer
+        .certain_prefix(&result.rows)
+        .expect("valid emitted intervals");
     assert!(
         certain < result.rows.len(),
         "the approximate stratum contributed to rows whose intervals now \
@@ -362,7 +365,10 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
     // and that is the honest floor rather than a defect.
     let control = text_only_search();
     assert_eq!(
-        control.trailer.certain_prefix(&control.rows),
+        control
+            .trailer
+            .certain_prefix(&control.rows)
+            .expect("valid emitted intervals"),
         control.rows.len(),
         "the same corpus through the exhaustive producer alone certifies every \
          row it returns, so the shortfall above is the approximation's and not \

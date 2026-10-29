@@ -3499,7 +3499,8 @@ class retrieval:
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a width: a rank of zero, a smoothing constant of zero, an unknown
-    # `decay` spelling, or a weight that is not strictly positive.
+    # `decay` spelling, or a zero weight. Negative weights and weights outside
+    # the unsigned 128-bit range raise `OverflowError` during extraction.
     @staticmethod
     def class_width(
         weight_raw: int, k: int, rank: int, *, decay: str, scale_digits: int
@@ -3540,8 +3541,9 @@ class retrieval:
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a depth: a smoothing constant of zero, a `max_width` of zero —
     # a class always contains its own rank, so a tolerance of zero is not a
-    # tolerance — an unknown `decay` spelling, or a weight that is not strictly
-    # positive. The constant and the tolerance are both checked before anything
+    # tolerance — an unknown `decay` spelling, or a zero weight. Negative weights
+    # and weights outside the unsigned 128-bit range raise `OverflowError`
+    # during extraction. The constant and the tolerance are both checked before anything
     # is measured, so neither refusal depends on the other argument; a tolerance
     # of one does no walking, and letting it answer where a larger tolerance
     # refuses would make one unusable rule usable or not according to the
@@ -3584,8 +3586,10 @@ class retrieval:
     #
     # `None` when no rank a plan can express brings the threshold below the
     # bound, rendered as a wall and never as an enormous rank. Weights are raw
-    # fixed-point units (`10 ** scale_digits` is one whole unit); a non-positive weight, a `k`
-    # of zero, a rank of zero or an unknown `decay` raise `ValueError`.
+    # fixed-point units (`10 ** scale_digits` is one whole unit); a zero weight,
+    # a `k` of zero, a rank of zero or an unknown `decay` raise `ValueError`.
+    # Negative weights and weights outside the unsigned 128-bit range raise
+    # `OverflowError` during extraction.
     @staticmethod
     def crossing_rank_at(
         naming_raw: list[int],
