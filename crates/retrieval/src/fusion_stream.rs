@@ -4966,6 +4966,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         if !self.clears_unseen(best.keys.as_deref(), best.score, &best.id)? {
             return Ok(None);
         }
+        // A dominating group settles selection only after every remaining bound
+        // is representable. Overflow lets the walk decide whether domination
+        // precedes the refusal in frontier order.
+        let mut dominated = false;
         for (signature, members) in &self.selection.groups {
             *visits += 1;
             if !signature.reach.intersects(&open) {
@@ -4990,10 +4994,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 term: first.id.as_str(),
             };
             if rank_order(&optimistic, best).is_lt() {
-                return Ok(None);
+                dominated = true;
             }
         }
-        Ok(Some(best.id.clone()))
+        Ok((!dominated).then(|| best.id.clone()))
     }
 
     /// [`Self::select_emittable`] by its pairwise definition: every final
