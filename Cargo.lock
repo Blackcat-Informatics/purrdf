@@ -845,6 +845,7 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-text",
+ "purrdf-xsd",
 ]
 
 [[package]]

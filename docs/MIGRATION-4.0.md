@@ -29,6 +29,30 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Declared retrieval ranks
+
+`RankedDeclaration` now requires `rank_source: RankSource`. Existing native
+producers declare `RankSource::Ordinal`. Producers whose distinct subjects
+share a literal rank declare `RankSource::Shared { position }`, naming an
+unbound integer-family output argument. Native execution retains those values
+instead of assigning new subject ranks. Caller-supplied shared-rank query text
+must project `?rank`. Zero, descending, unbound and ill-typed ranks are refused.
+
+`StreamContract::new` takes an explicit `RankLaw` first. Ordinal producers keep
+the contiguous distinct law; shared producers declare positive nondecreasing
+ranks. Duplicate identities remain independent of repeated rank values.
+
+Depths and row bounds still count rows. `DepthReached`, `RowBoundReached` and
+`SuppliedQueryEnded` report the last emitted rank; `Exhausted` counts emitted
+rows. `UnionProducer::last_rank` and `StratumResolution::ranks_pulled` retain
+rank progress separately from `rows_pulled`. The fusion trailer also reports
+`shared_ranks_observed`, excluding those intentional ties from
+`collisions_observed`. Registry fingerprints use schema version 3, so registry
+and dependent plan identities change, including those of empty registries.
+The explicit rank declaration participates in that identity.
+Candidate-union canonical bytes use layout version 2 and
+include the producer's last rank and rank law.
+
 ## Execution coordinates and receipt migration
 
 `QueryCoordinates::Started` retains the actual context time and initial entropy

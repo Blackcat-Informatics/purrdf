@@ -357,6 +357,7 @@ fn shaped_registry(
                     }],
                 }],
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: CANDIDATE_POSITION,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,

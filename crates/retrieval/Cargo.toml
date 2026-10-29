@@ -49,6 +49,7 @@ purrdf-sparql-algebra.workspace = true
 # The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
 # so a plan never carries a float where exactness is the whole point.
 purrdf-text.workspace = true
+purrdf-xsd.workspace = true
 # Fixed-output-length hashing for the plan identity. Deterministic and keyless,
 # so the same canonical bytes yield the same digest on every target.
 purrdf-hash.workspace = true

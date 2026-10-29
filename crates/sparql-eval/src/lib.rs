@@ -285,8 +285,8 @@ pub use property_fn::{
     Completeness, DeclaredArithmetic, DepthPlacement, DomainTag, DuplicatePolicy, ExclusionBasis,
     IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity, PfAttestation, PfCursor,
     PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic,
-    RankFidelity, RankedDeclaration, RequestFacet, ServiceLevel, TermKind, TermPattern,
-    TermPlacement, WorkspaceCursor, composed_order_fidelity, generation_contained,
+    RankFidelity, RankLaw, RankSource, RankedDeclaration, RequestFacet, ServiceLevel, TermKind,
+    TermPattern, TermPlacement, WorkspaceCursor, composed_order_fidelity, generation_contained,
     service_level_contained,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private

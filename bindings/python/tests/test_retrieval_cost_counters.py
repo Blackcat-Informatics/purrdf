@@ -79,7 +79,7 @@ TOP_K = 3
 OBSERVED_KEYS = frozenset(
     {
         "separates_to",
-        "ranks_pulled",
+        "ranks_pulled", "rows_pulled", "shared_ranks_observed",
         "collisions_observed",
         "exclusion_lookups",
         "rows_materialised",

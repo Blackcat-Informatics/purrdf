@@ -472,6 +472,7 @@ fn scripted_in(candidates: &[&str], block: &str) -> ScriptedStream {
         steps,
         emitted: 0,
         contract: StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             CandidateDomains::within([domain(block)]),
@@ -669,6 +670,7 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     let depths = CandidateDepths::new([(stratum.clone(), 3)]).unwrap();
     let plan_id = PlanId::from_canonical(b"candidate-portable-fixture");
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Allowed,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
@@ -734,7 +736,7 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
         [3]
     );
     let mut expected = Vec::new();
-    expected.extend_from_slice(&1_u16.to_le_bytes());
+    expected.extend_from_slice(&2_u16.to_le_bytes());
     framed(&mut expected, "candidate-union");
     expected.extend_from_slice(&32_u64.to_le_bytes());
     expected.extend_from_slice(plan_id.as_bytes());
@@ -754,6 +756,7 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     framed(&mut expected, STRATUM_ONE);
     expected.extend_from_slice(&3_u32.to_le_bytes()); // explicit requested depth
     expected.extend_from_slice(&3_u64.to_le_bytes()); // original rows pulled
+    expected.extend_from_slice(&3_u64.to_le_bytes()); // last original rank
     for _ in 0..2 {
         // known materialised/emitted rows
         expected.push(1);
@@ -761,7 +764,9 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     }
     expected.extend_from_slice(&[1, 1, 1]); // verified receipt, complete prefix, exhausted
     expected.extend_from_slice(&3_u64.to_le_bytes());
-    expected.extend_from_slice(&[1, 0, 0, 0, 0]); // contract; allowed, complete, faithful, unrestricted
+    expected.push(1); // declared contract
+    framed(&mut expected, "ordinal");
+    expected.extend_from_slice(&[0, 0, 0, 0]); // allowed, complete, faithful, unrestricted
     framed(&mut expected, "unavailable");
     expected.push(1); // an announcement, explicitly undeclared
     let mut announced = Vec::new();

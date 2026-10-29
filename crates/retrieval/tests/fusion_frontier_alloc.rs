@@ -163,6 +163,7 @@ impl RankedStream for LazyStream {
 
     fn contract(&self) -> StreamContract {
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             self.duplicates,
             RankFidelity::EXACT,
             self.domains.clone(),

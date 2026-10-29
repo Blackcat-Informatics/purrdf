@@ -875,6 +875,7 @@ fn generational_registry(
                 stratum: kernel_iri(stratum.as_str()),
                 accepted_terms: accepted_terms(predicate),
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -2029,6 +2030,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry<'static> {
                 stratum: kernel_iri(entry.stratum().as_str()),
                 accepted_terms: accepted_terms(entry.name),
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: entry.duplicates,
                 fidelity: RankFidelity::EXACT,
@@ -2649,6 +2651,7 @@ fn oracle_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedSt
                         rows_emitted: emitted,
                     },
                     contract: StreamContract::new(
+                        purrdf_sparql_eval::RankLaw::Ordinal,
                         DuplicatePolicy::Unique,
                         RankFidelity::EXACT,
                         CandidateDomains::within(entry.tags.iter().map(|tag| {
@@ -4313,8 +4316,9 @@ fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
     );
 
     // Every term of the expected text, from a source that is not the trailer.
-    // The collision count is the one term that is a zero, and it is DERIVED
-    // rather than copied: this profile still separates adjacent ranks far past
+    // The ordinal declaration makes row and rank counts equal and shared ranks
+    // zero. The collision count is also derived rather than copied: this
+    // profile still separates adjacent ranks far past
     // anything this run pulls, so no adjacent pair it read could have collided.
     // (The oracle that shows the counter moves off zero is in `fusion.rs`, over
     // a profile that collides inside the stream it fuses; there is no such
@@ -4349,7 +4353,8 @@ fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
             .map_or_else(|| "beyond-any-plan".to_owned(), |rank| rank.to_string());
         writeln!(
             expected,
-            "{stratum} separates_to={separates_to} ranks_pulled={predicted_ranks} \
+            "{stratum} rows_pulled={predicted_ranks} shared_ranks_observed=0 \
+             separates_to={separates_to} ranks_pulled={predicted_ranks} \
              collisions_observed=0 exclusion_lookups={lookups} \
              rows_materialised={rows}",
             lookups = measured.served_lookups[&stratum],

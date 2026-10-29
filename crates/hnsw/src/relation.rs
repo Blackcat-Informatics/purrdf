@@ -747,6 +747,7 @@ impl<A: Arithmetic> HnswRelation<A> {
                 position: KNN_COUNT,
                 datatype: depth_datatype,
             }),
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: KNN_NEIGHBOUR,
             // The space enforces distinct terms at construction, and one search
             // visits a node at most once, so a row cannot repeat within an

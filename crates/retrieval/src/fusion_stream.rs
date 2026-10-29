@@ -322,8 +322,7 @@ pub enum ProducerStatus {
     /// contribution space. See this type's header for why the two are not one
     /// variant.
     DepthReached {
-        /// The last 1-based rank the producer emitted, equal to the number of
-        /// rows fusion pulled from it.
+        /// The last positive rank pulled, independent of the emitted-row count.
         rank: u64,
     },
     /// The producer stopped at the row bound it had itself declared, so whether
@@ -331,13 +330,12 @@ pub enum ProducerStatus {
     ///
     /// The mirror of [`ProducerReceipt::RowBoundReached`], verified the same way
     /// [`Self::DepthReached`] is: `rank` is the last rank the producer emitted and
-    /// fusion has checked it against the rows it actually pulled. Unlike
+    /// fusion has checked it against the last rank it actually pulled. Unlike
     /// `DepthReached` it claims nothing about rows below that rank — the read could
     /// not be taken one row further to find out, which is the whole of what this
     /// ending reports.
     RowBoundReached {
-        /// The last 1-based rank the producer emitted, which is the declared row
-        /// bound it read to and the number of rows fusion pulled from it.
+        /// The last positive rank pulled, independent of the declared row bound.
         rank: u64,
     },
     /// The stream ran a query text a caller supplied rather than one this layer
@@ -351,8 +349,7 @@ pub enum ProducerStatus {
     /// it, the party that cut the read is the caller that wrote the query, and the
     /// honest remedy is to run the query [`compile`](crate::compile) renders.
     SuppliedQueryEnded {
-        /// The last 1-based rank the stream emitted, which is the number of rows
-        /// fusion pulled from it. Zero for a stream that emitted nothing.
+        /// The last positive rank pulled, independent of row count. Zero for a stream that emitted nothing.
         rank: u64,
     },
     /// Reading stopped at a contribution bound rather than at the end of the
@@ -475,10 +472,10 @@ pub struct FusedRow {
     /// because its search is approximate — does two things at once, and only
     /// the first is obvious. The candidate that row belonged to is summed
     /// without that contribution and scores **lower** than it should. And
-    /// because this fusion scores by *rank* and nothing else, every row behind
-    /// the missing one moves up a rank and collects a **larger** contribution
-    /// than it earned, so every candidate that stratum *did* name scores
-    /// **higher** than it should.
+    /// ordinal renumbering can move later rows to better ranks and raise their
+    /// contributions, so named candidates may score **higher** than they should.
+    /// Faithful shared-rank producers may instead retain their original ranks;
+    /// the same conservative bounds remain valid in either case.
     ///
     /// Calling such a score a "lower bound" is therefore right about the first
     /// and wrong about the second, which is worse than saying nothing: a
@@ -544,6 +541,12 @@ pub struct FusedRow {
 /// keeps pulling will see these numbers grow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StratumResolution {
+    /// The producer's declared progression, read before its first row.
+    pub rank_law: purrdf_sparql_eval::RankLaw,
+    /// Physical ranked rows pulled, including declared duplicate identities.
+    pub rows_pulled: u64,
+    /// Adjacent rows deliberately sharing a producer rank, independently of rounding.
+    pub shared_ranks_observed: u64,
     /// Where this profile stops separating adjacent ranks in this stratum.
     ///
     /// A property of the law, identical to what
@@ -552,21 +555,19 @@ pub struct StratumResolution {
     pub separation: MonotoneDepth,
     /// The highest 1-based rank this fusion actually pulled from the stream.
     ///
-    /// Named for ranks rather than depth because that is what it counts: under
-    /// [`DuplicatePolicy::Allowed`] a row discarded as a repeat still advances
-    /// the rank counter, so this is not the number of contributions merged.
+    /// This equals the row count for ordinal streams. Shared ranks may repeat
+    /// or skip values, so [`Self::rows_pulled`] reports their physical read cost.
     ///
     /// Zero means exactly one thing: this stream ended without ever emitting a
     /// row. It does not mean the stream went unread. Producing a trailer
     /// requires a terminal status per producer, which requires pulling from
     /// every stream until it yields either its first row or its receipt — so a
-    /// [`TopK`](crate::TopK) of zero still reports one here for every stream
+    /// [`TopK`](crate::TopK) of zero still reports its first rank here for every stream
     /// that has a first row to give, and a stream that has none is reported at
     /// zero after being asked.
     ///
-    /// A caller reading this as "how much did fusion spend on this stratum"
-    /// therefore gets the honest answer at both ends, and one reading zero as
-    /// "untouched" is wrong in the same way at both: the stream was pulled from
+    /// Read together with [`Self::rows_pulled`] when measuring read cost.
+    /// Zero does not mean "untouched": the stream was pulled from
     /// either way, and what differs is only whether it had anything to hand
     /// back.
     pub ranks_pulled: u64,
@@ -630,7 +631,7 @@ pub struct StratumResolution {
 ///
 /// The length of [`StratumResolution::counters`], named so the array type states
 /// it once rather than as a bare literal a reader has to count.
-pub const OBSERVED_COUNTER_COUNT: usize = 5;
+pub const OBSERVED_COUNTER_COUNT: usize = 7;
 
 /// One named cost counter of a [`StratumResolution`], as every surface that
 /// reports a trailer spells it.
@@ -677,17 +678,20 @@ impl StratumResolution {
     /// Every cost counter this stratum's resolution carries, named, in the one
     /// fixed order every surface reports them in.
     ///
-    /// The order is separation, ranks pulled, collisions observed, exclusion
-    /// lookups, rows materialised: the price of the answer in the order a
-    /// reader needs it, with [`Self::ranks_pulled`] second only to the law it is
-    /// judged against. See [`ObservedCounter`] for why this is the only place
-    /// the fields are read.
+    /// The order is rows pulled, shared ranks observed, separation, highest
+    /// rank pulled, quantization collisions, exclusion lookups and materialised
+    /// rows. Physical work and declared rank progress remain separate.
+    /// See [`ObservedCounter`] for why measured fields are read only here.
     #[must_use]
     pub fn counters(&self) -> [ObservedCounter; OBSERVED_COUNTER_COUNT] {
         // Exhaustive on purpose: a field added to the struct is a compile error
         // here until it is given a name and a place in the array, and from here
         // it reaches every surface at once.
         let Self {
+            // A declaration, rather than a measured cost counter.
+            rank_law: _,
+            rows_pulled,
+            shared_ranks_observed,
             separation,
             ranks_pulled,
             collisions_observed,
@@ -695,6 +699,14 @@ impl StratumResolution {
             rows_materialised,
         } = *self;
         [
+            ObservedCounter {
+                name: "rows_pulled",
+                reading: CounterReading::Number(rows_pulled),
+            },
+            ObservedCounter {
+                name: "shared_ranks_observed",
+                reading: CounterReading::Number(shared_ranks_observed),
+            },
             ObservedCounter {
                 name: "separates_to",
                 reading: separation.rank().map_or(
@@ -781,9 +793,9 @@ pub enum ScoreInterval {
         /// How much a degraded stratum could have OVER-contributed to this row.
         ///
         /// This is the term a one-sided reading misses. Reciprocal-rank fusion
-        /// scores by rank alone, so when a lossy stratum fails to name a row,
-        /// every row behind it moves up a rank and collects more than it
-        /// earned. For a candidate such a stratum *did* name, the true rank is
+        /// scores by rank alone, so deleting rows and renumbering ordinal ranks
+        /// can increase later contributions. Faithful shared-rank producers may
+        /// retain their original ranks instead. For a named candidate the true rank is
         /// therefore at least the emitted rank and the true contribution lies
         /// in `[0, emitted]` — so the whole emitted contribution is what could
         /// be spurious, and that is what is summed here.
@@ -821,14 +833,15 @@ pub enum ScoreInterval {
 ///
 /// Reciprocal-rank fusion discards score magnitude: a contribution is a
 /// function of `(decay rule, K, weight, rank)` and of nothing else. So a
-/// stratum that fails to name a row does not merely withhold that row's
-/// contribution — **every row behind the missing one moves up a rank and
-/// collects a larger contribution than it earned**. This is the mechanism the
-/// producer contract already names for a filter that deletes rows, and a
+/// stratum that fails to name a row can also inflate other contributions:
+/// deleting rows and renumbering ordinal ranks can promote later candidates.
+/// Faithful shared-rank producers may retain their original ranks; the same
+/// conservative bounds cover both cases. This is the mechanism the
+/// producer contract names for a filter that deletes and renumbers rows, and a
 /// [`Completeness::Lossy`](crate::Completeness::Lossy) search is that deletion arriving by another route.
 ///
-/// A candidate the short stratum **missed** is therefore summed too LOW, and a
-/// candidate it **named** is summed too HIGH. Calling the result a "lower
+/// A candidate the short stratum **missed** can be summed too LOW, and a
+/// candidate it **named** can be summed too HIGH. Calling the result a "lower
 /// bound" would be right about the first and wrong about the second, and a
 /// consumer acting on it would be confidently wrong in the direction the name
 /// told it not to look. Both sides are named here, and
@@ -2252,7 +2265,9 @@ pub struct FusionStream<'p, S: RankedStream> {
     initialized: bool,
     heads: purrdf_sparql_eval::AdmittedVec<Option<Head>>,
     exhausted: purrdf_sparql_eval::AdmittedVec<bool>,
-    next_ranks: purrdf_sparql_eval::AdmittedVec<u64>,
+    last_ranks: purrdf_sparql_eval::AdmittedVec<u64>,
+    rank_laws: purrdf_sparql_eval::AdmittedVec<purrdf_sparql_eval::RankLaw>,
+    shared_ranks_observed: purrdf_sparql_eval::AdmittedVec<u64>,
     rows_pulled: purrdf_sparql_eval::AdmittedVec<u64>,
     last_contribution: purrdf_sparql_eval::AdmittedVec<Option<Fixed>>,
     /// Per-stream count of adjacent ranks whose contributions were equal.
@@ -2539,6 +2554,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             .iter()
             .copied()
             .any(ExclusionBasis::is_declared);
+        let rank_laws = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            contracts.iter().map(|contract| contract.rank_law),
+            &workspace,
+        )?;
         let domains = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
             contracts.into_iter().map(|contract| contract.domains),
             &workspace,
@@ -2628,11 +2647,16 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 (0..count).map(|_| false),
                 &workspace,
             )?,
-            next_ranks: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
-                (0..count).map(|_| 1),
+            last_ranks: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| 0),
                 &workspace,
             )?,
             rows_pulled: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| 0),
+                &workspace,
+            )?,
+            rank_laws,
+            shared_ranks_observed: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
                 (0..count).map(|_| 0),
                 &workspace,
             )?,
@@ -2678,7 +2702,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
 
     /// Admit all original uncertain observations before certifying any row.
     /// They share the original frontier/aggregation law, but never masquerade
-    /// as contiguous established ranks or threshold heads.
+    /// as established stream ranks or threshold heads.
     pub(crate) fn retain_scoped(
         &mut self,
         scopes: &[crate::ScopedStratum],
@@ -2705,15 +2729,18 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 )
                 .into());
             }
-            let columns =
-                crate::execute::CandidateColumns::locate(&scope.variables, &self.domains[index])
-                    .map_err(|error| {
-                        purrdf_sparql_eval::NativeDiagnostic::error(
-                            purrdf_sparql_eval::NativeDiagnosticKind::Data,
-                            error,
-                            &self.workspace,
-                        )
-                    })?;
+            let columns = crate::execute::CandidateColumns::locate(
+                &scope.variables,
+                &self.domains[index],
+                self.rank_laws[index],
+            )
+            .map_err(|error| {
+                purrdf_sparql_eval::NativeDiagnostic::error(
+                    purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                    error,
+                    &self.workspace,
+                )
+            })?;
             scope.rows.with_rows(|rows| {
                 for row in rows {
                     let evidence = owner.import(&row.evidence)?;
@@ -2727,7 +2754,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                         // Established ranks are supplied by the original stream.
                         1
                     };
-                    let (_, item, block) = columns.rank_admitted(&row.cells, rank, &self.workspace)?;
+                    let (_, item, block) = columns.identity_admitted(&row.cells, rank, &self.workspace)?;
                     let key = (index, item.clone_admitted(&self.workspace)?);
                     let evidence = if let Some(previous) = records.get(&key) {
                         if previous.is_undecided() != evidence.is_undecided() {
@@ -3022,11 +3049,12 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 resolution.insert(
                     stratum.clone_admitted(&self.workspace)?,
                     StratumResolution {
+                        rank_law: self.rank_laws[index],
                         separation,
-                        // `next_ranks` starts at one and advances once per
-                        // row pulled, so this is the highest rank read and
-                        // cannot underflow.
-                        ranks_pulled: self.next_ranks[index] - 1,
+                        rows_pulled: self.rows_pulled[index],
+                        shared_ranks_observed: self.shared_ranks_observed[index],
+                        // Zero before the first row; shared ranks may repeat or skip.
+                        ranks_pulled: self.last_ranks[index],
                         collisions_observed: self.collisions_observed[index],
                         // A separate counter, never added into the rank
                         // above: a lookup is a point query and not a step
@@ -3081,8 +3109,8 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 deficit.insert(stratum.clone_admitted(&self.workspace)?)?;
             }
         }
-        // The same strata, by construction: a stratum that omits a row promotes
-        // every row behind it, so loss produces both effects at once. They are
+        // The same conservative strata sets: omission can promote later ordinal
+        // rows, while faithful shared-rank producers may retain their ranks. They are
         // carried as two sets because a later cause need not -- a stratum
         // stopped early withholds without promoting -- and a consumer that read
         // one set as the whole story would then be wrong in one direction.
@@ -3335,8 +3363,8 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 return Ok(None);
             };
 
-            let expected_rank = self.next_ranks[index];
-            crate::ranked_stream::validate_rank(expected_rank, rank)?;
+            let expected_rank = self.last_ranks[index];
+            crate::ranked_stream::validate_rank(self.rank_laws[index], expected_rank, rank)?;
             // The stratum is read by reference, not cloned: an `Iri` owns its
             // text, so cloning one here would be a heap allocation on every row
             // every stream emits, to serve a lookup that only borrows and an
@@ -3376,10 +3404,14 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             // on a value already proven to be that one. A forged contribution is
             // rejected above as the mismatch it is, rather than counted as a
             // shape of the decay curve.
-            self.count_collision(index, producer_contribution);
+            if rank == expected_rank {
+                self.shared_ranks_observed[index] += 1;
+            } else {
+                self.count_collision(index, producer_contribution);
+            }
 
             self.last_contribution[index] = Some(producer_contribution);
-            self.next_ranks[index] = rank + 1;
+            self.last_ranks[index] = rank;
             self.rows_pulled[index] += 1;
 
             let item: Term = item.into();
@@ -3433,7 +3465,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// This measures; it refuses nothing, and there is nothing here left for it
     /// to refuse. By the time a value reaches this function it has been proven
     /// equal to `contribution_under(decay, weight, rank)` and the ranks that
-    /// produced it are contiguous and ascending, so the sequence is the
+    /// produced it have advanced under the declared law, so the sequence is the
     /// profile's own curve read left to right — and that curve never rises (see
     /// [`ProtocolError::ContributionMismatch`], which is where a rising value is
     /// actually caught, as the wrong number it is). A comparison for a rise here
@@ -3455,13 +3487,11 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// Record a terminal receipt, refusing one the rows contradict.
     ///
     /// Every receipt that states a count is measured against the rows this
-    /// fusion actually pulled, and the four counting receipts are measured
-    /// identically. [`ProducerReceipt::Exhausted`] states how many rows it
+    /// fusion actually pulled. [`ProducerReceipt::Exhausted`] states how many rows it
     /// emitted; [`ProducerReceipt::DepthReached`],
     /// [`ProducerReceipt::RowBoundReached`] and
-    /// [`ProducerReceipt::SuppliedQueryEnded`] state the last rank it emitted, which is
-    /// the same number because ranks are contiguous from one — a law already
-    /// enforced row by row in [`Self::fetch`]. A producer may stop at the depth it
+    /// [`ProducerReceipt::SuppliedQueryEnded`] state the last rank it emitted,
+    /// checked independently from row count under both rank laws. A producer may stop at the depth it
     /// was given or at the bound it declared, and a caller may run a query of its own;
     /// none of them may miscount what was emitted, and the licence to stop reading is
     /// deliberately not also a licence to
@@ -3472,7 +3502,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// endings are not `Exhausted`.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
         let actual = self.rows_pulled[index];
-        crate::ranked_stream::validate_receipt(&receipt, actual)?;
+        crate::ranked_stream::validate_receipt(&receipt, actual, self.last_ranks[index])?;
         let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
         self.exhausted[index] = true;
         self.heads[index] = None;
@@ -4047,8 +4077,9 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// and could still do so may yet add to its score. The inflation is the
     /// direction a one-sided reading misses, and it exists because
     /// reciprocal-rank fusion scores by **rank** alone. When a lossy stratum
-    /// fails to name a row, every row behind it takes a better rank than it
-    /// earned and collects a larger contribution. So for a candidate a lossy
+    /// deletes and renumbers ordinal rows, later candidates can receive better
+    /// ranks and larger contributions. Faithful shared-rank producers may retain
+    /// their original ranks; the same conservative bounds still apply. For a candidate a lossy
     /// stratum *did* name, that stratum's whole contribution is suspect: the
     /// true rank is at least the emitted one, so the true contribution lies in
     /// `[0, emitted]`.
@@ -5282,6 +5313,7 @@ mod tests {
 
         fn contract(&self) -> StreamContract {
             StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 self.domains.clone(),

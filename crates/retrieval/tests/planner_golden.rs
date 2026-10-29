@@ -103,6 +103,7 @@ fn pair_registry() -> PropertyFunctionRegistry<'static> {
                 },
             ],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
@@ -411,12 +412,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "2b7470bbdaf31e5f661e4bac71b316f34c5a59300ec5fe99491884d9d5c73446";
+    "6bd87ddf64b6eca89aef37c53cfe6a83be887f90f1a5320357125d8029eb986c";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "7216ca6a1885b9bc03cd239b6a36b49b819a1cbf26d919594aeac19ddaf79034";
+    "ee310ae59ee251a6100c1e98d9e7c0206fcd819036569a7f1d7c6452ef1522fa";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -637,6 +638,7 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
                 }],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
@@ -763,6 +765,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry<'static> {
                 }],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
@@ -1002,6 +1005,7 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
                 }],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,

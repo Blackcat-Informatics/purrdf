@@ -294,6 +294,7 @@ deps = [
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
     "purrdf-text",
+    "purrdf-xsd",
 ]
 
 [[crate]]

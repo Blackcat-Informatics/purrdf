@@ -67,6 +67,7 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
         })
         .collect();
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,

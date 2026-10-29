@@ -277,6 +277,7 @@ impl RankedStream for LazyStream {
     fn contract(&self) -> StreamContract {
         if self.shared_block {
             return StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::within([
@@ -287,12 +288,14 @@ impl RankedStream for LazyStream {
         }
         match self.block {
             None => StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::Unrestricted,
                 self.exclusion,
             ),
             Some(block) => StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::within([

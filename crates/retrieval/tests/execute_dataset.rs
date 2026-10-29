@@ -318,6 +318,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
             }],
         }],
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates,
         // These fixtures fuse strata that rank the same dataset, so the widest
@@ -813,12 +814,14 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
         let stats = statistics();
         let bundle = compiled(&registry, &stats);
         let expected = StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             duplicates,
             RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
             ExclusionBasis::Unavailable,
         );
         let beta = StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
@@ -1642,6 +1645,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     //     that policy before it pulls a row.
     let mut relaxed = compiled(&registry, &stats);
     relaxed.units[0].contract = StreamContract {
+        rank_law: relaxed.units[0].contract.rank_law,
         duplicates: DuplicatePolicy::Allowed,
         // Carried over rather than restated: this test rewrites the DUPLICATE
         // policy and nothing else, so a fidelity typed in here would be a second

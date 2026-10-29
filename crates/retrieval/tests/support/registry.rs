@@ -72,6 +72,7 @@ pub fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         stratum: kernel_iri(stratum),
         accepted_terms: accepted(patterns),
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,

@@ -787,6 +787,118 @@ fn a_backwards_rank_and_a_skipped_rank_are_refused_while_their_valid_neighbours_
     );
 }
 
+#[test]
+fn shared_ranks_retain_equal_contributions_and_count_rows_independently() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let mut contract = unique_items();
+    contract.rank_law = purrdf_retrieval::RankLaw::Shared;
+    for receipt in [
+        exhausted(3),
+        ProducerReceipt::DepthReached { rank: 7 },
+        ProducerReceipt::RowBoundReached { rank: 7 },
+        ProducerReceipt::SuppliedQueryEnded { rank: 7 },
+    ] {
+        let stream = MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "b"),
+                row(1, Fixed::ONE, K, "a"),
+                row(7, Fixed::ONE, K, "c"),
+            ],
+            receipt,
+        )
+        .declaring(contract.clone());
+        let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            vec![(stratum("text"), stream)],
+            &profile,
+            TOP_K,
+        ))
+        .unwrap();
+        assert_eq!(fused.rows.len(), 3);
+        assert_eq!(fused.rows[0].entity, Term::new("a"));
+        assert_eq!(fused.rows[1].entity, Term::new("b"));
+        assert_eq!(fused.rows[0].score, fused.rows[1].score);
+        let cost = &fused.trailer.resolution[&stratum("text")];
+        assert_eq!(
+            (
+                cost.rows_pulled,
+                cost.ranks_pulled,
+                cost.shared_ranks_observed,
+                cost.collisions_observed
+            ),
+            (3, 7, 1, 0)
+        );
+    }
+    let forged = MockStream::new(
+        vec![row(1, Fixed::ONE, K, "a"), row(1, Fixed::ONE, K, "b")],
+        ProducerReceipt::DepthReached { rank: 2 },
+    )
+    .declaring(contract);
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("text"), forged)],
+        &profile,
+        TOP_K,
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(error, FusionError::Protocol(error) if matches!(*error, ProtocolError::ForgedReceipt { declared: 2, actual: 1 }))
+    );
+}
+
+#[test]
+fn shared_rank_law_refuses_descending_and_zero_without_changing_duplicate_policy() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let mut contract = allowed_duplicates();
+    contract.rank_law = purrdf_retrieval::RankLaw::Shared;
+    let repeated = MockStream::new(
+        vec![
+            row(1, Fixed::ONE, K, "a"),
+            row(1, Fixed::ONE, K, "a"),
+            row(1, Fixed::ONE, K, "b"),
+        ],
+        exhausted(3),
+    )
+    .declaring(contract.clone());
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("text"), repeated)],
+        &profile,
+        TOP_K,
+    ))
+    .unwrap();
+    assert_eq!(fused.rows.len(), 2);
+    assert_eq!(fused.rows[0].score, fused.rows[1].score);
+    assert!(fused.rows.iter().all(|row| row.contributions.len() == 1));
+    let mut unique = contract.clone();
+    unique.duplicates = DuplicatePolicy::Unique;
+    let repeated = MockStream::new(
+        vec![row(1, Fixed::ONE, K, "a"), row(1, Fixed::ONE, K, "a")],
+        exhausted(2),
+    )
+    .declaring(unique);
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("text"), repeated)],
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        result.is_err(),
+        "a unique producer must refuse a repeated identity: {result:?}"
+    );
+    for steps in [
+        vec![row(2, Fixed::ONE, K, "a"), row(1, Fixed::ONE, K, "b")],
+        vec![Step::Row(RankedRow::new(
+            0,
+            Fixed::ZERO,
+            Term::new("a"),
+            RowBlock::Undeclared,
+        ))],
+    ] {
+        let stream = MockStream::new(steps, exhausted(0)).declaring(contract.clone());
+        assert!(
+            matches!(block_on(purrdf_retrieval::fuse::<MockStream, Term>(vec![(stratum("text"), stream)], &profile, TOP_K)), Err(FusionError::Protocol(error)) if matches!(*error, ProtocolError::OutOfOrderRanks { .. }))
+        );
+    }
+}
+
 // 8. Dropping a live fusion drops every stream; receipts cannot be forged.
 #[test]
 fn drop_cancellation_and_receipts() {
@@ -2155,6 +2267,7 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
 /// `DuplicatePolicy::Allowed`, with the strict ordering the fixtures' rows keep.
 fn allowed_duplicates() -> StreamContract {
     StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Allowed,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
@@ -2587,6 +2700,7 @@ fn no_fused_answer_ever_contains_one_entity_twice() {
                                 stratum(NAMES[position]),
                                 MockStream::new(steps, exhausted(emitted)).declaring(
                                     StreamContract::new(
+                                        purrdf_sparql_eval::RankLaw::Ordinal,
                                         policy,
                                         RankFidelity::EXACT,
                                         CandidateDomains::Unrestricted,
@@ -5775,6 +5889,7 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
                 _ => ExclusionBasis::Unavailable,
             };
             let stream = MockStream::new(steps, exhausted(emitted)).declaring(StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 domains,
@@ -6663,6 +6778,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
         (
             stratum("docs"),
             docs().declaring(StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
@@ -6688,6 +6804,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 exhausted(2),
             )
             .declaring(StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
@@ -6733,6 +6850,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
         (
             stratum("docs"),
             docs().declaring(StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
@@ -6755,6 +6873,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 exhausted(2),
             )
             .declaring(StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
@@ -6806,6 +6925,7 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
     // is perfectly possible and the declaration-level refusal stays silent.
     let overlapping = || {
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
@@ -6894,6 +7014,7 @@ fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses(
     let law = profile(&[("wide", Fixed::ONE), ("people", Fixed::ONE)], K);
     let restricted = || {
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             within(&[DOMAIN_PEOPLE]),
@@ -6962,6 +7083,7 @@ fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
     let law = profile(&[("docs", Fixed::ONE)], K);
     let repeating = || {
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Allowed,
             RankFidelity::EXACT,
             within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
@@ -7078,6 +7200,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
         both_naming(
             (
                 StreamContract::new(
+                    purrdf_sparql_eval::RankLaw::Ordinal,
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS]),
@@ -7087,6 +7210,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
             ),
             (
                 StreamContract::new(
+                    purrdf_sparql_eval::RankLaw::Ordinal,
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS]),
@@ -7110,6 +7234,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
         both_naming(
             (
                 StreamContract::new(
+                    purrdf_sparql_eval::RankLaw::Ordinal,
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS]),
@@ -7119,6 +7244,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
             ),
             (
                 StreamContract::new(
+                    purrdf_sparql_eval::RankLaw::Ordinal,
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
@@ -7192,6 +7318,7 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
     let target = "http://example.org/doc/000001";
     let same_block = || {
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             within(&[DOMAIN_DOCS]),
@@ -7320,6 +7447,7 @@ const LOSS: &str = "approximate: beam search; recall UNMEASURED above 10^6 rows,
 /// visit.
 fn lossy_contract() -> StreamContract {
     StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity {
             completeness: Completeness::Lossy {
@@ -7637,6 +7765,7 @@ fn bounds(row: &FusedRow) -> (Fixed, Fixed) {
 /// approximated values, which can rank a row it found BETTER than it was due.
 fn perturbed_contract() -> StreamContract {
     StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity {
             completeness: Completeness::Lossy {
@@ -7745,6 +7874,7 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(StreamContract::new(
+                    purrdf_sparql_eval::RankLaw::Ordinal,
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     docs,
@@ -7760,6 +7890,7 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(StreamContract::new(
+                    purrdf_sparql_eval::RankLaw::Ordinal,
                     DuplicatePolicy::Unique,
                     RankFidelity {
                         completeness: Completeness::Lossy {
@@ -8821,6 +8952,7 @@ fn registry_declaring_fidelity(
                 placements: Vec::new(),
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity,

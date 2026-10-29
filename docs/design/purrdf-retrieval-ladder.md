@@ -320,13 +320,26 @@ question a host can act on while reading the refusal is therefore: *do
 you want these two weighted differently, and is the score bounded? Then
 separate strata.*
 
-**The input protocol has one fixed rank law and one declared duplicate
-policy.** Ranks are 1-based, contiguous and ascending for every ranked
-stream there is, and `fuse` measures each row against the next rank it
-expects from that stream — a lower rank is `OutOfOrderRanks`, a higher one
-`NonContiguousRanks`. Nothing a producer may state at registration softens
-that. What a ranked producer does state, where it is registered, is
-whether an item may repeat within one invocation. `fuse` is the consumer
+**The input protocol declares rank progression independently from duplicate
+handling.** `RankSource::Ordinal` assigns distinct contiguous ranks from one.
+`RankSource::Shared { position }` reads positive nondecreasing integer ranks
+from the producer's declared output column: several subjects stating one
+ranked literal retain that literal's rank and receive equal contributions.
+The registration's source and position participate in registry and plan
+identities. Native execution projects that column as `?rank`; caller-supplied
+shared-rank query text must project it too. Fusion and unscored union enforce
+the same `RankLaw`, refusing zero and descending ranks under either law,
+and repeated or gapped ranks under the ordinal law.
+
+Row depth remains a physical prefix bound, independent of rank values.
+Terminal exhaustion counts rows; bounded endings report the last emitted rank.
+The trailer reports physical `rows_pulled`, highest `ranks_pulled`, deliberate
+`shared_ranks_observed`, and quantization `collisions_observed` separately.
+Shared ranks preserve non-increasing contributions, so the existing threshold
+bound remains sound and a score tie still waits for its canonical tie-break.
+
+A ranked producer also declares whether an item may repeat within one
+invocation. `fuse` is the consumer
 that declaration was written for, so it reaches it — carried from the
 registry through the compiled unit and the executed stream rather than
 re-fetched at the end — and is honoured on its own terms. A producer that declares its

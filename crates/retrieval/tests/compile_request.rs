@@ -320,6 +320,7 @@ fn registry_of(
                 stratum: kernel_iri(&spec.stratum),
                 accepted_terms: spec.accepted,
                 depth_placement: spec.depth,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: spec.candidate,
                 duplicates: spec.duplicates,
                 fidelity: RankFidelity::EXACT,

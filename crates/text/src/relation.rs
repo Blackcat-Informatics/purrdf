@@ -1042,6 +1042,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 }],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: SEARCH_DOC,
             duplicates: DuplicatePolicy::Unique,
             // Passed through, never asserted here, for the reason `domains` is.

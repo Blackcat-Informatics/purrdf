@@ -683,7 +683,7 @@ mod tests {
         let env = env(ParserOptions::default(), &[A, B, C]);
         assert_eq!(
             env.content_fingerprint().expect("digest").to_hex(),
-            "fb1f135c2e76794621c48ee6084bc9999427bb9f59eb78bc99e2a9436ea29f42"
+            "b8108fd49c91447f63c763374f166b1b858f0ac15353eaac2c0472db80b40e1f"
         );
     }
 
