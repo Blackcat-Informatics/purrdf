@@ -6,21 +6,18 @@
 //! back into the shadow, so the authored stratification remains sound.
 
 use super::{
-    Arity, BTreeMap, BTreeSet, ClauseAtom, ClauseTerm, DemandAnswer, DemandError, Descriptor,
-    DlClause, EvalError, EvalOptions, NoGuards, Preparation, RelationStore, StopSignal, StoreShape,
-    TermDictionary, bind, compile, demand_atom, descriptors, evaluate_guarded, head_bindings,
-    names, pattern, select,
+    Arity, BTreeMap, BTreeSet, ClauseAtom, ClauseTerm, DemandError, Descriptor, DlClause,
+    EvalError, Preparation, PreparedDemand, RelationStore, StoreShape, TermDictionary, bind,
+    compile, demand_atom, descriptors, head_bindings, names, pattern, select,
 };
 use crate::dictionary::{DictionaryError, DictionaryTerm};
 use purrdf_lex::allocation::{Memory, Resident};
 
-pub(super) fn evaluate<D: TermDictionary, const N: usize>(
+pub(super) fn prepare<D: TermDictionary, const N: usize>(
     rules: &[DlClause<N>],
     goal: &ClauseAtom<N>,
-    mut edb: RelationStore<D, N>,
-    options: &EvalOptions,
-    stop: Option<&dyn StopSignal>,
-) -> Result<DemandAnswer<D, N>, DemandError<D::Error>>
+    dictionary: &D,
+) -> Result<PreparedDemand<N>, DemandError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -44,22 +41,21 @@ where
                 .expect("validation admitted every predicate as an IRI")
         })
         .collect();
-    let names = names(&descriptors, rules, goal, edb.interner(), predicates.len())?;
+    let names = names(&descriptors, rules, goal, dictionary, predicates.len())?;
     let shadows: BTreeMap<_, _> = predicates
         .into_iter()
-        .zip(names[descriptors.len()..].iter().map(String::as_str))
+        .map(str::to_owned)
+        .zip(names[descriptors.len()..].iter().cloned())
         .collect();
     let transformed = transform_exact(rules, goal, &descriptors, &names, &shadows);
     // Also compile the transformed program before seeding; neither source mutation
     // nor an executable is a substitute for native stratification.
     let executable = compile(transformed).map_err(DemandError::Compile)?;
-    let preparation = seed(&mut edb, &shadows)?;
-    let evaluation = evaluate_guarded(&executable, edb, &NoGuards, options, stop)
-        .map_err(DemandError::Evaluation)?;
-    Ok(DemandAnswer {
-        evaluation,
+    Ok(PreparedDemand {
+        executable,
         goal: goal.clone(),
-        preparation,
+        names,
+        shadows,
     })
 }
 
@@ -92,10 +88,14 @@ fn discovery<const N: usize>(rules: &[DlClause<N>]) -> Vec<DlClause<N>> {
     result
 }
 
-fn shadow<const N: usize>(atom: &ClauseAtom<N>, shadows: &BTreeMap<&str, &str>) -> ClauseAtom<N> {
+fn shadow<const N: usize>(
+    atom: &ClauseAtom<N>,
+    shadows: &BTreeMap<String, String>,
+) -> ClauseAtom<N> {
     let mut positions = atom.terms().map(Clone::clone);
     // Every authored atom was inventoried after validation, including negative groups.
-    positions[1] = ClauseTerm::iri(shadows[atom.predicate_iri().expect("validated IRI predicate")]);
+    positions[1] =
+        ClauseTerm::iri(shadows[atom.predicate_iri().expect("validated IRI predicate")].as_str());
     ClauseAtom::from_positions(positions)
 }
 
@@ -104,7 +104,7 @@ fn transform_exact<const N: usize>(
     goal: &ClauseAtom<N>,
     descriptors: &[Descriptor],
     names: &[String],
-    shadows: &BTreeMap<&str, &str>,
+    shadows: &BTreeMap<String, String>,
 ) -> Vec<DlClause<N>> {
     // Namespace allocation always reserves the final ordinal for the unit.
     let unit = names.last().expect("allocated unit ordinal");
@@ -170,9 +170,9 @@ fn transform_exact<const N: usize>(
     result
 }
 
-fn seed<D: TermDictionary, const N: usize>(
+pub(super) fn seed<D: TermDictionary, const N: usize>(
     edb: &mut RelationStore<D, N>,
-    shadows: &BTreeMap<&str, &str>,
+    shadows: &BTreeMap<String, String>,
 ) -> Result<Preparation, DemandError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
@@ -183,8 +183,11 @@ where
         shadow_facts: 0,
         shadow_terms: 0,
     };
+    if shadows.is_empty() {
+        return Ok(report);
+    }
     let mut predicates = BTreeMap::new();
-    for (&predicate, &name) in shadows {
+    for (predicate, name) in shadows {
         if let Some(id) = edb
             .interner()
             .lookup_term(&format!("<{predicate}>"))
