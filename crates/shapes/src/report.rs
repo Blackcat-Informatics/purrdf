@@ -532,7 +532,7 @@ impl CompleteValidationError {
     }
 
     /// Preserve existing product dimensions on the closed compatibility door.
-    pub(crate) fn into_product(self) -> crate::product::ShapesProductError {
+    pub fn into_product(self) -> crate::product::ShapesProductError {
         match self {
             Self::Preparation(error) => error,
             error => crate::product::ShapesProductError::new(

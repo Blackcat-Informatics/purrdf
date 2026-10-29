@@ -109,6 +109,7 @@ pub use product::{
     admit_shapes_product, admit_shapes_product_expecting,
     admit_shapes_product_with_implementations, certify_shapes_product, diff_shapes_products,
     explain_shapes_product, pack_shapes_product, pack_shapes_product_from_dataset,
+    pack_shapes_product_from_dataset_with_options, pack_shapes_product_with_options,
     pack_shapes_product_with_shapes_graph, parse_identity_digest, prepared_to_product,
     prepared_to_product_with_implementations, rebuild_shapes_product,
     rebuild_shapes_product_expecting, restore_shapes_product_with_options,
@@ -150,7 +151,8 @@ pub use purrdf_shapes::{
     ShapesImportError, UnsupportedTargetRefusal,
 };
 pub use shacl::{
-    validate_changes_to_sarif_string, validate_changes_to_sarif_string_with_shapes_graph,
+    requested_shacl_recursion, validate_changes_to_sarif_string,
+    validate_changes_to_sarif_string_with_shapes_graph,
     validate_changes_to_sarif_string_with_xpath_regex, validate_to_sarif_string,
     validate_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_xpath_regex,
 };

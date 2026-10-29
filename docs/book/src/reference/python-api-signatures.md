@@ -1082,7 +1082,7 @@ class _ValidationReport:
 class _Shapes:
     """Parsed SHACL shapes, reusable across many data graphs."""
 
-    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None) -> None:
+    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> None:
         ...
 
     def validate_nt(self, data_nt: str, *, xpath_regex: str | None=None) -> _ValidationReport:
@@ -1201,16 +1201,16 @@ class _ShapesProduct:
     def identity_components(self) -> list[tuple[str, str]]:
         ...
 
-    def admit(self) -> _PreparedShapes:
+    def admit(self, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def admit_expecting(self, expected_identity: str) -> _PreparedShapes:
+    def admit_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def rebuild(self) -> _PreparedShapes:
+    def rebuild(self, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def rebuild_expecting(self, expected_identity: str) -> _PreparedShapes:
+    def rebuild_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
     def certify(self) -> None:
@@ -1226,11 +1226,11 @@ class shapes:
     ShapesImportError: TypeAlias = _ShapesImportError
 
     @staticmethod
-    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None) -> bytes:
+    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> bytes:
         ...
 
     @staticmethod
-    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None) -> dict[str, builtins.object]:
+    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
