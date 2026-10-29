@@ -864,10 +864,10 @@ names = []
 
 [[job]]
 id = "div-ceil"
-summary = "Ceiling division without the overflow of the hand-written n + d - 1: std div_ceil on unsigned integers, retrieval's ceil_div on i128"
+summary = "Ceiling division without intermediate overflow: stable unsigned div_ceil, including retrieval's u128 resolution constraints"
 home = "purrdf_retrieval::reciprocal_rank::ceil_div"
 entry_points = []
-spec = "the quotient rounded toward positive infinity for a positive divisor; the unsigned integers' stable div_ceil, and ceil_div where the signed div_ceil is not stable"
+spec = "the unsigned quotient rounded toward positive infinity for a positive divisor; the stable div_ceil primitive"
 vectors = []
 bench = []
 sites = []
@@ -881,9 +881,9 @@ names = []
 
 [[job]]
 id = "wide-arith"
-summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c, and the greatest common divisor"
+summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c with truncated and ceiling rounding, and the greatest common divisor"
 home = "purrdf_xsd::wide::mul_div"
-entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::gcd"]
+entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::mul_div_ceil", "purrdf_xsd::wide::gcd"]
 spec = "schoolbook multiplication over 64-bit halves, restoring binary long division, and Euclid's algorithm, over u128"
 vectors = [
     "crates/xsd/tests/vectors/wide_vectors.txt",

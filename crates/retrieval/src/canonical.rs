@@ -146,6 +146,11 @@ impl<B: CanonicalSink> Writer<B> {
         self.buf.append(&value.to_le_bytes());
     }
 
+    /// Write an unsigned score count in little-endian order.
+    pub(crate) fn u128(&mut self, value: u128) {
+        self.buf.append(&value.to_le_bytes());
+    }
+
     /// Write an `f32` as its exact bit pattern.
     pub(crate) fn f32_bits(&mut self, value: f32) {
         self.u32(value.to_bits());
@@ -286,6 +291,11 @@ impl<'a> Reader<'a> {
     /// Read a little-endian `i128`.
     pub(crate) fn i128(&mut self) -> Result<i128, PlanError> {
         Ok(i128::from_le_bytes(self.array()?))
+    }
+
+    /// Read an unsigned score count.
+    pub(crate) fn u128(&mut self) -> Result<u128, PlanError> {
+        Ok(u128::from_le_bytes(self.array()?))
     }
 
     /// Read an `f32` from its exact bit pattern.

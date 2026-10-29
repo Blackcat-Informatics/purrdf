@@ -541,10 +541,15 @@ mod tests {
 
         let stratum = retrieval::Iri::parse(STRATUM).expect("the fixture stratum IRI is valid");
         let mut weights = BTreeMap::new();
-        weights.insert(stratum.clone(), retrieval::Fixed::ONE);
+        weights.insert(
+            stratum.clone(),
+            purrdf_retrieval::fixture::PRECISION_12
+                .score(purrdf_retrieval::fixture::PRECISION_12.scale()),
+        );
         let profile = retrieval::FusionProfile::with_decay(
             weights,
             retrieval::DecayRule::ReciprocalRank { k: 60 },
+            purrdf_retrieval::fixture::PRECISION_12,
         )
         .expect("the fixture fusion profile is valid");
 

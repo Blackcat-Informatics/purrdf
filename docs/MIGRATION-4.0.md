@@ -48,8 +48,37 @@ rows. `UnionProducer::last_rank` and `StratumResolution::ranks_pulled` retain
 rank progress separately from `rows_pulled`. The fusion trailer also reports
 `shared_ranks_observed`, excluding those intentional ties from
 `collisions_observed`. Registry and plan identities change with the explicit
-rank declaration. Candidate-union canonical bytes use layout version 2 and
+rank declaration. Candidate-union canonical bytes use layout version 3 and
 include the producer's last rank and rank law.
+
+## Explicit unsigned retrieval precision
+
+Fusion uses `Score` and `Precision`, independently of the signed `Fixed` values
+used for numeric request endpoints and BM25. Construct `Precision::new(digits)`
+with zero through 38 decimal fractional digits, then use `precision.score(raw)`
+for unsigned raw weights. `FusionProfile::with_decay(weights, decay, precision)`
+requires the precision explicitly and refuses weights carrying different units.
+The admitted ceiling is the exact checked sum of rank-one contributions, so
+representable full-width scores are accepted even when the raw weight sum would
+overflow. Both decay rules compute directly at the selected scale.
+
+Standalone scores and derived weights retain their raw units and precision.
+The inverse depth helper now takes `weight_for_depth(precision, depth)`; the
+threshold and crossing helpers also take explicit precision, including for empty
+weight lists. Frontier cells retain raw unsigned values under the owning profile.
+
+Python fusion calls require `scale_digits`; optional compile-time laws require
+all four of `weights`, `k`, `decay` and `scale_digits`, or none. Returned scores,
+contributions, ceiling bounds and derived weights are `{raw, scale_digits}`
+dictionaries. Raw Python weights span `u128`; floats, negative integers and
+integers outside that range are refused. Arithmetic depth/count results remain
+integers or absence. Signed numeric request endpoints retain their existing units.
+
+Regenerate fusion profiles: canonical layout version 2 carries an unsigned
+weight representation and explicit precision and refuses version 1. Candidate
+union layout version 3 carries the precision of every ceiling status. Profile
+identities change with precision. Pure plan identities remain independent of a
+fusion law; reproducible answers carry the separate plan and profile identities.
 
 ## Execution coordinates and receipt migration
 

@@ -21,9 +21,8 @@ host that writes Python:
   smoothing constant or row bound, and ``statistics`` must name its own source
   and revision, because PurRDF mints no vocabulary and invents no measurement.
 * **Exactness survives the boundary.** A weight crosses as an ``int`` of raw
-  fixed-point units (``retrieval.SCALE`` is one whole unit) and a score comes
-  back as its exact decimal ``str``. A float on either leg would be an
-  approximation of a number the fusion law computed exactly.
+  unsigned raw units and every score carries ``raw`` and ``scale_digits``.
+  The caller explicitly names the fusion precision; no float is involved.
 * **Nothing is lost between the stages.** Every fused row carries its
   per-stratum provenance, every applicable producer carries its own terminal
   status, and every request term that reached no producer is named with a typed
@@ -46,7 +45,7 @@ from typing import Any
 
 import pytest
 from purrdf import retrieval
-
+SCALE12 = 10**12
 EX = "https://example.org/"
 
 NOTE = f"{EX}note"
@@ -114,7 +113,7 @@ def _truncated_saturation(k: int) -> int:
     with pytest.raises(
         ValueError, match="no weight separates ranks to depth"
     ) as refused:
-        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, k, decay=TRUNCATED)
+        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, k, decay=TRUNCATED, scale_digits=12)["raw"]
     found = re.search(r"separates to depth (\d+)", str(refused.value))
     assert found is not None, str(refused.value)
     return int(found.group(1))
@@ -345,13 +344,13 @@ def _undeclared_crossing(corpus: str, request: list[Any], top_k: int) -> int:
         request,
         text_producers=_two_producers(DOMAINS_UNDECLARED),
         statistics=STATISTICS,
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=top_k,
     )
-    sharing = compiled["planned_resolution"][NOTE_STRATUM]["sharing_weights"]
-    assert sharing == [retrieval.SCALE, retrieval.SCALE], (
+    sharing = [v["raw"] for v in compiled["planned_resolution"][NOTE_STRATUM]["sharing_weights"]]
+    assert sharing == [SCALE12, SCALE12], (
         "an unrestricted declaration admits every block, so both strata share "
         f"this one's and the waist must say so: {sharing}"
     )
@@ -362,10 +361,10 @@ def _undeclared_crossing(corpus: str, request: list[Any], top_k: int) -> int:
         corpus,
         request,
         text_producers=_two_producers(DOMAINS_UNDECLARED),
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=top_k,
     )
     deepest = max(
@@ -381,8 +380,8 @@ def _undeclared_crossing(corpus: str, request: list[Any], top_k: int) -> int:
         for row in answer["rows"]
         if any(c["rank"] == deepest for c in row["contributions"])
     )
-    naming = [retrieval.SCALE] * namers
-    crossing = retrieval.crossing_rank_at(naming, deepest, sharing, 60, decay=TRUNCATED)
+    naming = [SCALE12] * namers
+    crossing = retrieval.crossing_rank_at(naming, deepest, sharing, 60, decay=TRUNCATED, scale_digits=12)
     assert crossing is not None, (
         "this law reaches zero, so a positive lower bound always crosses inside "
         "the expressible range"
@@ -396,10 +395,10 @@ def test_one_request_fuses_two_producers_into_one_ranking() -> None:
         DATA,
         [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
         text_producers=BOTH,
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
 
@@ -425,10 +424,10 @@ def test_every_producer_reports_its_own_terminal_status() -> None:
         DATA,
         [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
         text_producers=BOTH,
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
     statuses = answer["statuses"]
@@ -457,10 +456,10 @@ def test_an_answer_names_the_evidence_the_indexes_attested() -> None:
     """
     kwargs: dict[str, Any] = {
         "text_producers": NOTE_ONLY,
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     first = retrieval.search(DATA, [_lexical("quick fox", NOTE)], **kwargs)
@@ -533,10 +532,10 @@ def test_an_attestation_has_two_independently_absent_axes() -> None:
         DATA,
         [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
         text_producers=BOTH,
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
     assert set(answer["attestations"]) == {NOTE_STRATUM, TITLE_STRATUM}, (
@@ -587,10 +586,10 @@ REBUILDING = "shard 3 of 4 is still rebuilding"
 #: The fusion law and the request the attestation cases below all share, so the
 #: only thing that differs between any two of them is what a producer attested.
 ATTESTED_COMMON: dict[str, Any] = {
-    "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+    "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
     "statistics": STATISTICS,
     "k": 60,
-    "decay": TRUNCATED,
+    "scale_digits": 12, "decay": TRUNCATED,
     "top_k": 10,
 }
 
@@ -943,10 +942,10 @@ def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() ->
         DATA,
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )["statuses"][NOTE_STRATUM]
     assert exhausted["status"] == "exhausted"
@@ -959,10 +958,10 @@ def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() ->
         corpus,
         [_lexical("quick", NOTE)],
         text_producers=NOTE_ONLY,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 2}},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )["statuses"][NOTE_STRATUM]
     assert bounded["status"] == "depth_reached"
@@ -975,17 +974,16 @@ def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() ->
             (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
             (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
         ),
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=3,
     )["statuses"]
     assert {entry["status"] for entry in stopped.values()} == {"ceiling_reached"}
     for stratum, entry in stopped.items():
-        from decimal import Decimal
 
-        assert Decimal(entry["bound"]) > 0, stratum
+        assert entry["bound"]["raw"] > 0, stratum
 
     # ``"row_bound_reached"``: an exact nearest-neighbour producer over four
     # rows, whose guard admits four neighbours. Its declared row count is four,
@@ -1009,10 +1007,10 @@ def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() ->
                 (None, None),
             )
         },
-        weights={f"{EX}stratum/vector": retrieval.SCALE},
+        weights={f"{EX}stratum/vector": SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )["statuses"][f"{EX}stratum/vector"]
     assert self_bounded == {"status": "row_bound_reached", "rank": 4}, self_bounded
@@ -1121,10 +1119,10 @@ def test_a_declared_domain_changes_the_reading_and_not_the_answer() -> None:
     corpus = _disjoint_corpus(rows)
     request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
     law: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": top_k,
     }
     asking = retrieval.search(
@@ -1292,10 +1290,10 @@ def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> Non
     disjoint = _two_producers(DOMAINS_DISJOINT)
     request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
     law: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": top_k,
     }
 
@@ -1448,10 +1446,10 @@ def test_an_unrestricted_or_overlapping_stratum_keeps_the_declared_depth() -> No
     # And every one of them answers, identically. The depth is the only thing that
     # moved anywhere in this family.
     law: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": top_k,
     }
     widest = retrieval.search(corpus, request, text_producers=BOTH, **law)
@@ -1478,10 +1476,10 @@ def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> 
     writes the declaration that should work and does not.
     """
     common: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     request = [_lexical("quick fox", NOTE)]
@@ -1547,10 +1545,10 @@ def test_two_producers_under_one_stratum_are_refused_by_name_and_two_strata_are_
     producers under two strata, which fuse.
     """
     common: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
@@ -1609,10 +1607,10 @@ def test_a_false_domain_declaration_is_refused_and_names_who_collided() -> None:
     contributions, which the second half of this test holds.
     """
     common: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
@@ -1661,10 +1659,10 @@ def test_a_term_no_producer_accepts_is_named_not_dropped() -> None:
         DATA,
         [_lexical("quick fox", NOTE), ("entity", f"<{EX}a>")],
         text_producers=NOTE_ONLY,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
     assert answer["unserved_terms"] == [
@@ -1673,24 +1671,23 @@ def test_a_term_no_producer_accepts_is_named_not_dropped() -> None:
     assert answer["rows"], "the term that WAS served still answers"
 
 
-def test_scores_are_exact_decimals_that_sum_to_their_provenance() -> None:
+def test_scores_are_exact_raw_values_that_sum_to_their_provenance() -> None:
     """A score is its contributions, exactly — never a float approximation."""
     answer = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
         text_producers=BOTH,
-        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
-    from decimal import Decimal
 
     for row in answer["rows"]:
-        assert isinstance(row["score"], str), "a score crosses as an exact decimal"
-        total = sum(Decimal(c["contribution"]) for c in row["contributions"])
-        assert total == Decimal(row["score"]), row["entity"]
+        assert row["score"]["scale_digits"] == 12, "a score retains its declared units"
+        total = sum(c["contribution"]["raw"] for c in row["contributions"])
+        assert total == row["score"]["raw"], row["entity"]
 
 
 def test_both_identities_name_the_plan_and_the_law() -> None:
@@ -1710,9 +1707,9 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
     answer = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
         **kwargs,
     )
@@ -1723,9 +1720,9 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
     other = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=10,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
         **kwargs,
     )
@@ -1735,9 +1732,9 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
     again = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
         **kwargs,
     )
@@ -2138,9 +2135,9 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=PLAN_TOP_K,
     )
     planned = compiled["planned_resolution"][NOTE_STRATUM]
@@ -2163,7 +2160,7 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
     # separates every rank this plan reads, so one raw unit less cannot reach it.
     depth = planned["requested_depth"]
     assert depth >= 2, "a single rank has no adjacent pair to lose"
-    sufficient = retrieval.weight_for_depth(depth, 60, decay=TRUNCATED)
+    sufficient = retrieval.weight_for_depth(depth, 60, decay=TRUNCATED, scale_digits=12)["raw"]
     coarse = retrieval.compile(
         DATA,
         [_lexical("quick fox", NOTE)],
@@ -2171,7 +2168,7 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         statistics=STATISTICS,
         weights={NOTE_STRATUM: sufficient - 1},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=PLAN_TOP_K,
     )
     coarse_planned = coarse["planned_resolution"][NOTE_STRATUM]
@@ -2191,16 +2188,16 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         statistics=STATISTICS,
         weights={NOTE_STRATUM: sufficient},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=PLAN_TOP_K,
     )
     assert exact["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
 
 def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> None:
-    """Weights, the smoothing constant and the decay rule are ONE law together.
+    """Weights, smoothing, decay and precision are ONE law together.
 
-    Any subset of the three names no law at all, and the refusal says which part
+    Any proper subset names no law at all, and the refusal says which part
     arrived and which did not. Filling the absent part in would report a
     resolution measured against arithmetic the caller never wrote — and the
     decay rule is the part that most changes the measurement, so it is the part
@@ -2214,7 +2211,7 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
         retrieval.compile(
             DATA,
             [_lexical("quick fox", NOTE)],
-            weights={NOTE_STRATUM: retrieval.SCALE},
+            weights={NOTE_STRATUM: SCALE12},
             **common,
             top_k=PLAN_TOP_K,
         )
@@ -2223,35 +2220,35 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             DATA,
             [_lexical("quick fox", NOTE)],
             k=60,
-            decay=TRUNCATED,
+            decay=TRUNCATED, scale_digits=12,
             **common,
             top_k=PLAN_TOP_K,
         )
-    # Two thirds of a law is still not a law, and the message names the third
-    # that is missing rather than choosing one.
+    # A partial law is still not a law, and the message names the parts
+    # that are missing rather than choosing them.
     with pytest.raises(ValueError, match=r"left the `decay` rule unnamed"):
         retrieval.compile(
             DATA,
             [_lexical("quick fox", NOTE)],
-            weights={NOTE_STRATUM: retrieval.SCALE},
-            k=60,
+            weights={NOTE_STRATUM: SCALE12},
+            k=60, scale_digits=12,
             **common,
             top_k=PLAN_TOP_K,
         )
 
-    # All three together are a law, and the same call answers.
+    # All four together are a law, and the same call answers.
     whole = retrieval.compile(
         DATA,
         [_lexical("quick fox", NOTE)],
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         **common,
         top_k=PLAN_TOP_K,
     )
     assert whole["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
-    # Naming NONE of the three is not a refusal: it compiles without a law and
+    # Naming NONE of the four is not a refusal: it compiles without a law and
     # is simply told nothing about resolution.
     lawless = retrieval.compile(
         DATA, [_lexical("quick fox", NOTE)], **common, top_k=PLAN_TOP_K
@@ -2274,10 +2271,10 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         DATA,
         request,
         text_producers=NOTE_ONLY,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
 
@@ -2296,9 +2293,9 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         request,
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=PLAN_TOP_K,
     )
     assert compiled["planned_resolution"] == answer["planned_resolution"]
@@ -2334,7 +2331,7 @@ def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
         "text_producers": NOTE_ONLY,
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     with pytest.raises(TypeError, match="raw fixed-point units"):
@@ -2345,7 +2342,7 @@ def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
     answer = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
-        weights={NOTE_STRATUM: retrieval.SCALE // 2},
+        weights={NOTE_STRATUM: SCALE12 // 2},
         **common,
     )
     assert answer["rows"], "half a unit, stated exactly, is a perfectly good weight"
@@ -2389,10 +2386,10 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
         one_language,
         [_lexical("quick", NOTE)],
         text_producers=NOTE_ONLY,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
     assert sorted(row["entity"] for row in answer["rows"]) == [
@@ -2436,49 +2433,50 @@ def test_the_folded_rule_reaches_every_number_in_the_answer() -> None:
     from the rule's own definition rather than pinned to a literal: the
     truncated rule is ``trunc(w * trunc(S / D) / S)`` and the folded rule is
     ``trunc(w / D)``, with ``D = k + rank``, and at this weight they differ by
-    exactly one raw unit at rank one.
+    several raw units at rank one, even when wide intermediates are needed.
     """
-    from decimal import Decimal
 
-    scale = retrieval.SCALE
-    # A weight of one and a half units: the folded rule's single division keeps
-    # a raw unit the truncated rule's inner rounding throws away.
-    weight = scale + scale // 2
-    denominator = 60 + 1
-    expected_truncated = weight * (scale // denominator) // scale
-    expected_folded = weight // denominator
-    assert expected_folded == expected_truncated + 1, (
-        "this fixture is only a witness while the two rules disagree here"
-    )
-
-    def _top_row(decay: str) -> dict[str, Any]:
-        answer = retrieval.search(
-            DATA,
-            [_lexical("quick fox", NOTE)],
-            text_producers=NOTE_ONLY,
-            weights={NOTE_STRATUM: weight},
-            statistics=STATISTICS,
-            k=60,
-            decay=decay,
-            top_k=10,
+    for digits in (0, 18, 19, 20, 38):
+        scale = 10**digits
+        # Full-width weights exercise a large product with a representable result.
+        weight = (1 << 128) - 1
+        denominator = 60 + 1
+        expected_truncated = weight * (scale // denominator) // scale
+        expected_folded = weight // denominator
+        assert expected_folded > expected_truncated, (
+            "this fixture is only a witness while the two rules disagree here"
         )
-        return answer
 
-    truncated = _top_row(TRUNCATED)
-    folded = _top_row(FOLDED)
+        def _top_row(decay: str) -> dict[str, Any]:
+            answer = retrieval.search(
+                DATA,
+                [_lexical("quick fox", NOTE)],
+                text_producers=NOTE_ONLY,
+                weights={NOTE_STRATUM: weight},
+                statistics=STATISTICS,
+                k=60,
+                decay=decay, scale_digits=digits,
+                top_k=10,
+            )
+            assert answer["scale_digits"] == digits
+            assert answer["rows"][0]["score"]["scale_digits"] == digits
+            return answer
 
-    # One stratum, so the fused score IS the rank-one contribution.
-    assert Decimal(truncated["rows"][0]["score"]) * scale == expected_truncated
-    assert Decimal(folded["rows"][0]["score"]) * scale == expected_folded
-    assert (
-        Decimal(folded["rows"][0]["contributions"][0]["contribution"]) * scale
-        == expected_folded
-    ), "the per-stratum provenance is computed under the named rule too"
+        truncated = _top_row(TRUNCATED)
+        folded = _top_row(FOLDED)
 
-    # …and the law that produced it names itself differently, because the rule
-    # is part of what the profile's content identity fixes.
-    assert folded["profile_id"] != truncated["profile_id"]
-    assert len(folded["profile_id"]) == 64
+        # One stratum, so the fused score IS the rank-one contribution.
+        assert truncated["rows"][0]["score"]["raw"] == expected_truncated
+        assert folded["rows"][0]["score"]["raw"] == expected_folded
+        assert (
+            folded["rows"][0]["contributions"][0]["contribution"]["raw"]
+            == expected_folded
+        ), "the per-stratum provenance is computed under the named rule too"
+
+        # …and the law that produced it names itself differently, because the rule
+        # is part of what the profile's content identity fixes.
+        assert folded["profile_id"] != truncated["profile_id"]
+        assert len(folded["profile_id"]) == 64
 
 
 def test_a_depth_the_truncated_rule_refuses_is_answered_by_the_folded_one() -> None:
@@ -2496,29 +2494,29 @@ def test_a_depth_the_truncated_rule_refuses_is_answered_by_the_folded_one() -> N
 
     # The neighbouring VALID case, one rank shallower than the wall: the same
     # rule answers, so the refusal is about the depth and nothing else.
-    reachable = retrieval.weight_for_depth(saturates_at, 60, decay=TRUNCATED)
+    reachable = retrieval.weight_for_depth(saturates_at, 60, decay=TRUNCATED, scale_digits=12)["raw"]
     assert reachable > 0
 
     # One rank deeper is the wall, and no weight lifts it.
     with pytest.raises(ValueError, match="no weight separates ranks to depth"):
-        retrieval.weight_for_depth(saturates_at + 1, 60, decay=TRUNCATED)
+        retrieval.weight_for_depth(saturates_at + 1, 60, decay=TRUNCATED, scale_digits=12)["raw"]
 
     # THE CURE, reachable from the same surface that delivered the diagnosis:
     # the folded rule answers at exactly the depth the truncated one refused.
-    cured = retrieval.weight_for_depth(saturates_at + 1, 60, decay=FOLDED)
+    cured = retrieval.weight_for_depth(saturates_at + 1, 60, decay=FOLDED, scale_digits=12)["raw"]
     assert cured > 0
 
     # And it keeps answering well past the wall, because its reachable depth
     # grows with the weight rather than being capped by the inner rounding.
-    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED) > cured
+    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED, scale_digits=12)["raw"] > cured
 
     # The same split shows in the resolution curve, read at the very weight the
     # folded rule quoted. At the truncated rule's own last separating rank that
     # rule has ALREADY put two ranks into one class, while the folded rule still
     # holds them apart — which is the whole difference the cure buys, measured
     # rather than asserted from the refusal alone.
-    assert retrieval.class_width(cured, 60, saturates_at, decay=TRUNCATED) == 2
-    assert retrieval.class_width(cured, 60, saturates_at, decay=FOLDED) == 1
+    assert retrieval.class_width(cured, 60, saturates_at, decay=TRUNCATED, scale_digits=12) == 2
+    assert retrieval.class_width(cured, 60, saturates_at, decay=FOLDED, scale_digits=12) == 1
 
 
 def test_a_zero_smoothing_constant_is_one_refusal_across_all_three_functions() -> None:
@@ -2543,31 +2541,31 @@ def test_a_zero_smoothing_constant_is_one_refusal_across_all_three_functions() -
     short-circuiting argument and the walking one, and every case paired with
     ``k = 1`` — the smallest usable law there is — which must still answer.
     """
-    weight = 1000 * retrieval.SCALE
+    weight = 1000 * SCALE12
     for decay in (TRUNCATED, FOLDED):
         for depth in (1, 2, 64):
             with pytest.raises(ValueError, match="K must be at least 1") as refused:
-                retrieval.weight_for_depth(depth, 0, decay=decay)
+                retrieval.weight_for_depth(depth, 0, decay=decay, scale_digits=12)["raw"]
             assert "no further" not in str(refused.value), (
                 f"{decay}, depth {depth}: a malformed law is not a saturated rule"
             )
-            assert retrieval.weight_for_depth(depth, 1, decay=decay) > 0, (
+            assert retrieval.weight_for_depth(depth, 1, decay=decay, scale_digits=12)["raw"] > 0, (
                 f"{decay}, depth {depth}: the smallest usable constant prices it"
             )
 
         for rank in (1, 2, 64):
             with pytest.raises(ValueError, match="K must be at least 1") as refused:
-                retrieval.class_width(weight, 0, rank, decay=decay)
+                retrieval.class_width(weight, 0, rank, decay=decay, scale_digits=12)
             assert "no further" not in str(refused.value), (
                 f"{decay}, rank {rank}: a malformed law is not a saturated rule"
             )
-            assert retrieval.class_width(weight, 1, rank, decay=decay) == 1, (
+            assert retrieval.class_width(weight, 1, rank, decay=decay, scale_digits=12) == 1, (
                 f"{decay}, rank {rank}: this weight separates it from both neighbours"
             )
 
         for max_width in (1, 2, 64):
             with pytest.raises(ValueError, match="K must be at least 1") as refused:
-                retrieval.deepest_rank_within_width(weight, 0, max_width, decay=decay)
+                retrieval.deepest_rank_within_width(weight, 0, max_width, decay=decay, scale_digits=12)
             assert "no further" not in str(refused.value), (
                 f"{decay}, max_width {max_width}: a malformed law is not a "
                 "saturated rule"
@@ -2575,7 +2573,7 @@ def test_a_zero_smoothing_constant_is_one_refusal_across_all_three_functions() -
             assert (
                 _measured_depth(
                     retrieval.deepest_rank_within_width(
-                        weight, 1, max_width, decay=decay
+                        weight, 1, max_width, decay=decay, scale_digits=12
                     )
                 )
                 > 1
@@ -2589,7 +2587,7 @@ def test_the_decay_rule_must_be_named_and_is_named_by_its_own_spelling() -> None
     """No hidden default, and an unknown spelling names the accepted ones."""
     common: dict[str, Any] = {
         "text_producers": NOTE_ONLY,
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
         "top_k": 10,
@@ -2599,42 +2597,47 @@ def test_the_decay_rule_must_be_named_and_is_named_by_its_own_spelling() -> None
     with pytest.raises(TypeError, match="decay"):
         retrieval.search(DATA, [_lexical("quick fox", NOTE)], **common)
     with pytest.raises(TypeError, match="decay"):
-        retrieval.weight_for_depth(16, 60)
+        retrieval.weight_for_depth(16, 60)["raw"]
     with pytest.raises(TypeError, match="decay"):
-        retrieval.class_width(retrieval.SCALE, 60, 4)
+        retrieval.class_width(SCALE12, 60, 4)
     with pytest.raises(TypeError, match="decay"):
-        retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 4)
+        retrieval.deepest_rank_within_width(SCALE12, 60, 4)
 
     # Unknown: refused, naming both accepted spellings.
     for unknown in ("rrf", "", "ReciprocalRank"):
         with pytest.raises(ValueError, match="unknown decay rule") as refused:
             retrieval.search(
-                DATA, [_lexical("quick fox", NOTE)], decay=unknown, **common
+                DATA, [_lexical("quick fox", NOTE)], decay=unknown, scale_digits=12, **common
             )
         assert "reciprocal_rank" in str(refused.value)
         assert "weighted_reciprocal_rank" in str(refused.value)
     with pytest.raises(ValueError, match="unknown decay rule"):
-        retrieval.weight_for_depth(16, 60, decay="rrf")
+        retrieval.weight_for_depth(16, 60, decay="rrf", scale_digits=12)["raw"]
     with pytest.raises(ValueError, match="unknown decay rule"):
-        retrieval.class_width(retrieval.SCALE, 60, 4, decay="rrf")
+        retrieval.class_width(SCALE12, 60, 4, decay="rrf", scale_digits=12)
     with pytest.raises(ValueError, match="unknown decay rule"):
-        retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 4, decay="rrf")
+        retrieval.deepest_rank_within_width(SCALE12, 60, 4, decay="rrf", scale_digits=12)
 
     # The neighbouring VALID calls: every one of the four answers under either
     # accepted spelling, so the refusals above are about the value and nothing
     # else.
     for named in (TRUNCATED, FOLDED):
         assert retrieval.search(
-            DATA, [_lexical("quick fox", NOTE)], decay=named, **common
+            DATA, [_lexical("quick fox", NOTE)], decay=named, scale_digits=12, **common
         )["rows"]
-        assert retrieval.weight_for_depth(16, 60, decay=named) > 0
-        assert retrieval.class_width(retrieval.SCALE, 60, 4, decay=named) == 1
+        assert retrieval.weight_for_depth(16, 60, decay=named, scale_digits=12)["raw"] > 0
+        assert retrieval.class_width(SCALE12, 60, 4, decay=named, scale_digits=12) == 1
         assert (
             _measured_depth(
-                retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 4, decay=named)
+                retrieval.deepest_rank_within_width(SCALE12, 60, 4, decay=named, scale_digits=12)
             )
             >= 1
         )
+
+    with pytest.raises(TypeError, match="scale_digits"):
+        retrieval.weight_for_depth(1, 60, decay=TRUNCATED)
+    with pytest.raises(ValueError, match="38"):
+        retrieval.weight_for_depth(1, 60, decay=TRUNCATED, scale_digits=39)
 
 
 def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
@@ -2644,35 +2647,35 @@ def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
     probe IRI conjured to ask a question about arithmetic would be a minted one.
     """
     # Inside the separating range every rank stands alone.
-    assert retrieval.class_width(retrieval.SCALE, 60, 1, decay=TRUNCATED) == 1
+    assert retrieval.class_width(SCALE12, 60, 1, decay=TRUNCATED, scale_digits=12) == 1
 
     # Past it the classes widen, and the curve belongs to the RULE: a weight
     # heavy enough for the fold to buy depth is coarse under the truncated rule
     # and still exact under the folded one at the same rank.
-    heavy = 1000 * retrieval.SCALE
+    heavy = 1000 * SCALE12
     deep = 16 * _truncated_saturation(60)
-    coarse = _counted_width(retrieval.class_width(heavy, 60, deep, decay=TRUNCATED))
-    fine = _counted_width(retrieval.class_width(heavy, 60, deep, decay=FOLDED))
+    coarse = _counted_width(retrieval.class_width(heavy, 60, deep, decay=TRUNCATED, scale_digits=12))
+    fine = _counted_width(retrieval.class_width(heavy, 60, deep, decay=FOLDED, scale_digits=12))
     assert coarse > 1, "the truncated rule has lost resolution by this depth"
     assert fine < coarse, "and the folded rule has not"
 
     # The operands it cannot evaluate are refused rather than answered with the
     # most favourable width there is, each beside the neighbour that works.
     with pytest.raises(ValueError, match="rank must be at least 1"):
-        retrieval.class_width(retrieval.SCALE, 60, 0, decay=TRUNCATED)
-    assert retrieval.class_width(retrieval.SCALE, 60, 1, decay=TRUNCATED) == 1
+        retrieval.class_width(SCALE12, 60, 0, decay=TRUNCATED, scale_digits=12)
+    assert retrieval.class_width(SCALE12, 60, 1, decay=TRUNCATED, scale_digits=12) == 1
 
     with pytest.raises(ValueError, match="K must be at least 1"):
-        retrieval.class_width(retrieval.SCALE, 0, 4, decay=TRUNCATED)
-    assert retrieval.class_width(retrieval.SCALE, 1, 4, decay=TRUNCATED) == 1
+        retrieval.class_width(SCALE12, 0, 4, decay=TRUNCATED, scale_digits=12)
+    assert retrieval.class_width(SCALE12, 1, 4, decay=TRUNCATED, scale_digits=12) == 1
 
     with pytest.raises(ValueError, match="strictly positive"):
-        retrieval.class_width(0, 60, 4, decay=TRUNCATED)
+        retrieval.class_width(0, 60, 4, decay=TRUNCATED, scale_digits=12)
     # A raw weight of one IS evaluable — the refusal above is about the zero and
     # nothing else — and what it evaluates to is the saturating case, because
     # every contribution at that weight has truncated to zero. It is `None`, not
     # a number: see the test below for why that distinction is load-bearing.
-    assert retrieval.class_width(1, 60, 4, decay=TRUNCATED) is None
+    assert retrieval.class_width(1, 60, 4, decay=TRUNCATED, scale_digits=12) is None
 
 
 def test_a_class_with_no_end_inside_a_plans_range_is_none_and_not_a_number() -> None:
@@ -2692,7 +2695,7 @@ def test_a_class_with_no_end_inside_a_plans_range_is_none_and_not_a_number() -> 
     for raw in (1, 50):
         for decay in (TRUNCATED, FOLDED):
             for rank in (1, 4, 1000):
-                assert retrieval.class_width(raw, 60, rank, decay=decay) is None, (
+                assert retrieval.class_width(raw, 60, rank, decay=decay, scale_digits=12) is None, (
                     f"{decay}, raw {raw}, rank {rank}: this class has no end "
                     "inside a plan's range to count to"
                 )
@@ -2706,7 +2709,7 @@ def test_a_class_with_no_end_inside_a_plans_range_is_none_and_not_a_number() -> 
         (100, TRUNCATED, 40),
         (100, FOLDED, 40),
     ):
-        assert retrieval.class_width(raw, 60, 1, decay=decay) == measured, (
+        assert retrieval.class_width(raw, 60, 1, decay=decay, scale_digits=12) == measured, (
             f"{decay}, raw {raw}: this class ends inside the range and is counted"
         )
 
@@ -2721,33 +2724,33 @@ def test_deepest_rank_within_width_asks_about_arithmetic_and_needs_no_stratum() 
     # A tolerance of one is the deepest depth a read can stop at with every rank
     # it actually read separated, and it only grows as the tolerance is relaxed.
     narrow = _measured_depth(
-        retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 1, decay=TRUNCATED)
+        retrieval.deepest_rank_within_width(SCALE12, 60, 1, decay=TRUNCATED, scale_digits=12)
     )
     wide = _measured_depth(
-        retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 50, decay=TRUNCATED)
+        retrieval.deepest_rank_within_width(SCALE12, 60, 50, decay=TRUNCATED, scale_digits=12)
     )
     assert wide > narrow, "a larger tolerance reads deeper, never shallower"
 
     # The operands it cannot evaluate are refused rather than answered with the
     # most favourable depth there is, each beside the neighbour that works.
     with pytest.raises(ValueError, match="K must be at least 1"):
-        retrieval.deepest_rank_within_width(retrieval.SCALE, 0, 4, decay=TRUNCATED)
+        retrieval.deepest_rank_within_width(SCALE12, 0, 4, decay=TRUNCATED, scale_digits=12)
     assert (
         _measured_depth(
-            retrieval.deepest_rank_within_width(retrieval.SCALE, 1, 4, decay=TRUNCATED)
+            retrieval.deepest_rank_within_width(SCALE12, 1, 4, decay=TRUNCATED, scale_digits=12)
         )
         >= 1
     )
 
     with pytest.raises(ValueError, match="strictly positive"):
-        retrieval.deepest_rank_within_width(0, 60, 4, decay=TRUNCATED)
+        retrieval.deepest_rank_within_width(0, 60, 4, decay=TRUNCATED, scale_digits=12)
     assert (
-        _measured_depth(retrieval.deepest_rank_within_width(1, 60, 4, decay=TRUNCATED))
+        _measured_depth(retrieval.deepest_rank_within_width(1, 60, 4, decay=TRUNCATED, scale_digits=12))
         >= 1
     )
 
-    with pytest.raises(ValueError, match="strictly positive"):
-        retrieval.deepest_rank_within_width(-1, 60, 4, decay=TRUNCATED)
+    with pytest.raises(OverflowError):
+        retrieval.deepest_rank_within_width(-1, 60, 4, decay=TRUNCATED, scale_digits=12)
 
 
 def test_a_tolerance_of_zero_is_refused_and_a_tolerance_of_one_answers() -> None:
@@ -2764,7 +2767,7 @@ def test_a_tolerance_of_zero_is_refused_and_a_tolerance_of_one_answers() -> None
     """
     for decay in (TRUNCATED, FOLDED):
         with pytest.raises(ValueError, match="tolerance must be at least 1") as refused:
-            retrieval.deepest_rank_within_width(1000, 60, 0, decay=decay)
+            retrieval.deepest_rank_within_width(1000, 60, 0, decay=decay, scale_digits=12)
         assert "a tolerance of zero is not a tolerance" in str(refused.value), (
             f"{decay}: the refusal must say what is wrong with the operand, not "
             "point at a rank that was never at fault"
@@ -2777,7 +2780,7 @@ def test_a_tolerance_of_zero_is_refused_and_a_tolerance_of_one_answers() -> None
         # describe a class, at the same weight under the same rule.
         assert (
             _measured_depth(
-                retrieval.deepest_rank_within_width(1000, 60, 1, decay=decay)
+                retrieval.deepest_rank_within_width(1000, 60, 1, decay=decay, scale_digits=12)
             )
             >= 1
         ), f"{decay}: a tolerance of one is a tolerance and still answers"
@@ -2794,10 +2797,10 @@ def test_a_depth_that_outruns_every_plan_is_reported_as_saturation() -> None:
     ``"separates_to": None``; this is the same fact from the arithmetic-only
     entry point, and it is rendered the same way.
     """
-    fifty_times_apart = (20_000_000 * retrieval.SCALE, 1_000_000_000 * retrieval.SCALE)
+    fifty_times_apart = (20_000_000 * SCALE12, 1_000_000_000 * SCALE12)
     for weight in fifty_times_apart:
         assert (
-            retrieval.deepest_rank_within_width(weight, 60, 1, decay=FOLDED) is None
+            retrieval.deepest_rank_within_width(weight, 60, 1, decay=FOLDED, scale_digits=12) is None
         ), (
             f"weight {weight}: a law with no bound inside any plan's range has "
             "no depth to report, not an enormous one"
@@ -2807,7 +2810,7 @@ def test_a_depth_that_outruns_every_plan_is_reported_as_saturation() -> None:
     # above is about the wall and not about the question being unanswerable.
     below = _measured_depth(
         retrieval.deepest_rank_within_width(
-            18_000_000 * retrieval.SCALE, 60, 1, decay=FOLDED
+            18_000_000 * SCALE12, 60, 1, decay=FOLDED, scale_digits=12
         )
     )
     assert 0 < below < PLAN_DEPTH_LIMIT, (
@@ -2818,8 +2821,8 @@ def test_a_depth_that_outruns_every_plan_is_reported_as_saturation() -> None:
     # one, refuses at the identical boundary as a limit of the depth encoding a
     # plan carries -- with the neighbouring in-range depth still priced.
     with pytest.raises(ValueError, match="deeper than a plan can record"):
-        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT + 1, 60, decay=FOLDED)
-    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED) > 0
+        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT + 1, 60, decay=FOLDED, scale_digits=12)["raw"]
+    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED, scale_digits=12)["raw"] > 0
 
 
 def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ() -> (
@@ -2831,13 +2834,13 @@ def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ
     rule a strictly deeper answer, because the folded rule's reachable depth
     grows with the weight while the truncated one's does not.
     """
-    heavy = 1000 * retrieval.SCALE
+    heavy = 1000 * SCALE12
     for max_width in (1, 5, 50):
         truncated_depth = _measured_depth(
-            retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=TRUNCATED)
+            retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=TRUNCATED, scale_digits=12)
         )
         folded_depth = _measured_depth(
-            retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=FOLDED)
+            retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=FOLDED, scale_digits=12)
         )
         assert folded_depth > truncated_depth, (
             f"max_width {max_width}: the folded rule must read deeper than the "
@@ -2882,17 +2885,17 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
     round trip through the precise minimum is the honest way to tie the two
     together — anchoring on some larger, arbitrarily-chosen weight is not.
     """
-    heavy = 1000 * retrieval.SCALE
+    heavy = 1000 * SCALE12
     for decay in (TRUNCATED, FOLDED):
         for max_width in (1, 5, 50):
             depth = _measured_depth(
-                retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=decay)
+                retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=decay, scale_digits=12)
             )
             at_depth = _counted_width(
-                retrieval.class_width(heavy, 60, depth, decay=decay)
+                retrieval.class_width(heavy, 60, depth, decay=decay, scale_digits=12)
             )
             one_deeper = _counted_width(
-                retrieval.class_width(heavy, 60, depth + 1, decay=decay)
+                retrieval.class_width(heavy, 60, depth + 1, decay=decay, scale_digits=12)
             )
             assert at_depth >= max_width + 1, (
                 f"{decay}, max_width {max_width}: the reported depth already sits "
@@ -2911,9 +2914,9 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
         # The weight_for_depth round trip, at the tolerance where this
         # function agrees exactly with the separating bound.
         for named_depth in (16, 100, 972):
-            minimum_weight = retrieval.weight_for_depth(named_depth, 60, decay=decay)
+            minimum_weight = retrieval.weight_for_depth(named_depth, 60, decay=decay, scale_digits=12)["raw"]
             round_tripped = _measured_depth(
-                retrieval.deepest_rank_within_width(minimum_weight, 60, 1, decay=decay)
+                retrieval.deepest_rank_within_width(minimum_weight, 60, 1, decay=decay, scale_digits=12)
             )
             assert round_tripped == named_depth, (
                 f"{decay}: the minimum weight that separates to depth "
@@ -2936,12 +2939,12 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
         (1000, TRUNCATED, 2),
     ):
         depth = _measured_depth(
-            retrieval.deepest_rank_within_width(raw, 60, 1, decay=decay)
+            retrieval.deepest_rank_within_width(raw, 60, 1, decay=decay, scale_digits=12)
         )
         assert depth == 1, (
             f"{decay}, raw {raw}: these weights stop separating immediately"
         )
-        at_depth = _counted_width(retrieval.class_width(raw, 60, depth, decay=decay))
+        at_depth = _counted_width(retrieval.class_width(raw, 60, depth, decay=decay, scale_digits=12))
         assert at_depth == measured, (
             f"{decay}, raw {raw}: the class at the reported depth, measured"
         )
@@ -2971,14 +2974,9 @@ LOSS = "approximate: a 10% sample of the corpus; an empty result proves nothing"
 PERTURBATION = "machine-translated before indexing; ranks compare glosses"
 
 
-def _is_zero(lexical: str) -> bool:
-    """Whether a rendered fixed-point value is zero.
-
-    Compared numerically rather than as text: a `Fixed` renders in its full
-    decimal lexical (`"0.000000000000"`), and pinning the spelling here would
-    make this test fail if the scale ever changed, which is not what it is about.
-    """
-    return float(lexical) == 0.0
+def _is_zero(value: dict[str, int]) -> bool:
+    """Zero is an exact raw count independently of the declared scale."""
+    return value["raw"] == 0
 
 
 def _with_fidelity(
@@ -3014,10 +3012,10 @@ def _answer(producers: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     """One fused answer over ``producers``, with the fixture's usual inputs."""
     kwargs: dict[str, Any] = {
         "text_producers": producers,
-        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12, TITLE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     kwargs.update(overrides)
@@ -3122,7 +3120,7 @@ def test_a_declared_loss_bounds_each_row_and_can_shorten_the_certain_prefix() ->
     ]
     assert named, "the fixture has rows the degraded stratum named"
     for row in named:
-        assert row["interval"]["inflation"] != "0", (
+        assert row["interval"]["inflation"]["raw"] != 0, (
             "a row the lossy stratum named may have been promoted by a row it "
             "missed, so its whole contribution from that stratum is suspect"
         )
@@ -3174,7 +3172,7 @@ def test_an_empty_evidence_is_refused_on_either_axis_and_its_neighbours_are_not(
     def search(fidelity: tuple[Any, Any]) -> dict[str, Any]:
         return _answer(
             _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, fidelity)),
-            weights={NOTE_STRATUM: retrieval.SCALE},
+            weights={NOTE_STRATUM: SCALE12},
         )
 
     # Refused, on either axis: a declared degradation that discloses nothing
@@ -3308,7 +3306,7 @@ def test_the_evidence_a_host_writes_is_the_evidence_a_consumer_reads() -> None:
     awkward = "  lossy: 10% sample; seethe note\nand the second line  "
     answer = _answer(
         _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, (awkward, awkward))),
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
     )
     declared = answer["fidelities"][NOTE_STRATUM]
     assert declared["completeness_evidence"] == awkward, (
@@ -3332,7 +3330,7 @@ def test_the_four_producer_spellings_agree_where_they_overlap() -> None:
     that spelled out a default would get a different answer from one that did
     not.
     """
-    common: dict[str, Any] = {"weights": {NOTE_STRATUM: retrieval.SCALE}}
+    common: dict[str, Any] = {"weights": {NOTE_STRATUM: SCALE12}}
     three = _answer(NOTE_ONLY, **common)
     four = _answer(_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)), **common)
     five = _answer(
@@ -3445,9 +3443,9 @@ def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> 
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=PLAN_TOP_K,
     )
     assert (
@@ -3462,9 +3460,9 @@ def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> 
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=PLAN_TOP_K,
     )
     assert bounded["plan"]["stratum_depths"][NOTE_STRATUM] == 1
@@ -3492,12 +3490,12 @@ def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
         "text_producers": NOTE_ONLY,
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     request = [_lexical("quick fox", NOTE)]
 
-    for refused_weight in (0, -1, -retrieval.SCALE):
+    for refused_weight in (0,):
         with pytest.raises(ValueError, match="non-positive weight") as refused:
             retrieval.search(
                 DATA, request, weights={NOTE_STRATUM: refused_weight}, **common
@@ -3506,8 +3504,11 @@ def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
             f"the refusal names the stratum whose weight was rejected: {refused.value}"
         )
 
+    for refused_weight in (-1, 1 << 128):
+        with pytest.raises(OverflowError):
+            retrieval.search(DATA, request, weights={NOTE_STRATUM: refused_weight}, **common)
     # The neighbouring valid weights, down to the smallest positive one there is.
-    for accepted in (1, retrieval.SCALE // 2, retrieval.SCALE, 1000 * retrieval.SCALE):
+    for accepted in (1, SCALE12 // 2, SCALE12, 1000 * SCALE12):
         answer = retrieval.search(
             DATA, request, weights={NOTE_STRATUM: accepted}, **common
         )
@@ -3521,9 +3522,9 @@ def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbou
 
     ``retrieval.crossing_rank_at`` bisects over the head rank, which is exact only
     while the threshold does not rise with the rank — true only while every weight
-    in it is positive. A zero or negative weight, whether on the stratum that
-    named the candidate or on one that merely shares its block, raises
-    ``ValueError`` naming the weight it was handed.
+    in it is positive. A zero weight on either the naming stratum or a sharing
+    stratum raises ``ValueError`` naming the weight it was handed. Negative
+    integers fail unsigned extraction before the derivation runs.
 
     The neighbour is executed and pinned: one stratum named the candidate at rank
     five, two equal strata share its block, so under a smoothing constant of 60
@@ -3531,25 +3532,25 @@ def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbou
     at head rank 71. A one-unit sharer is a weight too and is searched, crossing
     where a lone sharer does, at rank six.
     """
-    scale = retrieval.SCALE
+    scale = SCALE12
     for decay in (TRUNCATED, "weighted_reciprocal_rank"):
-        for refused in (0, -1):
+        for refused in (0,):
             for naming, sharing in (
                 ([refused], [scale, scale]),
                 ([scale], [scale, refused]),
             ):
                 with pytest.raises(ValueError, match="non-positive weight") as raised:
-                    retrieval.crossing_rank_at(naming, 5, sharing, 60, decay=decay)
-                assert f"Fixed({refused})" in str(raised.value), (
+                    retrieval.crossing_rank_at(naming, 5, sharing, 60, decay=decay, scale_digits=12)
+                assert f"raw: {refused}" in str(raised.value), (
                     f"the refusal names the weight it was handed: {raised.value}"
                 )
 
         assert (
-            retrieval.crossing_rank_at([scale], 5, [scale, scale], 60, decay=decay)
+            retrieval.crossing_rank_at([scale], 5, [scale, scale], 60, decay=decay, scale_digits=12)
             == 71
         )
-        assert retrieval.crossing_rank_at([scale], 5, [scale, 1], 60, decay=decay) == 6
-        assert retrieval.crossing_rank_at([scale], 5, [scale], 60, decay=decay) == 6
+        assert retrieval.crossing_rank_at([scale], 5, [scale, 1], 60, decay=decay, scale_digits=12) == 6
+        assert retrieval.crossing_rank_at([scale], 5, [scale], 60, decay=decay, scale_digits=12) == 6
 
 
 def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
@@ -3567,10 +3568,10 @@ def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
     all, which is the neighbouring refusal held below.
     """
     common: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
         "data_format": "nquads",
     }
@@ -3634,10 +3635,10 @@ def test_each_data_format_name_routes_the_document_and_an_unknown_one_is_refused
     """
     common: dict[str, Any] = {
         "text_producers": NOTE_ONLY,
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     request = [_lexical("quick fox", NOTE)]
@@ -3668,40 +3669,27 @@ def test_each_data_format_name_routes_the_document_and_an_unknown_one_is_refused
 
 
 def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
-    """All six proper subsets of the three, each told apart from the others.
+    """Every proper subset of weights, smoothing, decay and precision is refused.
 
-    A law is ``weights``, ``k`` and ``decay`` together. There are six ways to name
-    some and not the rest, and a refusal that described them with one sentence
-    would be useless in exactly the case a caller needs it: they wrote two of the
-    three and cannot see which one is missing. So each message is checked to name
-    the parts that arrived AND the parts that did not, and the two lists are
-    checked against each other — a message that named all three on both sides
-    would match either half alone.
+    Both lists are checked: which declarations arrived and which are absent.
     """
     common: dict[str, Any] = {
         "text_producers": NOTE_ONLY,
         "statistics": STATISTICS,
     }
     request = [_lexical("quick fox", NOTE)]
-    weights = {NOTE_STRATUM: retrieval.SCALE}
+    weights = {NOTE_STRATUM: SCALE12}
     labels = {
         "weights": "`weights`",
         "k": "the smoothing constant `k`",
-        "decay": "the `decay` rule",
+        "decay": "the `decay` rule", "scale_digits": "`scale_digits`",
     }
-    whole = {"weights": weights, "k": 60, "decay": TRUNCATED}
+    whole = {"weights": weights, "k": 60, "scale_digits": 12, "decay": TRUNCATED}
 
-    # The three parts in the order the message lists them, so an expectation can
-    # be derived rather than transcribed six times.
-    order = ("weights", "k", "decay")
-    for supplied in (
-        ("weights",),
-        ("k",),
-        ("decay",),
-        ("weights", "k"),
-        ("weights", "decay"),
-        ("k", "decay"),
-    ):
+    # The four parts are checked in the exact order the message lists them.
+    order = ("weights", "k", "decay", "scale_digits")
+    for mask in range(1, (1 << len(order)) - 1):
+        supplied = tuple(part for bit, part in enumerate(order) if mask & (1 << bit))
         absent = tuple(part for part in order if part not in supplied)
         with pytest.raises(ValueError) as refused:
             retrieval.compile(
@@ -3718,7 +3706,7 @@ def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
             f"supplied {supplied}: {message}"
         )
 
-    # The two neighbouring cases that are NOT refusals: all three name a law, and
+    # The two neighbouring cases that are NOT refusals: all four name a law, and
     # none of them names no law — which is compiled without one, not refused.
     named = retrieval.compile(DATA, request, **whole, **common, top_k=PLAN_TOP_K)
     assert named["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
@@ -3754,10 +3742,10 @@ def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None
     is held by ``test_a_declared_domain_changes_the_reading_and_not_the_answer``.
     """
     common: dict[str, Any] = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     request = [_lexical("quick fox", NOTE)]
@@ -4527,10 +4515,10 @@ def test_han_producer_supplies_dictionary_independent_ranked_rows() -> None:
     corpus = f'<{EX}university> <{NOTE}> "北京大学" .'
     entries = [("北京大学", 1), ("北京", 1)]
     common = {
-        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "weights": {NOTE_STRATUM: SCALE12},
         "statistics": STATISTICS,
         "k": 60,
-        "decay": TRUNCATED,
+        "scale_digits": 12, "decay": TRUNCATED,
         "top_k": 10,
     }
     answers = []
@@ -4580,10 +4568,10 @@ def test_standard_analyzer_resolves_all_five_caller_supplied_artifacts() -> None
                 {"lexicon": "baseline", "artifacts": artifacts},
             )
         },
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
     assert len(answer["rows"]) == 1
@@ -4614,10 +4602,10 @@ def test_han_grapheme_bases_and_attached_marks(
                 {"lexicon": "empty", "projection": "han"},
             )
         },
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
     assert len(answer["rows"]) == expected
@@ -4647,10 +4635,10 @@ def _accent_answer(accent: Any) -> dict[str, Any]:
                 {"lexicon": "empty", "accent": accent},
             )
         },
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        weights={NOTE_STRATUM: SCALE12},
         statistics=STATISTICS,
         k=60,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=10,
     )
 
@@ -4712,10 +4700,10 @@ def test_selected_arabic_accents_also_normalize_caller_dictionary_keys() -> None
                     },
                 )
             },
-            weights={NOTE_STRATUM: retrieval.SCALE},
+            weights={NOTE_STRATUM: SCALE12},
             statistics=STATISTICS,
             k=60,
-            decay=TRUNCATED,
+            decay=TRUNCATED, scale_digits=12,
             top_k=10,
         )
         assert len(answer["rows"]) == expected

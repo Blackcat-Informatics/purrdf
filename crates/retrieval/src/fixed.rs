@@ -1,18 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The exact fixed-point base every fused score is computed in.
+//! Exact signed numeric request endpoints, independent of fusion precision.
 //!
-//! Fusion reuses `purrdf-text`'s [`Fixed`] rather than defining a second
-//! base-10 type: an `i128` read as a multiple of `10^-12`, with truncation
-//! toward zero, checked operations, and a wide-intermediate multiply/divide that
-//! refuses to report an overflow the answer does not have. Two fixed-point types
-//! in one workspace would be two conventions for what a rounded reciprocal means,
-//! so there is exactly one and it is re-exported here.
-//!
-//! The re-export exists so a caller building a fusion profile can name the weight
-//! type without depending on `purrdf-text` directly; it is the same type the
-//! crate root already re-exports, not a wrapper.
+//! Numeric ranges and spatial maximum distances retain their signed scale 12
+//! lexical representation. Fusion uses [`crate::Score`] and [`crate::Precision`].
 
 pub use purrdf_text::Fixed;
 

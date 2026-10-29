@@ -2683,8 +2683,8 @@ class slice:
 # ordered answer. Producers, strata and weights are caller-supplied; nothing here
 # has a default, because PurRDF mints no vocabulary.
 #
-# Every weight crosses as an `int` of raw fixed-point units (`SCALE` is one whole
-# unit) and every score comes back as its exact decimal `str`, never a float.
+# Every weight crosses as an unsigned raw `int`, with `10**scale_digits` units
+# per whole value. Every score returns as `{raw, scale_digits}`, never a float.
 
 # One ranked text producer's declaration: `(stratum, predicate, graph)`, the same
 # three followed by the producer's candidate domains, or those four followed by
@@ -2961,11 +2961,12 @@ class _PlanDocumentError(ValueError):
 
     refusal: str
 
+class _RetrievalScore(TypedDict):
+    raw: int
+    scale_digits: int
+
 class retrieval:
-    # The decimal exponent of one whole fixed-point unit.
-    SCALE_DIGITS: int
-    # One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
-    SCALE: int
+    # Fusion precision is explicit on each law. Scores retain raw units and scale.
     # Spelled with an explicit `TypeAlias`, exactly as `purrdf.shapes` spells its
     # own re-exports and for the same reason: this is a type a caller ANNOTATES
     # with, and a plain `X = X` reads to a type checker as a variable.
@@ -2977,7 +2978,7 @@ class retrieval:
     # * "reciprocal_rank" truncates the reciprocal to the declared scale BEFORE
     #   the weight is applied. The inner truncation is a ceiling no weight can
     #   lift, so this rule stops separating adjacent ranks at the same depth —
-    #   just past a million — for every weight at or above one.
+    #   just past the square root of the scale — for every weight at or above one.
     # * "weighted_reciprocal_rank" folds the weight into the numerator as one
     #   exactly-rounded division. Its value is never below the other's, and its
     #   reachable depth grows with the weight, so a heavier stratum is readable
@@ -3196,16 +3197,16 @@ class retrieval:
     # the larger of the two. `"planned_resolution"` is not a fallback
     # source for it: that map is empty unless the call names a fusion law.
     #
-    # `weights`, `k` and `decay` are the fusion law the caller means to fuse
+    # `weights`, `k`, `decay` and `scale_digits` are the fusion law the caller means to fuse
     # under, and naming it is what makes `"planned_resolution"` answerable: per
     # weighted stratum, the `"separates_to"` depth this law still tells adjacent
     # ranks apart at (`None` when it never stops inside a depth a plan can
     # express), the `"requested_depth"` the plan recorded, and
     # `"fully_separated"`. That is what the plan will cost in rank resolution,
-    # known without executing a single unit. Omit all three and the map is empty
+    # known without executing a single unit. Omit all four and the map is empty
     # — no law is invented to measure against — and naming some of them and not
     # the rest raises `ValueError` saying which part is missing, because the
-    # three are one law between them. The rule matters most here: a stratum the
+    # four are one law between them. The rule matters most here: a stratum the
     # truncated rule reports as coarse may be fully separated under the folded
     # one at the same weight.
     #
@@ -3226,19 +3227,20 @@ class retrieval:
         weights: dict[str, int] | None = None,
         k: int | None = None,
         decay: str | None = None,
+        scale_digits: int | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Run the whole ladder and return one fused answer.
     #
     # `weights` maps a stratum IRI to its weight in raw fixed-point units, where
-    # `SCALE` (that is, `10 ** SCALE_DIGITS`) is one whole unit. A weight of one
-    # is `SCALE`, never the literal `1`, which is one raw unit. Weights are read
+    # `10 ** scale_digits` is one whole unit. A weight of one
+    # is `10 ** scale_digits`; the literal `1` is one raw unit. Weights are read
     # only as ratios, so a dict mixing the two spellings is a silent
-    # factor-of-`SCALE` error: it runs, refuses nothing, and ranks as though the
+    # factor-of-`10 ** scale_digits` error: it runs, refuses nothing, and ranks as though the
     # smaller stratum were absent. Write every weight the same way.
     #
-    # `k`, `decay` and `top_k` are required: the fusion law is the caller's and
+    # `k`, `decay`, `scale_digits` and `top_k` are required: the fusion law is the caller's and
     # fused enumeration is top-k by construction. How many contributions a
     # candidate may receive is not a parameter — it is the number of weighted
     # strata, because a candidate surfaces at most once in each.
@@ -3296,7 +3298,7 @@ class retrieval:
     # argument, the depth already sat on that declaration, so the row past it could
     # not be asked for and whether one exists was NOT observable, which is why this
     # is not `"exhausted"`;
-    # `"ceiling_reached"` (with `"bound"`: an exact decimal `str`) is a
+    # `"ceiling_reached"` (with `"bound"`: `{raw, scale_digits}`) is a
     # contribution bound, every row at or above it read and the rows below not —
     # what a fusion the caller's `top_k` stopped writes over the streams it
     # stopped; `"supplied_query_ended"` (with `"rank"`: int) is a unit running a
@@ -3443,6 +3445,7 @@ class retrieval:
         statistics: dict[str, builtins.object],
         k: int,
         decay: str,
+        scale_digits: int,
         top_k: int,
         hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
         knn_producers: dict[str, _KnnProducerSpec] | None = None,
@@ -3471,7 +3474,7 @@ class retrieval:
     # again under "weighted_reciprocal_rank". A `k` of zero is deliberately not
     # told that way, because switching rules does not make it usable.
     @staticmethod
-    def weight_for_depth(depth: int, k: int, *, decay: str) -> int: ...
+    def weight_for_depth(depth: int, k: int, *, decay: str, scale_digits: int) -> _RetrievalScore: ...
     # How many consecutive ranks around `rank` a weight of `weight_raw` cannot
     # tell apart under the rule `decay` names.
     #
@@ -3492,14 +3495,14 @@ class retrieval:
     #
     # No stratum is taken, because a width is a property of the rule, its
     # smoothing constant, the weight and the rank and of nothing else.
-    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    # `weight_raw` is in raw units, where `10 ** scale_digits` is one whole unit.
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a width: a rank of zero, a smoothing constant of zero, an unknown
     # `decay` spelling, or a weight that is not strictly positive.
     @staticmethod
     def class_width(
-        weight_raw: int, k: int, rank: int, *, decay: str
+        weight_raw: int, k: int, rank: int, *, decay: str, scale_digits: int
     ) -> int | None: ...
     # The deepest depth that can be read with every rank in it sitting in a
     # class no wider than `max_width`, for a weight of `weight_raw` under the
@@ -3532,7 +3535,7 @@ class retrieval:
     #
     # No stratum is taken, because the answer is a property of the rule, its
     # smoothing constant, the weight and the tolerance and of nothing else.
-    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    # `weight_raw` is in raw units, where `10 ** scale_digits` is one whole unit.
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a depth: a smoothing constant of zero, a `max_width` of zero —
@@ -3557,7 +3560,7 @@ class retrieval:
     # a hot-loop one.
     @staticmethod
     def deepest_rank_within_width(
-        weight_raw: int, k: int, max_width: int, *, decay: str
+        weight_raw: int, k: int, max_width: int, *, decay: str, scale_digits: int
     ) -> int | None: ...
     # The head rank at which a candidate that has collected `naming_raw`'s
     # contributions, at rank `at_rank` in each of them, first beats the threshold
@@ -3581,7 +3584,7 @@ class retrieval:
     #
     # `None` when no rank a plan can express brings the threshold below the
     # bound, rendered as a wall and never as an enormous rank. Weights are raw
-    # fixed-point units (`SCALE` is one whole unit); a non-positive weight, a `k`
+    # fixed-point units (`10 ** scale_digits` is one whole unit); a non-positive weight, a `k`
     # of zero, a rank of zero or an unknown `decay` raise `ValueError`.
     @staticmethod
     def crossing_rank_at(
@@ -3591,4 +3594,5 @@ class retrieval:
         k: int,
         *,
         decay: str,
+        scale_digits: int,
     ) -> int | None: ...

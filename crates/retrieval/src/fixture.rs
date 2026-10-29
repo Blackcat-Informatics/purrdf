@@ -8,7 +8,10 @@
 //! file of this package, and a helper each package retyped would be a second copy
 //! of the same fixture.
 
-use crate::{DomainTag, Fixed, FusedRow, Iri, Term};
+use crate::{DomainTag, FusedRow, Iri, Score, Term};
+
+/// Explicit decimal units of the original frozen fusion fixtures.
+pub const PRECISION_12: crate::Precision = crate::Precision::FROZEN_12;
 
 /// A fixture IRI, which is valid by construction.
 ///
@@ -49,7 +52,7 @@ pub fn shared_block() -> DomainTag {
 /// A fused row reduced to what a comparison between two runs is about: the
 /// entity, its score and every stratum's `(stratum, rank, contribution)`.
 #[must_use]
-pub fn reduce(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
+pub fn reduce(row: &FusedRow) -> (Term, Score, Vec<(Iri, u64, Score)>) {
     (
         row.entity.clone(),
         row.score,

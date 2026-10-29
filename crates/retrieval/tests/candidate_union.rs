@@ -8,6 +8,7 @@ mod common;
 mod registry;
 
 use purrdf_core::{TermValue, datatype::XSD_INTEGER};
+use purrdf_retrieval::fixture::PRECISION_12;
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDepths, CandidateExecutionResult, CandidatePlan,
     CandidatePlanError, DuplicatePolicy, IndexGeneration, Iri, OrderFidelity, PfAttestation,
@@ -112,7 +113,7 @@ fn ranked_literals(
 #[test]
 fn native_shared_ranks_survive_planning_execution_union_and_fusion() {
     use purrdf_retrieval::{
-        DecayRule, Fixed, FusionProfile, RankLaw, RankSource, RankedStreamAdapter, TopK,
+        DecayRule, FusionProfile, RankLaw, RankSource, RankedStreamAdapter, TopK,
     };
     let ranks: Vec<_> = [1, 1, 7, 7]
         .into_iter()
@@ -144,8 +145,9 @@ fn native_shared_ranks_survive_planning_execution_union_and_fusion() {
     .unwrap();
     assert!(compiled.units()[0].sparql().contains("AS ?rank"));
     let profile = FusionProfile::with_decay(
-        BTreeMap::from([(iri("shared"), Fixed::ONE)]),
+        BTreeMap::from([(iri("shared"), PRECISION_12.score(PRECISION_12.scale()))]),
         DecayRule::WeightedReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .unwrap();
     for schedule in [ReadSchedule::Materialised, ReadSchedule::OnDemand] {

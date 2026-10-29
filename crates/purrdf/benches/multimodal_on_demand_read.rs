@@ -80,6 +80,7 @@
 //! `tests/text_exclusion_lookup.rs` and in this crate's own
 //! `tests/multimodal_exclusion_lookup.rs`.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -90,9 +91,9 @@ use purrdf_testkit::rng::signed_unit_next_nonzero;
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionBasis, Fixed,
-    FusionProfile, Iri, OrderFidelity, RECIP_K, RankFidelity, RankedStreamAdapter, RequestTerm,
-    RetrievalRequest, Statistics, Term, TopK, compile, execute, fuse, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionBasis, FusionProfile,
+    Iri, OrderFidelity, RECIP_K, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
+    Statistics, Term, TopK, compile, execute, fuse, plan, search,
 };
 use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, TermKind};
 use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
@@ -166,10 +167,14 @@ impl Statistics for Cardinalities {
 fn profile_over(strata: &[String]) -> FusionProfile {
     let weights = strata
         .iter()
-        .map(|stratum| (iri(stratum), Fixed::ONE))
+        .map(|stratum| (iri(stratum), PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: recip_k() })
-        .expect("the fixture profile is valid")
+    FusionProfile::with_decay(
+        weights,
+        DecayRule::ReciprocalRank { k: recip_k() },
+        PRECISION_12,
+    )
+    .expect("the fixture profile is valid")
 }
 
 /// The dataset built from `(subject, text)` rows, all under one predicate.
