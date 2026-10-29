@@ -527,7 +527,7 @@ impl FusionProfile {
         if tie_break > 1 {
             return Err(ProfileRefusal::TieBreakTag {
                 found: tie_break,
-                expected: TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM,
+                maximum: 1,
             }
             .into());
         }
@@ -535,10 +535,7 @@ impl FusionProfile {
             let semantics = Iri::parse(&reader.string("caller ordering semantics")?)?;
             let leading = reader.u8()?;
             if leading > 1 {
-                return Err(crate::OrderingError::Uncertified {
-                    reason: "canonical ordering leading-key tag is neither zero nor one".to_owned(),
-                }
-                .into());
+                return Err(ProfileRefusal::LeadingKeyTag { found: leading }.into());
             }
             Some(crate::OrderingPolicy {
                 semantics,

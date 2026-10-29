@@ -1061,8 +1061,9 @@ pub struct FusionTrailer {
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
     /// The evidence these rows were produced against: the content identity of
-    /// [`Self::attestations`], and of which strata answered the exclusion lookups
-    /// the rows were certified on.
+    /// [`Self::attestations`], which strata answered the exclusion lookups the
+    /// rows were certified on, and the immutable caller-ordering semantics,
+    /// snapshot and full-domain evidence when present.
     ///
     /// The third of the three identities an answer carries.
     /// [`Self::plan_id`] pins the question, [`Self::profile_id`] pins the law,
@@ -1087,12 +1088,18 @@ pub struct FusionTrailer {
     /// already digested for it; an answer whose lookups were answered by another
     /// generation has no identity to replay, because it was refused.
     ///
-    /// A fusion that asked no lookup digests exactly the attestation map, byte
-    /// for byte the identity such a run always carried. The attestation half is
-    /// immovable across repeated [`FusionStream::trailer`] calls; the lookup half
+    /// Without caller ordering, a fusion that asked no lookup digests exactly
+    /// the attestation map, byte for byte the identity such a run always carried.
+    /// The attestation half is immovable across repeated [`FusionStream::trailer`]
+    /// calls; the lookup half
     /// moves only if the caller certifies further rows between two calls and the
     /// fusion asks a stratum it had not asked before — the evidence behind the
     /// answer grew, and the identity says so.
+    ///
+    /// Caller ordering additionally binds each stratum's immutable semantics
+    /// IRI, snapshot and full-domain bound from [`Self::ordering`]. Its current
+    /// [`OrderingStatus::unread`](crate::OrderingStatus::unread) bound remains
+    /// visible there but is excluded from identity, preserving read-depth invariance.
     ///
     /// # Why [`Self::fidelities`] is deliberately NOT folded in
     ///
@@ -1419,7 +1426,6 @@ fn write_ordered_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
             writer.string(status.evidence.semantics.as_str());
             writer.bytes(&status.evidence.snapshot);
             status.evidence.domain.write(writer);
-            status.unread.write(writer);
         }
     }
 }
@@ -1427,17 +1433,20 @@ fn write_ordered_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
 impl FusionTrailer {
     /// The canonical bytes [`Self::evidence_id`] is the digest of.
     ///
-    /// A pure function of [`Self::attestations`] and of which strata
-    /// [`Self::resolution`] records exclusion lookups for: the layout version,
-    /// the entry count, then every `(stratum, generation, service level)` in
-    /// canonical stratum order, each variable-length part framed by its own
-    /// length and every integer little-endian — followed, only when some
-    /// stratum's lookups were asked, by the count and names of those strata (see
-    /// [`Self::evidence_id`]). Sorting comes free from the admitted ordered map and
-    /// is relied on, so no iteration order can reach the digest; the framing is
-    /// what makes the encoding injective, so no two different maps can share
-    /// bytes by running their fields together; the little-endian integers are
-    /// what make it identical on every target, `wasm32` included.
+    /// A pure function of [`Self::attestations`], which strata [`Self::resolution`]
+    /// records exclusion lookups for, and the immutable caller-ordering semantics
+    /// IRI, snapshot and full-domain bound in [`Self::ordering`] when present.
+    /// The layout contains its version, the attestation entry count and every
+    /// `(stratum, generation, service level)` in canonical stratum order. The
+    /// lookup section names the strata asked; it is present when nonempty or when
+    /// caller ordering follows. Caller ordering appends the count and each
+    /// `(stratum, semantics, snapshot, domain)` in canonical stratum order.
+    /// Mutable unread bounds are excluded: unchanged lookup strata and immutable
+    /// ordering evidence produce identical bytes at any read depth.
+    /// Sorting comes free from the admitted ordered map and is relied on, so no
+    /// iteration order can reach the digest; each variable-length part is framed
+    /// by its own length to keep the encoding injective, and little-endian integers
+    /// make it identical on every target, `wasm32` included.
     ///
     /// Public because an identity nobody can re-derive is an identity nobody
     /// can audit. A caller holding a trailer can recompute
@@ -6087,7 +6096,25 @@ mod tests {
                 )
             };
             let mut checked = build();
+            let early = poll_once_expect_ready(checked.trailer()).expect("initial evidence");
             let (rows, _) = drain_checked(&mut checked);
+            let late = poll_once_expect_ready(checked.trailer()).expect("drained evidence");
+            assert_ne!(
+                early.ordering.as_ref().unwrap()[&stratum(0)].unread,
+                late.ordering.as_ref().unwrap()[&stratum(0)].unread,
+                "the remaining source bound changes as rows are read"
+            );
+            assert_eq!(
+                early
+                    .evidence_canonical_bytes()
+                    .expect("early bytes")
+                    .as_slice(),
+                late.evidence_canonical_bytes()
+                    .expect("late bytes")
+                    .as_slice(),
+                "immutable evidence bytes do not depend on read depth"
+            );
+            assert_eq!(early.evidence_id, late.evidence_id);
             assert_eq!(rows, drain(&mut build()));
             let names: Vec<_> = rows.iter().map(|row| row.entity.as_str()).collect();
             assert_eq!(

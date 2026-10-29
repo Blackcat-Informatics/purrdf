@@ -977,9 +977,10 @@ where
     } = execution;
     let workspace = statuses.workspace().clone();
     if profile.ordering().is_some()
-        && statuses
-            .iter()
-            .any(|(stratum, _)| profile.weight(stratum).is_some())
+        && statuses.iter().any(|(stratum, status)| {
+            profile.weight(stratum).is_some()
+                && matches!(status, ProducerStatus::ExecutionFailed { .. })
+        })
     {
         return Err(FusionError::from(crate::OrderingError::Uncertified {
             reason: "a weighted native producer failed before it supplied a full-domain key bound"
