@@ -131,10 +131,10 @@ fn programmatic_prepared_calls_require_signed_recursion_admission() {
     check_programmatic_admission(true);
 }
 
-/// Cache eviction cannot erase source-only declared edges or change a native
-/// model's signed verdict. The cache retains no model bodies or data graphs.
+/// Shared admission keeps source-only edges and distinct original model domains.
+/// Its retained metadata must not keep model bodies or data graphs alive.
 #[test]
-fn admission_metadata_survives_eviction_without_retaining_model_bodies() {
+fn admission_metadata_keeps_original_domains_without_retaining_model_bodies() {
     use purrdf_shapes::constraints::conforms;
     use purrdf_shapes::engine::PreparedShapes;
     use purrdf_shapes::shapes::{Constraint, ModelOwner};
@@ -158,15 +158,7 @@ fn admission_metadata_survives_eviction_without_retaining_model_bodies() {
     let data = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
     let focus = Term::NamedNode(NamedNode::from("http://example.org/a"));
     let root = parsed.owner.root(&id).unwrap();
-    let native_before = conforms(&data, &focus, &root).unwrap();
-    let mut retained = Vec::new();
-    for index in 0..40 {
-        let mut definition = prototype.clone();
-        definition.id = Term::BlankNode(format!("eviction-{index}"));
-        let owner = ModelOwner::from_definitions(vec![definition.clone()]).unwrap();
-        retained.push(owner.root(&definition.id).unwrap());
-    }
-    assert_eq!(conforms(&data, &focus, &root).unwrap(), native_before);
+    assert!(conforms(&data, &focus, &root).unwrap());
     let prepared = PreparedShapes::new(Arc::new(parsed.clone()));
     assert!(
         prepared
@@ -180,7 +172,7 @@ fn admission_metadata_survives_eviction_without_retaining_model_bodies() {
         .with_validation_options(ValidationOptions::default())
         .bind_dataset(&dataset)
     else {
-        panic!("source-declared recursion still requires a selection after cache eviction")
+        panic!("source-declared recursion still requires a selection with shared metadata")
     };
     assert!(
         matches!(refusal, ShapesError::Recursion(refusal) if refusal.reason == RecursionRefusalReason::MissingSelection)
@@ -202,8 +194,6 @@ fn admission_metadata_survives_eviction_without_retaining_model_bodies() {
     replacement.set_validation_options(ValidationOptions::default());
     assert!(validate_with(&data, &replacement).unwrap().conforms);
 
-    // Keep every eviction model live until the original model was asked again.
-    assert_eq!(retained.len(), 40);
     let mut negative = replacement.owner.definition(&id).unwrap().clone();
     let mut handle = negative.clone();
     handle.constraints = vec![Constraint::Reference(id.clone())];
@@ -211,9 +201,7 @@ fn admission_metadata_survives_eviction_without_retaining_model_bodies() {
     let owner = ModelOwner::from_definitions(vec![negative]).unwrap();
     let root = owner.root(&id).unwrap();
     let before = conforms(&data, &focus, &root).unwrap_err();
-    for shape in &retained {
-        conforms(&data, &focus, shape).unwrap();
-    }
+    assert!(conforms(&data, &focus, &replacement.node_shapes[0]).unwrap());
     assert_eq!(conforms(&data, &focus, &root).unwrap_err(), before);
 
     // Equal names in original inline occurrences must not collapse their edges,

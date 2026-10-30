@@ -21,6 +21,7 @@ use purrdf_testkit::harness::{
 const FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-fixture");
 const PRINT_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-print-fixture");
 const HOST_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-wasm-host-fixture");
+const SERIAL_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-serial-fixture");
 
 fn fixture_command(args: &[&str]) -> Command {
     let mut command = Command::new(FIXTURE);
@@ -36,6 +37,82 @@ fn run_fixture(args: &[&str]) -> Output {
     fixture_command(args)
         .output()
         .expect("run the fixture harness")
+}
+
+#[test]
+fn serial_measurement_runner_retains_selection_and_failure_reporting() {
+    // Keep the same environment isolation as the ordinary fixture.
+    let run = |args: &[&str]| {
+        Command::new(SERIAL_FIXTURE)
+            .args(args)
+            .env_remove("RUST_TEST_THREADS")
+            .env_remove("RUST_TEST_NOCAPTURE")
+            .env_remove("PURRDF_TEST_REQUIRE_EXACT")
+            .output()
+            .expect("run serial fixture")
+    };
+    let listed = run(&["--list", "--test-threads=4"]);
+    assert_eq!(listed.status.code(), Some(0));
+    assert_eq!(
+        stdout_of(&listed),
+        "alpha_passes: test\ndelta_panics: test\nepsilon_is_ignored: test\n\n3 tests, 0 benchmarks\n"
+    );
+    for args in [
+        vec!["--exact", "alpha_passes"],
+        vec!["alpha", "--test-threads=1"],
+    ] {
+        let selected = run(&args);
+        assert_eq!(selected.status.code(), Some(0));
+        assert!(
+            stdout_of(&selected)
+                .contains("1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out")
+        );
+    }
+    let failed = run(&[]);
+    assert_eq!(failed.status.code(), Some(101));
+    let text = stdout_of(&failed);
+    assert!(text.contains("test alpha_passes ... ok\ntest delta_panics ... FAILED"));
+    assert!(text.contains("the planted serial failure"));
+    assert!(text.contains("1 passed; 1 failed; 1 ignored;"));
+    let ignored = run(&["--ignored"]);
+    assert_eq!(ignored.status.code(), Some(101));
+    assert!(stdout_of(&ignored).contains("ignored case ran"));
+}
+
+#[test]
+fn serial_measurement_runner_refuses_concurrent_command_line_and_environment() {
+    for (args, threads) in [(vec!["--test-threads=2"], None), (vec![], Some("2"))] {
+        let mut command = Command::new(SERIAL_FIXTURE);
+        command
+            .args(args)
+            .env_remove("RUST_TEST_THREADS")
+            .env_remove("PURRDF_TEST_REQUIRE_EXACT");
+        if let Some(threads) = threads {
+            command.env("RUST_TEST_THREADS", threads);
+        }
+        let output = command.output().expect("run serial concurrency refusal");
+        assert_eq!(output.status.code(), Some(101));
+        assert!(stdout_of(&output).is_empty(), "no case ran");
+        assert!(
+            String::from_utf8(output.stderr)
+                .expect("UTF-8 error")
+                .contains("whole-process measurements require --test-threads=1")
+        );
+    }
+    let admitted = Command::new(SERIAL_FIXTURE)
+        .args(["--exact", "alpha_passes"])
+        .env("RUST_TEST_THREADS", "1")
+        .env_remove("PURRDF_TEST_REQUIRE_EXACT")
+        .output()
+        .expect("run admitted serial environment");
+    assert_eq!(admitted.status.code(), Some(0));
+    let overridden = Command::new(SERIAL_FIXTURE)
+        .args(["--test-threads=1", "--exact", "alpha_passes"])
+        .env("RUST_TEST_THREADS", "2")
+        .env_remove("PURRDF_TEST_REQUIRE_EXACT")
+        .output()
+        .expect("command line retains precedence over environment");
+    assert_eq!(overridden.status.code(), Some(0));
 }
 
 #[test]

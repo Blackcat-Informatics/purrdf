@@ -98,6 +98,8 @@ pub use temp::{NamedTempFile, TempDir};
 /// before an identifier apply to that case's registration, so
 /// `#[cfg(not(target_arch = "wasm32"))] native_only_case` registers the case
 /// only where the function exists.
+/// `harness_main!(serial; case_a, case_b)` uses [`harness::serial_main`]
+/// to isolate whole-process measurements from concurrent runner traffic.
 ///
 /// ```no_run
 /// fn arithmetic() {
@@ -116,6 +118,12 @@ pub use temp::{NamedTempFile, TempDir};
 #[macro_export]
 macro_rules! harness_main {
     ($( $(#[$meta:meta])* $case:ident ),+ $(,)?) => {
+        $crate::harness_main!(@entry main; $( $(#[$meta])* $case ),+);
+    };
+    (serial; $( $(#[$meta:meta])* $case:ident ),+ $(,)?) => {
+        $crate::harness_main!(@entry serial_main; $( $(#[$meta])* $case ),+);
+    };
+    (@entry $entry:ident; $( $(#[$meta:meta])* $case:ident ),+ $(,)?) => {
         fn main() -> ::std::process::ExitCode {
             // `mut` is unused when every registration is configured away.
             #[allow(unused_mut, clippy::vec_init_then_push)]
@@ -130,7 +138,7 @@ macro_rules! harness_main {
                     },
                 ));
             )+
-            $crate::harness::main(trials)
+            $crate::harness::$entry(trials)
         }
     };
 }
