@@ -3961,11 +3961,9 @@ impl<'s> Parser<'s> {
         Ok(shapes)
     }
 
-    /// Parse an inline / anonymous shape (member of `sh:and`, `sh:or`, etc.).
-    ///
-    /// If the node has `sh:path`, it is treated as an inline property shape:
-    /// the path+constraints are wrapped into a single `PropertyShape` entry and
-    /// the resulting `Shape` has empty node-level constraints.
+    /// Queue an inline shape and return its bare reference without unfolding it.
+    /// Node and property bodies remain in the original catalog; the pending
+    /// definition pass reads `sh:path` to choose the original property body.
     fn parse_inline_shape(&mut self, id: Term) -> Result<Shape, String> {
         self.request_shape(&id);
         Ok(Shape {

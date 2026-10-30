@@ -495,12 +495,12 @@ pub(crate) struct TargetBinding<'a> {
 }
 
 impl<'a> TargetBinding<'a> {
-    pub(crate) fn named_where_plan(
+    pub(crate) fn where_plan(
         self,
         target: &Shape,
     ) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
         let original = self.model.and_then(|owner| {
-            crate::recursion::closed::named_where_reference(target, Some(owner))?;
+            crate::recursion::closed::where_reference(target, Some(owner))?;
             let shape = owner.definition(&target.id)?;
             let lowered = self
                 .graph
@@ -3080,7 +3080,7 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
                 | Target::Sparql { .. }
                 | Target::NodeExpression(_) => {}
                 Target::Where(target) => {
-                    if crate::recursion::closed::named_where_reference(target, walk.owner.as_ref())
+                    if crate::recursion::closed::where_reference(target, walk.owner.as_ref())
                         .is_some()
                     {
                         lower_reference(&target.id, false, walk)?;

@@ -310,28 +310,39 @@ fn admission_retries_an_original_body_that_was_not_installed_at_export() {
 
 #[test]
 fn acyclic_target_where_retains_its_anonymous_property_domain() {
-    let shapes = parse_shapes_with_options(
-        &format!(
-            "{PREFIXES}
-          :S a sh:NodeShape ;
-             sh:targetWhere [ sh:class :Person ;
-                 sh:property [ sh:path :age ; sh:minCount 1 ; sh:minInclusive 18 ] ] ;
-             sh:property :P .
-          :P a sh:PropertyShape ; sh:path :vote ; sh:minCount 1 ."
-        ),
-        None,
-        None,
-        None,
-        &ShapesImports::new(),
-        &ValidationOptions::default(),
-    )
-    .unwrap();
     let dataset =
         parse_turtle_to_dataset(&format!("{PREFIXES} :a a :Person ; :age 18 ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    let report = validate_with(&data, &shapes).unwrap();
-    assert!(!report.conforms);
-    assert_eq!(report.results.len(), 1);
+    for operand in [
+        "sh:class :Person ; sh:property [ sh:path :age ; sh:minCount 1 ; sh:minInclusive 18 ]",
+        "sh:path :age ; sh:minCount 1 ; sh:minInclusive 18",
+    ] {
+        for request in [
+            ValidationOptions::default(),
+            options(RecursionSemantics::Lfp),
+            options(RecursionSemantics::Gfp),
+        ] {
+            let shapes = parse_shapes_with_options(
+                &format!(
+                    "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere [ {operand} ] ;
+                    sh:property :P . :P a sh:PropertyShape ; sh:path :vote ; sh:minCount 1 ."
+                ),
+                None,
+                None,
+                None,
+                &ShapesImports::new(),
+                &request,
+            )
+            .unwrap();
+            let report = validate_with(&data, &shapes).unwrap();
+            assert!(!report.conforms);
+            assert_eq!(report.results.len(), 1);
+            assert_eq!(
+                report.results[0].focus_node.to_string(),
+                "<http://example.org/a>"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1234,7 +1245,7 @@ fn named_conformance_refuses_replaced_and_foreign_target_handles() {
     }
 }
 
-/// A named where target selects graph nodes by the original recursive relation,
+/// An original where target selects graph nodes by the recursive relation,
 /// including lower-stratum negation. It never treats a target declaration as a
 /// constraint on the body the relation asks.
 #[test]
@@ -1242,68 +1253,71 @@ fn named_where_targets_share_fixed_points_and_strata() {
     let dataset =
         parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b . :b :p :c ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    for (body, extra, least, greatest) in [
-        ("sh:node :W", "", Vec::new(), vec!["a", "b", "c"]),
-        (
-            "sh:node :V",
-            ":V a sh:NodeShape ; sh:node :W .",
-            Vec::new(),
-            vec!["a", "b", "c"],
-        ),
-        (
-            "sh:or ( [ sh:hasValue :b ] [ sh:node :W ] ) ; sh:not :Bad",
-            ":Bad a sh:NodeShape ; sh:hasValue :a .",
-            vec!["b"],
-            vec!["b", "c"],
-        ),
-    ] {
-        let source = format!(
-            "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere :W ; sh:nodeKind sh:Literal . :W a sh:NodeShape ; {body} . {extra}"
-        );
-        assert!(
-            matches!(parse_shapes_with_options(&source, None, None, None, &ShapesImports::new(), &ValidationOptions::default()), Err(CompleteValidationError::Shapes(ShapesError::Recursion(refusal))) if refusal.reason == RecursionRefusalReason::MissingSelection)
-        );
-        for (semantics, expected) in [
-            (RecursionSemantics::Lfp, &least),
-            (RecursionSemantics::Gfp, &greatest),
+    for target in [":W", "_:w"] {
+        for (body, extra, least, greatest) in [
+            ("sh:node :W", "", Vec::new(), vec!["a", "b", "c"]),
+            (
+                "sh:node :V",
+                ":V a sh:NodeShape ; sh:node :W .",
+                Vec::new(),
+                vec!["a", "b", "c"],
+            ),
+            (
+                "sh:or ( [ sh:hasValue :b ] [ sh:node :W ] ) ; sh:not :Bad",
+                ":Bad a sh:NodeShape ; sh:hasValue :a .",
+                vec!["b"],
+                vec!["b", "c"],
+            ),
         ] {
-            let shapes = parse_shapes_with_options(
-                &source,
-                None,
-                None,
-                None,
-                &ShapesImports::new(),
-                &options(semantics),
-            )
-            .unwrap();
-            let report = validate_with(&data, &shapes).unwrap();
-            let mut focuses: Vec<_> = report
-                .results
-                .iter()
-                .map(|result| {
-                    assert_eq!(result.source_shape.to_string(), "<http://example.org/S>");
-                    result.focus_node.to_string()
-                })
-                .collect();
-            focuses.sort();
-            assert_eq!(
-                focuses,
-                expected
-                    .iter()
-                    .map(|name| format!("<http://example.org/{name}>"))
-                    .collect::<Vec<_>>(),
-                "{semantics:?}: {body}"
-            );
-        }
-    }
-    for body in ["sh:not :W", "sh:xone ( :W :W )"] {
-        let source = format!(
-            "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere :W . :W a sh:NodeShape ; {body} ."
-        );
-        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            let source = format!(
+            "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere :W ; sh:nodeKind sh:Literal . :W a sh:NodeShape ; {body} . {extra}"
+        ).replace(":W", target);
             assert!(
-                matches!(parse_shapes_with_options(&source, None, None, None, &ShapesImports::new(), &options(semantics)), Err(CompleteValidationError::Shapes(ShapesError::Recursion(refusal))) if refusal.reason == RecursionRefusalReason::NonStratified { semantics })
+                matches!(parse_shapes_with_options(&source, None, None, None, &ShapesImports::new(), &ValidationOptions::default()), Err(CompleteValidationError::Shapes(ShapesError::Recursion(refusal))) if refusal.reason == RecursionRefusalReason::MissingSelection)
             );
+            for (semantics, expected) in [
+                (RecursionSemantics::Lfp, &least),
+                (RecursionSemantics::Gfp, &greatest),
+            ] {
+                let shapes = parse_shapes_with_options(
+                    &source,
+                    None,
+                    None,
+                    None,
+                    &ShapesImports::new(),
+                    &options(semantics),
+                )
+                .unwrap();
+                let report = validate_with(&data, &shapes).unwrap();
+                let mut focuses: Vec<_> = report
+                    .results
+                    .iter()
+                    .map(|result| {
+                        assert_eq!(result.source_shape.to_string(), "<http://example.org/S>");
+                        result.focus_node.to_string()
+                    })
+                    .collect();
+                focuses.sort();
+                assert_eq!(
+                    focuses,
+                    expected
+                        .iter()
+                        .map(|name| format!("<http://example.org/{name}>"))
+                        .collect::<Vec<_>>(),
+                    "{semantics:?}: {body}"
+                );
+            }
+        }
+        for body in ["sh:not :W", "sh:xone ( :W :W )"] {
+            let source = format!(
+                "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere :W . :W a sh:NodeShape ; {body} ."
+            )
+            .replace(":W", target);
+            for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+                assert!(
+                    matches!(parse_shapes_with_options(&source, None, None, None, &ShapesImports::new(), &options(semantics)), Err(CompleteValidationError::Shapes(ShapesError::Recursion(refusal))) if refusal.reason == RecursionRefusalReason::NonStratified { semantics })
+                );
+            }
         }
     }
 }
@@ -1318,67 +1332,70 @@ fn named_where_targets_charge_all_roots_before_publishing() {
     let dataset =
         parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b . :b :p :c ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
-        for (pairs, rounds, expected) in [
-            (
-                0,
-                4_096,
-                Some(RecursionRefusalReason::PairLimit {
-                    limit: 0,
-                    consumed: 0,
-                }),
-            ),
-            (
-                2,
-                4_096,
-                Some(RecursionRefusalReason::PairLimit {
-                    limit: 2,
-                    consumed: 2,
-                }),
-            ),
-            (
-                3,
-                0,
-                Some(RecursionRefusalReason::IterationLimit {
-                    limit: 0,
-                    consumed: 0,
-                }),
-            ),
-            (3, 4_096, None),
-        ] {
-            let request = ValidationOptions::default().with_recursion(RecursionOptions {
-                semantics,
-                max_pairs: pairs,
-                max_iterations: rounds,
-            });
-            let shapes = parse_shapes_with_options(
-                &source,
-                None,
-                None,
-                None,
-                &ShapesImports::new(),
-                &request,
-            )
-            .unwrap();
-            let actual = validate_with(&data, &shapes);
-            if let Some(expected) = expected {
-                assert!(
-                    matches!(actual, Err(ShapesError::Recursion(refusal)) if refusal.reason == expected)
-                );
-            } else {
-                assert_eq!(
-                    actual.unwrap().results.len(),
-                    if semantics == RecursionSemantics::Gfp {
-                        3
-                    } else {
-                        0
-                    }
-                );
-            }
-            if pairs == 0 {
-                let empty = parse_turtle_to_dataset("", None).unwrap();
-                let empty = ShaclData::new(Arc::clone(&empty), empty, None);
-                assert!(validate_with(&empty, &shapes).unwrap().conforms);
+    for target in [":W", "_:w"] {
+        let source = source.replace(":W", target);
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            for (pairs, rounds, expected) in [
+                (
+                    0,
+                    4_096,
+                    Some(RecursionRefusalReason::PairLimit {
+                        limit: 0,
+                        consumed: 0,
+                    }),
+                ),
+                (
+                    2,
+                    4_096,
+                    Some(RecursionRefusalReason::PairLimit {
+                        limit: 2,
+                        consumed: 2,
+                    }),
+                ),
+                (
+                    3,
+                    0,
+                    Some(RecursionRefusalReason::IterationLimit {
+                        limit: 0,
+                        consumed: 0,
+                    }),
+                ),
+                (3, 4_096, None),
+            ] {
+                let request = ValidationOptions::default().with_recursion(RecursionOptions {
+                    semantics,
+                    max_pairs: pairs,
+                    max_iterations: rounds,
+                });
+                let shapes = parse_shapes_with_options(
+                    &source,
+                    None,
+                    None,
+                    None,
+                    &ShapesImports::new(),
+                    &request,
+                )
+                .unwrap();
+                let actual = validate_with(&data, &shapes);
+                if let Some(expected) = expected {
+                    assert!(
+                        matches!(actual, Err(ShapesError::Recursion(refusal)) if refusal.reason == expected)
+                    );
+                } else {
+                    assert_eq!(
+                        actual.unwrap().results.len(),
+                        if semantics == RecursionSemantics::Gfp {
+                            3
+                        } else {
+                            0
+                        }
+                    );
+                }
+                if pairs == 0 {
+                    let empty = parse_turtle_to_dataset("", None).unwrap();
+                    let empty = ShaclData::new(Arc::clone(&empty), empty, None);
+                    assert!(validate_with(&empty, &shapes).unwrap().conforms);
+                }
             }
         }
     }
@@ -1395,78 +1412,89 @@ fn named_where_targets_rebind_original_reports_after_product_restore() {
     let source = format!(
         "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere :W ; sh:nodeKind sh:Literal . :W a sh:NodeShape ; sh:node :W ."
     );
-    for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
-        let request = options(semantics);
-        let shapes = Arc::new(
-            parse_shapes_with_options(&source, None, None, None, &ShapesImports::new(), &request)
+    for target in [":W", "_:w"] {
+        let source = source.replace(":W", target);
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            let request = options(semantics);
+            let shapes = Arc::new(
+                parse_shapes_with_options(
+                    &source,
+                    None,
+                    None,
+                    None,
+                    &ShapesImports::new(),
+                    &request,
+                )
                 .unwrap(),
-        );
-        let prepared = PreparedShapes::new(Arc::clone(&shapes));
-        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
-        for (graph, names) in [
-            (":a :p :b .", ["a", "b"]),
-            (":fresh :q :other .", ["fresh", "other"]),
-        ] {
-            let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} {graph}"), None).unwrap();
-            let data = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
-            let direct = validate_with(&data, &shapes).unwrap();
-            assert_eq!(
-                direct.results.len(),
-                if semantics == RecursionSemantics::Gfp {
-                    2
-                } else {
-                    0
-                }
             );
-            let expected = direct.to_ntriples().unwrap();
-            let focuses: Vec<Term> = names
-                .iter()
-                .map(|name| {
-                    NamedNode::new_unchecked(format!("http://example.org/{name}")).into_term()
-                })
-                .collect();
-            let bound = prepared.bind_dataset(&dataset).unwrap();
-            assert_eq!(bound.validate().unwrap().to_ntriples().unwrap(), expected);
-            assert_eq!(
-                bound
-                    .validate_focus_nodes(&focuses)
-                    .unwrap()
-                    .to_ntriples()
-                    .unwrap(),
-                expected
-            );
-            for rebuild in [false, true] {
-                let product = ShapesProduct::open(&bytes).unwrap();
-                let restored = if rebuild {
-                    product.rebuild_with_options(
-                        &ShapesProfile::CORE,
-                        &HostBindings::empty(),
-                        &request,
-                    )
-                } else {
-                    product.admit_with_options(
-                        &ShapesProfile::CORE,
-                        &HostBindings::empty(),
-                        &request,
-                    )
-                }
-                .unwrap();
-                let bound = restored.bind_dataset(&dataset).unwrap();
+            let prepared = PreparedShapes::new(Arc::clone(&shapes));
+            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            for (graph, names) in [
+                (":a :p :b .", ["a", "b"]),
+                (":fresh :q :other .", ["fresh", "other"]),
+            ] {
+                let dataset =
+                    parse_turtle_to_dataset(&format!("{PREFIXES} {graph}"), None).unwrap();
+                let data = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
+                let direct = validate_with(&data, &shapes).unwrap();
                 assert_eq!(
-                    bound.validate().unwrap().to_ntriples().unwrap(),
-                    expected,
-                    "rebuild={rebuild}"
+                    direct.results.len(),
+                    if semantics == RecursionSemantics::Gfp {
+                        2
+                    } else {
+                        0
+                    }
                 );
+                let expected = direct.to_ntriples().unwrap();
+                let focuses: Vec<Term> = names
+                    .iter()
+                    .map(|name| {
+                        NamedNode::new_unchecked(format!("http://example.org/{name}")).into_term()
+                    })
+                    .collect();
+                let bound = prepared.bind_dataset(&dataset).unwrap();
+                assert_eq!(bound.validate().unwrap().to_ntriples().unwrap(), expected);
                 assert_eq!(
                     bound
                         .validate_focus_nodes(&focuses)
                         .unwrap()
                         .to_ntriples()
                         .unwrap(),
-                    expected,
-                    "rebuild={rebuild}"
+                    expected
                 );
-                assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+                for rebuild in [false, true] {
+                    let product = ShapesProduct::open(&bytes).unwrap();
+                    let restored = if rebuild {
+                        product.rebuild_with_options(
+                            &ShapesProfile::CORE,
+                            &HostBindings::empty(),
+                            &request,
+                        )
+                    } else {
+                        product.admit_with_options(
+                            &ShapesProfile::CORE,
+                            &HostBindings::empty(),
+                            &request,
+                        )
+                    }
+                    .unwrap();
+                    let bound = restored.bind_dataset(&dataset).unwrap();
+                    assert_eq!(
+                        bound.validate().unwrap().to_ntriples().unwrap(),
+                        expected,
+                        "rebuild={rebuild}"
+                    );
+                    assert_eq!(
+                        bound
+                            .validate_focus_nodes(&focuses)
+                            .unwrap()
+                            .to_ntriples()
+                            .unwrap(),
+                        expected,
+                        "rebuild={rebuild}"
+                    );
+                    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+                }
             }
         }
     }
@@ -1484,22 +1512,82 @@ fn named_where_targets_refuse_replaced_root_operands() {
     let source = format!(
         "{PREFIXES} :S a sh:NodeShape ; sh:targetWhere :W ; sh:nodeKind sh:Literal . :W a sh:NodeShape ; sh:node :W ."
     );
-    let shapes = parse_shapes_with_options(
-        &source,
-        None,
-        None,
-        None,
-        &ShapesImports::new(),
-        &options(RecursionSemantics::Gfp),
-    )
-    .unwrap();
     let sid = NamedNode::from("http://example.org/S").into_term();
-    let wid = NamedNode::from("http://example.org/W").into_term();
     let focus = NamedNode::from("http://example.org/a").into_term();
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    let original = shapes.owner.root(&sid).unwrap();
-    let foreign = parse_shapes_with_options(
+    for target in [":W", "_:w"] {
+        let source = source.replace(":W", target);
+        let shapes = parse_shapes_with_options(
+            &source,
+            None,
+            None,
+            None,
+            &ShapesImports::new(),
+            &options(RecursionSemantics::Gfp),
+        )
+        .unwrap();
+        let original = shapes.owner.root(&sid).unwrap();
+        let foreign = parse_shapes_with_options(
+            &source,
+            None,
+            None,
+            None,
+            &ShapesImports::new(),
+            &options(RecursionSemantics::Gfp),
+        )
+        .unwrap();
+        let foreign_root = foreign.owner.root(&sid).unwrap();
+        let Target::Where(foreign_operand) = &foreign_root.targets[0] else {
+            unreachable!()
+        };
+        let foreign_target = foreign.owner.root(&foreign_operand.id).unwrap();
+        for variant in 0..5 {
+            let mut root = original.clone();
+            match variant {
+                1 => {
+                    let Target::Where(target) = &mut root.targets[0] else {
+                        unreachable!()
+                    };
+                    target
+                        .messages
+                        .push(Literal::new_simple_literal("replacement"));
+                }
+                2 => root.targets[0] = Target::Where(Box::new(foreign_target.clone())),
+                3 => root.targets[0] = Target::Node(focus.clone()),
+                4 => {
+                    let Target::Where(target) = &mut root.targets[0] else {
+                        unreachable!()
+                    };
+                    target.constraints.clear();
+                }
+                _ => {}
+            }
+            for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+                let actual = conforms_with_recursion(
+                    &data,
+                    &focus,
+                    &root,
+                    options(semantics).recursion.as_ref().unwrap(),
+                );
+                if variant == 0 {
+                    assert!(!actual.unwrap());
+                } else {
+                    assert!(matches!(
+                        actual,
+                        Err(ShapesError::Preparation(
+                            purrdf_shapes::PreparationRefusal::UnqualifiedRecursion(_)
+                        ))
+                    ));
+                }
+            }
+        }
+    }
+
+    // Invalid term kinds must fail even when their definitions are present.
+    use purrdf_shapes::shapes::{Constraint, ModelOwner};
+    use purrdf_shapes::term::{Term, Triple};
+    let parsed = parse_shapes_with_options(
         &source,
         None,
         None,
@@ -1508,38 +1596,68 @@ fn named_where_targets_refuse_replaced_root_operands() {
         &options(RecursionSemantics::Gfp),
     )
     .unwrap();
-    for variant in 0..4 {
-        let mut root = original.clone();
-        match variant {
-            1 => {
-                let Target::Where(target) = &mut root.targets[0] else {
-                    unreachable!()
-                };
-                target
-                    .messages
-                    .push(Literal::new_simple_literal("replacement"));
-            }
-            2 => root.targets[0] = Target::Where(Box::new(foreign.owner.root(&wid).unwrap())),
-            3 => root.targets[0] = Target::Node(focus.clone()),
-            _ => {}
+    let prototype = parsed.owner.definition(&sid).unwrap();
+    let Target::Where(bare) = &prototype.targets[0] else {
+        unreachable!()
+    };
+    for (id, present, allowed) in [
+        (
+            NamedNode::from("http://example.org/W").into_term(),
+            true,
+            true,
+        ),
+        (Term::BlankNode("original".to_owned()), true, true),
+        (
+            NamedNode::from("http://example.org/missing").into_term(),
+            false,
+            false,
+        ),
+        (
+            Term::Literal(Literal::new_simple_literal("invalid")),
+            true,
+            false,
+        ),
+        (
+            Term::Triple(Box::new(Triple::new(
+                focus.clone(),
+                NamedNode::from("http://example.org/p"),
+                focus.clone(),
+            ))),
+            true,
+            false,
+        ),
+    ] {
+        let mut operand = bare.as_ref().clone();
+        operand.id = id.clone();
+        operand.constraints = vec![Constraint::Reference(id.clone())];
+        let mut root = prototype.clone();
+        root.targets[0] = Target::Where(Box::new(operand));
+        let mut definitions = vec![root];
+        if present {
+            let mut target = parsed.owner.definition(&bare.id).unwrap().clone();
+            target.id = id;
+            target.constraints = vec![Constraint::NodeKind(vec![
+                purrdf_shapes::shapes::NodeKindValue::Iri,
+            ])];
+            definitions.push(target);
         }
-        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
-            let actual = conforms_with_recursion(
-                &data,
-                &focus,
-                &root,
-                options(semantics).recursion.as_ref().unwrap(),
-            );
-            if variant == 0 {
-                assert!(!actual.unwrap());
-            } else {
-                assert!(matches!(
-                    actual,
-                    Err(ShapesError::Preparation(
-                        purrdf_shapes::PreparationRefusal::UnqualifiedRecursion(_)
-                    ))
-                ));
-            }
+        let owner = ModelOwner::from_definitions(definitions).unwrap();
+        let root = owner.root(&sid).unwrap();
+        let actual = conforms_with_recursion(
+            &data,
+            &focus,
+            &root,
+            options(RecursionSemantics::Gfp).recursion.as_ref().unwrap(),
+        );
+        if allowed {
+            assert!(!actual.unwrap());
+        } else {
+            assert!(matches!(
+                actual,
+                Err(ShapesError::Preparation(
+                    purrdf_shapes::PreparationRefusal::UnqualifiedRecursion(_)
+                ))
+            ));
         }
     }
 
@@ -1858,11 +1976,6 @@ fn selected_entries_refuse_unproved_original_scopes() {
         (
             "sh:sparql [ sh:select \"SELECT ?this WHERE {}\" ]",
             purrdf_shapes::model::sh::SPARQL,
-            false,
-        ),
-        (
-            "sh:targetWhere [ sh:nodeKind sh:IRI ]",
-            purrdf_shapes::model::sh::TARGET_WHERE,
             false,
         ),
     ];

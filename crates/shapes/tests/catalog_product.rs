@@ -280,3 +280,195 @@ fn product_identity_changes_with_the_exported_root_set() {
         "distinct validators over the same retained source must have distinct product cache identities"
     );
 }
+
+/// Equal blank spellings remain distinct original definitions in each owner.
+#[test]
+fn where_products_keep_blank_operands_in_their_original_domains() {
+    use purrdf_shapes::engine::{ValidationOptions, parse_shapes_with_options};
+    use purrdf_shapes::recursion::{RecursionOptions, RecursionSemantics};
+    for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+        let request = ValidationOptions::default().with_recursion(RecursionOptions {
+            semantics,
+            max_pairs: 4_096,
+            max_iterations: 4_096,
+        });
+        let mut first = None;
+        let mut roots = Vec::new();
+        for (root, kind) in [("Left", "IRI"), ("Right", "Literal")] {
+            let mut shapes = parse_shapes_with_options(
+                &format!("@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix ex: <http://example.org/> .
+                    ex:{root} a sh:NodeShape ; sh:targetWhere _:same ; sh:in () .
+                    _:same a sh:NodeShape ; sh:nodeKind sh:{kind} ."),
+                None, None, None, &purrdf_shapes::ShapesImports::new(), &request,
+            ).unwrap();
+            let id = NamedNode::new_unchecked(format!("http://example.org/{root}")).into_term();
+            roots.push(shapes.owner.root(&id).unwrap());
+            if first.is_none() {
+                shapes.node_shapes.clear();
+                first = Some(shapes);
+            }
+        }
+        let purrdf_shapes::shapes::Target::Where(left) = &roots[0].targets[0] else {
+            unreachable!()
+        };
+        let purrdf_shapes::shapes::Target::Where(right) = &roots[1].targets[0] else {
+            unreachable!()
+        };
+        assert_eq!(
+            left.id, right.id,
+            "the owners must share a native blank spelling"
+        );
+        let mut shapes = first.unwrap();
+        shapes.node_shapes = roots;
+        let prepared = PreparedShapes::new(Arc::new(shapes));
+        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let restored = ShapesProduct::open(&bytes)
+            .unwrap()
+            .admit_with_options(&ShapesProfile::CORE, &HostBindings::empty(), &request)
+            .unwrap();
+        let data = parse_turtle_to_dataset(
+            "<http://example.org/a> <http://example.org/p> \"value\" .",
+            None,
+        )
+        .unwrap();
+        for model in [&prepared, &restored] {
+            let report = model.bind_dataset(&data).unwrap().validate().unwrap();
+            let mut rows: Vec<_> = report
+                .results
+                .iter()
+                .map(|r| (r.source_shape.to_string(), r.focus_node.to_string()))
+                .collect();
+            rows.sort();
+            assert_eq!(
+                rows,
+                vec![
+                    (
+                        "<http://example.org/Left>".to_owned(),
+                        "<http://example.org/a>".to_owned()
+                    ),
+                    (
+                        "<http://example.org/Right>".to_owned(),
+                        "\"value\"".to_owned()
+                    ),
+                ]
+            );
+        }
+        assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    }
+}
+
+/// RDF acquisition scopes survive both product admission and source rebuild.
+#[test]
+fn where_products_keep_equal_blank_labels_in_distinct_rdf_scopes() {
+    use purrdf_rdf::{BlankScope, RdfDatasetBuilder};
+    use purrdf_shapes::engine::ValidationOptions;
+    use purrdf_shapes::recursion::{RecursionOptions, RecursionSemantics};
+    let mut source = RdfDatasetBuilder::new();
+    let target = source
+        .intern_iri("http://www.w3.org/ns/shacl#targetWhere")
+        .unwrap();
+    let kind = source
+        .intern_iri("http://www.w3.org/ns/shacl#nodeKind")
+        .unwrap();
+    let not = source.intern_iri("http://www.w3.org/ns/shacl#not").unwrap();
+    for (root, scope, value) in [("Left", 4, "IRI"), ("Right", 5, "Literal")] {
+        let root = source
+            .intern_iri(&format!("http://example.org/{root}"))
+            .unwrap();
+        let blank = source.intern_blank("same", BlankScope(scope)).unwrap();
+        let value = source
+            .intern_iri(&format!("http://www.w3.org/ns/shacl#{value}"))
+            .unwrap();
+        source.push_quad(root, target, blank, None).unwrap();
+        source.push_quad(root, not, blank, None).unwrap();
+        source.push_quad(blank, kind, value, None).unwrap();
+    }
+    let source = source.freeze().unwrap();
+    for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+        let request = ValidationOptions::default().with_recursion(RecursionOptions {
+            semantics,
+            max_pairs: 4_096,
+            max_iterations: 4_096,
+        });
+        let shapes = purrdf_shapes::shapes::from_dataset_with_options(
+            &source,
+            None,
+            &[],
+            None,
+            None,
+            &purrdf_shapes::ShapesImports::new(),
+            &request,
+        )
+        .unwrap();
+        let prepared = PreparedShapes::new(Arc::new(shapes));
+        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        for (graph, iri, literal) in [
+            (
+                "<http://example.org/a> <http://example.org/p> \"value\" .",
+                "a",
+                "value",
+            ),
+            (
+                "<http://example.org/fresh> <http://example.org/q> \"other\" .",
+                "fresh",
+                "other",
+            ),
+        ] {
+            let data = parse_turtle_to_dataset(graph, None).unwrap();
+            let report = prepared.bind_dataset(&data).unwrap().validate().unwrap();
+            let mut rows: Vec<_> = report
+                .results
+                .iter()
+                .map(|result| {
+                    (
+                        result.source_shape.to_string(),
+                        result.focus_node.to_string(),
+                    )
+                })
+                .collect();
+            rows.sort();
+            assert_eq!(
+                rows,
+                vec![
+                    (
+                        "<http://example.org/Left>".to_owned(),
+                        format!("<http://example.org/{iri}>")
+                    ),
+                    (
+                        "<http://example.org/Right>".to_owned(),
+                        format!("\"{literal}\"")
+                    ),
+                ]
+            );
+            let expected = report.to_ntriples().unwrap();
+            for rebuild in [false, true] {
+                let product = ShapesProduct::open(&bytes).unwrap();
+                let restored = if rebuild {
+                    product.rebuild_with_options(
+                        &ShapesProfile::CORE,
+                        &HostBindings::empty(),
+                        &request,
+                    )
+                } else {
+                    product.admit_with_options(
+                        &ShapesProfile::CORE,
+                        &HostBindings::empty(),
+                        &request,
+                    )
+                }
+                .unwrap();
+                assert_eq!(
+                    restored
+                        .bind_dataset(&data)
+                        .unwrap()
+                        .validate()
+                        .unwrap()
+                        .to_ntriples()
+                        .unwrap(),
+                    expected
+                );
+                assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+            }
+        }
+    }
+}
