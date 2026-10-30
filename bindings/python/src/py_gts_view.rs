@@ -324,7 +324,7 @@ fn gts_relational_rows_from_bytes<'py>(
 ///
 /// The first pass discovers inline identities only. It is dropped before the
 /// scope-preserving importer verifies and retains their payloads. This eager
-/// convenience keeps the selected import's explicit 1024-blob/1-GiB bounds.
+/// convenience retains fixed per-blob and total byte ceilings.
 fn canonical_gts_source(
     data: &[u8],
 ) -> PyResult<(
