@@ -92,11 +92,11 @@ use purrdf_datalog::seminaive::{
 use purrdf_entail::reasoner::SchemaObstruction;
 use purrdf_entail::{
     ChaseProof, ClaimSubject, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
-    EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
-    Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Question,
-    Reasoner, ReasoningReport, Regime, RuleSet, Service, ServiceProof, VarKey, Verdict,
-    explain_conclusion, extensions, extract_module, extract_module_with_proofs, implemented,
-    justify, materialize_with_imports, parse_rif_xml, profile, resolve_imports, rules,
+    EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ExplanationSession, ImportMap,
+    Justification, Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate,
+    Question, Reasoner, ReasoningReport, Regime, RuleSet, Service, ServiceProof, VarKey, Verdict,
+    extensions, extract_module, extract_module_with_proofs, implemented, justify,
+    materialize_with_imports, parse_rif_xml, prepare_explanations, profile, resolve_imports, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -2191,6 +2191,10 @@ fn verdict_name(verdict: Verdict) -> &'static str {
 /// the expensive part and does not change between questions. This type holds it: [`open`]
 /// pays the parse once, the first knowledge-base service pays the reverse-mapping once,
 /// and every later question reuses both.
+/// Consecutive explanations with the same regime and exact graph selection also
+/// reuse one forward evaluation and proof index. Only the active selection is
+/// retained; a different selection replaces it after its first proof succeeds.
+/// A refused replacement leaves the preceding selection available.
 ///
 /// The free functions are thin wrappers over this type rather than a second
 /// implementation, so a session answer and a one-shot answer cannot drift apart.
@@ -2238,6 +2242,9 @@ pub struct ReasonerSession {
     /// certificate states `ontology-import-resolved` rather than the survey's
     /// `ontology-import-unresolved`, which is false of such a dataset.
     resolved_imports: bool,
+    /// One active chase selection over this immutable dataset. Replacement is
+    /// committed only after its first requested checked proof succeeds.
+    explanation: std::sync::Mutex<Option<ExplanationSession<'static>>>,
 }
 
 impl std::fmt::Debug for ReasonerSession {
@@ -2315,6 +2322,7 @@ impl ReasonerSession {
             reasoner: None,
             proofs,
             resolved_imports: false,
+            explanation: std::sync::Mutex::new(None),
         })
     }
 
@@ -2358,6 +2366,7 @@ impl ReasonerSession {
             reasoner: None,
             proofs,
             resolved_imports,
+            explanation: std::sync::Mutex::new(None),
         })
     }
 
@@ -2675,15 +2684,34 @@ impl ReasonerSession {
     ) -> Result<ReasoningAnswer, String> {
         let parsed = parse_regime(regime)?;
         let (graph, subject, predicate, object) = parse_one_statement(conclusion)?;
-        let proof = explain_conclusion(
-            &self.dataset,
-            parsed,
-            graph.as_ref(),
-            &subject,
-            &predicate,
-            &object,
-        )
-        .map_err(|error| format!("explain-conclusion: {error}"))?;
+        let proof = {
+            let mut active = self.explanation.lock().map_err(|_| {
+                "explain-conclusion: active explanation session lock is poisoned".to_owned()
+            })?;
+            // Native fixed rules, NoGuards and independent checking invoke no
+            // caller callback or session method while this guard is held.
+            let result = if let Some(session) = active
+                .as_ref()
+                .filter(|session| session.regime() == parsed && session.graph() == graph.as_ref())
+            {
+                session.explain(&subject, &predicate, &object)
+            } else {
+                prepare_explanations(
+                    &self.dataset,
+                    parsed,
+                    graph.as_ref(),
+                    &EvalOptions::default(),
+                    None,
+                )
+                .and_then(purrdf_entail::PreparedExplanations::into_session)
+                .and_then(|session| {
+                    let proof = session.explain(&subject, &predicate, &object)?;
+                    *active = Some(session);
+                    Ok(proof)
+                })
+            };
+            result.map_err(|error| format!("explain-conclusion: {error}"))?
+        };
         Ok(ReasoningAnswer {
             answer: render_chase_proof_answer(&proof),
             certificate: render_chase_proof_certificate(&proof),
@@ -6902,6 +6930,159 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
         let given = explain_conclusion_to_string(TAXONOMY, "owl-rl", asserted).expect("asserted");
         assert!(given.answer().starts_with("asserted true\n"));
         assert!(given.certificate().contains("\nchecked true\n"));
+    }
+
+    /// Repeated host queries reuse one preparation/index; replacing a graph or
+    /// regime preserves fresh certificates and never retains a refused selection.
+    #[test]
+    fn explanation_sessions_reuse_active_selection_and_release_replaced_sources() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_iri::vocab::rdf;
+
+        let document = format!(
+            "{SCHEMA}<http://example.org/n> <{}> <http://example.org/A> <http://example.org/g> .\n",
+            rdf::TYPE
+        );
+        let default = format!(
+            "<http://example.org/x> <{}> <http://example.org/C> .",
+            rdf::TYPE
+        );
+        let named = format!(
+            "<http://example.org/n> <{}> <http://example.org/C> <http://example.org/g> .",
+            rdf::TYPE
+        );
+        let absent = format!(
+            "<http://example.org/n> <{}> <http://example.org/C> <http://example.org/absent> .",
+            rdf::TYPE
+        );
+        let asserted = format!(
+            "<http://example.org/x> <{}> <http://example.org/A> .",
+            rdf::TYPE
+        );
+        let fresh = explain_conclusion_to_string(&document, "simple", &asserted).unwrap();
+        // Simple has no rule rounds or worker allocations. The native owning
+        // session fixture measures nonempty indexes under Sequential explicitly.
+        let lifetime = CurrentThreadWindow::open();
+        let session = ReasonerSession::open(&document, 1, 1).unwrap();
+        assert!(session.explanation.lock().unwrap().is_none());
+        let before = lifetime.sample();
+        let first = session.explain_conclusion("simple", &asserted).unwrap();
+        assert_eq!(first.answer(), fresh.answer());
+        assert_eq!(first.certificate(), fresh.certificate());
+        drop(first);
+        let prepared = lifetime.sample();
+        let index_work = session
+            .explanation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .preparation_work();
+        let mut measurements = [(0, 0); 3];
+        for (measurement, targets) in measurements.iter_mut().zip([1, 4, 16]) {
+            let start = lifetime.sample();
+            for _ in 0..targets {
+                let answer = session.explain_conclusion("simple", &asserted).unwrap();
+                assert_eq!(answer.answer(), fresh.answer());
+                assert_eq!(answer.certificate(), fresh.certificate());
+            }
+            let finish = lifetime.sample();
+            assert_eq!(finish.retained_bytes, start.retained_bytes);
+            *measurement = (
+                finish.allocations - start.allocations,
+                finish.requested_bytes - start.requested_bytes,
+            );
+            assert_eq!(
+                session
+                    .explanation
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .preparation_work(),
+                index_work
+            );
+        }
+        assert!(prepared.allocations - before.allocations > measurements[0].0);
+        assert!(prepared.requested_bytes - before.requested_bytes > measurements[0].1);
+        for pair in measurements.windows(2) {
+            assert_eq!(pair[1].0, pair[0].0 * 4);
+            assert_eq!(pair[1].1, pair[0].1 * 4);
+        }
+        drop(session);
+        let released = lifetime.close();
+        assert_eq!(released.retained_bytes, 0);
+        eprintln!(
+            "shared Simple index={index_work:?}; first-query allocations={}, requested bytes={}; total peak bytes={}; repeated-query (allocations, bytes)={measurements:?}",
+            prepared.allocations - before.allocations,
+            prepared.requested_bytes - before.requested_bytes,
+            released.peak_working_bytes
+        );
+
+        let session = ReasonerSession::open(&document, 1, 1).unwrap();
+        drop(session.explain_conclusion("owl-rl", &default).unwrap());
+        let index_work = session
+            .explanation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .preparation_work();
+        for (regime, conclusion, reason) in [
+            ("owl-rl", absent.as_str(), "no derivation"),
+            ("rdf", default.as_str(), "existential"),
+            ("owl-rl", "", "not one N-Quads statement"),
+            ("unknown", "", "unknown entailment regime"),
+        ] {
+            let error = session.explain_conclusion(regime, conclusion).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+            let active = session.explanation.lock().unwrap();
+            let active = active.as_ref().unwrap();
+            assert_eq!(active.regime(), Regime::OwlRl);
+            assert!(active.graph().is_none());
+            assert_eq!(active.preparation_work(), index_work);
+        }
+        for (regime, conclusion) in [
+            ("owl-rl", named.as_str()),
+            ("rdfs", named.as_str()),
+            ("owl-rl", default.as_str()),
+            ("rdfs", default.as_str()),
+            ("owl-rl", named.as_str()),
+        ] {
+            let expected = explain_conclusion_to_string(&document, regime, conclusion).unwrap();
+            let answer = session.explain_conclusion(regime, conclusion).unwrap();
+            assert_eq!(answer.answer(), expected.answer());
+            assert_eq!(answer.certificate(), expected.certificate());
+            let active = session.explanation.lock().unwrap();
+            let active = active.as_ref().unwrap();
+            assert_eq!(active.regime(), parse_regime(regime).unwrap());
+            assert_eq!(
+                active.graph(),
+                parse_one_statement(conclusion).unwrap().0.as_ref()
+            );
+        }
+        assert!(
+            session.reasoner.is_none(),
+            "chase queries never build the DL knowledge base"
+        );
+        drop(session);
+
+        let poisoned = ReasonerSession::open(&document, 0, 0).unwrap();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poisoned.explanation.lock().unwrap();
+            panic!("synthetic explanation lock poison");
+        }));
+        assert!(panic.is_err());
+        assert!(
+            poisoned
+                .explain_conclusion("unknown", "")
+                .unwrap_err()
+                .starts_with("unknown entailment regime")
+        );
+        assert_eq!(
+            poisoned.explain_conclusion("owl-rl", &default).unwrap_err(),
+            "explain-conclusion: active explanation session lock is poisoned"
+        );
     }
 
     /// The existential refusal is per CONCLUSION, not per regime — and an

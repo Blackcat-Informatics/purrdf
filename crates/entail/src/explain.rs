@@ -72,6 +72,7 @@
 //! through ordered sets throughout. Two runs over one input produce byte-identical digests,
 //! on native targets and on `wasm32` alike.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -605,7 +606,8 @@ pub fn prepare_explanations(
         program,
         attribution,
         seeded,
-        evaluation,
+        evaluation: Shared::try_new(evaluation)
+            .map_err(|_| EntailError::from(StorageError::AllocationFailed))?,
         regime,
         graph: graph.cloned(),
         existential_present,
@@ -619,7 +621,7 @@ struct ExplanationContext {
     program: Vec<DlClause>,
     attribution: Vec<ChaseRule>,
     seeded: RelationStore,
-    evaluation: Evaluation,
+    evaluation: Shared<Evaluation>,
     regime: Regime,
     graph: Option<TermValue>,
     existential_present: bool,
@@ -666,13 +668,29 @@ impl PreparedExplanations {
     /// Preserves the native index allocation or recording refusal.
     pub fn session(&self) -> Result<ExplanationSession<'_>, ExplainError> {
         Ok(ExplanationSession {
-            prepared: self,
+            prepared: Cow::Borrowed(self),
             proofs: EvaluationProofIndex::of(&self.context.evaluation).map_err(proof_error)?,
+        })
+    }
+
+    /// Own this immutable preparation and one reusable resident proof index.
+    /// The session has no borrow of this handle or of the original source dataset.
+    /// # Errors
+    /// Preserves shared-owner overflow and native index allocation/recording refusals.
+    pub fn into_session(self) -> Result<ExplanationSession<'static>, ExplainError> {
+        let evaluation = self
+            .context
+            .evaluation
+            .try_clone()
+            .map_err(|_| EntailError::from(StorageError::SizeOverflow))?;
+        Ok(ExplanationSession {
+            proofs: EvaluationProofIndex::of_shared(evaluation).map_err(proof_error)?,
+            prepared: Cow::Owned(self),
         })
     }
 }
 
-/// A borrowed immutable snapshot and its one reusable resident derivation index.
+/// An immutable snapshot, borrowed or owned, and one reusable resident derivation index.
 ///
 /// Index and returned proof arenas retain their existing resident allocation
 /// contracts. Each query still checks its proof and performs the existing
@@ -681,11 +699,23 @@ impl PreparedExplanations {
 /// the whole explanation operation scales only with its requested subtree.
 #[derive(Debug)]
 pub struct ExplanationSession<'a> {
-    prepared: &'a PreparedExplanations,
+    prepared: Cow<'a, PreparedExplanations>,
     proofs: EvaluationProofIndex<'a>,
 }
 
 impl ExplanationSession<'_> {
+    /// The exact regime retained by this session.
+    #[must_use]
+    pub fn regime(&self) -> Regime {
+        self.prepared.regime()
+    }
+
+    /// The original graph selection, including its term scope.
+    #[must_use]
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.prepared.graph()
+    }
+
     /// Actual work of building this session's index once.
     #[must_use]
     pub fn preparation_work(&self) -> ProofIndexWork {
@@ -764,7 +794,11 @@ impl ExplanationSession<'_> {
         let backward = confirm_backward(context.regime, &context.program, &context.seeded, &goal)?;
 
         let proof = ChaseProof {
-            context: self.prepared.context.clone(),
+            context: self
+                .prepared
+                .context
+                .try_clone()
+                .map_err(|_| EntailError::from(StorageError::SizeOverflow))?,
             conclusion: (subject.clone(), predicate.clone(), object.clone()),
             arena,
             root,
@@ -1536,8 +1570,18 @@ mod tests {
         assert_eq!(retained[0].encode(), retained[3].encode());
         drop(eager);
         drop(session);
-        drop(prepared);
+        let owned = prepared.into_session().unwrap();
         drop(source);
+        let proof = owned
+            .explain(
+                &TermValue::iri(TOM),
+                &TermValue::iri(TYPE),
+                &TermValue::iri(ANIMAL),
+            )
+            .unwrap();
+        assert_eq!(proof.encode(), retained[0].encode());
+        retained.push(proof);
+        drop(owned);
         for proof in &retained {
             assert!(proof.check().is_ok());
             assert_eq!(proof.context.strong_count(), retained.len());
@@ -1626,7 +1670,7 @@ mod tests {
             let lifetime = CurrentThreadWindow::open();
             let prepared = prepare_explanations(&source, regime, None, &options, None).unwrap();
             let forward_work = prepared.work();
-            let session = prepared.session().unwrap();
+            let session = prepared.clone().into_session().unwrap();
             let index_work = session.preparation_work();
             let mut prior = None;
             for (measurement, targets) in measurements.iter_mut().zip([1, 4, 16]) {
