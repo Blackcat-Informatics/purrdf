@@ -687,7 +687,7 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
     }
     fn constraint(&mut self, constraint: &'a Constraint) -> Result<(), WalkError> {
         if let Constraint::Expression { expr, .. } = constraint
-            && let Some(target) = super::closed::named_conformance(expr, self.owner)
+            && let Some(target) = super::closed::original_conformance(expr, self.owner)
         {
             // `sh:this` is the current value-node focus, independently of the
             // valuation. The expression is true exactly when this original
