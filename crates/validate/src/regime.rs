@@ -2710,6 +2710,7 @@ impl ReasonerSession {
                     Ok(proof)
                 })
             };
+            drop(active);
             result.map_err(|error| format!("explain-conclusion: {error}"))?
         };
         Ok(ReasoningAnswer {
