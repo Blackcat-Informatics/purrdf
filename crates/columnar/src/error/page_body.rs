@@ -30,6 +30,17 @@ pub enum PageBodyReason {
         /// Declared plain value-body byte count.
         expected: usize,
     },
+    /// Declared PLAIN bytes cannot encode the page's present-value count.
+    Cardinality {
+        /// Original declared uncompressed value-body bytes.
+        declared: usize,
+        /// Bytes required by the physical value count.
+        required: usize,
+        /// Original physical value type.
+        physical_type: crate::PhysicalType,
+        /// Original number of present values.
+        present: usize,
+    },
     /// Successful decompression produced a different length from its declaration.
     DecodedSize {
         /// Original successful decoder output byte count.
@@ -61,6 +72,9 @@ impl purrdf_hash::error::StructuredError for PageBodyReason {
         PlainSize { actual, expected } => "columnar-plain-size" {
             "actual" => ByteCount(*actual as u128), "expected" => ByteCount(*expected as u128),
         },
+        Cardinality { declared, required, physical_type, present } => "columnar-plain-cardinality" {
+            "declared" => ByteCount(*declared as u128), "required" => ByteCount(*required as u128), "physical_type" => Code(match physical_type { crate::PhysicalType::Int64 => "int64", crate::PhysicalType::ByteArray => "byte-array" }), "present" => Unsigned(*present as u128),
+        },
         DecodedSize { actual, expected } => "columnar-decoded-size" {
             "actual" => ByteCount(*actual as u128), "expected" => ByteCount(*expected as u128),
         },
@@ -82,6 +96,22 @@ impl fmt::Display for PageBodyReason {
             }
             Self::PlainSize { actual, expected } => {
                 write!(output, "has {actual} bytes, expected {expected}")
+            }
+            Self::Cardinality {
+                declared,
+                required,
+                physical_type,
+                present,
+            } => {
+                let relation = if *physical_type == crate::PhysicalType::Int64 || *present == 0 {
+                    "exactly"
+                } else {
+                    "at least"
+                };
+                write!(
+                    output,
+                    "declares {declared} value bytes, requires {relation} {required}"
+                )
             }
             Self::DecodedSize { actual, expected } => {
                 write!(output, "decoded {actual} bytes, expected {expected}")

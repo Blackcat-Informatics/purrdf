@@ -26,7 +26,6 @@ pub(crate) const TYPE_SET: u8 = 10;
 pub(crate) const TYPE_MAP: u8 = 11;
 pub(crate) const TYPE_STRUCT: u8 = 12;
 
-const MAX_METADATA_COLLECTION_ITEMS: usize = 1_024;
 const MAX_SKIP_DEPTH: usize = 64;
 
 #[derive(Debug, Default)]
@@ -425,11 +424,11 @@ impl<'a> CompactReader<'a> {
         let len = usize::try_from(value).map_err(|cause| {
             ColumnarError::compact(context, CompactReason::CollectionLength { value, cause })
         })?;
-        if len > MAX_METADATA_COLLECTION_ITEMS {
-            return Err(ColumnarError::limit(
+        if len > self.bytes.len() - self.pos {
+            return Err(ColumnarError::truncated(
                 context,
                 len,
-                MAX_METADATA_COLLECTION_ITEMS,
+                self.bytes.len() - self.pos,
             ));
         }
         Ok(len)
@@ -585,14 +584,14 @@ mod tests {
         ));
 
         let mut oversized = vec![0x19, 0xf5];
-        write_varint(&mut oversized, (MAX_METADATA_COLLECTION_ITEMS + 1) as u64);
+        write_varint(&mut oversized, 1_025);
         oversized.push(TYPE_STOP);
         let mut reader = CompactReader::new(&oversized);
         let mut root = StructState::default();
         let field = reader.next_field(&mut root).unwrap().unwrap();
         assert!(matches!(
             reader.read_list_i32(field),
-            Err(ColumnarError::LimitExceeded { .. })
+            Err(ColumnarError::Truncated { .. })
         ));
     }
 }

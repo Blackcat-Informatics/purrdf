@@ -10,10 +10,11 @@ use purrdf_core::{
     ContentStore, DatasetView, LossLedger, QuadIds, RdfTextDirection, TermRef, TermValue,
 };
 
+use crate::ProjectionCell;
 use crate::column::Int64Column;
 use crate::error::{ColumnarError, ColumnarWriteError, ProjectionReason};
 use crate::files::ParquetFiles;
-use crate::parquet::{ColumnValues, Compression, TableData};
+use crate::parquet::{ColumnValues, Compression, TableData, write_rows};
 use crate::schema::Table;
 
 type QuadRow = (i64, i64, i64, Option<i64>);
@@ -49,17 +50,26 @@ pub fn write<D: DatasetView>(
     blobs: &ContentStore,
     compression: Compression,
 ) -> Result<ColumnarWrite, ColumnarWriteError<D::ReadError>> {
-    project(view, blobs)?
-        .to_parquet(compression)
-        .map_err(Into::into)
+    view.checked_read(|view| {
+        let prepared = prepare(view, blobs)?;
+        let mut files = std::array::from_fn(|_| Vec::new());
+        for (file, table) in files.iter_mut().zip(Table::ALL) {
+            *file = write_rows(table, prepared.rows(table), compression)?;
+        }
+        Ok(ColumnarWrite {
+            files: ParquetFiles::from_array(files),
+            losses: LossLedger::default(),
+        })
+    })
+    .map_err(ColumnarWriteError::SourceRead)?
 }
 
 /// Project an RDF view into the authoritative five-table schema.
 ///
 /// This is the same canonical projection the Parquet writer uses. Relational
 /// hosts insert these rows directly rather than assigning their own term ids.
-/// The eager projection retains all rows and is subject to the native v1 table
-/// bounds; it is not an external-memory construction API.
+/// The eager projection retains all rows; physical addressability still applies.
+/// File writes consume the same canonical rows without materializing these columns.
 ///
 /// # Errors
 ///
@@ -69,30 +79,44 @@ pub fn project<D: DatasetView>(
     view: &D,
     blobs: &ContentStore,
 ) -> Result<crate::projection::ColumnarProjection, ColumnarWriteError<D::ReadError>> {
-    view.checked_read(|view| project_read(view, blobs))
-        .map_err(ColumnarWriteError::SourceRead)?
+    view.checked_read(|view| {
+        let prepared = prepare(view, blobs)?;
+        let mut tables = Vec::new();
+        for table in Table::ALL {
+            tables.push(materialize(table, prepared.rows(table))?);
+        }
+        Ok(crate::projection::ColumnarProjection::from_tables(
+            tables.try_into().expect("five schema tables"),
+        ))
+    })
+    .map_err(ColumnarWriteError::SourceRead)?
 }
 
-/// Build fixed-schema tables inside the completed-read boundary, retaining native causes.
-fn project_read<D: DatasetView>(
+fn prepare<'a, D: DatasetView>(
     view: &D,
-    blobs: &ContentStore,
-) -> Result<crate::projection::ColumnarProjection, ColumnarWriteError<D::ReadError>> {
+    blobs: &'a ContentStore,
+) -> Result<Prepared<'a>, ColumnarWriteError<D::ReadError>> {
     blobs.verify_all().map_err(ColumnarError::ContentStore)?;
-
     let source = SourceRows::collect(view);
     let mut resolver = Resolver::new(view);
     source.resolve_all(&mut resolver)?;
     let dictionary = Dictionary::build(&resolver, &source.named_graphs)?;
-
-    let tables = [
-        build_terms_table(&dictionary)?,
-        build_quads_table(&source, &resolver, &dictionary)?,
-        build_reifiers_table(&source, &resolver, &dictionary)?,
-        build_annotations_table(&source, &resolver, &dictionary)?,
-        build_blobs_table(blobs)?,
-    ];
-    Ok(crate::projection::ColumnarProjection::from_tables(tables))
+    let quads = quad_rows(&source.quads, &resolver, &dictionary)?;
+    let annotations = quad_rows(&source.annotations, &resolver, &dictionary)?;
+    let reifiers = reifier_rows(&source, &resolver, &dictionary)?;
+    let mut blob_rows: Vec<_> = blobs.iter().collect();
+    blob_rows.sort_unstable_by_key(|(digest, _)| **digest);
+    let blobs = blob_rows
+        .into_iter()
+        .map(|(digest, payload)| (digest.to_hex(), payload.as_slice()))
+        .collect();
+    Ok(Prepared {
+        dictionary,
+        quads,
+        reifiers,
+        annotations,
+        blobs,
+    })
 }
 
 #[derive(Debug)]
@@ -323,13 +347,6 @@ impl Dictionary {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        if terms.len() > i32::MAX as usize {
-            return Err(ColumnarError::limit(
-                "term dictionary",
-                terms.len(),
-                i32::MAX as usize,
-            ));
-        }
         let mut ids = BTreeMap::new();
         for (index, term) in terms.iter().enumerate() {
             let id = i64::try_from(index)
@@ -370,75 +387,85 @@ impl Dictionary {
     }
 }
 
-fn build_terms_table(dictionary: &Dictionary) -> Result<TableData, ColumnarError> {
-    let capacity = dictionary.terms.len();
-    let mut ids = Int64Column::with_capacity(capacity);
-    let mut kinds = Int64Column::with_capacity(capacity);
-    let mut lex = Vec::with_capacity(capacity);
-    let mut datatypes = Int64Column::with_capacity(capacity);
-    let mut languages = Vec::with_capacity(capacity);
-    let mut directions = Int64Column::with_capacity(capacity);
-    let mut scopes = Int64Column::with_capacity(capacity);
-    let mut triple_subjects = Int64Column::with_capacity(capacity);
-    let mut triple_predicates = Int64Column::with_capacity(capacity);
-    let mut triple_objects = Int64Column::with_capacity(capacity);
-    let mut named_graphs = Int64Column::with_capacity(capacity);
-
-    for (index, term) in dictionary.terms.iter().enumerate() {
-        ids.push(Some(index as i64));
-        append_term_columns(
-            dictionary,
-            term,
-            &mut kinds,
-            &mut lex,
-            &mut datatypes,
-            &mut languages,
-            &mut directions,
-            &mut scopes,
-            &mut triple_subjects,
-            &mut triple_predicates,
-            &mut triple_objects,
-        )?;
-        named_graphs.push(Some(i64::from(dictionary.named_graphs.contains(term))));
-    }
-
-    TableData::new(
-        Table::Terms,
-        vec![
-            ColumnValues::int64(ids),
-            ColumnValues::int64(kinds),
-            ColumnValues::bytes(lex),
-            ColumnValues::int64(datatypes),
-            ColumnValues::bytes(languages),
-            ColumnValues::int64(directions),
-            ColumnValues::int64(scopes),
-            ColumnValues::int64(triple_subjects),
-            ColumnValues::int64(triple_predicates),
-            ColumnValues::int64(triple_objects),
-            ColumnValues::int64(named_graphs),
-        ],
-    )
+struct Prepared<'a> {
+    dictionary: Dictionary,
+    quads: BTreeSet<QuadRow>,
+    reifiers: BTreeSet<ReifierRow>,
+    annotations: BTreeSet<QuadRow>,
+    blobs: Vec<(String, &'a [u8])>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn append_term_columns(
+impl Prepared<'_> {
+    fn rows(
+        &self,
+        table: Table,
+    ) -> Box<
+        dyn Iterator<Item = Result<purrdf_core::SmallVec<[ProjectionCell<'_>; 11]>, ColumnarError>>
+            + '_,
+    > {
+        use ProjectionCell::{Bytes, Int64};
+        match table {
+            Table::Terms => Box::new(
+                self.dictionary
+                    .terms
+                    .iter()
+                    .enumerate()
+                    .map(|(id, term)| term_row(&self.dictionary, id, term)),
+            ),
+            Table::Quads | Table::Annotations => {
+                let rows = if table == Table::Quads {
+                    &self.quads
+                } else {
+                    &self.annotations
+                };
+                Box::new(rows.iter().map(|&(s, p, o, g)| {
+                    Ok(purrdf_core::smallvec![
+                        Int64(s),
+                        Int64(p),
+                        Int64(o),
+                        optional(g)
+                    ])
+                }))
+            }
+            Table::Reifiers => Box::new(self.reifiers.iter().map(|&(r, s, p, o, g)| {
+                Ok(purrdf_core::smallvec![
+                    Int64(r),
+                    Int64(s),
+                    Int64(p),
+                    Int64(o),
+                    optional(g)
+                ])
+            })),
+            Table::Blobs => Box::new(self.blobs.iter().map(|(digest, payload)| {
+                Ok(purrdf_core::smallvec![
+                    Bytes(digest.as_bytes()),
+                    Bytes(payload)
+                ])
+            })),
+        }
+    }
+}
+
+fn optional(value: Option<i64>) -> ProjectionCell<'static> {
+    value.map_or(ProjectionCell::Null, ProjectionCell::Int64)
+}
+
+fn term_row<'a>(
     dictionary: &Dictionary,
-    term: &TermValue,
-    kinds: &mut Int64Column,
-    lex: &mut Vec<Option<Vec<u8>>>,
-    datatypes: &mut Int64Column,
-    languages: &mut Vec<Option<Vec<u8>>>,
-    directions: &mut Int64Column,
-    scopes: &mut Int64Column,
-    triple_subjects: &mut Int64Column,
-    triple_predicates: &mut Int64Column,
-    triple_objects: &mut Int64Column,
-) -> Result<(), ColumnarError> {
-    let mut row = TermColumns::default();
+    index: usize,
+    term: &'a TermValue,
+) -> Result<purrdf_core::SmallVec<[ProjectionCell<'a>; 11]>, ColumnarError> {
+    use ProjectionCell::{Bytes, Int64, Null};
+    let mut row: purrdf_core::SmallVec<[_; 11]> = purrdf_core::smallvec![Null; 11];
+    row[0] = Int64(
+        i64::try_from(index)
+            .map_err(|_| ColumnarError::limit("term id", index, i64::MAX as usize))?,
+    );
+    row[10] = Int64(i64::from(dictionary.named_graphs.contains(term)));
     match term {
         TermValue::Iri(iri) => {
-            row.kind = 0;
-            row.lex = Some(iri.as_bytes().to_vec());
+            row[1] = Int64(0);
+            row[2] = Bytes(iri.as_bytes());
         }
         TermValue::Literal {
             lexical_form,
@@ -446,47 +473,27 @@ fn append_term_columns(
             language,
             direction,
         } => {
-            row.kind = 1;
-            row.lex = Some(lexical_form.as_bytes().to_vec());
-            row.datatype = Some(dictionary.id(&TermValue::Iri(datatype.clone()))?);
-            row.language = language.as_ref().map(|value| value.as_bytes().to_vec());
-            row.direction = direction.map(direction_id);
+            row[1] = Int64(1);
+            row[2] = Bytes(lexical_form.as_bytes());
+            row[3] = Int64(dictionary.id(&TermValue::Iri(datatype.clone()))?);
+            row[4] = language
+                .as_ref()
+                .map_or(Null, |value| Bytes(value.as_bytes()));
+            row[5] = optional(direction.map(direction_id));
         }
         TermValue::Blank { label, scope } => {
-            row.kind = 2;
-            row.lex = Some(label.as_bytes().to_vec());
-            row.scope = Some(i64::from(scope.ordinal()));
+            row[1] = Int64(2);
+            row[2] = Bytes(label.as_bytes());
+            row[6] = Int64(i64::from(scope.ordinal()));
         }
         TermValue::Triple { s, p, o } => {
-            row.kind = 3;
-            row.triple_s = Some(dictionary.id(s)?);
-            row.triple_p = Some(dictionary.id(p)?);
-            row.triple_o = Some(dictionary.id(o)?);
+            row[1] = Int64(3);
+            row[7] = Int64(dictionary.id(s)?);
+            row[8] = Int64(dictionary.id(p)?);
+            row[9] = Int64(dictionary.id(o)?);
         }
     }
-    kinds.push(Some(row.kind));
-    lex.push(row.lex);
-    datatypes.push(row.datatype);
-    languages.push(row.language);
-    directions.push(row.direction);
-    scopes.push(row.scope);
-    triple_subjects.push(row.triple_s);
-    triple_predicates.push(row.triple_p);
-    triple_objects.push(row.triple_o);
-    Ok(())
-}
-
-#[derive(Default)]
-struct TermColumns {
-    kind: i64,
-    lex: Option<Vec<u8>>,
-    datatype: Option<i64>,
-    language: Option<Vec<u8>>,
-    direction: Option<i64>,
-    scope: Option<i64>,
-    triple_s: Option<i64>,
-    triple_p: Option<i64>,
-    triple_o: Option<i64>,
+    Ok(row)
 }
 
 const fn direction_id(direction: RdfTextDirection) -> i64 {
@@ -496,32 +503,12 @@ const fn direction_id(direction: RdfTextDirection) -> i64 {
     }
 }
 
-fn build_quads_table<D: DatasetView>(
+fn reifier_rows<D: DatasetView>(
     source: &SourceRows<D::Id>,
     resolver: &Resolver<'_, D>,
     dictionary: &Dictionary,
-) -> Result<TableData, ColumnarError> {
-    let rows = source
-        .quads
-        .iter()
-        .map(|quad| {
-            Ok((
-                dictionary.source_id(resolver, quad.s)?,
-                dictionary.source_id(resolver, quad.p)?,
-                dictionary.source_id(resolver, quad.o)?,
-                dictionary.graph_id(resolver, quad.g)?,
-            ))
-        })
-        .collect::<Result<BTreeSet<_>, ColumnarError>>()?;
-    table_from_quad_rows(Table::Quads, rows)
-}
-
-fn build_reifiers_table<D: DatasetView>(
-    source: &SourceRows<D::Id>,
-    resolver: &Resolver<'_, D>,
-    dictionary: &Dictionary,
-) -> Result<TableData, ColumnarError> {
-    let mut rows = BTreeSet::new();
+) -> Result<BTreeSet<ReifierRow>, ColumnarError> {
+    let mut reifiers = BTreeSet::new();
     for quad in &source.reifiers {
         let TermValue::Triple { s, p, o } = resolver.get(quad.o)? else {
             return Err(ColumnarError::projection(
@@ -529,7 +516,7 @@ fn build_reifiers_table<D: DatasetView>(
                 ProjectionReason::ReifierObject,
             ));
         };
-        rows.insert((
+        reifiers.insert((
             dictionary.source_id(resolver, quad.s)?,
             dictionary.id(s)?,
             dictionary.id(p)?,
@@ -537,16 +524,15 @@ fn build_reifiers_table<D: DatasetView>(
             dictionary.graph_id(resolver, quad.g)?,
         ));
     }
-    table_from_reifier_rows(rows)
+    Ok(reifiers)
 }
 
-fn build_annotations_table<D: DatasetView>(
-    source: &SourceRows<D::Id>,
+fn quad_rows<D: DatasetView>(
+    source: &[QuadIds<D::Id>],
     resolver: &Resolver<'_, D>,
     dictionary: &Dictionary,
-) -> Result<TableData, ColumnarError> {
-    let rows = source
-        .annotations
+) -> Result<BTreeSet<QuadRow>, ColumnarError> {
+    source
         .iter()
         .map(|quad| {
             Ok((
@@ -556,70 +542,39 @@ fn build_annotations_table<D: DatasetView>(
                 dictionary.graph_id(resolver, quad.g)?,
             ))
         })
-        .collect::<Result<BTreeSet<_>, ColumnarError>>()?;
-    table_from_quad_rows(Table::Annotations, rows)
+        .collect()
 }
 
-fn table_from_quad_rows(table: Table, rows: BTreeSet<QuadRow>) -> Result<TableData, ColumnarError> {
-    let mut first = Int64Column::with_capacity(rows.len());
-    let mut second = Int64Column::with_capacity(rows.len());
-    let mut third = Int64Column::with_capacity(rows.len());
-    let mut graphs = Int64Column::with_capacity(rows.len());
-    for (a, b, c, graph) in rows {
-        first.push(Some(a));
-        second.push(Some(b));
-        third.push(Some(c));
-        graphs.push(graph);
+/// The explicitly eager relational API owns cells; the file path above borrows them.
+fn materialize<'a>(
+    table: Table,
+    rows: impl Iterator<Item = Result<purrdf_core::SmallVec<[ProjectionCell<'a>; 11]>, ColumnarError>>,
+) -> Result<TableData, ColumnarError> {
+    let mut columns: Vec<_> = table
+        .schema()
+        .columns
+        .iter()
+        .map(|column| match column.physical_type {
+            crate::PhysicalType::Int64 => ColumnValues::int64(Int64Column::default()),
+            crate::PhysicalType::ByteArray => ColumnValues::bytes(Vec::new()),
+        })
+        .collect();
+    for row in rows {
+        for (column, cell) in columns.iter_mut().zip(row?) {
+            match (column, cell) {
+                (ColumnValues::Int64(values), ProjectionCell::Int64(value)) => {
+                    values.push(Some(value));
+                }
+                (ColumnValues::Int64(values), ProjectionCell::Null) => values.push(None),
+                (ColumnValues::ByteArray(values), ProjectionCell::Bytes(value)) => {
+                    values.push(Some(value.to_vec()));
+                }
+                (ColumnValues::ByteArray(values), ProjectionCell::Null) => values.push(None),
+                _ => unreachable!("canonical rows match the schema"),
+            }
+        }
     }
-    TableData::new(
-        table,
-        vec![
-            ColumnValues::int64(first),
-            ColumnValues::int64(second),
-            ColumnValues::int64(third),
-            ColumnValues::int64(graphs),
-        ],
-    )
-}
-
-fn table_from_reifier_rows(rows: BTreeSet<ReifierRow>) -> Result<TableData, ColumnarError> {
-    let mut reifiers = Int64Column::with_capacity(rows.len());
-    let mut subjects = Int64Column::with_capacity(rows.len());
-    let mut predicates = Int64Column::with_capacity(rows.len());
-    let mut objects = Int64Column::with_capacity(rows.len());
-    let mut graphs = Int64Column::with_capacity(rows.len());
-    for (reifier, subject, predicate, object, graph) in rows {
-        reifiers.push(Some(reifier));
-        subjects.push(Some(subject));
-        predicates.push(Some(predicate));
-        objects.push(Some(object));
-        graphs.push(graph);
-    }
-    TableData::new(
-        Table::Reifiers,
-        vec![
-            ColumnValues::int64(reifiers),
-            ColumnValues::int64(subjects),
-            ColumnValues::int64(predicates),
-            ColumnValues::int64(objects),
-            ColumnValues::int64(graphs),
-        ],
-    )
-}
-
-fn build_blobs_table(blobs: &ContentStore) -> Result<TableData, ColumnarError> {
-    let mut rows: Vec<_> = blobs.iter().collect();
-    rows.sort_unstable_by_key(|(digest, _)| **digest);
-    let mut digests = Vec::with_capacity(rows.len());
-    let mut bytes = Vec::with_capacity(rows.len());
-    for (digest, payload) in rows {
-        digests.push(Some(digest.to_hex().into_bytes()));
-        bytes.push(Some(payload.clone()));
-    }
-    TableData::new(
-        Table::Blobs,
-        vec![ColumnValues::bytes(digests), ColumnValues::bytes(bytes)],
-    )
+    TableData::new(table, columns)
 }
 
 #[cfg(test)]
@@ -741,7 +696,7 @@ mod tests {
                 0 => cyclic.resolve(id).unwrap_err(),
                 1 => empty.get(id).unwrap_err().into(),
                 2 => dictionary.id(&missing).unwrap_err().into(),
-                3 => build_reifiers_table(&reifier, &nontriple, &dictionary)
+                3 => reifier_rows(&reifier, &nontriple, &dictionary)
                     .unwrap_err()
                     .into(),
                 _ => unreachable!("each fixture names one production refusal"),
