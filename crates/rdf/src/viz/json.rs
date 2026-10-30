@@ -481,6 +481,12 @@ purrdf_lex::json_string_enum!(VizElementKind {
     Legend => "legend",
     LegendEntry => "legendEntry",
     LegendLabel => "legendLabel",
+    PresentationFrame => "presentationFrame",
+    PresentationFrameLabel => "presentationFrameLabel",
+    BoundaryPort => "boundaryPort",
+    Lifeline => "lifeline",
+    Navigation => "navigation",
+    DetailHeading => "detailHeading",
 });
 
 purrdf_lex::json_string_enum!(VizSceneNodeKind {

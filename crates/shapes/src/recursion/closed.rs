@@ -9,7 +9,8 @@ use crate::shapes::{
     link::{ShapeIndex, ShapeIndexRef},
 };
 use crate::term::Term;
-use purrdf_lex::allocation::{Shared, StorageError};
+use purrdf_lex::allocation::{Memory, Resident, Shared, StorageError};
+use purrdf_lex::walk::WorkList;
 use std::sync::{Arc, Weak};
 
 struct Fields {
@@ -118,17 +119,91 @@ pub(crate) struct ClosedProof(pub(super) ());
 pub(crate) fn original_conformance<'a>(
     expression: &'a NodeExpr,
     owner: Option<&Arc<ModelOwner>>,
-) -> Option<&'a crate::shapes::Shape> {
+) -> Result<Option<&'a crate::shapes::Shape>, crate::error::ShapesError> {
     let NodeExpr::ConformsToShape {
         node,
         shape: ShapeArg::Named(shape),
     } = expression
     else {
-        return None;
+        return Ok(None);
     };
-    matches!(node.as_ref(), NodeExpr::This)
-        .then(|| original_reference(shape, owner))
-        .flatten()
+    let Some(target) = original_reference(shape, owner) else {
+        return Ok(None);
+    };
+    Ok(pure_focus(node)?.then_some(target))
+}
+
+/// Check every child, independently of which branch a particular focus takes.
+/// Depth includes the enclosing conformance expression, just as evaluation does.
+fn pure_focus(expression: &NodeExpr) -> Result<bool, crate::error::ShapesError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut pending: WorkList<(&NodeExpr, u32), 8> = WorkList::new();
+    pending.try_push_admitted((expression, 2), &mut memory)?;
+    while let Some((expression, depth)) = pending.pop() {
+        if depth > crate::expression::MAX_NODE_EXPR_DEPTH {
+            return Err(crate::error::ProcessorFailure::ExpressionDepth {
+                depth,
+                limit: crate::expression::MAX_NODE_EXPR_DEPTH,
+            }
+            .into());
+        }
+        let mut child =
+            |expression| pending.try_push_admitted((expression, depth + 1), &mut memory);
+        match expression {
+            NodeExpr::Constant(_)
+            | NodeExpr::This
+            | NodeExpr::Path(_)
+            | NodeExpr::Empty
+            | NodeExpr::Var(_)
+            | NodeExpr::List(_) => {}
+            NodeExpr::Union(operands)
+            | NodeExpr::Intersection(operands)
+            | NodeExpr::Concat(operands) => {
+                for operand in operands {
+                    child(operand)?;
+                }
+            }
+            NodeExpr::If { cond, then, els } => {
+                child(cond.as_ref())?;
+                child(then.as_ref())?;
+                child(els.as_ref())?;
+            }
+            NodeExpr::Count { of, .. }
+            | NodeExpr::Distinct(of)
+            | NodeExpr::Min(of)
+            | NodeExpr::Max(of)
+            | NodeExpr::Sum(of)
+            | NodeExpr::Limit { of, .. }
+            | NodeExpr::Offset { of, .. }
+            | NodeExpr::Exists(of)
+            | NodeExpr::InstancesOf(of) => child(of.as_ref())?,
+            NodeExpr::OrderBy { of, key, .. } => {
+                child(of.as_ref())?;
+                child(key.as_ref())?;
+            }
+            NodeExpr::PathValues { focus, .. } => child(focus.as_ref())?,
+            NodeExpr::Remove { nodes, remove } => {
+                child(nodes.as_ref())?;
+                child(remove.as_ref())?;
+            }
+            NodeExpr::FlatMap { nodes, map } => {
+                child(nodes.as_ref())?;
+                child(map.as_ref())?;
+            }
+            NodeExpr::Filter { .. }
+            | NodeExpr::FindFirst { .. }
+            | NodeExpr::MatchAll { .. }
+            | NodeExpr::NodesMatching(_)
+            | NodeExpr::ConformsToShape { .. }
+            | NodeExpr::Call(_)
+            | NodeExpr::CustomCall { .. }
+            | NodeExpr::Arg(_)
+            | NodeExpr::Owned { .. }
+            | NodeExpr::Select { .. } => return Ok(false),
+        }
+    }
+    Ok(true)
 }
 
 /// Resolve only canonical references in their original declaration domain.

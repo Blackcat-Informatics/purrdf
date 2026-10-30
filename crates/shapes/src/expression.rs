@@ -1735,6 +1735,35 @@ pub(crate) fn eval_planned_node_expr_in_scope(
     result
 }
 
+/// Evaluate only the focus operand of a proved conformance expression. Preserve
+/// its enclosing structural frame while evaluating that operand.
+pub(crate) fn eval_planned_conformance_focus(
+    store: &ShaclData,
+    focus: &Term,
+    node: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Option<Term>, crate::error::ShapesError> {
+    guard.enter_node_expr()?;
+    let result = eval_planned_node_expr_in_scope(store, focus, node, lowered, plan, guard, scope)
+        .and_then(conformance_focus);
+    guard.exit_node_expr();
+    result
+}
+
+fn conformance_focus(mut candidates: Vec<Term>) -> Result<Option<Term>, crate::error::ShapesError> {
+    if candidates.len() > 1 {
+        return Err(format!(
+            "shnex:conformsToShape node argument must yield at most one node, got {}",
+            candidates.len()
+        )
+        .into());
+    }
+    Ok(candidates.pop())
+}
+
 /// Evaluate a node expression that has NO stage-0 lowering, lowering it here.
 ///
 /// Public expression callers and authored argument expressions prepare their
@@ -2391,17 +2420,16 @@ fn eval_node_expr_at_depth(
         // argument must produce at most one node. No node ⇒ the empty list (the
         // spec's stated "no value" case); otherwise the boolean conformance answer.
         NodeExpr::ConformsToShape { node, shape } => {
-            let candidates = descend!(node, 0)?;
-            match candidates.as_slice() {
-                [] => Ok(Vec::new()),
-                [only] => {
+            match conformance_focus(descend!(node, 0)?)? {
+                None => Ok(Vec::new()),
+                Some(only) => {
                     // The shape argument is resolved the way it was written: a
                     // NAMED one was parsed at load, a COMPUTED one is evaluated
                     // here against the shapes graph's own shape index.
                     match shape {
                         ShapeArg::Named(shape) => Ok(vec![bool_literal(conforms_guarded(
                             store,
-                            only,
+                            &only,
                             lowered.shape(plan, 0, shape)?,
                             guard,
                         )?)]),
@@ -2423,16 +2451,11 @@ fn eval_node_expr_at_depth(
                                     )
                                 })?;
                             Ok(vec![bool_literal(conforms_guarded(
-                                store, only, shape_plan, guard,
+                                store, &only, shape_plan, guard,
                             )?)])
                         }
                     }
                 }
-                more => Err(format!(
-                    "shnex:conformsToShape node argument must yield at most one node, got {}",
-                    more.len()
-                )
-                .into()),
             }
         }
         // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`) / §6.2 (`sh:sparqlExpr`),
