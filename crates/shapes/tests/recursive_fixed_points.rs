@@ -778,9 +778,11 @@ paper_cases! {
     named_conformance_acyclic: PaperCase {
         data: ":a :p :b .",
         shapes: ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this :T ) ] .
+                 :C a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( :b :T ) ] .
                  :T a sh:NodeShape ; sh:hasValue :b .",
         admission: Admission::Acyclic,
-        pairs: &[("a", "S", false, false), ("b", "S", true, true)],
+        pairs: &[("a", "S", false, false), ("b", "S", true, true),
+                 ("a", "C", true, true), ("b", "C", true, true)],
     };
     named_conformance_self: PaperCase {
         data: ":a :p :a .", shapes: NAMED_CONFORMANCE_SELF,
@@ -2454,11 +2456,6 @@ fn selected_entries_refuse_unproved_original_scopes() {
     let cases = [
         (
             "sh:expression sh:this",
-            purrdf_shapes::model::sh::EXPRESSION,
-            false,
-        ),
-        (
-            "sh:expression [ shnex:conformsToShape ( :a :T ) ]",
             purrdf_shapes::model::sh::EXPRESSION,
             false,
         ),
