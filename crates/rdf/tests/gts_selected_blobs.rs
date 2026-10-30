@@ -11,8 +11,6 @@ use purrdf_hash::error::ErrorValue;
 use purrdf_lex::cbor::Value;
 use purrdf_testkit::error_capture::Capture;
 
-#[global_allocator]
-static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{
     DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits, GtsBlobSelector, import_gts_events,
     import_gts_events_with_blobs,
@@ -640,14 +638,8 @@ fn more_than_a_thousand_digest_selectors_retain_every_requested_blob() {
         .map(|digest| GtsBlobSelector::Digest(digest))
         .collect();
     let bytes = writer.into_bytes();
-    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
     let imported = import_gts_events_with_blobs(&bytes, &selectors, GtsBlobLimits::UNBOUNDED)
         .expect("selector and retained digest counts derive from the input");
-    let measured = window.close();
-    println!(
-        "1100 selected digests: {measured:?}; logical usage: {:?}",
-        imported.usage
-    );
     assert_eq!(imported.blobs.len(), 1100);
     assert!(
         imported
