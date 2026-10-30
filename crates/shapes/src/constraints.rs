@@ -4174,10 +4174,10 @@ fn eval_constraint<'a, S: ResultSink>(
                 .fixed
                 .map(|_| {
                     let target =
-                        crate::recursion::closed::named_conformance(expr, context.plan.model())
+                        crate::recursion::closed::original_conformance(expr, context.plan.model())
                             .ok_or_else(|| {
                                 crate::error::ShapesError::internal(
-                                    "closed expression lost its original named target proof",
+                                    "closed expression lost its original static target proof",
                                 )
                             })?;
                     lowered.shape(context.plan, 0, target)
