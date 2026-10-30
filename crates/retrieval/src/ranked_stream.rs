@@ -472,6 +472,9 @@ pub struct RankedRow<I> {
     /// no other — see this module's header, and [`RowBlock`] for why the absence
     /// is a value rather than an `Option`.
     pub block: RowBlock,
+    /// Immutable caller keys under a caller-key fusion law; absent under the
+    /// built-in stratum-rank policy.
+    pub order_keys: Option<crate::CandidateKeys>,
 }
 
 impl<I> RankedRow<I> {
@@ -483,7 +486,15 @@ impl<I> RankedRow<I> {
             contribution,
             item,
             block,
+            order_keys: None,
         }
+    }
+
+    /// Attach the caller's normalized candidate keys without changing rank or score.
+    #[must_use]
+    pub fn with_order_keys(mut self, keys: crate::CandidateKeys) -> Self {
+        self.order_keys = Some(keys);
+        self
     }
 }
 
@@ -654,6 +665,8 @@ pub enum ProducerReceipt {
 pub enum ProtocolError {
     /// A native query or ownership refusal, retaining its original typed cause.
     NativeFailure(purrdf_sparql_eval::EvalError),
+    /// Original typed caller-key source refusal.
+    Ordering(crate::OrderingError),
     /// A rank arrived below the next expected rank — a producer that went
     /// backwards.
     OutOfOrderRanks {
@@ -1134,6 +1147,7 @@ pub enum ProtocolError {
 impl purrdf_hash::error::StructuredError for ProtocolError {
     purrdf_hash::error_visit! {
         NativeFailure(cause) => "ranked-stream-native-failure" { "cause" => Cause(cause) },
+        Ordering(cause) => "ranked-stream-ordering" { "cause" => Cause(cause) },
         OutOfOrderRanks { expected, got } => "ranked-stream-out-of-order-ranks" { "expected" => Unsigned(u128::from(*expected)), "got" => Unsigned(u128::from(*got)) },
         NonContiguousRanks { gap } => "ranked-stream-non-contiguous-ranks" { "gap" => Unsigned(u128::from(*gap)) },
         DuplicateItem { item, stratum } => "ranked-stream-duplicate-item" { "item" => Text(item), "stratum" => Iri(stratum) },
@@ -1159,6 +1173,7 @@ impl std::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NativeFailure(error) => error.fmt(f),
+            Self::Ordering(error) => error.fmt(f),
             Self::OutOfOrderRanks { expected, got } => write!(
                 f,
                 "stream rank went backwards: expected {expected}, got {got}"
@@ -1262,6 +1277,7 @@ impl std::error::Error for ProtocolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NativeFailure(error) => Some(error),
+            Self::Ordering(error) => Some(error),
             _ => None,
         }
     }
@@ -1314,6 +1330,33 @@ pub struct ReadSettlement {
 // would instead exclude legitimate single-threaded producers.
 #[allow(async_fn_in_trait)]
 pub trait RankedStream {
+    /// Whether a compiled score-first plan truncated this source's read depth.
+    /// External streams have no compiled score-prefix license to report.
+    fn score_prefix_bounded(&self) -> bool {
+        false
+    }
+    /// Pinned identity and full-domain key bound for a caller-key law.
+    /// Absent means this source implements no caller ordering contract.
+    fn ordering_evidence(&self) -> Option<crate::OrderingEvidence> {
+        None
+    }
+
+    /// Best leading key among rows not yet yielded by `next`. This excludes a
+    /// row just returned; fusion includes its buffered head separately. Bounds
+    /// may tighten, never widen, and must cover every future returned row.
+    /// Missing-domain rows are covered by `ordering_evidence().domain` instead.
+    fn unread_key_bound(&self) -> crate::LeadingBound {
+        crate::LeadingBound::Unbounded
+    }
+
+    /// Resolve a key from the same pinned source for native scoped observations.
+    /// Ordinary ranked rows carry their own keys and are checked against them.
+    fn candidate_keys(
+        &self,
+        _candidate: &Term,
+    ) -> Result<Option<crate::CandidateKeys>, ProtocolError> {
+        Ok(None)
+    }
     /// Native execution authority retained by this producer, when its rows
     /// originated in an admitted execution. Caller-owned streams need no native
     /// account; fusion still uses the same fallible storage implementation.

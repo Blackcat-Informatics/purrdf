@@ -1522,6 +1522,7 @@ fn profile_wire_fields_retain_native_discriminators() {
         let mut forged = original.clone();
         forged[offset..offset + width].fill(255);
         let expected = match width {
+            1 if code == "fusion-profile-tie-break-tag" => 1,
             1 => u128::from(original[offset]),
             2 => u128::from(u16::from_le_bytes(
                 original[offset..offset + 2].try_into().unwrap(),
@@ -1536,10 +1537,26 @@ fn profile_wire_fields_retain_native_discriminators() {
         let reason = capture.child("reason");
         assert_eq!(reason.code, code);
         assert!(matches!(reason.field("found"), ErrorValue::Unsigned(value) if value == found));
-        assert!(
-            matches!(reason.field("expected"), ErrorValue::Unsigned(value) if value == expected)
-        );
+        let field = if code == "fusion-profile-tie-break-tag" {
+            "maximum"
+        } else {
+            "expected"
+        };
+        assert!(matches!(reason.field(field), ErrorValue::Unsigned(value) if value == expected));
     }
+    let ordered = one.with_ordering(purrdf_retrieval::OrderingPolicy {
+        semantics: iri("http://example.org/ordering"),
+        leading: true,
+    });
+    let mut forged = ordered.canonical_bytes();
+    let leading_offset = forged.len() - 7;
+    forged[leading_offset] = 2;
+    let error = FusionProfile::from_canonical_bytes(&forged).unwrap_err();
+    let capture = Capture::read(&error);
+    assert_eq!(capture.code, "fusion-malformed-profile");
+    let reason = capture.child("reason");
+    assert_eq!(reason.code, "fusion-profile-leading-key-tag");
+    assert!(matches!(reason.field("found"), ErrorValue::Unsigned(2)));
 }
 
 // Decoded unsigned profiles enforce the same positive-weight law as construction.
@@ -9224,6 +9241,7 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
                 // invariant the floor is computed under.
                 let inflation = next(score + 1);
                 FusedRow {
+                    order_witness: None,
                     entity: Term::new(format!("item-{index}")),
                     score: Score::from_raw(u128::from(score), PRECISION_12),
                     contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(

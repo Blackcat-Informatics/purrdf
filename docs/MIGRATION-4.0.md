@@ -8,6 +8,20 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+Caller ordering is explicit: select `FusionProfile::with_ordering` and plan
+with `ReadBound::CallerOrdered(k)`. The law compares optional leading bytes,
+score descending, caller tie bytes and canonical term; the default law and its
+canonical bytes remain unchanged. Producers supply immutable keys, pinned
+key-snapshot evidence and sound unread bounds. Native `search_ordered` accepts
+an `OrderCatalog` and selects the read bound before planning.
+
+Python `retrieval.search` and `compile` accept `ordering={"semantics": iri,
+"leading": bool, "keys": {canonical_term: (leading_bytes, tie_bytes)}}`.
+`plan(..., caller_ordered=True)` selects the corresponding planning license.
+Ordering on `compile` requires all arithmetic-law arguments. Returned rows carry
+`order_witness`; keyed answers carry source `ordering` evidence and
+`unemitted_order`. Missing keys and insufficient proof raise `ValueError`.
+
 Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 3.x forms:
 
@@ -240,6 +254,19 @@ Fully decided answer, certificate and proof bytes remain unchanged. The shared
 host methods accept no stop input; native refusals retain native cancellation
 evidence without adding a new host protocol claim.
 
+## Justification decision refusals
+
+Justification shrinking and its sufficiency/minimality checks now require a
+fully decided native certificate for every negative answer. Unsupported ontology
+boundaries, exhausted search and native solver failures propagate instead of
+being interpreted as evidence that an axiom is necessary. Positive evidence
+within a supported fragment remains usable.
+
+The unit `ExplainError::Undecided` variant is removed. Incomplete decisions now
+use `ExplainError::Entail` with `EntailError::Decision`, retaining the original
+certificate, including boundaries, resource refusal and cancellation evidence.
+The boolean check methods return that original `EntailError::Decision` directly.
+
 ## Canonical reserved-vocabulary refusals
 
 `ReservedVocabulary` now lends its original IRI and position through `iri()` and
@@ -419,10 +446,27 @@ Native callers can select `RecursionSemantics::Lfp` or `Gfp` through
 limits. The same closed structural evaluator serves parse, prepare, bind, direct
 conformance, reports and restored products. No selection still refuses cycles;
 negative/nonmonotone recursive components refuse both selected laws.
+The direct expression `shnex:conformsToShape ( sh:this :Target )` has a positive
+dependency when its static shape operand is a canonical IRI or blank-node
+reference in the same original catalog, including recognized anonymous node and
+property shapes. Typed empty shapes remain static; untyped empty and path-only
+operands keep their computed-expression classification. Its conformance question
+shares the active fixed point and original binding, including property-value
+focuses and restored products. Original function bodies and general expression
+callbacks remain outside this proved surface.
 `PreparationRefusal::UnqualifiedRecursion` retains the original definition,
 parameter and model/index scope when an expression, query/computed target or
 overlay has no closed dependency proof. The broader dynamic-expression contract
 remains outside this closed catalog surface.
+
+`sh:targetWhere :Target` also admits an original canonical IRI or blank-node operand. Target
+discovery reuses the original lowering and fresh dataset binding, with one
+fixed-point execution for every candidate root and its dependencies. Pair and
+round limits apply cumulatively within that sweep; they do not bound raw graph
+scans. A refusal publishes no partial target set. Anonymous node and property
+operands retain their original focus domains; replaced operands remain refused.
+Restored products rebind target
+answers to their new data; they never carry a resolved target set or request.
 
 Read `RecursiveValidationReport` for the settled answer and native finite cycle
 evidence alongside ordinary SHACL results. `RecursionPosition::focus()` returns

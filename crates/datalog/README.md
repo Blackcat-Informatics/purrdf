@@ -45,6 +45,26 @@ disjunction meaning inconsistency. These source and head laws participate in
 triple program identity. Existing quad program identities retain their original
 encoding.
 
+## Prepared demand queries
+
+`demand::prepare_demanded` compiles one fixed-predicate triple or quad goal and
+its rules into a reusable `PreparedDemand`. Positive recursion and stratified
+negation use the existing native transformation and evaluator. Call
+`prepared.evaluate(source, &options, stop)` for each original source store;
+execution preserves its dictionary IDs and applies the supplied governors and
+stop signal. The returned answer owns its dictionary independently of the
+prepared program. `demand::evaluate_demanded` prepares and executes through this
+same path when reuse is unnecessary.
+
+Preparation reads the supplied dictionary to choose collision-free internal
+names. Execution checks compatibility before modifying a source. If a later
+source contains a generated name, including an unused dictionary term,
+`PreparedNamespaceCollision` names it. Call `prepared.check_compatibility(source.interner())`
+before moving a source into execution to retain that owner when re-preparation
+is needed. Prepare again against the same source to choose a fresh namespace
+and accept the legitimate input. Execution checks compatibility again; a prepared artifact
+does not reserve caller vocabulary or claim snapshot continuity.
+
 ## Design commitments
 
 `seminaive::Maintained` owns a materialized model across signed base transactions.

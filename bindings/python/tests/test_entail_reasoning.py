@@ -610,13 +610,8 @@ def test_a_malformed_term_or_axiom_is_refused() -> None:
 
 
 def test_the_session_answers_what_the_free_functions_answer() -> None:
-    """Every `Reasoner` method matches its free function, certificate included.
-
-    The session exists to avoid re-parsing, so the ONE thing that must never
-    differ is the result. Both halves of the pair are compared: an answer that
-    matched while its certificate reported different `steps` would mean the
-    session had carried work forward between questions, which is a wrong
-    certificate even where the answer survives.
+    """Session services, including repeated explanations, preserve fresh answers
+    and certificates rather than carrying decision counters between questions.
     """
     session = entail.Reasoner(TAXONOMY)
     cat = "<https://example.org/Cat>"
@@ -630,6 +625,10 @@ def test_the_session_answers_what_the_free_functions_answer() -> None:
     assert session.extract_module(cat, "star") == entail.extract_module(
         TAXONOMY, cat, "star"
     )
+    for _ in range(3):
+        assert session.explain_conclusion(entail.Regime.OWL_RL, DERIVED_TRIPLE) == (
+            entail.explain_conclusion(TAXONOMY, entail.Regime.OWL_RL, DERIVED_TRIPLE)
+        )
 
 
 def test_the_session_exposes_every_service_the_module_does() -> None:

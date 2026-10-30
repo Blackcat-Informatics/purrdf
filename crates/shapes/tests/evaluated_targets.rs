@@ -41,6 +41,34 @@ fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
         .expect("validation runs")
 }
 
+fn validate_named_where(
+    body: &str,
+    constraint: &str,
+    data: &str,
+    semantics: purrdf_shapes::recursion::RecursionSemantics,
+) -> ValidationReport {
+    let options = purrdf_shapes::engine::ValidationOptions::default().with_recursion(
+        purrdf_shapes::recursion::RecursionOptions {
+            semantics,
+            max_pairs: 4_096,
+            max_iterations: 4_096,
+        },
+    );
+    let mut reports = Vec::new();
+    for target in ["ex:W", "_:w"] {
+        let shapes = purrdf_shapes::engine::parse_shapes_with_options(
+        &format!("{PREFIXES} ex:S a sh:NodeShape ; sh:targetWhere {target} ; {constraint} . {target} a sh:NodeShape ; {body} ."),
+        None, None, None, &purrdf_shapes::ShapesImports::new(), &options,
+    ).expect("original target loads");
+        reports.push(
+            validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data), &shapes, None)
+                .expect("original target runs"),
+        );
+    }
+    assert_eq!(focus_nodes(&reports[0]), focus_nodes(&reports[1]));
+    reports.remove(0)
+}
+
 /// The focus node of every result, sorted and deduplicated — the focus set, for a
 /// shape every targeted node fails.
 fn focus_nodes(report: &ValidationReport) -> Vec<String> {
@@ -335,6 +363,24 @@ fn a_where_target_ranges_over_the_nodes_of_the_data_graph_triple_terms_included(
         data_ttl,
     );
     assert_eq!(focus_nodes(&iris), vec![ex("r")]);
+    for semantics in [
+        purrdf_shapes::recursion::RecursionSemantics::Lfp,
+        purrdf_shapes::recursion::RecursionSemantics::Gfp,
+    ] {
+        for (body, constraint, expected) in [
+            (
+                "sh:nodeKind sh:TripleTerm",
+                "sh:nodeKind sh:IRI",
+                &triple_terms,
+            ),
+            ("sh:nodeKind sh:IRI", "sh:nodeKind sh:Literal", &iris),
+        ] {
+            assert_eq!(
+                focus_nodes(&validate_named_where(body, constraint, data_ttl, semantics)),
+                focus_nodes(expected)
+            );
+        }
+    }
 }
 
 /// A where shape whose constraint cannot make a node non-conforming — its severity
@@ -361,6 +407,37 @@ fn a_where_constraint_that_does_not_count_against_conformance_narrows_nothing() 
         data_ttl,
     );
     assert_eq!(focus_nodes(&violation), vec![ex("a")]);
+    for semantics in [
+        purrdf_shapes::recursion::RecursionSemantics::Lfp,
+        purrdf_shapes::recursion::RecursionSemantics::Gfp,
+    ] {
+        for body in [
+            "sh:class ex:C ; sh:severity sh:Debug",
+            "sh:class ex:C ; sh:deactivated true",
+            "sh:class ex:C {| sh:severity sh:Debug |}",
+            "sh:property [ sh:path ex:absent ; sh:minCount 1 ; sh:defaultValue \"x\" ]",
+        ] {
+            assert_eq!(
+                focus_nodes(&validate_named_where(
+                    body,
+                    "sh:nodeKind sh:Literal",
+                    data_ttl,
+                    semantics
+                )),
+                focus_nodes(&debug),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            focus_nodes(&validate_named_where(
+                "sh:class ex:C ; sh:severity sh:Violation",
+                "sh:nodeKind sh:Literal",
+                data_ttl,
+                semantics
+            )),
+            focus_nodes(&violation)
+        );
+    }
 }
 
 /// A where shape with a required property narrows to that property's subjects,
@@ -388,6 +465,26 @@ fn a_narrowed_where_target_agrees_with_the_full_scan() {
     );
     assert_eq!(focus_nodes(&narrowed), vec![ex("a")]);
     assert_eq!(focus_nodes(&scanned), vec![ex("a")]);
+    for semantics in [
+        purrdf_shapes::recursion::RecursionSemantics::Lfp,
+        purrdf_shapes::recursion::RecursionSemantics::Gfp,
+    ] {
+        for body in [
+            "sh:property [ sh:path ex:age ; sh:minCount 1 ; sh:minInclusive 18 ]",
+            "sh:or ( [ sh:property [ sh:path ex:age ; sh:minCount 1 ; sh:minInclusive 18 ] ] )",
+        ] {
+            assert_eq!(
+                focus_nodes(&validate_named_where(
+                    body,
+                    "sh:nodeKind sh:Literal",
+                    data_ttl,
+                    semantics
+                )),
+                focus_nodes(&scanned),
+                "{body}"
+            );
+        }
+    }
 }
 
 // ── Node-expression sh:targetNode ──────────────────────────────────────────────

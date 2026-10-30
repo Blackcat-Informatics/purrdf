@@ -121,11 +121,26 @@ component refusal. This explicit policy is permitted by
 The selected evaluator admits proved closed structural shape catalogs: node,
 property, logical, member and qualified references keep their original model
 and occurrence identities. Negative or nonmonotone references within a recursive
-component refuse either selection; lower strata remain fixed. Expressions,
-query/computed targets and unbound overlays without a closed dependency proof
+component refuse either selection; lower strata remain fixed. A direct
+`sh:expression [ shnex:conformsToShape ( sh:this :Target ) ]` also participates
+when its static shape operand is a canonical IRI or blank-node reference in the
+same original catalog, including recognized anonymous node and property shapes.
+Typed empty shapes are static; untyped empty and path-only operands retain their
+computed-expression classification. It asks the current value node's target pair
+through the active fixed point; a false answer produces the ordinary
+expression-constraint violation. Original function bodies, computed or wrapped
+expressions, query/computed targets and unbound overlays without a closed dependency proof
 return `PreparationRefusal::UnqualifiedRecursion`, retaining the original
 definition, parameter and model/index scope. Selecting a law does not authorize
 an unknown transfer or the old depth-bound approximation.
+
+A `sh:targetWhere :Target` can use the same explicit selection when its operand
+is a canonical IRI or blank-node reference in the same original catalog. Discovery reuses
+the original plan and dataset binding, seeds every candidate pair into one
+fixed-point execution and publishes targets only after the whole sweep settles.
+Pair and round limits cover the candidate roots and their dependencies together;
+they do not bound raw graph scans. Anonymous node and property where shapes retain
+their original definitions and focus domains. Replaced operands remain refused.
 
 `validate_with_recursion_evidence` and `validate_shape_with_recursion` retain the
 settled verdict, ordinary finite SHACL leaf results and native closed-pair cycle
@@ -136,6 +151,35 @@ RDF vocabulary. Pair and round exhaustion is a typed failure, never a partial
 report. Ahmetaj et al.'s *sheval* study compares recursive-shape
 implementations,[^sheval] and their *Common Foundations for Recursive Shape
 Languages* develops the semantics and LFP/GFP duality.[^recursive-foundations]
+
+Python selects the same closed-catalog evaluator with `recursion="lfp"` or
+`recursion="gfp"` and both `recursion_max_pairs` and
+`recursion_max_iterations`. Omit all three to retain the default cycle refusal.
+Unknown modes and partial requests raise `ValueError`; zero is an explicit limit,
+and limits accept the complete unsigned 64-bit range. Resource exhaustion raises
+an exception without returning a partial report.
+
+```python
+options = dict(recursion="gfp", recursion_max_pairs=4096,
+               recursion_max_iterations=4096)
+shapes = purrdf.shapes.Shapes(shapes_ttl, **options)
+report = shapes.prepare().validate_nt(data_nt)
+product = purrdf.shapes.ShapesProduct.open(
+    purrdf.shapes.pack_product(shapes_ttl, **options)
+)
+restored = product.admit(**options)
+```
+
+To migrate a recursive Python caller, supply the complete request on
+`shapes.validate`, `Shapes`, or `pack_product` before the shapes are loaded.
+Prepared validation, store changes and XPath overrides retain that request.
+Product bytes carry the catalog and do not serialize request options. Callers
+supply the current request again on `admit`, `admit_expecting`, `rebuild` or
+`rebuild_expecting`; restored execution retains it. Existing product refusals keep
+their dimension labels. Python exposes its existing reports and exceptions;
+native cycle certificates and scoped evidence have no Python inspection API.
+Always read `conforms`: a settled false least fixed point can have no ordinary
+leaf result, so an empty `results` list does not establish conformance.
 
 Deep acyclic parsing and recursive validation also check the available stack.
 Node-expression evaluation retains its structural and function re-entry

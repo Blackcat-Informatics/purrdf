@@ -23,7 +23,8 @@ use crate::cursor::LendingIterator;
 use crate::dictionary::TermDictionary;
 use crate::guard::NoGuards;
 use crate::seminaive::{
-    BudgetReport, EvalError, EvalOptions, Evaluation, WorkReport, compile, evaluate_guarded,
+    BudgetReport, EvalError, EvalOptions, Evaluation, Executable, WorkReport, compile,
+    evaluate_guarded,
 };
 use crate::stop::StopSignal;
 use crate::store::{Arity, Bound, RelationStore, StoreShape};
@@ -75,6 +76,12 @@ pub enum DemandError<E> {
     Evaluation(EvalError<E>),
     /// Every representable namespace nonce collided with authored/source terms.
     NamespaceExhausted,
+    /// A supplied source now uses a name reserved by this prepared artifact.
+    /// Reprepare against that source to choose a different private namespace.
+    PreparedNamespaceCollision {
+        /// Exact conflicting IRI spelling, including angle brackets.
+        term: String,
+    },
 }
 
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
@@ -89,6 +96,9 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Source(cause) => "datalog-demand-source" { "cause" => Cause(cause) },
         Evaluation(cause) => "datalog-demand-evaluation" { "cause" => Cause(cause) },
         NamespaceExhausted => "datalog-demand-namespace-exhausted" {},
+        PreparedNamespaceCollision { term } => "datalog-demand-prepared-namespace-collision" {
+            "term" => Text(term),
+        },
     }
 }
 
@@ -103,6 +113,10 @@ impl<E: std::fmt::Display> std::fmt::Display for DemandError<E> {
             Self::Source(error) => error.fmt(f),
             Self::Evaluation(error) => error.fmt(f),
             Self::NamespaceExhausted => f.write_str("demand predicate namespace exhausted"),
+            Self::PreparedNamespaceCollision { term } => write!(
+                f,
+                "prepared demand namespace conflicts with source term {term}; reprepare against this source"
+            ),
         }
     }
 }
@@ -112,7 +126,9 @@ impl<E: std::error::Error + 'static> std::error::Error for DemandError<E> {
             Self::Compile(error) => Some(error),
             Self::Source(error) => Some(error),
             Self::Evaluation(error) => Some(error),
-            Self::Unsupported { .. } | Self::NamespaceExhausted => None,
+            Self::Unsupported { .. }
+            | Self::NamespaceExhausted
+            | Self::PreparedNamespaceCollision { .. } => None,
         }
     }
 }
@@ -145,6 +161,115 @@ pub struct Preparation {
     pub shadow_facts: usize,
     /// Additional dictionary terms minted while seeding those rows.
     pub shadow_terms: u64,
+}
+
+/// A reusable compiled demand transformation for one authored program and goal.
+///
+/// Owns no source dictionary or result. Each execution consumes its original
+/// store, preserving that dictionary's IDs, and uses the same native evaluator.
+/// A new source may have different rows and IDs, but must not use this artifact's
+/// generated names. Repreparing against an incompatible source chooses a fresh
+/// namespace without reserving any vocabulary against the caller.
+#[derive(Debug)]
+pub struct PreparedDemand<const N: usize = 3>
+where
+    Arity<N>: StoreShape<N>,
+{
+    executable: Executable<N>,
+    goal: ClauseAtom<N>,
+    names: Vec<String>,
+    shadows: BTreeMap<String, String>,
+}
+
+impl<const N: usize> PreparedDemand<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Check a source without consuming its original dictionary or rows.
+    ///
+    /// On a namespace conflict, pass this same source to fresh preparation
+    /// before moving it into execution. This check grants no snapshot token:
+    /// [`Self::evaluate`] checks the dictionary again at its execution boundary.
+    /// # Errors
+    /// Returns an exact namespace conflict or the original source failure.
+    pub fn check_compatibility<D: TermDictionary>(
+        &self,
+        dictionary: &D,
+    ) -> Result<(), DemandError<D::Error>> {
+        dictionary.check_read().map_err(DemandError::Source)?;
+        for name in &self.names {
+            let term = format!("<{name}>");
+            if dictionary
+                .lookup_term(&term)
+                .map_err(DemandError::Source)?
+                .is_some()
+            {
+                dictionary.check_read().map_err(DemandError::Source)?;
+                return Err(DemandError::PreparedNamespaceCollision { term });
+            }
+        }
+        dictionary.check_read().map_err(DemandError::Source)
+    }
+
+    /// Execute the prepared transformation over a compatible original source.
+    ///
+    /// Namespace compatibility is checked before shadow seeding or evaluation.
+    /// Work, cancellation, budgets and answer ownership retain the one-shot
+    /// API's contract; preparation counts describe this execution's source.
+    /// # Errors
+    /// Returns an actionable namespace conflict, original source failure or
+    /// original evaluator refusal. No partial answer is returned on exhaustion.
+    pub fn evaluate<D: TermDictionary>(
+        &self,
+        mut edb: RelationStore<D, N>,
+        options: &EvalOptions,
+        stop: Option<&dyn StopSignal>,
+    ) -> Result<DemandAnswer<D, N>, DemandError<D::Error>> {
+        self.check_compatibility(edb.interner())?;
+        let preparation = stratified::seed(&mut edb, &self.shadows)?;
+        let evaluation = evaluate_guarded(&self.executable, edb, &NoGuards, options, stop)
+            .map_err(DemandError::Evaluation)?;
+        Ok(DemandAnswer {
+            evaluation,
+            goal: self.goal.clone(),
+            preparation,
+        })
+    }
+}
+
+/// Compile a reusable demand transformation without modifying the source.
+///
+/// Checks the same complete fixed-predicate triple/quad fragment as
+/// [`evaluate_demanded`], including stratified negation. The dictionary is used
+/// only to choose collision-free generated names; it is neither retained nor
+/// copied. Later executions check their own dictionary before mutation.
+/// # Errors
+/// Returns the original fragment, compiler or dictionary failure.
+pub fn prepare_demanded<D: TermDictionary, const N: usize>(
+    rules: &[DlClause<N>],
+    goal: &ClauseAtom<N>,
+    dictionary: &D,
+) -> Result<PreparedDemand<N>, DemandError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    validate(rules, goal)?;
+    if rules
+        .iter()
+        .any(|rule| !rule.negations().is_empty() || rule.body().iter().any(ClauseAtom::is_negated))
+    {
+        return stratified::prepare(rules, goal, dictionary);
+    }
+    let descriptors = descriptors(rules, goal);
+    let names = names(&descriptors, rules, goal, dictionary, 0)?;
+    let transformed = transform(rules, goal, &descriptors, &names);
+    let executable = compile(transformed).map_err(DemandError::Compile)?;
+    Ok(PreparedDemand {
+        executable,
+        goal: goal.clone(),
+        names,
+        shadows: BTreeMap::new(),
+    })
 }
 
 impl<D: TermDictionary, const N: usize> DemandAnswer<D, N>
@@ -238,30 +363,7 @@ pub fn evaluate_demanded<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    validate(rules, goal)?;
-    if rules
-        .iter()
-        .any(|rule| !rule.negations().is_empty() || rule.body().iter().any(ClauseAtom::is_negated))
-    {
-        return stratified::evaluate(rules, goal, edb, options, stop);
-    }
-    let preparation = Preparation {
-        original_facts: edb.row_count(),
-        original_terms: edb.interner().term_count(),
-        shadow_facts: 0,
-        shadow_terms: 0,
-    };
-    let descriptors = descriptors(rules, goal);
-    let names = names(&descriptors, rules, goal, edb.interner(), 0)?;
-    let transformed = transform(rules, goal, &descriptors, &names);
-    let executable = compile(transformed).map_err(DemandError::Compile)?;
-    let evaluation = evaluate_guarded(&executable, edb, &NoGuards, options, stop)
-        .map_err(DemandError::Evaluation)?;
-    Ok(DemandAnswer {
-        evaluation,
-        goal: goal.clone(),
-        preparation,
-    })
+    prepare_demanded(rules, goal, edb.interner())?.evaluate(edb, options, stop)
 }
 
 fn validate<E, const N: usize>(

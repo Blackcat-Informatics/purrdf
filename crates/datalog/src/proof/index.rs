@@ -7,7 +7,7 @@ use super::{
     Arity, Evaluation, ProofArena, ProofError, ProofId, ShapeFact, StoreShape, TermInterner,
 };
 use crate::seminaive::Derivation;
-use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, Shared, StorageError};
 use purrdf_lex::walk::{WorkList, try_sort_unstable_by};
 
 /// Actual index and traversal operations, independent of elapsed time.
@@ -34,9 +34,33 @@ struct Entry {
     rank: usize,
 }
 
+#[derive(Debug)]
+enum DerivationSource<'a, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    Borrowed(&'a [Derivation<N>]),
+    Shared(Shared<Evaluation<TermInterner, N>>),
+}
+
+impl<const N: usize> DerivationSource<'_, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn as_slice(&self) -> &[Derivation<N>] {
+        match self {
+            Self::Borrowed(derivations) => derivations,
+            // of_shared checks recording before publishing this immutable owner.
+            Self::Shared(evaluation) => evaluation
+                .derivations()
+                .expect("INVARIANT: a shared proof index retains recorded derivations"),
+        }
+    }
+}
+
 /// Reusable lookup over recorded derivations; preparation constructs no proof nodes.
 ///
-/// The evaluation stays immutably borrowed. Each extraction owns only the requested
+/// The evaluation stays immutably borrowed or shared. Each extraction owns only the requested
 /// proof DAG and uses the same predecessor order as [`super::EvaluationProofs`].
 /// Arena construction retains [`ProofArena`]'s existing resident allocation contract;
 /// supplied memory admits the index and traversal scratch, not the returned arena.
@@ -45,7 +69,7 @@ pub struct EvaluationProofIndex<'a, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
-    derivations: &'a [Derivation<N>],
+    derivations: DerivationSource<'a, N>,
     entries: Vec<Entry>,
     preparation: ProofIndexWork,
 }
@@ -67,6 +91,24 @@ where
         Self::of_with_memory(evaluation, &mut Memory::new(&mut Resident))
     }
 
+    /// Retain the exact immutable evaluation and index it without copying its inventory.
+    /// The index remains usable after every other evaluation handle drops.
+    /// Index entries and extraction keep their existing resident allocation contract.
+    ///
+    /// # Errors
+    /// Returns disabled recording or the original index allocation refusal.
+    pub fn of_shared(
+        evaluation: Shared<Evaluation<TermInterner, N>>,
+    ) -> Result<EvaluationProofIndex<'static, N>, ProofError<N>> {
+        if evaluation.derivations().is_none() {
+            return Err(ProofError::DerivationsNotRecorded);
+        }
+        EvaluationProofIndex::from_source(
+            DerivationSource::Shared(evaluation),
+            &mut Memory::new(&mut Resident),
+        )
+    }
+
     /// Index through the caller's original memory. On success its grant remains
     /// with this index until [`Self::release_with_memory`] destroys the entries.
     /// Index release must use that same original memory owner.
@@ -78,20 +120,23 @@ where
         evaluation: &'a Evaluation<TermInterner, N>,
         memory: &mut Memory<'_, A>,
     ) -> Result<Self, ProofError<N>> {
-        Self::from_derivations(
-            evaluation
-                .derivations()
-                .ok_or(ProofError::DerivationsNotRecorded)?,
+        Self::from_source(
+            DerivationSource::Borrowed(
+                evaluation
+                    .derivations()
+                    .ok_or(ProofError::DerivationsNotRecorded)?,
+            ),
             memory,
         )
     }
 
-    fn from_derivations<A: Admission + ?Sized>(
-        derivations: &'a [Derivation<N>],
+    fn from_source<A: Admission + ?Sized>(
+        source: DerivationSource<'a, N>,
         memory: &mut Memory<'_, A>,
     ) -> Result<Self, ProofError<N>> {
         memory
             .scope(|memory| {
+                let derivations = source.as_slice();
                 let mut preparation = ProofIndexWork {
                     derivations: u64::try_from(derivations.len())
                         .map_err(|_| StorageError::SizeOverflow)?,
@@ -125,7 +170,7 @@ where
                     )
                 })?;
                 Ok(Self {
-                    derivations,
+                    derivations: source,
                     entries,
                     preparation,
                 })
@@ -190,6 +235,7 @@ where
         work: &mut ProofIndexWork,
     ) -> Result<Option<(ProofArena<N>, ProofId)>, ProofError<N>> {
         *work = ProofIndexWork::default();
+        let derivations = self.derivations.as_slice();
         memory
             .scope(|memory| {
                 let Some(target) = self.predecessor(goal, usize::MAX, work)? else {
@@ -208,7 +254,7 @@ where
                 ProofIndexWork::increment(&mut work.derivations)?;
                 while let Some(mut frame) = pending.pop() {
                     let entry = &self.entries[frame.entry];
-                    let derivation = &self.derivations[entry.derivation];
+                    let derivation = &derivations[entry.derivation];
                     if let Some(source) = derivation.sources().get(frame.premises.len()) {
                         let predecessor = self.predecessor(source, entry.rank, work)?;
                         let premise = if let Some(index) = predecessor {
@@ -264,13 +310,14 @@ where
         before: usize,
         work: &mut ProofIndexWork,
     ) -> Result<Option<usize>, StorageError> {
+        let derivations = self.derivations.as_slice();
         let mut low = 0;
         let mut high = self.entries.len();
         while low < high {
             let mid = low + (high - low) / 2;
             let entry = &self.entries[mid];
             ProofIndexWork::increment(&mut work.index_comparisons)?;
-            if (self.derivations[entry.derivation].fact(), entry.rank) < (goal, before) {
+            if (derivations[entry.derivation].fact(), entry.rank) < (goal, before) {
                 low = mid + 1;
             } else {
                 high = mid;
@@ -280,6 +327,6 @@ where
             return Ok(None);
         };
         ProofIndexWork::increment(&mut work.index_comparisons)?;
-        Ok((self.derivations[self.entries[index].derivation].fact() == goal).then_some(index))
+        Ok((derivations[self.entries[index].derivation].fact() == goal).then_some(index))
     }
 }

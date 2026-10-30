@@ -75,6 +75,7 @@ const REJECT_UNSATISFIED_CONSTRAINT: u8 = 3;
 
 const BOUND_COMPLETE: u8 = 0;
 const BOUND_BOUNDED: u8 = 1;
+const BOUND_CALLER_ORDERED: u8 = 2;
 
 const UNSERVED_NO_PRODUCER_ACCEPTS: u8 = 0;
 const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
@@ -878,7 +879,7 @@ impl Plan {
         // value this process cannot have minted; the plan is held to its
         // content fingerprint instead. Recorded here rather than inferred at
         // admission, which cannot tell a foreign counter from a stale one.
-        Ok(Self {
+        let plan = Self {
             origin: PlanOrigin::Deserialized,
             version,
             request_terms,
@@ -892,7 +893,9 @@ impl Plan {
             statistics_snapshot,
             registry_instance_id,
             registry_content_fingerprint,
-        })
+        };
+        plan.validate_order_bound()?;
+        Ok(plan)
     }
 
     /// The plan's content identity.
@@ -967,6 +970,7 @@ impl Plan {
     /// request terms. Each is a refusal rather than a repair: a plan whose depth
     /// and evidence disagree has no reading under which one of them is the truth.
     pub fn certify(&self) -> Result<(), PlanError> {
+        self.validate_order_bound()?;
         for constraint in &self.constraints {
             crate::planner::validate_term(constraint)?;
         }
@@ -1036,6 +1040,41 @@ impl Plan {
             if !consulted.contains(entry.subject.as_str()) {
                 return Err(PlanError::UnconsultedStatisticsSubject {
                     subject: entry.subject.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Enforce the read-order license at every untrusted plan ingress.
+    pub(crate) fn validate_order_bound(&self) -> Result<(), PlanError> {
+        if matches!(self.read_bound, ReadBound::Bounded(_)) {
+            return Ok(());
+        }
+        for (stratum, inputs) in &self.stratum_derivations {
+            if inputs.licensed_prefix.is_some() {
+                return Err(PlanError::OrderBoundPrefix {
+                    stratum: stratum.as_str().to_owned(),
+                });
+            }
+        }
+        if !matches!(self.read_bound, ReadBound::CallerOrdered(_)) {
+            return Ok(());
+        }
+        let mut depths: Vec<_> = self.stratum_depths.iter().collect();
+        depths.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        for (stratum, &depth) in depths {
+            let inputs = self.stratum_derivations.get(stratum).ok_or_else(|| {
+                PlanError::DepthWithoutDerivation {
+                    stratum: stratum.as_str().to_owned(),
+                }
+            })?;
+            let derived = crate::depth_from(inputs);
+            if derived != depth {
+                return Err(PlanError::DepthNotDerivable {
+                    stratum: stratum.as_str().to_owned(),
+                    recorded: depth,
+                    derived,
                 });
             }
         }
@@ -1301,6 +1340,10 @@ fn write_read_bound(writer: &mut Writer, bound: ReadBound) {
             writer.u8(BOUND_BOUNDED);
             writer.u64(top_k.get() as u64);
         }
+        ReadBound::CallerOrdered(top_k) => {
+            writer.u8(BOUND_CALLER_ORDERED);
+            writer.u64(top_k.get() as u64);
+        }
     }
 }
 
@@ -1318,13 +1361,17 @@ fn write_read_bound(writer: &mut Writer, bound: ReadBound) {
 fn read_read_bound(reader: &mut Reader<'_>) -> Result<ReadBound, PlanError> {
     match reader.u8()? {
         BOUND_COMPLETE => Ok(ReadBound::Complete),
-        BOUND_BOUNDED => {
+        tag @ (BOUND_BOUNDED | BOUND_CALLER_ORDERED) => {
             let rows = reader.u64()?;
             let rows = usize::try_from(rows).map_err(|_| PlanError::InvalidTag {
                 what: "read bound row count wider than this target's usize",
-                tag: BOUND_BOUNDED,
+                tag,
             })?;
-            Ok(ReadBound::Bounded(TopK::new(rows)))
+            Ok(if tag == BOUND_BOUNDED {
+                ReadBound::Bounded(TopK::new(rows))
+            } else {
+                ReadBound::CallerOrdered(TopK::new(rows))
+            })
         }
         tag => Err(PlanError::InvalidTag {
             what: "read bound",

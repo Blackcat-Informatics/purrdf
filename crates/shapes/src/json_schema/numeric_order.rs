@@ -26,6 +26,7 @@
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 
+use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use purrdf_xsd::bigint::BigInt;
 
 /// The `whiteSpace` `collapse` facet's trim (the four code points XSD names).
@@ -68,9 +69,13 @@ impl Decimal {
         }
     }
 
-    /// Parse an `xsd:decimal` lexical form (after the `collapse` trim), or an
-    /// `xsd:integer` one when `integer` is set; `None` when it is not one.
+    /// Parse an `xsd:decimal` lexical form, or an integer when `integer` is set.
     pub(super) fn parse(lexical: &str, integer: bool) -> Option<Self> {
+        Self::components(lexical, integer)
+            .map(|(negative, int, frac)| Self::normalized(negative, int, frac))
+    }
+
+    fn components(lexical: &str, integer: bool) -> Option<(bool, &str, &str)> {
         let lexical = purrdf_iri::terminals::trim_ws(lexical);
         let (negative, body) = match lexical.as_bytes().first() {
             Some(b'-') => (true, &lexical[1..]),
@@ -83,7 +88,25 @@ impl Decimal {
             && digits(frac)
             && !(int.is_empty() && frac.is_empty())
             && (!integer || !body.contains('.'));
-        valid.then(|| Self::normalized(negative, int, frac))
+        valid.then_some((negative, int, frac))
+    }
+
+    /// Use the same lexical law while owning normalized digits through native admission.
+    pub(super) fn parse_with_memory<S: Admission + ?Sized>(
+        lexical: &str,
+        integer: bool,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Self>, StorageError> {
+        let Some((negative, int, frac)) = Self::components(lexical, integer) else {
+            return Ok(None);
+        };
+        let int = int.trim_start_matches('0');
+        let frac = frac.trim_end_matches('0');
+        Ok(Some(Self {
+            negative: negative && !(int.is_empty() && frac.is_empty()),
+            int: memory.string(int)?,
+            frac: memory.string(frac)?,
+        }))
     }
 
     /// `numerator × 2^exponent`, exactly ([`BigInt::from_binary`]), as digit
@@ -101,6 +124,32 @@ impl Decimal {
         );
         let (int, frac) = padded.split_at(padded.len() - places);
         Self::normalized(negative, int, frac)
+    }
+
+    /// Write the exact normalized decimal through the original native string owner.
+    pub(super) fn plain_text<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<String, StorageError> {
+        let integer = if self.int.is_empty() { "0" } else { &self.int };
+        let length = integer
+            .len()
+            .checked_add(self.frac.len())
+            .and_then(|n| n.checked_add(usize::from(self.negative)))
+            .and_then(|n| n.checked_add(usize::from(!self.frac.is_empty())))
+            .ok_or(StorageError::SizeOverflow)?;
+        let mut text = String::new();
+        memory.reserve_string(&mut text, length)?;
+        write!(
+            text,
+            "{}{}{}{}",
+            if self.negative { "-" } else { "" },
+            integer,
+            if self.frac.is_empty() { "" } else { "." },
+            self.frac
+        )
+        .map_err(|_| StorageError::SizeOverflow)?;
+        Ok(text)
     }
 
     /// The nearest `f64` (the decimal promoted to double).
@@ -228,49 +277,91 @@ impl Threshold {
     /// compares with nothing.
     pub(super) fn for_bound(facet: Facet, bound: BoundNumber<'_>) -> Self {
         match bound {
-            BoundNumber::Exact(decimal) => {
-                let rel = match facet {
-                    Facet::MinInclusive => Rel::Ge,
-                    Facet::MinExclusive => Rel::Gt,
-                    Facet::MaxInclusive => Rel::Le,
-                    Facet::MaxExclusive => Rel::Lt,
-                };
-                Self::Cmp(rel, decimal.clone())
-            }
+            BoundNumber::Exact(decimal) => Self::for_exact(facet, decimal.clone()),
             BoundNumber::Double(value) => Self::ieee(facet, &Ieee::double(value)),
             BoundNumber::Float(value) => Self::ieee(facet, &Ieee::float(value)),
         }
     }
 
+    /// Consume an already admitted exact threshold without cloning its digits.
+    pub(super) fn for_exact(facet: Facet, decimal: Decimal) -> Self {
+        let relation = match facet {
+            Facet::MinInclusive => Rel::Ge,
+            Facet::MinExclusive => Rel::Gt,
+            Facet::MaxInclusive => Rel::Le,
+            Facet::MaxExclusive => Rel::Lt,
+        };
+        Self::Cmp(relation, decimal)
+    }
+
     fn ieee(facet: Facet, format: &Ieee) -> Self {
-        let Some(bound) = format.point else {
-            return Self::None;
-        };
-        // `r(v) ≥ x`, for a representable (or infinite) `x`.
-        let at_least = |x: Point| -> Self {
-            if x == format.negative_infinity() {
-                return Self::All;
+        match format.boundary(facet) {
+            IeeeBoundary::All => Self::All,
+            IeeeBoundary::None => Self::None,
+            IeeeBoundary::Cmp(relation, low, high) => {
+                Self::Cmp(relation, format.midpoint(low, high))
             }
-            let pred = format.pred(x);
-            let rel = if format.even(x) { Rel::Ge } else { Rel::Gt };
-            Self::Cmp(rel, format.midpoint(pred, x))
-        };
-        // `r(v) ≤ x`.
-        let at_most = |x: Point| -> Self {
-            if x == format.positive_infinity() {
-                return Self::All;
+        }
+    }
+
+    /// The same threshold law, with native ownership for every midpoint digit.
+    pub(super) fn for_bound_with_memory<S: Admission + ?Sized>(
+        facet: Facet,
+        bound: BoundNumber<'_>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, purrdf_xsd::exact::ExactOperationError> {
+        use purrdf_xsd::bigint::LimbScratchError;
+        use purrdf_xsd::exact::ExactOperationError;
+        let storage = |error| ExactOperationError::Storage(LimbScratchError::Storage(error));
+        let format = match bound {
+            BoundNumber::Exact(decimal) => {
+                let exact = Self::for_exact(
+                    facet,
+                    Decimal {
+                        negative: decimal.negative,
+                        int: memory.string(&decimal.int).map_err(storage)?,
+                        frac: memory.string(&decimal.frac).map_err(storage)?,
+                    },
+                );
+                return Ok(exact);
             }
-            let succ = format.succ(x);
-            let rel = if format.even(x) { Rel::Le } else { Rel::Lt };
-            Self::Cmp(rel, format.midpoint(x, succ))
+            BoundNumber::Double(value) => Ieee::double(value),
+            BoundNumber::Float(value) => Ieee::float(value),
         };
-        match facet {
-            Facet::MinInclusive => at_least(bound),
-            Facet::MaxInclusive => at_most(bound),
-            Facet::MinExclusive if bound == format.positive_infinity() => Self::None,
-            Facet::MinExclusive => at_least(format.succ(bound)),
-            Facet::MaxExclusive if bound == format.negative_infinity() => Self::None,
-            Facet::MaxExclusive => at_most(format.pred(bound)),
+        match format.boundary(facet) {
+            IeeeBoundary::All => Ok(Self::All),
+            IeeeBoundary::None => Ok(Self::None),
+            IeeeBoundary::Cmp(relation, low, high) => {
+                let (sum, exponent) = format.midpoint_parts(low, high);
+                let magnitude = u64::try_from(sum.unsigned_abs())
+                    .map_err(|_| storage(StorageError::SizeOverflow))?;
+                let exact = purrdf_xsd::exact::Decimal::try_from_dyadic_admitted(
+                    sum < 0,
+                    magnitude,
+                    exponent,
+                    &mut |layout| {
+                        memory
+                            .add_bytes(layout.required_bytes())
+                            .map_err(LimbScratchError::Storage)
+                    },
+                )?;
+                let prepared = purrdf_xsd::numeric::prepare_decimal_text(&exact, &mut |layout| {
+                    memory
+                        .add_bytes(layout.required_bytes())
+                        .map_err(LimbScratchError::Storage)
+                })?;
+                let mut text = String::new();
+                memory
+                    .reserve_string(&mut text, prepared.len())
+                    .map_err(storage)?;
+                prepared
+                    .write_to(&mut text)
+                    .map_err(|_| storage(StorageError::SizeOverflow))?;
+                let decimal = Decimal::parse_with_memory(&text, false, memory)
+                    .map_err(storage)?
+                    .ok_or_else(|| storage(StorageError::SizeOverflow))?;
+                Ok(Self::Cmp(relation, decimal))
+            }
         }
     }
 
@@ -307,7 +398,45 @@ struct Ieee {
     point: Option<Point>,
 }
 
+enum IeeeBoundary {
+    All,
+    None,
+    Cmp(Rel, Point, Point),
+}
+
 impl Ieee {
+    fn boundary(&self, facet: Facet) -> IeeeBoundary {
+        let Some(bound) = self.point else {
+            return IeeeBoundary::None;
+        };
+        // `r(v) ≥ x`, for a representable (or infinite) `x`.
+        let at_least = |x: Point| -> IeeeBoundary {
+            if x == self.negative_infinity() {
+                return IeeeBoundary::All;
+            }
+            let pred = self.pred(x);
+            let rel = if self.even(x) { Rel::Ge } else { Rel::Gt };
+            IeeeBoundary::Cmp(rel, pred, x)
+        };
+        // `r(v) ≤ x`.
+        let at_most = |x: Point| -> IeeeBoundary {
+            if x == self.positive_infinity() {
+                return IeeeBoundary::All;
+            }
+            let succ = self.succ(x);
+            let rel = if self.even(x) { Rel::Le } else { Rel::Lt };
+            IeeeBoundary::Cmp(rel, x, succ)
+        };
+        match facet {
+            Facet::MinInclusive => at_least(bound),
+            Facet::MaxInclusive => at_most(bound),
+            Facet::MinExclusive if bound == self.positive_infinity() => IeeeBoundary::None,
+            Facet::MinExclusive => at_least(self.succ(bound)),
+            Facet::MaxExclusive if bound == self.negative_infinity() => IeeeBoundary::None,
+            Facet::MaxExclusive => at_most(self.pred(bound)),
+        }
+    }
+
     fn double(value: f64) -> Self {
         Self::new(53, -1074, value.is_nan(), || {
             let bits = value.abs().to_bits();
@@ -386,12 +515,19 @@ impl Ieee {
     }
 
     /// The exact midpoint of two adjacent points.
-    fn midpoint(&self, low: Point, high: Point) -> Decimal {
+    fn midpoint_parts(&self, low: Point, high: Point) -> (i128, i32) {
         let (a, ea) = self.exact(low);
         let (b, eb) = self.exact(high);
         let exponent = ea.min(eb);
-        let sum = (a << (ea - exponent)) + (b << (eb - exponent));
-        Decimal::from_binary(sum, exponent - 1)
+        (
+            (a << (ea - exponent)) + (b << (eb - exponent)),
+            exponent - 1,
+        )
+    }
+
+    fn midpoint(&self, low: Point, high: Point) -> Decimal {
+        let (sum, exponent) = self.midpoint_parts(low, high);
+        Decimal::from_binary(sum, exponent)
     }
 }
 

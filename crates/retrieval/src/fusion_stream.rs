@@ -449,6 +449,8 @@ impl From<ProducerReceipt> for ProducerStatus {
 /// what it witnesses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusedRow {
+    /// Full-order certification evidence under a caller-key law.
+    pub order_witness: Option<crate::OrderWitness>,
     /// The candidate, in its canonical term lexical — `<http://example.org/doc>`,
     /// `"lex"@en`, `<<( s p o )>>`.
     ///
@@ -945,6 +947,15 @@ pub enum ScoreExactness {
 /// mid-stream entitles it to claim otherwise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusionTrailer {
+    /// Caller-key snapshot identities and remaining source bounds, absent for
+    /// the built-in ordering law.
+    pub ordering: Option<
+        purrdf_sparql_eval::SharedWorkspace<
+            purrdf_sparql_eval::AdmittedOrderedMap<Iri, crate::OrderingStatus>,
+        >,
+    >,
+    /// Best possible full-order position of an unreturned candidate.
+    pub unemitted_order: Option<crate::OrderBound>,
     /// Explicit decimal units shared by all scores, even for an empty result.
     pub precision: Precision,
     /// Every producer's own status, keyed by its stratum.
@@ -1050,8 +1061,9 @@ pub struct FusionTrailer {
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
     /// The evidence these rows were produced against: the content identity of
-    /// [`Self::attestations`], and of which strata answered the exclusion lookups
-    /// the rows were certified on.
+    /// [`Self::attestations`], which strata answered the exclusion lookups the
+    /// rows were certified on, and the immutable caller-ordering semantics,
+    /// snapshot and full-domain evidence when present.
     ///
     /// The third of the three identities an answer carries.
     /// [`Self::plan_id`] pins the question, [`Self::profile_id`] pins the law,
@@ -1076,12 +1088,18 @@ pub struct FusionTrailer {
     /// already digested for it; an answer whose lookups were answered by another
     /// generation has no identity to replay, because it was refused.
     ///
-    /// A fusion that asked no lookup digests exactly the attestation map, byte
-    /// for byte the identity such a run always carried. The attestation half is
-    /// immovable across repeated [`FusionStream::trailer`] calls; the lookup half
+    /// Without caller ordering, a fusion that asked no lookup digests exactly
+    /// the attestation map, byte for byte the identity such a run always carried.
+    /// The attestation half is immovable across repeated [`FusionStream::trailer`]
+    /// calls; the lookup half
     /// moves only if the caller certifies further rows between two calls and the
     /// fusion asks a stratum it had not asked before — the evidence behind the
     /// answer grew, and the identity says so.
+    ///
+    /// Caller ordering additionally binds each stratum's immutable semantics
+    /// IRI, snapshot and full-domain bound from [`Self::ordering`]. Its current
+    /// [`OrderingStatus::unread`](crate::OrderingStatus::unread) bound remains
+    /// visible there but is excluded from identity, preserving read-depth invariance.
     ///
     /// # Why [`Self::fidelities`] is deliberately NOT folded in
     ///
@@ -1350,7 +1368,23 @@ pub(crate) fn write_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
     A: ExactSizeIterator<Item = (&'a Iri, &'a PfAttestation)>,
     R: Iterator<Item = (&'a Iri, &'a StratumResolution)>,
 {
-    writer.u16(EVIDENCE_VERSION);
+    write_ordered_evidence(writer, attestations, resolution, None);
+}
+
+fn write_ordered_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
+    writer: &mut Writer<B>,
+    attestations: impl Fn() -> A,
+    resolution: impl Fn() -> R,
+    ordering: Option<&purrdf_sparql_eval::AdmittedOrderedMap<Iri, crate::OrderingStatus>>,
+) where
+    A: ExactSizeIterator<Item = (&'a Iri, &'a PfAttestation)>,
+    R: Iterator<Item = (&'a Iri, &'a StratumResolution)>,
+{
+    writer.u16(if ordering.is_some() {
+        EVIDENCE_VERSION + 1
+    } else {
+        EVIDENCE_VERSION
+    });
     writer.u64(attestations().len() as u64);
     for (stratum, attestation) in attestations() {
         writer.string(stratum.as_str());
@@ -1379,10 +1413,19 @@ pub(crate) fn write_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
             .map(|(stratum, _)| stratum)
     };
     let strata = looked_up().count();
-    if strata > 0 {
+    if strata > 0 || ordering.is_some() {
         writer.u64(strata as u64);
         for stratum in looked_up() {
             writer.string(stratum.as_str());
+        }
+    }
+    if let Some(ordering) = ordering {
+        writer.u64(ordering.len() as u64);
+        for (stratum, status) in ordering {
+            writer.string(stratum.as_str());
+            writer.string(status.evidence.semantics.as_str());
+            writer.bytes(&status.evidence.snapshot);
+            status.evidence.domain.write(writer);
         }
     }
 }
@@ -1390,17 +1433,20 @@ pub(crate) fn write_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
 impl FusionTrailer {
     /// The canonical bytes [`Self::evidence_id`] is the digest of.
     ///
-    /// A pure function of [`Self::attestations`] and of which strata
-    /// [`Self::resolution`] records exclusion lookups for: the layout version,
-    /// the entry count, then every `(stratum, generation, service level)` in
-    /// canonical stratum order, each variable-length part framed by its own
-    /// length and every integer little-endian — followed, only when some
-    /// stratum's lookups were asked, by the count and names of those strata (see
-    /// [`Self::evidence_id`]). Sorting comes free from the admitted ordered map and
-    /// is relied on, so no iteration order can reach the digest; the framing is
-    /// what makes the encoding injective, so no two different maps can share
-    /// bytes by running their fields together; the little-endian integers are
-    /// what make it identical on every target, `wasm32` included.
+    /// A pure function of [`Self::attestations`], which strata [`Self::resolution`]
+    /// records exclusion lookups for, and the immutable caller-ordering semantics
+    /// IRI, snapshot and full-domain bound in [`Self::ordering`] when present.
+    /// The layout contains its version, the attestation entry count and every
+    /// `(stratum, generation, service level)` in canonical stratum order. The
+    /// lookup section names the strata asked; it is present when nonempty or when
+    /// caller ordering follows. Caller ordering appends the count and each
+    /// `(stratum, semantics, snapshot, domain)` in canonical stratum order.
+    /// Mutable unread bounds are excluded: unchanged lookup strata and immutable
+    /// ordering evidence produce identical bytes at any read depth.
+    /// Sorting comes free from the admitted ordered map and is relied on, so no
+    /// iteration order can reach the digest; each variable-length part is framed
+    /// by its own length to keep the encoding injective, and little-endian integers
+    /// make it identical on every target, `wasm32` included.
     ///
     /// Public because an identity nobody can re-derive is an identity nobody
     /// can audit. A caller holding a trailer can recompute
@@ -1417,10 +1463,11 @@ impl FusionTrailer {
     ) -> Result<purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<u8>>, FusionError>
     {
         let mut writer = Writer::admitted(self.attestations.workspace());
-        write_evidence(
+        write_ordered_evidence(
             &mut writer,
             || self.attestations.iter(),
             || self.resolution.iter(),
+            self.ordering.as_deref(),
         );
         writer.into_admitted().map_err(FusionError::from)
     }
@@ -1490,13 +1537,15 @@ impl FusionTrailer {
 
     /// How many leading rows of `rows` are **certainly** in the answer.
     ///
-    /// The longest prefix in which every row's lowest possible score still beats
-    /// both of the things that could displace it: every later row's highest
-    /// possible score, and [`Self::unemitted_ceiling`] — the highest possible
-    /// score of any candidate this answer does not contain. Those rows keep
-    /// their places whatever the degraded strata did or did not find; past the
-    /// prefix, two rows' intervals overlap and their relative order is an
-    /// artefact of what the producers happened to return.
+    /// The longest prefix whose pessimistic positions beat every later row's
+    /// optimistic position and the bound over candidates outside this answer.
+    /// The built-in policy compares score floors and ceilings, admitting ties
+    /// already settled by its total order. Caller ordering compares immutable
+    /// leading keys, score intervals, caller tie keys and canonical terms; an
+    /// unseen candidate has no known tie key, so equal leading key and score
+    /// require a strict score advantage rather than a guessed tie-break.
+    /// [`Self::unemitted_ceiling`] supplies the built-in score bound;
+    /// [`Self::unemitted_order`] supplies the caller-key bound.
     ///
     /// # What this is for
     ///
@@ -1527,10 +1576,10 @@ impl FusionTrailer {
     ///
     /// Membership, not order within a tie, and not exclusion past the prefix:
     ///
-    /// * which of two *exactly* tied rows comes first is not settled here — it
-    ///   is decided by the engine's total tie-break (best rank, then canonical
-    ///   term order), replayably, and reported for the last emitted row as
-    ///   [`Self::cut_on_a_tie`];
+    /// * the built-in policy leaves exactly tied scores to best rank and
+    ///   canonical term. Caller ordering uses its fixed tie key immediately
+    ///   after score and the canonical term last. The last emitted row's tie
+    ///   event is reported as [`Self::cut_on_a_tie`];
     /// * a row **past** the prefix is *possible*, never excluded. The prefix
     ///   ending at three says the first three keep their places, not that the
     ///   fourth has lost its own;
@@ -1552,18 +1601,17 @@ impl FusionTrailer {
     ///   interval is zero-width, so the pairwise term is the emitted order
     ///   itself; and nothing outside `rows` can reach them either, because a row
     ///   is certified only over a threshold that bounds every candidate still to
-    ///   come and that threshold only falls as reading proceeds. The same
-    ///   interval comparison derives this result for exact and degraded answers.
-    /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
-    ///   could outscore anything, so nothing above it is safe either, and a
-    ///   prefix "certain except for one unbounded rival" is not certain.
-    /// * [`Self::unemitted_ceiling`] of `None` ⇒ `0`, for the same reason about
-    ///   the candidates this answer never named.
+    ///   come. The interval comparison derives the result for exact and
+    ///   degraded answers alike; an exact label never bypasses validation.
+    /// * Under the built-in policy, any [`ScoreInterval::Unbounded`] or absent
+    ///   [`Self::unemitted_ceiling`] gives `0`: no score comparison can settle it.
+    ///   A caller's strictly better leading key can still settle precedence
+    ///   despite unbounded scores. An unbounded leading key cannot.
     /// * `rows` empty ⇒ `0`.
     ///
     /// # Why the comparison admits equality
     ///
-    /// The test is `floor(i) >= ceiling(j)`, not `>`, and the difference is not
+    /// The built-in test is `floor(i) >= ceiling(j)`, not `>`, and the difference is not
     /// a rounding convenience — it is what keeps the common case from reading
     /// as uncertain. Two rows with the *same* score are ordinary: fixed-point
     /// reciprocal-rank decay quantizes adjacent ranks to one value routinely,
@@ -1579,19 +1627,42 @@ impl FusionTrailer {
     /// "Beats every later row" is asked of every row, and asking it row by row
     /// would walk the suffix each time — quadratic in the answer, on the default
     /// path of every fused search. The suffix maximum of `ceiling` is carried
-    /// backwards instead, so each row is judged against one number and the whole
-    /// function is linear in `rows` with no allocation.
+    /// backwards instead. Caller ordering carries a borrowed full-order bound
+    /// over the same suffix. Both passes are linear in `rows` and acquire no
+    /// term, key or container storage.
     ///
     /// `rows` is assumed to be in this fusion's emitted order, which is the
     /// order [`FusionStream::next`] yields and the order
     /// [`FusionResult`](crate::FusionResult) stores.
     /// # Errors
-    /// Refuses scores or bounds in different precision from this trailer and
-    /// intervals whose endpoints cannot be represented, including inflation
-    /// greater than the observed score. Validation precedes uncertainty exits.
+    /// Refuses scores or bounds in different precision from this trailer,
+    /// unrepresentable interval endpoints (including inflation greater than the
+    /// observed score), and malformed caller-key witnesses. Validation precedes
+    /// uncertainty exits.
     pub fn certain_prefix(&self, rows: &[FusedRow]) -> Result<usize, FusionError> {
         if let Some(bound) = self.unemitted_ceiling {
             bound.require_precision(self.precision)?;
+        }
+        if let Some(bound) = &self.unemitted_order
+            && let Some(score) = bound.score
+        {
+            score.require_precision(self.precision)?;
+        }
+        let ordering_semantics = self.ordering.as_ref().and_then(|sources| {
+            sources
+                .values()
+                .next()
+                .map(|source| &source.evidence.semantics)
+        });
+        if let Some(sources) = &self.ordering
+            && sources
+                .values()
+                .any(|source| Some(&source.evidence.semantics) != ordering_semantics)
+        {
+            return Err(crate::OrderingError::PolicyMismatch {
+                stratum: "certainty sources".to_owned(),
+            }
+            .into());
         }
         for row in rows {
             row.score.require_precision(self.precision)?;
@@ -1599,6 +1670,25 @@ impl FusionTrailer {
                 row.score.checked_sub(inflation)?;
                 row.score.checked_add(deficit)?;
             }
+            if let Some(witness) = &row.order_witness {
+                if ordering_semantics != Some(&witness.semantics) {
+                    return Err(crate::OrderingError::PolicyMismatch {
+                        stratum: "certainty witness".to_owned(),
+                    }
+                    .into());
+                }
+                if let Some(score) = witness.unseen.score {
+                    score.require_precision(self.precision)?;
+                }
+            } else if self.ordering.is_some() {
+                return Err(crate::OrderingError::MissingKey {
+                    item: row.entity.as_str().to_owned(),
+                }
+                .into());
+            }
+        }
+        if self.ordering.is_some() {
+            return self.certain_order_prefix(rows);
         }
         // One unbounded row poisons the whole ranking: it could be worth
         // anything, so no row can be certain of outranking it.
@@ -1613,7 +1703,6 @@ impl FusionTrailer {
         let Some(unemitted) = self.unemitted_ceiling else {
             return Ok(0);
         };
-
         // The inflation term is a sum of contributions that are themselves
         // summands of `score`, so it cannot exceed it and this subtraction
         // cannot underflow. A failure means that a row was forged or the
@@ -1658,11 +1747,47 @@ impl FusionTrailer {
         }
         Ok(certain)
     }
+
+    fn certain_order_prefix(&self, rows: &[FusedRow]) -> Result<usize, FusionError> {
+        let mut suffix = self
+            .unemitted_order
+            .as_ref()
+            .ok_or_else(|| crate::OrderingError::Uncertified {
+                reason: "caller-key trailer has no full-order remainder bound".to_owned(),
+            })?
+            .view();
+        let mut certain = rows.len();
+        for (position, row) in rows.iter().enumerate().rev() {
+            let witness =
+                row.order_witness
+                    .as_ref()
+                    .ok_or_else(|| crate::OrderingError::MissingKey {
+                        item: row.entity.as_str().to_owned(),
+                    })?;
+            let (floor, ceiling) = match row.interval {
+                ScoreInterval::Bounded { inflation, deficit } => (
+                    row.score.checked_sub(inflation)?,
+                    Some(row.score.checked_add(deficit)?),
+                ),
+                ScoreInterval::Unbounded { .. } => (Score::zero(self.precision), None),
+            };
+            if !suffix.is_after(&witness.keys, floor, &row.entity)? {
+                certain = position;
+            }
+            suffix = suffix.union(crate::ordering::OrderBoundView::known(
+                &witness.keys,
+                ceiling,
+                &row.entity,
+            ));
+        }
+        Ok(certain)
+    }
 }
 
 /// The current head of one stream, already validated and contribution-checked.
 #[derive(Clone, Debug)]
 struct Head {
+    keys: Option<purrdf_sparql_eval::SharedWorkspace<crate::CandidateKeys>>,
     rank: u64,
     contribution: RawScore,
     item: Term,
@@ -1717,6 +1842,7 @@ struct BlockWitness {
 /// A candidate's accumulated NRA state.
 #[derive(Debug)]
 struct CandidateState {
+    keys: Option<purrdf_sparql_eval::SharedWorkspace<crate::CandidateKeys>>,
     lower_bound: RawScore,
     contributions: purrdf_sparql_eval::AdmittedVec<(Iri, u64, RawScore)>,
     /// The streams that have named this candidate.
@@ -1803,6 +1929,7 @@ impl CandidateState {
     /// known to score.
     fn new(workspace: &purrdf_sparql_eval::WorkspaceCapability) -> Self {
         Self {
+            keys: None,
             lower_bound: RawScore::ZERO,
             contributions: purrdf_sparql_eval::AdmittedVec::new(workspace),
             seen_streams: AdmittedOrderedSet::new(workspace),
@@ -1868,13 +1995,6 @@ impl StreamSet {
         match self {
             Self::Narrow(word) => word & (1 << index) != 0,
             Self::Wide(words) => words[index / 64] & (1 << (index % 64)) != 0,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Narrow(word) => *word == 0,
-            Self::Wide(words) => words.iter().all(|word| *word == 0),
         }
     }
 
@@ -1948,6 +2068,7 @@ struct Signature {
 /// frontier.
 #[derive(Clone, Debug)]
 struct RankKey {
+    keys: Option<purrdf_sparql_eval::SharedWorkspace<crate::CandidateKeys>>,
     score: RawScore,
     best_rank: u64,
     id: CandidateId,
@@ -1956,6 +2077,7 @@ struct RankKey {
 /// A [`RankKey`] read through borrowed parts, so a key can be found in — and
 /// taken out of — an ordered set without cloning the term it carries.
 trait RankOrder {
+    fn keys(&self) -> Option<&crate::CandidateKeys>;
     fn score(&self) -> RawScore;
     fn best_rank(&self) -> u64;
     fn term(&self) -> &str;
@@ -1964,14 +2086,21 @@ trait RankOrder {
 /// The one comparison both [`RankKey`] and its borrowed probe are ordered by,
 /// so the set's order and the lookup's order cannot drift apart.
 fn rank_order(left: &dyn RankOrder, right: &dyn RankOrder) -> core::cmp::Ordering {
-    right
-        .score()
-        .cmp(&left.score())
-        .then_with(|| left.best_rank().cmp(&right.best_rank()))
+    left.keys()
+        .map(|keys| keys.leading.as_slice())
+        .cmp(&right.keys().map(|keys| keys.leading.as_slice()))
+        .then_with(|| right.score().cmp(&left.score()))
+        .then_with(|| match (left.keys(), right.keys()) {
+            (Some(left), Some(right)) => left.tie.as_slice().cmp(right.tie.as_slice()),
+            _ => left.best_rank().cmp(&right.best_rank()),
+        })
         .then_with(|| left.term().cmp(right.term()))
 }
 
 impl RankOrder for RankKey {
+    fn keys(&self) -> Option<&crate::CandidateKeys> {
+        self.keys.as_deref()
+    }
     fn score(&self) -> RawScore {
         self.score
     }
@@ -1985,12 +2114,16 @@ impl RankOrder for RankKey {
 
 /// A lookup key for a [`RankKey`], borrowing the term rather than owning it.
 struct RankProbe<'a> {
+    keys: Option<&'a crate::CandidateKeys>,
     score: RawScore,
     best_rank: u64,
     term: &'a str,
 }
 
 impl RankOrder for RankProbe<'_> {
+    fn keys(&self) -> Option<&crate::CandidateKeys> {
+        self.keys
+    }
     fn score(&self) -> RawScore {
         self.score
     }
@@ -2123,6 +2256,7 @@ impl SelectionIndex {
 /// the answer, which is the caller's to hold and not this engine's.
 #[derive(Debug)]
 struct EmittedRecord {
+    keys: Option<purrdf_sparql_eval::SharedWorkspace<crate::CandidateKeys>>,
     /// The stream indexes that contributed to the candidate before it
     /// certified — [`CandidateState::seen_streams`], moved out of the state
     /// being dropped rather than rebuilt.
@@ -2260,6 +2394,9 @@ impl Degradation {
 /// demand. Call [`next`](FusionStream::next) until it returns `Ok(None)`, then
 /// [`trailer`](FusionStream::trailer) for the producers' statuses.
 pub struct FusionStream<'p, S: RankedStream> {
+    empty_order_key: Option<crate::OrderBytes>,
+    terminal_ordering_failure: Option<Box<crate::OrderingError>>,
+    ordering: Option<purrdf_sparql_eval::AdmittedVec<crate::OrderingStatus>>,
     workspace: purrdf_sparql_eval::WorkspaceCapability,
     // A refused mutation cannot be resumed or reported as successful. Retain
     // the first native cause without rendering or acquiring another buffer.
@@ -2526,6 +2663,32 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     ) -> Result<Self, FusionError> {
         let workspace = streams.workspace().clone();
         let count = streams.len();
+        let ordering = if let Some(policy) = profile.ordering() {
+            Some(purrdf_sparql_eval::AdmittedVec::try_from_iter_admitted(
+                streams.iter().map(|(stratum, stream)| {
+                    if stream.score_prefix_bounded() {
+                        return Err(FusionError::from(crate::OrderingError::Uncertified { reason: format!("stratum <{stratum}> came from a score-prefix bounded plan; replan with CallerOrdered") }));
+                    }
+                    let evidence = stream.ordering_evidence().ok_or_else(|| {
+                        crate::OrderingError::MissingEvidence {
+                            stratum: stratum.as_str().to_owned(),
+                        }
+                    })?;
+                    if evidence.semantics != policy.semantics {
+                        return Err(FusionError::from(crate::OrderingError::PolicyMismatch {
+                            stratum: stratum.as_str().to_owned(),
+                        }));
+                    }
+                    Ok(crate::OrderingStatus {
+                        evidence: evidence.clone_admitted(&workspace)?,
+                        unread: stream.unread_key_bound().clone_admitted(&workspace)?,
+                    })
+                }),
+                &workspace,
+            )?)
+        } else {
+            None
+        };
         // One read of each contract, both terms taken from it. Asking twice
         // would let a stream answer differently the second time and leave the
         // engine holding two halves of two declarations.
@@ -2642,7 +2805,14 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         } else {
             None
         };
+        let empty_order_key = ordering
+            .as_ref()
+            .map(|_| crate::ordering::retain_bytes(&[], &workspace))
+            .transpose()?;
         Ok(Self {
+            empty_order_key,
+            terminal_ordering_failure: None,
+            ordering,
             streams,
             profile,
             plan_id: None,
@@ -2783,7 +2953,9 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                             stratum: self.streams[index].0.as_str().to_owned(),
                         })?;
                         let contribution = RawScore::from_raw(crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?.into_raw());
-                        observations.push((index, Head { rank, contribution, item, block }))?;
+                        let keys = self.streams[index].1.candidate_keys(&item)?;
+                        let keys = self.retain_order_keys(index, &item, keys)?;
+                        observations.push((index, Head { keys, rank, contribution, item, block }))?;
                     }
                 }
                 Ok::<_, FusionError>(())
@@ -2838,10 +3010,16 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// violation, reachable only from a hand-built stream set that repeats a
     /// stratum.
     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+        if let Some(error) = &self.terminal_ordering_failure {
+            return Err(FusionError::Ordering((**error).clone()));
+        }
         if let Some(error) = &self.terminal_failure {
             return Err(FusionError::NativeFailure(error.clone()));
         }
         let result = self.next_inner().await;
+        if let Err(FusionError::Ordering(error)) = &result {
+            self.terminal_ordering_failure = Some(Box::new(error.clone()));
+        }
         if let Err(FusionError::NativeFailure(error)) = &result {
             self.terminal_failure = Some(error.clone());
         }
@@ -2878,7 +3056,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 // anything.
                 let mut visits = 0;
                 self.last_row_won_a_tie =
-                    self.has_final_rival_at(state.lower_bound, &mut visits)?;
+                    self.has_final_rival_at(state.lower_bound, state.keys.as_deref(), &mut visits)?;
                 self.selection_visits += visits;
                 // The candidate leaves the frontier here and nowhere else, so
                 // this is the only place the record of its emission can be
@@ -2892,7 +3070,24 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 // Computed before the state is dismantled: it reads
                 // `seen_streams`, which is moved out immediately below.
                 let interval = self.score_interval(&state)?;
+                let order_witness = if let Some(keys) = &state.keys {
+                    Some(crate::OrderWitness {
+                        semantics: self
+                            .profile
+                            .ordering()
+                            .ok_or_else(|| crate::OrderingError::PolicyMismatch {
+                                stratum: "fusion law".to_owned(),
+                            })?
+                            .semantics
+                            .clone_admitted(&self.workspace)?,
+                        keys: (**keys).clone(),
+                        unseen: self.unseen_order_bound(true)?,
+                    })
+                } else {
+                    None
+                };
                 let CandidateState {
+                    keys,
                     lower_bound,
                     mut contributions,
                     seen_streams,
@@ -2909,6 +3104,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 self.emitted.record(
                     id.clone(),
                     EmittedRecord {
+                        keys,
                         named_by: seen_streams,
                         block,
                         excluded,
@@ -2924,6 +3120,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                             .then(left.1.cmp(&right.1))
                     });
                 return Ok(Some(FusedRow {
+                    order_witness,
                     entity: id,
                     score: lower_bound.scaled(self.profile.precision()),
                     contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(
@@ -2941,7 +3138,22 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             }
             match self.best_head_index() {
                 Some(index) => self.pull(index).await?,
-                None => return Ok(None),
+                None => {
+                    if self.profile.ordering().is_some()
+                        && (!self.frontier.is_empty()
+                            || !matches!(
+                                self.unseen_order_bound(true)?.leading,
+                                crate::LeadingBound::Empty
+                            ))
+                    {
+                        return Err(crate::OrderingError::Uncertified {
+                            reason: "no remaining readable row can discharge the ordering bounds"
+                                .to_owned(),
+                        }
+                        .into());
+                    }
+                    return Ok(None);
+                }
             }
         }
     }
@@ -2992,10 +3204,16 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// yet, because a bound of zero rows must still report a status per
     /// producer.
     pub async fn trailer(&mut self) -> Result<FusionTrailer, FusionError> {
+        if let Some(error) = &self.terminal_ordering_failure {
+            return Err(FusionError::Ordering((**error).clone()));
+        }
         if let Some(error) = &self.terminal_failure {
             return Err(FusionError::NativeFailure(error.clone()));
         }
         let result = self.trailer_inner().await;
+        if let Err(FusionError::Ordering(error)) = &result {
+            self.terminal_ordering_failure = Some(Box::new(error.clone()));
+        }
         if let Err(FusionError::NativeFailure(error)) = &result {
             self.terminal_failure = Some(error.clone());
         }
@@ -3036,6 +3254,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 }
                 .into());
             }
+            self.check_callback_ordering(index)?;
             rows_materialised.push(settlement.rows_materialised)?;
         }
         for index in 0..self.streams.len() {
@@ -3146,7 +3365,34 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             }
         };
 
+        let ordering = if let Some(sources) = &self.ordering {
+            let mut values = purrdf_sparql_eval::AdmittedOrderedMap::new(&self.workspace);
+            for (index, status) in sources.iter().enumerate() {
+                if self.streams[index].1.ordering_evidence().as_ref() != Some(&status.evidence) {
+                    return Err(crate::OrderingError::EvidenceChanged {
+                        stratum: self.streams[index].0.as_str().to_owned(),
+                    }
+                    .into());
+                }
+                values.insert(
+                    self.streams[index].0.clone_admitted(&self.workspace)?,
+                    crate::OrderingStatus {
+                        evidence: status.evidence.clone(),
+                        unread: self.effective_key_bound(index, true),
+                    },
+                )?;
+            }
+            Some(values)
+        } else {
+            None
+        };
+        let ordering = ordering
+            .map(|values| {
+                purrdf_sparql_eval::SharedWorkspace::new_admitted(values, &self.workspace)
+            })
+            .transpose()?;
         Ok(FusionTrailer {
+            unemitted_order: self.unemitted_order_bound()?,
             precision: self.profile.precision(),
             statuses: purrdf_sparql_eval::SharedWorkspace::new_admitted(
                 purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
@@ -3165,12 +3411,14 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             // and the identity a holder of that answer re-derives cannot come
             // from two encodings that drifted apart.
             evidence_id: EvidenceId::from_record(|hasher| {
-                write_evidence(
+                write_ordered_evidence(
                     &mut Writer::digest(hasher),
                     || self.attestations.iter(),
                     || resolution.iter(),
+                    ordering.as_deref(),
                 );
             }),
+            ordering,
             attestations: self.attestations.clone(),
             fidelities: purrdf_sparql_eval::SharedWorkspace::new_admitted(
                 purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
@@ -3326,6 +3574,282 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         Ok(())
     }
 
+    fn check_ordering_evidence(&self, index: usize) -> Result<(), FusionError> {
+        let Some(statuses) = &self.ordering else {
+            return Ok(());
+        };
+        if self.streams[index].1.ordering_evidence().as_ref() != Some(&statuses[index].evidence) {
+            return Err(crate::OrderingError::EvidenceChanged {
+                stratum: self.streams[index].0.as_str().to_owned(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    fn check_callback_ordering(&mut self, index: usize) -> Result<(), FusionError> {
+        self.check_ordering_evidence(index)?;
+        if self.exhausted[index] {
+            return Ok(());
+        }
+        let Some(statuses) = &mut self.ordering else {
+            return Ok(());
+        };
+        let next = self.streams[index].1.unread_key_bound();
+        match next.cmp_best(&statuses[index].unread) {
+            core::cmp::Ordering::Less => {
+                return Err(crate::OrderingError::BoundLoosened {
+                    stratum: self.streams[index].0.as_str().to_owned(),
+                }
+                .into());
+            }
+            core::cmp::Ordering::Greater => {
+                statuses[index].unread = next.clone_admitted(&self.workspace)?;
+            }
+            core::cmp::Ordering::Equal => {}
+        }
+        Ok(())
+    }
+
+    fn refresh_ordering(
+        &mut self,
+        index: usize,
+        returned: Option<&[u8]>,
+    ) -> Result<(), FusionError> {
+        self.check_ordering_evidence(index)?;
+        let Some(statuses) = &mut self.ordering else {
+            return Ok(());
+        };
+        let stratum = self.streams[index].0.as_str();
+        let stream = &self.streams[index].1;
+        let status = &mut statuses[index];
+        if let Some(key) = returned {
+            if !status.unread.permits(key) || !status.evidence.domain.permits(key) {
+                return Err(crate::OrderingError::BoundViolated {
+                    stratum: stratum.to_owned(),
+                }
+                .into());
+            }
+            let next = stream.unread_key_bound();
+            if next.cmp_best(&status.unread).is_lt() {
+                return Err(crate::OrderingError::BoundLoosened {
+                    stratum: stratum.to_owned(),
+                }
+                .into());
+            }
+            status.unread = next.clone_admitted(&self.workspace)?;
+        } else {
+            // This read has no further offered rows. Its persistent domain
+            // evidence, rather than this suffix, bounds rows it may have missed.
+            status.unread = crate::LeadingBound::Empty;
+        }
+        Ok(())
+    }
+
+    fn check_order_keys(
+        &mut self,
+        index: usize,
+        item: &Term,
+        keys: Option<crate::CandidateKeys>,
+    ) -> Result<Option<purrdf_sparql_eval::SharedWorkspace<crate::CandidateKeys>>, FusionError>
+    {
+        let keys = self.retain_order_keys(index, item, keys)?;
+        if let Some(keys) = &keys {
+            self.refresh_ordering(index, Some(&keys.leading))?;
+        }
+        Ok(keys)
+    }
+
+    fn retain_order_keys(
+        &self,
+        index: usize,
+        item: &Term,
+        keys: Option<crate::CandidateKeys>,
+    ) -> Result<Option<purrdf_sparql_eval::SharedWorkspace<crate::CandidateKeys>>, FusionError>
+    {
+        self.validate_order_keys(index, item, keys.as_ref())?;
+        keys.map(|keys| {
+            purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                keys.clone_admitted(&self.workspace)?,
+                &self.workspace,
+            )
+        })
+        .transpose()
+        .map_err(FusionError::from)
+    }
+
+    fn validate_order_keys(
+        &self,
+        index: usize,
+        item: &Term,
+        keys: Option<&crate::CandidateKeys>,
+    ) -> Result<(), FusionError> {
+        let Some(policy) = self.profile.ordering() else {
+            if keys.is_some() {
+                return Err(crate::OrderingError::PolicyMismatch {
+                    stratum: self.streams[index].0.as_str().to_owned(),
+                }
+                .into());
+            }
+            return Ok(());
+        };
+        let keys = keys.ok_or_else(|| crate::OrderingError::MissingKey {
+            item: item.as_str().to_owned(),
+        })?;
+        if !policy.leading && !keys.leading.is_empty() {
+            return Err(crate::OrderingError::UnexpectedLeadingKey {
+                item: item.as_str().to_owned(),
+            }
+            .into());
+        }
+        let prior = self
+            .frontier
+            .get(item)
+            .and_then(|state| state.keys.as_deref())
+            .or_else(|| {
+                self.emitted
+                    .get(item)
+                    .and_then(|state| state.keys.as_deref())
+            })
+            .or_else(|| {
+                self.heads
+                    .iter()
+                    .flatten()
+                    .find(|head| &head.item == item)
+                    .and_then(|head| head.keys.as_deref())
+            });
+        if prior.is_some_and(|prior| prior != keys) {
+            return Err(crate::OrderingError::ConflictingKey {
+                item: item.as_str().to_owned(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    fn source_may_have_missing(&self, index: usize) -> bool {
+        self.degradation
+            .as_ref()
+            .is_some_and(|degradation| degradation.degraded[index])
+            || (self.heads[index].is_none()
+                && self
+                    .statuses
+                    .get(&self.streams[index].0)
+                    .is_some_and(|status| !matches!(status, ProducerStatus::Exhausted { .. })))
+    }
+
+    fn effective_key_bound(&self, index: usize, include_missing: bool) -> crate::LeadingBound {
+        use crate::LeadingBound;
+        let Some(ordering) = &self.ordering else {
+            return if self.heads[index].is_some() {
+                LeadingBound::Unbounded
+            } else {
+                LeadingBound::Empty
+            };
+        };
+        let policy = self.profile.ordering();
+        if policy.is_some_and(|policy| !policy.leading) {
+            return if self.heads[index].is_some()
+                || (include_missing && self.source_may_have_missing(index))
+            {
+                self.empty_order_key
+                    .as_ref()
+                    .map_or(LeadingBound::Unbounded, |key| {
+                        LeadingBound::Inclusive(key.clone())
+                    })
+            } else {
+                LeadingBound::Empty
+            };
+        }
+        let status = &ordering[index];
+        let mut bound = status.unread.clone();
+        if let Some(head) = &self.heads[index] {
+            bound = bound.union(head.keys.as_ref().map_or(LeadingBound::Unbounded, |keys| {
+                LeadingBound::Inclusive(keys.leading.clone())
+            }));
+        }
+        if include_missing && self.source_may_have_missing(index) {
+            bound = bound.union(status.evidence.domain.clone());
+        }
+        bound
+    }
+
+    fn unseen_order_bound(&self, include_missing: bool) -> Result<crate::OrderBound, FusionError> {
+        let mut leading = crate::LeadingBound::Empty;
+        for index in 0..self.streams.len() {
+            leading = leading.union(self.effective_key_bound(index, include_missing));
+        }
+        let mut score = self.compute_threshold_under(include_missing)?;
+        if include_missing {
+            for index in 0..self.streams.len() {
+                let degraded = self
+                    .degradation
+                    .as_ref()
+                    .is_some_and(|degradation| degradation.degraded[index]);
+                if !degraded && self.source_may_have_missing(index) && self.heads[index].is_none() {
+                    score = score.checked_add(self.rank_one_contribution(index)?)?;
+                }
+            }
+        }
+        Ok(crate::OrderBound {
+            leading,
+            score: if include_missing
+                && self.fidelities.iter().any(RankFidelity::order_is_unbounded)
+            {
+                None
+            } else {
+                Some(score.scaled(self.profile.precision()))
+            },
+            tail: None,
+        })
+    }
+
+    fn clears_unseen(
+        &self,
+        keys: Option<&crate::CandidateKeys>,
+        score: RawScore,
+        id: &Term,
+    ) -> Result<bool, FusionError> {
+        match keys {
+            Some(keys) => self.unseen_order_bound(true)?.is_after(
+                keys,
+                score.scaled(self.profile.precision()),
+                id,
+            ),
+            None => Ok(!self.heads.iter().any(Option::is_some) || score > self.threshold),
+        }
+    }
+
+    fn unemitted_order_bound(&self) -> Result<Option<crate::OrderBound>, FusionError> {
+        if self.profile.ordering().is_none() {
+            return Ok(None);
+        }
+        let mut bound = self.unseen_order_bound(true)?;
+        for (id, state) in &self.frontier {
+            let keys = state
+                .keys
+                .as_ref()
+                .ok_or_else(|| crate::OrderingError::MissingKey {
+                    item: id.as_str().to_owned(),
+                })?;
+            let score = match self.score_interval(state)? {
+                ScoreInterval::Bounded { deficit, .. } => Some(
+                    state
+                        .lower_bound
+                        .scaled(self.profile.precision())
+                        .checked_add(deficit)?,
+                ),
+                ScoreInterval::Unbounded { .. } => None,
+            };
+            bound = bound.union(crate::OrderBound {
+                leading: crate::LeadingBound::Inclusive(keys.leading.clone()),
+                score,
+                tail: Some((keys.tie.clone(), id.clone())),
+            });
+        }
+        Ok(Some(bound))
+    }
+
     /// Pull and validate rows from stream `index` until one of them is a head,
     /// or the stream ends.
     ///
@@ -3362,6 +3886,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 contribution: producer_contribution,
                 item,
                 block,
+                order_keys,
             }) = pulled?
             else {
                 let receipt = {
@@ -3369,6 +3894,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                     stream.receipt().await
                 }?;
                 self.finish(index, receipt)?;
+                self.refresh_ordering(index, None)?;
                 return Ok(None);
             };
 
@@ -3425,6 +3951,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             self.rows_pulled[index] += 1;
 
             let item: Term = item.into();
+            let keys = self.check_order_keys(index, &item, order_keys)?;
             let repeated = match self.seen_items[index].as_mut() {
                 // `Unique`: the producer promised no repeats, so there is no
                 // per-stream identity set to consult and none to grow — that
@@ -3449,6 +3976,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             };
             if !repeated {
                 return Ok(Some(Head {
+                    keys,
                     rank,
                     contribution: RawScore::from_raw(expected.into_raw()),
                     item,
@@ -3918,6 +4446,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             // the frontier exactly as it found it — the discipline every other
             // refusal in this engine keeps.
             self.check_verdict_against_declaration(index, &id, verdict)?;
+            self.check_callback_ordering(index)?;
             // The signature the candidate is filed under before the answer is
             // recorded, so it can be re-filed under the one the answer leaves.
             let before = self
@@ -3995,7 +4524,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                     .score
                     .checked_add(heads)
                     .map_err(|_| FusionError::Overflow)?;
-                if reach <= self.threshold {
+                if !self.clears_unseen(member.keys.as_deref(), reach, &member.id)? {
                     break;
                 }
                 for index in 0..self.streams.len() {
@@ -4304,15 +4833,21 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         right_id: &CandidateId,
         right: &CandidateState,
     ) -> bool {
-        match left.lower_bound.cmp(&right.lower_bound) {
-            core::cmp::Ordering::Greater => true,
-            core::cmp::Ordering::Less => false,
-            core::cmp::Ordering::Equal => match left.best_rank().cmp(&right.best_rank()) {
-                core::cmp::Ordering::Less => true,
-                core::cmp::Ordering::Greater => false,
-                core::cmp::Ordering::Equal => left_id.as_str() < right_id.as_str(),
+        rank_order(
+            &RankProbe {
+                keys: left.keys.as_deref(),
+                score: left.lower_bound,
+                best_rank: left.best_rank(),
+                term: left_id.as_str(),
             },
-        }
+            &RankProbe {
+                keys: right.keys.as_deref(),
+                score: right.lower_bound,
+                best_rank: right.best_rank(),
+                term: right_id.as_str(),
+            },
+        )
+        .is_lt()
     }
 
     /// Whether `other` could still be ordered ahead of the finalized `state`.
@@ -4345,17 +4880,25 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         state: &CandidateState,
     ) -> Result<bool, FusionError> {
         let other_upper = self.upper_bound(other)?;
-        Ok(match other_upper.cmp(&state.lower_bound) {
-            core::cmp::Ordering::Greater => true,
-            core::cmp::Ordering::Less => false,
-            core::cmp::Ordering::Equal => {
-                if self.is_final(other) {
-                    Self::is_better(other_id, other, id, state)
+        Ok(rank_order(
+            &RankProbe {
+                keys: other.keys.as_deref(),
+                score: other_upper,
+                best_rank: if self.is_final(other) {
+                    other.best_rank()
                 } else {
-                    true
-                }
-            }
-        })
+                    0
+                },
+                term: other_id.as_str(),
+            },
+            &RankProbe {
+                keys: state.keys.as_deref(),
+                score: state.lower_bound,
+                best_rank: state.best_rank(),
+                term: id.as_str(),
+            },
+        )
+        .is_lt())
     }
 
     /// The best candidate that is safe to emit, if any.
@@ -4429,13 +4972,13 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         let Some(best) = best else {
             return Ok(None);
         };
-        if open.is_empty() {
-            return Ok(Some(best.id.clone()));
-        }
-        if best.score <= self.threshold {
+        if !self.clears_unseen(best.keys.as_deref(), best.score, &best.id)? {
             return Ok(None);
         }
-        let mut ceiling: Option<RawScore> = None;
+        // A dominating group settles selection only after every remaining bound
+        // is representable. Overflow lets the walk decide whether domination
+        // precedes the refusal in frontier order.
+        let mut dominated = false;
         for (signature, members) in &self.selection.groups {
             *visits += 1;
             if !signature.reach.intersects(&open) {
@@ -4453,14 +4996,17 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             let Ok(reach) = reach else {
                 return self.select_emittable_by_scan(visits);
             };
-            if ceiling.is_none_or(|highest| reach > highest) {
-                ceiling = Some(reach);
+            let optimistic = RankProbe {
+                keys: first.keys.as_deref(),
+                score: reach,
+                best_rank: 0,
+                term: first.id.as_str(),
+            };
+            if rank_order(&optimistic, best).is_lt() {
+                dominated = true;
             }
         }
-        if ceiling.is_some_and(|highest| highest >= best.score) {
-            return Ok(None);
-        }
-        Ok(Some(best.id.clone()))
+        Ok((!dominated).then(|| best.id.clone()))
     }
 
     /// [`Self::select_emittable`] by its pairwise definition: every final
@@ -4479,31 +5025,28 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         if self.frontier.is_empty() {
             return Ok(None);
         }
-        let active = self.heads.iter().any(Option::is_some);
         let mut best: Option<CandidateId> = None;
         for (id, state) in &self.frontier {
             *visits += 1;
             if !self.is_final(state) {
                 continue;
             }
-            if active {
-                if state.lower_bound <= self.threshold {
+            if !self.clears_unseen(state.keys.as_deref(), state.lower_bound, id)? {
+                continue;
+            }
+            let mut dominated = false;
+            for (other_id, other) in &self.frontier {
+                *visits += 1;
+                if other_id == id {
                     continue;
                 }
-                let mut dominated = false;
-                for (other_id, other) in &self.frontier {
-                    *visits += 1;
-                    if other_id == id {
-                        continue;
-                    }
-                    if self.outranks(other_id, other, id, state)? {
-                        dominated = true;
-                        break;
-                    }
+                if self.outranks(other_id, other, id, state)? {
+                    dominated = true;
+                    break;
                 }
-                if dominated {
-                    continue;
-                }
+            }
+            if dominated {
+                continue;
             }
             match &best {
                 None => best = Some(id.clone()),
@@ -4528,9 +5071,15 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     /// stream, and within a group the first key at or after `score` is the
     /// best-placed one scoring at most `score`, so one ordered lookup per final
     /// group answers it.
-    fn has_final_rival_at(&self, score: RawScore, visits: &mut u64) -> Result<bool, FusionError> {
+    fn has_final_rival_at(
+        &self,
+        score: RawScore,
+        keys: Option<&crate::CandidateKeys>,
+        visits: &mut u64,
+    ) -> Result<bool, FusionError> {
         let open = self.open_streams()?;
         let probe = RankProbe {
+            keys,
             score,
             best_rank: 0,
             term: "",
@@ -4542,7 +5091,11 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 && members
                     .range::<dyn RankOrder, _>((Bound::Included(from), Bound::Unbounded))
                     .next()
-                    .is_some_and(|(rival, ())| rival.score == score)
+                    .is_some_and(|(rival, ())| {
+                        rival.score == score
+                            && rival.keys.as_deref().map(|keys| keys.leading.as_slice())
+                                == keys.map(|keys| keys.leading.as_slice())
+                    })
         }))
     }
 
@@ -4611,6 +5164,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     fn unfile(&mut self, id: &CandidateId, state: &CandidateState) -> Result<(), FusionError> {
         let signature = self.signature(state)?;
         let probe = RankProbe {
+            keys: state.keys.as_deref(),
             score: state.lower_bound,
             best_rank: state.best_rank(),
             term: id.as_str(),
@@ -4633,6 +5187,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             return Ok(());
         }
         let probe = RankProbe {
+            keys: state.keys.as_deref(),
             score: state.lower_bound,
             best_rank: state.best_rank(),
             term: id.as_str(),
@@ -4937,6 +5492,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
     // Both ordinary heads and original uncertain observations accumulate here.
     // There is one contribution sum, domain/duplicate law and selection index.
     fn merge_head(&mut self, index: usize, head: Head) -> Result<(), FusionError> {
+        self.validate_order_keys(index, &head.item, head.keys.as_deref())?;
         let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
 
         // Asked before the frontier is consulted, let alone touched, and before
@@ -5098,6 +5654,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             Some(state) => {
                 let signature = self.signature(state)?;
                 let probe = RankProbe {
+                    keys: state.keys.as_deref(),
                     score: state.lower_bound,
                     best_rank: state.best_rank(),
                     term: head.item.as_str(),
@@ -5127,6 +5684,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
                 .push((stratum, head.rank, head.contribution))?;
             state.seen_streams.insert(index)?;
             state.block = placement;
+            state.keys = head.keys;
             self.frontier.insert(head.item, state)?;
         }
         let state = self
@@ -5140,6 +5698,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
             .map(|_| indexed.clone_admitted(&self.workspace))
             .transpose()?;
         let key = RankKey {
+            keys: state.keys.clone(),
             score: state.lower_bound,
             best_rank: state.best_rank(),
             id: indexed,
@@ -5236,7 +5795,6 @@ mod tests {
                 assert_eq!(left.contains(index), left_oracle.contains(&index));
                 assert_eq!(right.contains(index), right_oracle.contains(&index));
             }
-            assert_eq!(left.is_empty(), left_oracle.is_empty());
             assert_eq!(
                 left.intersects(&right),
                 !left_oracle.is_disjoint(&right_oracle)
@@ -5268,6 +5826,14 @@ mod tests {
 
     /// A stream over a fixed universe, emitted in the given order.
     struct Listed {
+        ordering: Option<std::sync::Arc<crate::OrderCatalog>>,
+        ordering_after_settle: Option<std::sync::Arc<crate::OrderCatalog>>,
+        ordering_after_exclusion: Option<std::sync::Arc<crate::OrderCatalog>>,
+        key_bounds: Option<Vec<crate::LeadingBound>>,
+        key_bound_after_settle: Option<crate::LeadingBound>,
+        key_bound_after_exclusion: Option<crate::LeadingBound>,
+        domain_override: Option<crate::LeadingBound>,
+        fidelity: RankFidelity,
         items: Vec<Term>,
         holds: BTreeSet<Term>,
         emitted: usize,
@@ -5285,6 +5851,14 @@ mod tests {
         fn new(items: Vec<Term>, weight: Score) -> Self {
             let holds = items.iter().cloned().collect();
             Self {
+                ordering: None,
+                ordering_after_settle: None,
+                ordering_after_exclusion: None,
+                key_bounds: None,
+                key_bound_after_settle: None,
+                key_bound_after_exclusion: None,
+                domain_override: None,
+                fidelity: RankFidelity::EXACT,
                 items,
                 holds,
                 emitted: 0,
@@ -5319,6 +5893,47 @@ mod tests {
     impl RankedStream for Listed {
         type Item = Term;
 
+        fn ordering_evidence(&self) -> Option<crate::OrderingEvidence> {
+            self.ordering.as_ref().map(|catalog| {
+                let mut evidence = catalog.evidence();
+                if let Some(domain) = &self.domain_override {
+                    evidence.domain = domain.clone();
+                }
+                evidence
+            })
+        }
+
+        fn unread_key_bound(&self) -> crate::LeadingBound {
+            if let Some(bounds) = &self.key_bounds {
+                return bounds[self.emitted].clone();
+            }
+            let Some(catalog) = &self.ordering else {
+                return crate::LeadingBound::Unbounded;
+            };
+            self.items[self.emitted..]
+                .iter()
+                .fold(crate::LeadingBound::Empty, |bound, item| {
+                    bound.union(crate::LeadingBound::Inclusive(
+                        catalog.keys(item).expect("fixture key").leading.clone(),
+                    ))
+                })
+        }
+
+        fn candidate_keys(
+            &self,
+            candidate: &Term,
+        ) -> Result<Option<crate::CandidateKeys>, ProtocolError> {
+            self.ordering
+                .as_ref()
+                .map(|catalog| {
+                    catalog
+                        .keys(candidate)
+                        .cloned()
+                        .map_err(ProtocolError::Ordering)
+                })
+                .transpose()
+        }
+
         async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
             self.next_attempts += 1;
             if self.native_refusal {
@@ -5338,7 +5953,9 @@ mod tests {
                 .drawn_from
                 .clone()
                 .map_or(RowBlock::Undeclared, RowBlock::Declared);
-            Ok(Some(RankedRow::new(rank, value, item, drawn_from)))
+            let mut row = RankedRow::new(rank, value, item, drawn_from);
+            row.order_keys = self.candidate_keys(&row.item)?;
+            Ok(Some(row))
         }
 
         async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -5347,11 +5964,25 @@ mod tests {
             })
         }
 
+        async fn settle(&mut self) -> Result<crate::ReadSettlement, ProtocolError> {
+            if let Some(ordering) = self.ordering_after_settle.take() {
+                self.ordering = Some(ordering);
+            }
+            if let Some(bound) = self.key_bound_after_settle.take() {
+                self.key_bounds = Some(vec![bound; self.items.len() + 1]);
+            }
+            Ok(crate::ReadSettlement {
+                attestation: self.attestation(),
+                rows_materialised: self.rows_materialised(),
+                rows_emitted: None,
+            })
+        }
+
         fn contract(&self) -> StreamContract {
             StreamContract::new(
                 purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
-                RankFidelity::EXACT,
+                self.fidelity.clone(),
                 self.domains.clone(),
                 self.basis,
             )
@@ -5361,11 +5992,382 @@ mod tests {
             if !self.basis.is_declared() {
                 return Err(ProtocolError::ExclusionUnavailable);
             }
+            if let Some(ordering) = self.ordering_after_exclusion.take() {
+                self.ordering = Some(ordering);
+            }
+            if let Some(bound) = self.key_bound_after_exclusion.take() {
+                self.key_bounds = Some(vec![bound; self.items.len() + 1]);
+            }
             Ok(if self.holds.contains(candidate) {
                 ExclusionVerdict::Possible
             } else {
                 ExclusionVerdict::Excluded
             })
+        }
+    }
+
+    fn ordering_catalog(
+        leading: bool,
+        entries: &[(&str, u8, u8)],
+    ) -> std::sync::Arc<crate::OrderCatalog> {
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let keys = entries
+            .iter()
+            .map(|(name, lead, tie)| {
+                (
+                    Term::new(format!("<http://example.org/{name}>")),
+                    crate::CandidateKeys::new(
+                        if leading {
+                            std::slice::from_ref(lead)
+                        } else {
+                            &[]
+                        },
+                        std::slice::from_ref(tie),
+                        &workspace,
+                    )
+                    .expect("fixture keys admitted"),
+                )
+            })
+            .collect();
+        std::sync::Arc::new(
+            crate::OrderCatalog::new(
+                crate::OrderingPolicy {
+                    semantics: Iri::parse("http://example.org/order").expect("fixture IRI"),
+                    leading,
+                },
+                keys,
+            )
+            .expect("fixture catalog"),
+        )
+    }
+
+    fn keyed_stream(
+        names: &[&str],
+        catalog: std::sync::Arc<crate::OrderCatalog>,
+        weight: Score,
+    ) -> Listed {
+        let mut stream = Listed::new(
+            names
+                .iter()
+                .map(|name| Term::new(format!("<http://example.org/{name}>")))
+                .collect(),
+            weight,
+        );
+        stream.ordering = Some(catalog);
+        stream
+    }
+
+    fn keyed_fusion(streams: Vec<Listed>, weight: Score) -> FusionStream<'static, Listed> {
+        let policy = streams[0]
+            .ordering
+            .as_ref()
+            .expect("keyed fixture")
+            .policy()
+            .clone();
+        let profile = FusionProfile::with_decay(
+            (0..streams.len())
+                .map(|index| (stratum(index), weight))
+                .collect(),
+            DecayRule::ReciprocalRank { k: K },
+            PRECISION_12,
+        )
+        .expect("fixture profile")
+        .with_ordering(policy);
+        FusionStream::new(
+            streams
+                .into_iter()
+                .enumerate()
+                .map(|(index, stream)| (stratum(index), stream))
+                .collect(),
+            profile,
+        )
+        .expect("fixture fusion")
+    }
+
+    #[test]
+    fn caller_keys_order_indexed_and_pairwise_certification_before_best_rank() {
+        for leading in [false, true] {
+            let catalog = ordering_catalog(leading, &[("a", 2, 2), ("b", 0, 1), ("c", 1, 0)]);
+            let weight = PRECISION_12.score(1); // The declared law quantizes every score to zero.
+            let build = || {
+                keyed_fusion(
+                    vec![keyed_stream(&["a", "b", "c"], catalog.clone(), weight)],
+                    weight,
+                )
+            };
+            let mut checked = build();
+            let early = poll_once_expect_ready(checked.trailer()).expect("initial evidence");
+            let (rows, _) = drain_checked(&mut checked);
+            let late = poll_once_expect_ready(checked.trailer()).expect("drained evidence");
+            assert_ne!(
+                early.ordering.as_ref().unwrap()[&stratum(0)].unread,
+                late.ordering.as_ref().unwrap()[&stratum(0)].unread,
+                "the remaining source bound changes as rows are read"
+            );
+            assert_eq!(
+                early
+                    .evidence_canonical_bytes()
+                    .expect("early bytes")
+                    .as_slice(),
+                late.evidence_canonical_bytes()
+                    .expect("late bytes")
+                    .as_slice(),
+                "immutable evidence bytes do not depend on read depth"
+            );
+            assert_eq!(early.evidence_id, late.evidence_id);
+            assert_eq!(rows, drain(&mut build()));
+            let names: Vec<_> = rows.iter().map(|row| row.entity.as_str()).collect();
+            assert_eq!(
+                names,
+                if leading {
+                    vec![
+                        "<http://example.org/b>",
+                        "<http://example.org/c>",
+                        "<http://example.org/a>",
+                    ]
+                } else {
+                    vec![
+                        "<http://example.org/c>",
+                        "<http://example.org/b>",
+                        "<http://example.org/a>",
+                    ]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_buffered_better_leading_key_blocks_a_final_higher_score() {
+        let catalog = ordering_catalog(true, &[("early", 2, 0), ("best", 0, 0), ("tail", 3, 0)]);
+        let weight = PRECISION_12.score(PRECISION_12.scale());
+        let mut run = keyed_fusion(
+            vec![keyed_stream(&["early", "best", "tail"], catalog, weight)],
+            weight,
+        );
+        let first = poll_once_expect_ready(run.next())
+            .expect("certification")
+            .expect("best row");
+        assert_eq!(first.entity.as_str(), "<http://example.org/best>");
+        assert!(first.score < contribution(weight, 1, K).expect("rank-one score"));
+        assert_eq!(
+            run.rows_pulled[0], 3,
+            "the buffered best row was not hidden by its suffix bound"
+        );
+        assert!(
+            !run.exhausted[0],
+            "the full-order bound certifies before draining the source"
+        );
+        let witness = first.order_witness.expect("full-order witness");
+        assert!(
+            witness
+                .unseen
+                .is_after(&witness.keys, first.score, &first.entity)
+                .expect("same units")
+        );
+    }
+
+    #[test]
+    fn caller_key_conflicts_and_unsound_source_bounds_are_actionable_failures() {
+        let weight = PRECISION_12.score(PRECISION_12.scale());
+        let first = ordering_catalog(true, &[("same", 1, 0)]);
+        let second = ordering_catalog(true, &[("same", 2, 0)]);
+        let mut conflict = keyed_fusion(
+            vec![
+                keyed_stream(&["same"], first.clone(), weight),
+                keyed_stream(&["same"], second, weight),
+            ],
+            weight,
+        );
+        assert!(matches!(
+            poll_once_expect_ready(conflict.next()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::ConflictingKey { .. }
+            ))
+        ));
+        assert!(matches!(
+            poll_once_expect_ready(conflict.trailer()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::ConflictingKey { .. }
+            ))
+        ));
+
+        let mut bounded = keyed_stream(&["same"], first.clone(), weight);
+        bounded.key_bounds = Some(vec![
+            crate::LeadingBound::Inclusive(
+                ordering_catalog(true, &[("bound", 2, 0)])
+                    .keys(&Term::new("<http://example.org/bound>"))
+                    .expect("bound key")
+                    .leading
+                    .clone(),
+            ),
+            crate::LeadingBound::Empty,
+        ]);
+        assert!(matches!(
+            poll_once_expect_ready(keyed_fusion(vec![bounded], weight).next()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::BoundViolated { .. }
+            ))
+        ));
+
+        let mut widening = keyed_stream(&["same"], first.clone(), weight);
+        widening.key_bounds = Some(vec![
+            first.evidence().domain,
+            crate::LeadingBound::Unbounded,
+        ]);
+        assert!(matches!(
+            poll_once_expect_ready(keyed_fusion(vec![widening], weight).next()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::BoundLoosened { .. }
+            ))
+        ));
+
+        let mut missing = keyed_stream(&["same"], first, weight);
+        missing.fidelity = RankFidelity {
+            completeness: crate::Completeness::Lossy {
+                evidence: std::sync::Arc::from("fixture missing candidates"),
+            },
+            order: crate::OrderFidelity::Faithful,
+        };
+        missing.domain_override = Some(crate::LeadingBound::Unbounded);
+        assert!(matches!(
+            poll_once_expect_ready(keyed_fusion(vec![missing], weight).next()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::Uncertified { .. }
+            ))
+        ));
+
+        let catalog = ordering_catalog(true, &[("same", 1, 0)]);
+        for changed in [
+            ordering_catalog(true, &[("same", 1, 1)]),
+            ordering_catalog(true, &[("same", 2, 0)]),
+        ] {
+            let mut stream = keyed_stream(&["same"], catalog.clone(), weight);
+            stream.ordering_after_settle = Some(changed);
+            let mut run = keyed_fusion(vec![stream], weight);
+            assert!(
+                poll_once_expect_ready(run.next())
+                    .expect("certified row")
+                    .is_some()
+            );
+            for _ in 0..2 {
+                assert!(matches!(
+                    poll_once_expect_ready(run.trailer()),
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::EvidenceChanged { .. }
+                    ))
+                ));
+            }
+            assert!(matches!(
+                poll_once_expect_ready(run.next()),
+                Err(FusionError::Ordering(
+                    crate::OrderingError::EvidenceChanged { .. }
+                ))
+            ));
+        }
+
+        let catalog = ordering_catalog(true, &[("same", 0, 0), ("other", 1, 0), ("tail", 2, 0)]);
+        let first = keyed_stream(&["same", "tail"], catalog.clone(), weight).answering();
+        let mut second = keyed_stream(&["other", "tail"], catalog, weight).answering();
+        second.ordering_after_exclusion = Some(ordering_catalog(
+            true,
+            &[("same", 0, 1), ("other", 1, 0), ("tail", 2, 0)],
+        ));
+        let mut run = keyed_fusion(vec![first, second], weight);
+        assert!(matches!(
+            poll_once_expect_ready(run.next()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::EvidenceChanged { .. }
+            ))
+        ));
+        assert!(matches!(
+            poll_once_expect_ready(run.trailer()),
+            Err(FusionError::Ordering(
+                crate::OrderingError::EvidenceChanged { .. }
+            ))
+        ));
+
+        for settle in [true, false] {
+            let mut run = if settle {
+                let mut stream =
+                    keyed_stream(&["same"], ordering_catalog(true, &[("same", 0, 0)]), weight);
+                stream.key_bound_after_settle = Some(crate::LeadingBound::Unbounded);
+                keyed_fusion(vec![stream], weight)
+            } else {
+                let catalog =
+                    ordering_catalog(true, &[("same", 0, 0), ("other", 1, 0), ("tail", 2, 0)]);
+                let first = keyed_stream(&["same", "tail"], catalog.clone(), weight).answering();
+                let mut second = keyed_stream(&["other", "tail"], catalog, weight).answering();
+                second.key_bound_after_exclusion = Some(crate::LeadingBound::Unbounded);
+                keyed_fusion(vec![first, second], weight)
+            };
+            let result = if settle {
+                poll_once_expect_ready(run.trailer()).map(|_| ())
+            } else {
+                poll_once_expect_ready(run.next()).map(|_| ())
+            };
+            for result in [
+                result,
+                poll_once_expect_ready(run.next()).map(|_| ()),
+                poll_once_expect_ready(run.trailer()).map(|_| ()),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::BoundLoosened { .. }
+                    ))
+                ));
+            }
+        }
+
+        for bound in [crate::LeadingBound::Unbounded, crate::LeadingBound::Empty] {
+            let tightened = matches!(bound, crate::LeadingBound::Empty);
+            let mut stream =
+                keyed_stream(&["same"], ordering_catalog(true, &[("same", 0, 0)]), weight);
+            stream.key_bounds = Some(vec![crate::LeadingBound::Unbounded; 2]);
+            stream.key_bound_after_settle = Some(bound);
+            let mut run = keyed_fusion(vec![stream], weight);
+            poll_once_expect_ready(run.trailer()).expect("equal or tighter live suffix is valid");
+            assert!(!run.exhausted[0], "the callback did not terminate the read");
+            if tightened {
+                run.streams[0].1.key_bound_after_settle = Some(crate::LeadingBound::Unbounded);
+                assert!(matches!(
+                    poll_once_expect_ready(run.trailer()),
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::BoundLoosened { .. }
+                    ))
+                ));
+                assert!(matches!(
+                    poll_once_expect_ready(run.next()),
+                    Err(FusionError::Ordering(
+                        crate::OrderingError::BoundLoosened { .. }
+                    ))
+                ));
+            } else {
+                assert_eq!(drain(&mut run).len(), 1);
+                assert!(run.exhausted[0]);
+                poll_once_expect_ready(run.trailer())
+                    .expect("an ended read may retain a conservative getter");
+            }
+        }
+
+        let catalog = ordering_catalog(true, &[("same", 0, 0), ("other", 1, 0), ("tail", 2, 0)]);
+        for bound in [
+            crate::LeadingBound::Unbounded,
+            crate::LeadingBound::Inclusive(
+                catalog
+                    .keys(&Term::new("<http://example.org/tail>"))
+                    .expect("fixture tail key")
+                    .leading
+                    .clone(),
+            ),
+        ] {
+            let first = keyed_stream(&["same", "tail"], catalog.clone(), weight).answering();
+            let mut second = keyed_stream(&["other", "tail"], catalog.clone(), weight).answering();
+            second.key_bounds = Some(vec![crate::LeadingBound::Unbounded; 3]);
+            second.key_bound_after_exclusion = Some(bound);
+            let mut run = keyed_fusion(vec![first, second], weight);
+            assert_eq!(drain(&mut run).len(), 3);
+            poll_once_expect_ready(run.trailer()).expect("equal or tighter lookup suffix is valid");
         }
     }
 
@@ -5492,6 +6494,7 @@ mod tests {
         assert_eq!(filed, fusion.frontier.len(), "the index holds the frontier");
         for (id, state) in &fusion.frontier {
             let probe = RankProbe {
+                keys: state.keys.as_deref(),
                 score: state.lower_bound,
                 best_rank: state.best_rank(),
                 term: id.as_str(),
@@ -5548,6 +6551,11 @@ mod tests {
                 let rival = fusion.frontier.values().any(|rival| {
                     rival.lower_bound.scaled(fusion.profile.precision()) == row.score
                         && fusion.is_final(rival)
+                        && rival.keys.as_deref().map(|keys| keys.leading.as_slice())
+                            == row
+                                .order_witness
+                                .as_ref()
+                                .map(|witness| witness.keys.leading.as_slice())
                 });
                 assert_eq!(
                     fusion.last_row_won_a_tie, rival,

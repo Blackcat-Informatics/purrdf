@@ -4,6 +4,7 @@
 //! Caller-owned plain argument representation for the shared SHACL emitter.
 
 pub(super) mod emission;
+pub(super) mod numeric;
 pub(super) use emission::emitted_json;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,6 +167,18 @@ pub enum ToolRepresentationError {
     Constraint(&'static str),
     /// A class does not select one unique named object shape.
     ClassTarget,
+    /// A numeric constant is malformed or outside the finite plain value profile.
+    NumericConstant,
+    /// JSON Schema numeric equality cannot distinguish negative IEEE zero.
+    SignedZero,
+    /// The numeric RDF carrier is ambiguous in this plain value position.
+    NumericDomain,
+    /// A residual numeric check cannot be used as an exact logical operand.
+    NumericLogic,
+    /// Noncanonical numeric RDF terms cannot retain their lexical identity in JSON.
+    NumericIdentity,
+    /// A native numeric authority did not produce its promised numeric value.
+    NumericInvariant,
 }
 
 impl std::fmt::Display for ToolRepresentationError {
@@ -186,6 +199,22 @@ impl std::fmt::Display for ToolRepresentationError {
             }
             Self::Constraint(term) => write!(f, "{term} has no admitted plain representation"),
             Self::ClassTarget => f.write_str("class has no unique named object shape"),
+            Self::NumericConstant => f.write_str("numeric constant requires a valid finite value"),
+            Self::SignedZero => f.write_str(
+                "JSON Schema numeric equality cannot distinguish the IEEE negative-zero sign",
+            ),
+            Self::NumericDomain => {
+                f.write_str("plain numeric values require one unambiguous RDF datatype")
+            }
+            Self::NumericInvariant => {
+                f.write_str("native numeric conversion did not produce a number")
+            }
+            Self::NumericIdentity => {
+                f.write_str("numeric constants require canonical RDF lexical identity")
+            }
+            Self::NumericLogic => {
+                f.write_str("numeric residual cannot be used as an exact logical operand")
+            }
         }
     }
 }
@@ -273,6 +302,8 @@ impl std::error::Error for ToolSchemaError {
 
 pub(super) struct ToolPolicy {
     predicate: Option<String>,
+    numeric: numeric::Scope,
+    numeric_location: String,
     bindings: BTreeMap<(String, String), String>,
     used: BTreeSet<(String, String)>,
     classes: BTreeMap<String, Option<Term>>,
@@ -932,8 +963,17 @@ fn native_pretty(value: &Value, policy: &mut ToolPolicy) -> Option<String> {
 ///
 /// A property with `sh:maxCount 1` is scalar; every other property is an array.
 /// Object values use bound member names and carry no JSON-LD keywords. String,
-/// integer and boolean values retain their native JSON forms. Other RDF literal
-/// encodings are refused, rather than coerced. Existing unmodeled constraints
+/// integer and boolean values retain their native JSON forms. Decimal values and
+/// finite float/double values use bare JSON numbers without rounding their value.
+/// IEEE values use their exact dyadic decimal expansion. An unrestricted IEEE
+/// datatype records the registered `plain:ieee-representability` loss and requires
+/// original SHACL validation; JSON `number` alone does not prove representability.
+/// A finite admitted enumeration, or a scalar constant, proves that obligation.
+/// Numeric constants require the native canonical RDF lexical form; negative IEEE
+/// zero, nonfinite/invalid constants and ambiguous numeric datatype domains are
+/// source-bearing typed refusals. Bound lexical forms are read by numeric value.
+/// Residual checks cannot be negated or treated as exact logical alternatives.
+/// Other RDF literal encodings are refused, rather than coerced. Existing unmodeled constraints
 /// remain visible in the loss ledger and schema comments. An inactive property
 /// of an open object needs no binding; an inactive declared direct path of a
 /// closed object still requires a binding for its permitted member name.
@@ -997,6 +1037,8 @@ pub fn compile_tool_arguments(
 ) -> Result<CompiledSchema, ToolSchemaError> {
     let mut policy = ToolPolicy {
         predicate: None,
+        numeric: numeric::Scope::default(),
+        numeric_location: String::new(),
         bindings: BTreeMap::new(),
         used: BTreeSet::new(),
         classes: BTreeMap::new(),
@@ -1390,11 +1432,16 @@ pub(super) fn admit_property(
             return false;
         }
         let accepted = match c {
-            Constraint::Datatype(types) => types
+            Constraint::Datatype(types) => types.iter().all(|t| {
+                matches!(t.as_str(), XSD_STRING | XSD_INTEGER | XSD_BOOLEAN)
+                    || numeric::kind(t.as_str()).is_some()
+            }),
+            Constraint::In(terms) => terms
                 .iter()
-                .all(|t| matches!(t.as_str(), XSD_STRING | XSD_INTEGER | XSD_BOOLEAN)),
-            Constraint::In(terms) => terms.iter().all(scalar_term),
-            Constraint::HasValue(term) => scalar_term(term),
+                .all(|term| numeric::admit_term(term, &std::format!("{shape} / {key}"), policy)),
+            Constraint::HasValue(term) => {
+                numeric::admit_term(term, &std::format!("{shape} / {key}"), policy)
+            }
             Constraint::NodeKind(kinds) => kinds.iter().all(|k| {
                 matches!(
                     k,
@@ -1407,7 +1454,7 @@ pub(super) fn admit_property(
             | Constraint::MaxInclusive(t)
             | Constraint::MinExclusive(t)
             | Constraint::MaxExclusive(t) => {
-                scalar_term(t) && matches!(t, Term::Literal(l) if l.datatype_str() == XSD_INTEGER)
+                numeric::admit_bound(t, &std::format!("{shape} / {key}"), policy)
             }
             Constraint::Reference(_)
             | Constraint::Class(_)
@@ -1464,9 +1511,12 @@ pub(super) fn scalar_term(term: &Term) -> bool {
     }
 }
 
-pub(super) fn datatype_schema(datatype: &str, ctx: &mut Ctx<'_>) -> Value {
+pub(super) fn datatype_schema(datatype: &str, shape: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
     if ctx.tool.is_none() {
         return datatype_value_schema(datatype, ctx.ns);
+    }
+    if let Some(kind) = numeric::kind(datatype) {
+        return numeric::datatype_schema(kind, shape, key, ctx);
     }
     let kind = match datatype {
         XSD_STRING => "string",
@@ -1481,6 +1531,12 @@ pub(super) fn datatype_schema(datatype: &str, ctx: &mut Ctx<'_>) -> Value {
 pub(super) fn enum_value(term: &Term, ctx: &mut Ctx<'_>) -> Value {
     if ctx.tool.is_none() {
         return term_enum_value(term, ctx.ns);
+    }
+    if let Term::Literal(literal) = term
+        && let Some(kind) = numeric::kind(literal.datatype_str())
+        && kind != numeric::Kind::Integer
+    {
+        return numeric::term_value(term, ctx);
     }
     match term {
         Term::Literal(literal) if literal.datatype_str() == XSD_STRING => {
@@ -1500,15 +1556,19 @@ pub(super) fn enum_value(term: &Term, ctx: &mut Ctx<'_>) -> Value {
     }
 }
 
-pub(super) fn node_kind_schema(kinds: &[NodeKindValue], ctx: &mut Ctx<'_>) -> Value {
+pub(super) fn node_kind_schema(kinds: &[NodeKindValue], number: bool, ctx: &mut Ctx<'_>) -> Value {
     let mut alternatives = Vec::new();
     for kind in kinds {
         let ty = match kind {
             NodeKindValue::Literal => {
-                let values = ["string", "integer", "boolean"]
-                    .into_iter()
-                    .map(|kind| native_value(ctx, kind))
-                    .collect::<Vec<_>>();
+                let values = [
+                    "string",
+                    if number { "number" } else { "integer" },
+                    "boolean",
+                ]
+                .into_iter()
+                .map(|kind| native_value(ctx, kind))
+                .collect::<Vec<_>>();
                 native_array(ctx, values)
             }
             _ => native_value(ctx, "object"),
@@ -1618,6 +1678,9 @@ pub(super) fn exact_plain_constraint(
     location: (&str, &str),
 ) -> Option<bool> {
     ctx.tool.as_ref()?;
+    if let Some(exact) = numeric::exact(constraint, siblings, ctx, location) {
+        return Some(exact);
+    }
     let mut domain = |accepted: fn(&str) -> bool| {
         for sibling in siblings {
             if !step(ctx) {
@@ -1877,6 +1940,8 @@ mod tests {
         );
         ctx.tool = Some(ToolPolicy {
             predicate: None,
+            numeric: numeric::Scope::default(),
+            numeric_location: String::new(),
             bindings: BTreeMap::new(),
             used: BTreeSet::new(),
             classes: BTreeMap::new(),

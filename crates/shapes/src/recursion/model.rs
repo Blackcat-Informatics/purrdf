@@ -57,6 +57,11 @@ pub(crate) fn canonical_handle(shape: &Shape) -> bool {
                 | (Target::ObjectsOf(a), Target::ObjectsOf(b)) => a == b,
                 (Target::Node(a), Target::Node(b))
                 | (Target::ImplicitClass(a), Target::ImplicitClass(b)) => a == b,
+                (Target::Where(a), Target::Where(b)) => {
+                    a.id == b.id
+                        && super::closed::where_reference(a, Some(owner)).is_some()
+                        && super::closed::where_reference(b, Some(owner)).is_some()
+                }
                 _ => false,
             })
 }
@@ -641,7 +646,11 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
                 match target {
                     Target::Sparql { .. } => return self.unqualified(sh::TARGET, None),
                     Target::NodeExpression(_) => return self.unqualified(sh::TARGET_NODE, None),
-                    Target::Where(_) => return self.unqualified(sh::TARGET_WHERE, None),
+                    Target::Where(shape)
+                        if super::closed::where_reference(shape, self.owner).is_none() =>
+                    {
+                        return self.unqualified(sh::TARGET_WHERE, None);
+                    }
                     _ => {}
                 }
             }
@@ -677,6 +686,19 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
         result
     }
     fn constraint(&mut self, constraint: &'a Constraint) -> Result<(), WalkError> {
+        if let Constraint::Expression { expr, .. } = constraint
+            && let Some(target) = super::closed::original_conformance(expr, self.owner)
+        {
+            // `sh:this` is the current value-node focus, independently of the
+            // valuation. The expression is true exactly when this original
+            // target pair is true, so its dependency is positive in both the
+            // selected proof and the unselected cycle-admission graph.
+            let previous = self.context;
+            self.context = Context::default();
+            let result = self.reference(&target.id, shnex::CONFORMS_TO_SHAPE);
+            self.context = previous;
+            return result;
+        }
         if self.closed {
             match constraint {
                 Constraint::Expression { .. } => return self.unqualified(sh::EXPRESSION, None),

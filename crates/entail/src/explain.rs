@@ -72,6 +72,7 @@
 //! through ordered sets throughout. Two runs over one input produce byte-identical digests,
 //! on native targets and on `wasm32` alike.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -92,7 +93,7 @@ use purrdf_lex::allocation::{Shared, StorageError};
 use crate::calculus::{ChaseRule, program_with_attribution};
 use crate::engine::{seed, surface_of};
 use crate::interner::{Interner, blank_closure, blank_subjects, intern_into};
-use crate::reasoner::{DlAxiom, Reasoner, Verdict};
+use crate::reasoner::{DlAxiom, DlCompleteness, Reasoner, Verdict};
 use crate::rules::RuleId;
 use crate::{EntailError, Regime};
 
@@ -127,13 +128,6 @@ pub enum ExplainError {
     /// of it does either, and the shrinking search would return the empty set — an answer
     /// that reads as "nothing is needed" and means the opposite.
     NotEntailed,
-    /// The tableau could not DECIDE the axiom within its step cap, so neither a positive nor
-    /// a negative answer is available to shrink against.
-    ///
-    /// Distinct from [`Self::NotEntailed`]: that one is a decided `no`, this is no decision.
-    /// Shrinking against an undecided answer would produce a subset whose minimality claim
-    /// rests on decisions that were never made.
-    Undecided,
     /// The lane is evaluated by the RESTRICTED CHASE, whose derivations are not checkable
     /// proof terms.
     ///
@@ -176,11 +170,6 @@ impl std::fmt::Display for ExplainError {
                     "the ontology does not entail the axiom, so it has no justification"
                 )
             }
-            Self::Undecided => write!(
-                f,
-                "the tableau did not decide the axiom within its step cap, so there is no \
-                 answer to justify"
-            ),
             Self::Existential(regime) => write!(
                 f,
                 "the {regime:?} lane is evaluated by the restricted chase, whose existential \
@@ -202,7 +191,7 @@ impl std::error::Error for ExplainError {
     ///
     /// The rest return `None`, and none of them is a wrapper. `Existential` carries a
     /// [`Regime`] — not an error but the NAME of the lane whose rules have existential
-    /// heads. `NotDerived`, `BackwardDisagreement`, `NotEntailed` and `Undecided` are
+    /// heads. `NotDerived`, `BackwardDisagreement` and `NotEntailed` are
     /// findings ABOUT the conclusion rather than failures of some subsystem beneath
     /// this one: each is the whole statement, and there is nothing further in to walk.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
@@ -212,8 +201,7 @@ impl std::error::Error for ExplainError {
             Self::Existential(_)
             | Self::NotDerived { .. }
             | Self::BackwardDisagreement { .. }
-            | Self::NotEntailed
-            | Self::Undecided => None,
+            | Self::NotEntailed => None,
         }
     }
 }
@@ -618,7 +606,8 @@ pub fn prepare_explanations(
         program,
         attribution,
         seeded,
-        evaluation,
+        evaluation: Shared::try_new(evaluation)
+            .map_err(|_| EntailError::from(StorageError::AllocationFailed))?,
         regime,
         graph: graph.cloned(),
         existential_present,
@@ -632,7 +621,7 @@ struct ExplanationContext {
     program: Vec<DlClause>,
     attribution: Vec<ChaseRule>,
     seeded: RelationStore,
-    evaluation: Evaluation,
+    evaluation: Shared<Evaluation>,
     regime: Regime,
     graph: Option<TermValue>,
     existential_present: bool,
@@ -679,13 +668,29 @@ impl PreparedExplanations {
     /// Preserves the native index allocation or recording refusal.
     pub fn session(&self) -> Result<ExplanationSession<'_>, ExplainError> {
         Ok(ExplanationSession {
-            prepared: self,
+            prepared: Cow::Borrowed(self),
             proofs: EvaluationProofIndex::of(&self.context.evaluation).map_err(proof_error)?,
+        })
+    }
+
+    /// Own this immutable preparation and one reusable resident proof index.
+    /// The session has no borrow of this handle or of the original source dataset.
+    /// # Errors
+    /// Preserves shared-owner overflow and native index allocation/recording refusals.
+    pub fn into_session(self) -> Result<ExplanationSession<'static>, ExplainError> {
+        let evaluation = self
+            .context
+            .evaluation
+            .try_clone()
+            .map_err(|_| EntailError::from(StorageError::SizeOverflow))?;
+        Ok(ExplanationSession {
+            proofs: EvaluationProofIndex::of_shared(evaluation).map_err(proof_error)?,
+            prepared: Cow::Owned(self),
         })
     }
 }
 
-/// A borrowed immutable snapshot and its one reusable resident derivation index.
+/// An immutable snapshot, borrowed or owned, and one reusable resident derivation index.
 ///
 /// Index and returned proof arenas retain their existing resident allocation
 /// contracts. Each query still checks its proof and performs the existing
@@ -694,11 +699,23 @@ impl PreparedExplanations {
 /// the whole explanation operation scales only with its requested subtree.
 #[derive(Debug)]
 pub struct ExplanationSession<'a> {
-    prepared: &'a PreparedExplanations,
+    prepared: Cow<'a, PreparedExplanations>,
     proofs: EvaluationProofIndex<'a>,
 }
 
 impl ExplanationSession<'_> {
+    /// The exact regime retained by this session.
+    #[must_use]
+    pub fn regime(&self) -> Regime {
+        self.prepared.regime()
+    }
+
+    /// The original graph selection, including its term scope.
+    #[must_use]
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.prepared.graph()
+    }
+
     /// Actual work of building this session's index once.
     #[must_use]
     pub fn preparation_work(&self) -> ProofIndexWork {
@@ -777,7 +794,11 @@ impl ExplanationSession<'_> {
         let backward = confirm_backward(context.regime, &context.program, &context.seeded, &goal)?;
 
         let proof = ChaseProof {
-            context: self.prepared.context.clone(),
+            context: self
+                .prepared
+                .context
+                .try_clone()
+                .map_err(|_| EntailError::from(StorageError::SizeOverflow))?,
             conclusion: (subject.clone(), predicate.clone(), object.clone()),
             arena,
             root,
@@ -901,14 +922,16 @@ impl Justification {
     ///
     /// [`EntailError::Parse`] if the justification is not a well-formed OWL graph, or
     /// [`EntailError::Unsatisfiable`] if it has no model at all.
+    /// [`EntailError::Decision`] retains the native certificate if an undecided
+    /// search or an incomplete ontology prevents an exact negative answer.
     pub fn is_sufficient(&self) -> Result<bool, EntailError> {
-        entails(&self.ontology, &self.axiom).map(|verdict| matches!(verdict, Verdict::True))
+        entails(&self.ontology, &self.axiom)
     }
 
     /// MINIMALITY, re-decided: does dropping any ONE axiom lose the entailment?
     ///
     /// The second half. For each axiom of the justification it re-decides over the
-    /// justification without it and requires the answer to be anything but `True`. A `false`
+    /// justification without it and requires an exact `False` answer. A `false`
     /// here means the justification is entailing but not minimal — it carries an axiom the
     /// entailment does not need — which is a weaker answer rather than a wrong one, and is
     /// why this is a QUESTION rather than an invariant baked into the type.
@@ -929,7 +952,7 @@ impl Justification {
                 .filter_map(|(index, _)| (index != dropped).then_some(index))
                 .collect();
             let subset = axioms.emit(&kept)?;
-            if matches!(entails(&subset, &self.axiom)?, Verdict::True) {
+            if entails(&subset, &self.axiom)? {
                 return Ok(false);
             }
         }
@@ -949,9 +972,10 @@ impl Justification {
 /// [`ExplainError::NotEntailed`] if `ds` does not entail `axiom` — a hard error, because a
 /// subset of a non-entailing ontology does not entail either and the search would return the
 /// empty set, which reads as "nothing is needed" and means the opposite.
-/// [`ExplainError::Undecided`] if the tableau ran out of step budget deciding the axiom over
-/// the whole ontology, so there is no answer to shrink against. [`ExplainError::Entail`] for
-/// a malformed ontology or one with no model.
+/// [`ExplainError::Entail`] retains the original native refusal for the whole
+/// ontology or any candidate subset. An undecided or incomplete negative answer
+/// carries [`EntailError::Decision`] with its original certificate; it never
+/// establishes minimality. Malformed or inconsistent subsets are also refusals.
 ///
 /// ```
 /// use purrdf_core::{RdfDatasetBuilder, TermValue};
@@ -980,16 +1004,13 @@ impl Justification {
 /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn justify(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Justification, ExplainError> {
-    match entails(ds, axiom)? {
-        Verdict::True => {}
-        Verdict::False => return Err(ExplainError::NotEntailed),
-        Verdict::Unknown => return Err(ExplainError::Undecided),
+    if !entails(ds, axiom)? {
+        return Err(ExplainError::NotEntailed);
     }
 
-    // An unsatisfiable subset entails everything, which would let the search drop an axiom
-    // for the wrong reason; it is not a `True` verdict, so `entails` reporting it as an
-    // error keeps the candidate.
-    let mut holds = |subset: &RdfDataset| Ok(matches!(entails(subset, axiom), Ok(Verdict::True)));
+    // Only an exact negative decision justifies keeping a candidate axiom as
+    // necessary. Native failures must stop the search rather than certify it.
+    let mut holds = |subset: &RdfDataset| entails(subset, axiom);
     // The tableau lane spends whatever the ontology costs and REPORTS it rather than
     // capping it; `Justification::decisions` is that number. A cap here would produce a
     // subset whose minimality claim quietly stopped being true partway through.
@@ -1086,14 +1107,21 @@ where
     })
 }
 
-/// Whether `ds` entails `axiom`, as the reasoner's own verdict.
+/// Whether `ds` entails `axiom`, requiring complete evidence for a negative.
 ///
 /// An UNSATISFIABLE ontology is an error rather than `True`: it entails every axiom
 /// vacuously, and letting that count as entailment would make the shrinking search drop
 /// axioms because the remainder was inconsistent rather than because they were unneeded.
-fn entails(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Verdict, EntailError> {
+fn entails(ds: &RdfDataset, axiom: &DlAxiom) -> Result<bool, EntailError> {
     let mut reasoner = Reasoner::new(ds)?;
-    Ok(*reasoner.entails(axiom)?.answer())
+    let (answer, certificate) = reasoner.entails(axiom)?.into_parts();
+    match answer {
+        Verdict::True => Ok(true),
+        Verdict::False if matches!(certificate.completeness(), DlCompleteness::Decided) => {
+            Ok(false)
+        }
+        Verdict::False | Verdict::Unknown => Err(EntailError::Decision(Box::new(certificate))),
+    }
 }
 
 /// The ontology split into AXIOMS and the scaffolding they carry.
@@ -1277,6 +1305,65 @@ mod tests {
             .into_iter()
             .collect::<BTreeSet<String>>()
         );
+    }
+
+    #[test]
+    fn justification_checks_preserve_incomplete_negative_certificates() {
+        use purrdf_iri::vocab::owl::IMPORTS;
+
+        let axiom = cat_is_an_animal();
+        let target = (CAT, SUB, ANIMAL);
+        let import = (
+            "http://example.org/ontology",
+            IMPORTS,
+            "http://example.org/unresolved",
+        );
+        let ontology = dataset(&[target, import]);
+        let mut original = Reasoner::new(&ontology).unwrap();
+        assert_eq!(*original.entails(&axiom).unwrap().answer(), Verdict::True);
+
+        let subset = dataset(&[import]);
+        let mut reasoner = Reasoner::new(&subset).unwrap();
+        let (answer, expected) = reasoner.entails(&axiom).unwrap().into_parts();
+        assert_eq!(answer, Verdict::False);
+        assert_eq!(
+            expected.completeness(),
+            DlCompleteness::DecidedWithinBoundaries
+        );
+
+        let error = justify(&ontology, &axiom).unwrap_err();
+        let ExplainError::Entail(cause) = error else {
+            panic!("the original native decision must survive shrinking");
+        };
+        let EntailError::Decision(certificate) = *cause else {
+            panic!("the candidate subset was not completely decided");
+        };
+        assert_eq!(*certificate, expected);
+        for ontology in [subset, ontology] {
+            let candidate = Justification {
+                axiom: axiom.clone(),
+                axioms: ontology.quads().count(),
+                ontology,
+                decisions: 0,
+            };
+            let error = if candidate.axioms == 1 {
+                candidate.is_sufficient().unwrap_err()
+            } else {
+                candidate.is_minimal().unwrap_err()
+            };
+            let EntailError::Decision(certificate) = error else {
+                panic!("a negative check must retain its native certificate");
+            };
+            assert_eq!(*certificate, expected);
+        }
+
+        // The same positive evidence remains usable when the unsupported import
+        // can be removed first, followed by an exact negative on the empty set.
+        let adjacent = dataset(&[import, target]);
+        let justification = justify(&adjacent, &axiom).unwrap();
+        assert_eq!(justification.axioms(), 1);
+        assert!(justification.is_sufficient().unwrap());
+        assert!(justification.is_minimal().unwrap());
     }
 
     /// MINIMALITY IS A CHECK, NOT A CLAIM — so a NON-minimal subset must fail it.
@@ -1483,8 +1570,18 @@ mod tests {
         assert_eq!(retained[0].encode(), retained[3].encode());
         drop(eager);
         drop(session);
-        drop(prepared);
+        let owned = prepared.into_session().unwrap();
         drop(source);
+        let proof = owned
+            .explain(
+                &TermValue::iri(TOM),
+                &TermValue::iri(TYPE),
+                &TermValue::iri(ANIMAL),
+            )
+            .unwrap();
+        assert_eq!(proof.encode(), retained[0].encode());
+        retained.push(proof);
+        drop(owned);
         for proof in &retained {
             assert!(proof.check().is_ok());
             assert_eq!(proof.context.strong_count(), retained.len());
@@ -1573,7 +1670,7 @@ mod tests {
             let lifetime = CurrentThreadWindow::open();
             let prepared = prepare_explanations(&source, regime, None, &options, None).unwrap();
             let forward_work = prepared.work();
-            let session = prepared.session().unwrap();
+            let session = prepared.clone().into_session().unwrap();
             let index_work = session.preparation_work();
             let mut prior = None;
             for (measurement, targets) in measurements.iter_mut().zip([1, 4, 16]) {

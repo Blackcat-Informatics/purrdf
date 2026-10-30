@@ -388,3 +388,268 @@ ex:Pattern a sh:NodeShape; sh:datatype xsd:boolean; sh:pattern "{oversized}".
         );
     }
 }
+
+/// Decimal boundaries and same-domain logical predicates must not round through IEEE.
+#[test]
+fn decimal_boundaries_and_logical_membership_remain_exact() {
+    let compiled = compile_plain(
+        r#"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:closed true;
+ sh:property [sh:path ex:amount; sh:datatype xsd:decimal; sh:nodeKind sh:Literal; sh:minCount 1; sh:maxCount 1;
+  sh:minInclusive "9007199254740993.0000000000000001"^^xsd:decimal;
+  sh:maxExclusive "9007199254740993.0000000000000003"^^xsd:decimal;
+  sh:not [sh:datatype xsd:decimal; sh:in ("9007199254740993.0000000000000002"^^xsd:decimal)];
+  sh:someValue [sh:datatype xsd:decimal; sh:minInclusive 1]].
+"#,
+        &["amount"],
+    )
+    .expect("exact decimal profile");
+    assert!(compiled.losses.is_empty());
+    let schema = purrdf_jsonschema::Schema::from_document(
+        &metaschemas(),
+        "mem:///decimal.json",
+        purrdf_lex::json::read(&compiled.schema_json).unwrap(),
+    )
+    .unwrap();
+    for (value, expected) in [
+        ("9007199254740993.0000000000000001", true),
+        ("9007199254740993.0000000000000002", false),
+        ("9007199254740993.0000000000000003", false),
+        ("9007199254740993", false),
+    ] {
+        assert_eq!(
+            schema
+                .is_valid(&purrdf_lex::json::read(&format!("{{\"amount\":{value}}}")).unwrap())
+                .unwrap(),
+            expected
+        );
+    }
+}
+
+/// Finite IEEE enums prove their own domain; unrestricted numbers retain a located check.
+#[test]
+fn finite_ieee_constants_are_exact_and_unrestricted_domains_are_ledgered() {
+    for (datatype, exact) in [
+        ("float", "0.100000001490116119384765625"),
+        (
+            "double",
+            "0.1000000000000000055511151231257827021181583404541015625",
+        ),
+    ] {
+        let body = format!(
+            r#"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call;
+ sh:property [sh:path ex:amount; sh:datatype xsd:{datatype}; sh:nodeKind sh:Literal; sh:minCount 1; sh:maxCount 1;
+  sh:in ("1.0E-1"^^xsd:{datatype} "5.0E-1"^^xsd:{datatype}); sh:minInclusive 0.1].
+"#
+        );
+        let compiled = compile_plain(&body, &["amount"]).expect("finite IEEE profile");
+        assert!(
+            compiled.losses.is_empty(),
+            "{datatype}: {:?}",
+            compiled.losses
+        );
+        let schema = purrdf_jsonschema::Schema::from_document(
+            &metaschemas(),
+            "mem:///ieee.json",
+            purrdf_lex::json::read(&compiled.schema_json).unwrap(),
+        )
+        .unwrap();
+        for (value, expected) in [(exact, true), ("0.5", true), ("0.1", false)] {
+            assert_eq!(
+                schema
+                    .is_valid(&purrdf_lex::json::read(&format!("{{\"amount\":{value}}}")).unwrap())
+                    .unwrap(),
+                expected,
+                "{datatype}: {value}"
+            );
+        }
+        let body = format!(
+            "ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:property [sh:path ex:amount; sh:datatype xsd:{datatype}; sh:maxCount 1; sh:minInclusive 0.1]."
+        );
+        let compiled =
+            compile_plain(&body, &["amount"]).expect("located original-SHACL obligation");
+        let [loss] = compiled.losses.entries() else {
+            panic!("{:?}", compiled.losses);
+        };
+        assert_eq!(loss.code, "plain:ieee-representability");
+        assert_eq!(
+            loss.location.as_ref().unwrap().subject.as_deref(),
+            Some("<https://example.org/tools/Args>")
+        );
+        assert!(compiled.schema_json.contains("original SHACL validation"));
+    }
+}
+
+/// A refusal must distinguish invalid/nonfinite/sign/identity failures and retain source.
+#[test]
+fn numeric_refusals_have_canonical_valid_neighbors_and_original_predicates() {
+    use purrdf_shapes::json_schema::ToolRepresentationError;
+    for (datatype, lexical, reason, valid) in [
+        (
+            "decimal",
+            "1e0",
+            ToolRepresentationError::NumericConstant,
+            "1",
+        ),
+        (
+            "double",
+            "INF",
+            ToolRepresentationError::NumericConstant,
+            "1.0E0",
+        ),
+        (
+            "float",
+            "NaN",
+            ToolRepresentationError::NumericConstant,
+            "1.0E0",
+        ),
+        (
+            "float",
+            "-0.0E0",
+            ToolRepresentationError::SignedZero,
+            "0.0E0",
+        ),
+        (
+            "decimal",
+            "1.0",
+            ToolRepresentationError::NumericIdentity,
+            "1",
+        ),
+    ] {
+        let body = |text| {
+            format!(
+                "ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:property [sh:path ex:amount; sh:datatype xsd:{datatype}; sh:maxCount 1; sh:in (\"{text}\"^^xsd:{datatype})]."
+            )
+        };
+        let error = compile_plain(&body(lexical), &["amount"]).expect_err("source-bearing refusal");
+        assert!(
+            matches!(error, ToolSchemaError::UnsupportedConstruct { location, predicate, reason: actual }
+            if location.contains("Args") && predicate.as_deref() == Some("https://example.org/tools/amount") && actual == reason)
+        );
+        let compiled = compile_plain(&body(valid), &["amount"]).expect("canonical finite neighbor");
+        assert!(compiled.losses.is_empty());
+    }
+}
+
+/// Residual datatype checks cannot become an exact negand through a cached reference.
+#[test]
+fn ieee_residual_references_refuse_exact_logic_and_decimal_neighbors_work() {
+    use purrdf_shapes::json_schema::ToolRepresentationError;
+    let body = r"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call;
+ sh:property [sh:path ex:amount; sh:datatype xsd:double; sh:maxCount 1; sh:node ex:Numeric; sh:not ex:Numeric].
+ex:Numeric a sh:NodeShape; sh:datatype xsd:double; sh:minInclusive 1.
+";
+    let error = compile_plain(body, &["amount"])
+        .expect_err("an approximate cached definition cannot be negated");
+    assert!(
+        matches!(error, ToolSchemaError::UnsupportedConstruct { location, predicate, reason: ToolRepresentationError::NumericLogic }
+        if location.contains("Numeric") && predicate.as_deref() == Some("https://example.org/tools/amount"))
+    );
+    let compiled = compile_plain(&body.replace("xsd:double", "xsd:decimal"), &["amount"])
+        .expect("exact decimal negation remains supported");
+    assert!(compiled.losses.is_empty());
+    // The same target under unknown and integer scopes must not share a
+    // datatype-incompatible definition, whichever field compiles first.
+    for (plain, integer) in [("a", "b"), ("b", "a")] {
+        let body = format!(
+            r"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call;
+ sh:property [sh:path ex:{plain}; sh:maxCount 1; sh:nodeKind sh:Literal; sh:node ex:Numeric];
+ sh:property [sh:path ex:{integer}; sh:maxCount 1; sh:datatype xsd:integer; sh:node ex:Numeric].
+ex:Numeric a sh:NodeShape; sh:datatype xsd:decimal.
+"
+        );
+        let compiled =
+            compile_plain(&body, &["a", "b"]).expect("scope-specific numeric references");
+        assert!(compiled.losses.is_empty());
+        let schema = purrdf_jsonschema::Schema::from_document(
+            &metaschemas(),
+            "mem:///numeric-reference.json",
+            purrdf_lex::json::read(&compiled.schema_json).unwrap(),
+        )
+        .unwrap();
+        for (instance, expected) in [
+            (format!("{{\"{plain}\":1.5}}"), true),
+            (format!("{{\"{plain}\":\"1.5\"}}"), false),
+            (format!("{{\"{integer}\":1}}"), false),
+        ] {
+            assert_eq!(
+                schema
+                    .is_valid(&purrdf_lex::json::read(&instance).unwrap())
+                    .unwrap(),
+                expected,
+                "{instance}"
+            );
+        }
+    }
+    let finite = compile_plain(
+        r#"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call;
+ sh:property [sh:path ex:amount; sh:maxCount 1; sh:in ("1.5"^^xsd:decimal)].
+"#,
+        &["amount"],
+    )
+    .expect("homogeneous finite decimal domain selects its carrier");
+    assert!(finite.losses.is_empty());
+    let ambiguous = compile_plain(
+        r#"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call;
+ sh:property [sh:path ex:amount; sh:maxCount 1; sh:in (1 "1"^^xsd:decimal)].
+"#,
+        &["amount"],
+    )
+    .expect_err("different numeric RDF tags must not collapse");
+    assert!(matches!(
+        ambiguous,
+        ToolSchemaError::UnsupportedConstruct {
+            reason: ToolRepresentationError::NumericDomain,
+            ..
+        }
+    ));
+}
+
+/// The first subnormal's promotion threshold is a half-subnormal, not representable as f64.
+#[test]
+fn decimal_ieee_midpoint_and_native_ceilings_preserve_exact_boundaries() {
+    use purrdf_testkit::exact::{Natural, Rational};
+    let body = r#"
+ex:Args a sh:NodeShape; sh:targetClass ex:Call;
+ sh:property [sh:path ex:amount; sh:datatype xsd:decimal; sh:maxCount 1;
+  sh:minInclusive "4.9406564584124654E-324"^^xsd:double].
+"#;
+    let shapes = purrdf_shapes::engine::parse_shapes(&format!("{PREFIXES}{body}"), None).unwrap();
+    let profile = profile("Args", "Call", &["amount"]);
+    let compiled = compile_tool_arguments(&shapes, &namespaces(), &profile, &LIMITS)
+        .expect("native admitted midpoint");
+    let value = purrdf_lex::json::read(&compiled.schema_json).unwrap();
+    let midpoint = value["properties"]["amount"]["exclusiveMinimum"]
+        .as_number()
+        .expect("odd first subnormal needs a strict midpoint");
+    let oracle = Rational::new(
+        false,
+        Natural::from_u128(1),
+        Natural::from_u128(1).shl(1075),
+    );
+    assert!(
+        Rational::parse(midpoint.lexeme())
+            .unwrap()
+            .value_eq(&oracle)
+    );
+    for resource in ["work", "bytes", "nodes"] {
+        let mut tiny = LIMITS;
+        match resource {
+            "work" => tiny.work = 0,
+            "bytes" => tiny.bytes = 0,
+            _ => tiny.nodes = 0,
+        }
+        assert!(
+            matches!(compile_tool_arguments(&shapes, &namespaces(), &profile, &tiny),
+            Err(ToolSchemaError::Exhausted { resource: actual, .. }) if actual == resource)
+        );
+    }
+    let repeated = compile_tool_arguments(&shapes, &namespaces(), &profile, &LIMITS)
+        .expect("valid ceiling neighbor");
+    assert_eq!(repeated.schema_json, compiled.schema_json);
+}

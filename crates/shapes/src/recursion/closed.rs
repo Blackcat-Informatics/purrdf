@@ -3,6 +3,7 @@
 
 //! Checked eligibility for the borrowed recursive evaluator.
 
+use crate::expression::{NodeExpr, ShapeArg};
 use crate::shapes::{
     ModelOwner,
     link::{ShapeIndex, ShapeIndexRef},
@@ -109,6 +110,58 @@ impl std::error::Error for ClosedRecursionRefusal {}
 
 /// Constructed only after the original catalog and occurrence are checked.
 pub(crate) struct ClosedProof(pub(super) ());
+
+/// A conformance question whose focus and target cannot depend on the current
+/// recursive valuation. Only a canonical reference into the same original
+/// catalog is admitted: neither a local replacement body nor another model's
+/// equal-named shape may acquire this catalog's proof or borrowed binding.
+pub(crate) fn original_conformance<'a>(
+    expression: &'a NodeExpr,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    let NodeExpr::ConformsToShape {
+        node,
+        shape: ShapeArg::Named(shape),
+    } = expression
+    else {
+        return None;
+    };
+    matches!(node.as_ref(), NodeExpr::This)
+        .then(|| original_reference(shape, owner))
+        .flatten()
+}
+
+/// Resolve only canonical references in their original declaration domain.
+/// Blank labels carry RDF scope, while the owner distinguishes independent
+/// catalogs even when their native terms have the same spelling.
+fn original_reference<'a>(
+    shape: &'a crate::shapes::Shape,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    let owner = owner?;
+    (matches!(shape.id, Term::NamedNode(_) | Term::BlankNode(_))
+        && shape
+            .owner
+            .as_ref()
+            .is_none_or(|target| Arc::ptr_eq(owner, target))
+        && super::model::canonical_handle(shape)
+        && owner.definition(&shape.id).is_some())
+    .then_some(shape)
+}
+
+/// A where operand is the original bare reference, not an exported root with
+/// its own targets. Check that representation before the general root proof:
+/// its ownerless branch checks every metadata field without descending into a
+/// caller-built tree of owned where targets.
+pub(crate) fn where_reference<'a>(
+    shape: &'a crate::shapes::Shape,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    if shape.owner.is_some() {
+        return None;
+    }
+    original_reference(shape, owner)
+}
 
 /// The original kind of an admitted dependency-graph occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

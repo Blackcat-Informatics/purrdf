@@ -5232,6 +5232,15 @@ mod tests {
             arena.encode(root),
             eager.arena().encode(eager.root_for(&fact("1023")).unwrap())
         );
+        let expected = arena.encode(root);
+        drop(index);
+        drop(eager);
+        let owned = EvaluationProofIndex::of_shared(
+            purrdf_lex::allocation::Shared::try_new(evaluation).unwrap(),
+        )
+        .unwrap();
+        let (arena, root) = owned.extract(&fact("1023")).unwrap().unwrap();
+        assert_eq!(arena.encode(root), expected);
     }
 
     #[test]

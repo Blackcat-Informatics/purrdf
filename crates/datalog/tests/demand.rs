@@ -4,7 +4,7 @@
 //! Native acceptance of the complete, source-bound demand query entry point.
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
-use purrdf_datalog::demand::{DemandError, evaluate_demanded};
+use purrdf_datalog::demand::{DemandError, evaluate_demanded, prepare_demanded};
 use purrdf_datalog::dictionary::{DictionaryError, DictionaryTerm, TermDictionary};
 use purrdf_datalog::guard::{Guard, NoGuards};
 use purrdf_datalog::id::TermId;
@@ -573,6 +573,7 @@ impl purrdf_hash::error::StructuredError for Lost {
 #[derive(Debug, Default)]
 struct Control {
     lookup_failure: AtomicBool,
+    read_failure_on_lookup: AtomicBool,
     read_failure: AtomicBool,
     writes: AtomicUsize,
     fail_write_at: AtomicUsize,
@@ -590,7 +591,11 @@ impl TermDictionary for CheckedDictionary {
         if self.control.lookup_failure.load(Ordering::Relaxed) {
             return Err(Lost);
         }
-        Ok(self.terms.lookup(surface))
+        let result = self.terms.lookup(surface);
+        if self.control.read_failure_on_lookup.load(Ordering::Relaxed) {
+            self.control.read_failure.store(true, Ordering::Relaxed);
+        }
+        Ok(result)
     }
     fn resolve_term(&self, id: TermId) -> Result<&str, Lost> {
         self.check_read()?;
@@ -679,6 +684,19 @@ where
         ),
         Err(DemandError::Source(Lost))
     ));
+    let dictionary = CheckedDictionary::default();
+    let control = dictionary.control.clone();
+    let prepared = prepare_demanded(&rules, &goal, &dictionary).unwrap();
+    control.lookup_failure.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        prepared.evaluate(
+            RelationStore::with_dictionary(dictionary),
+            &EvalOptions::default(),
+            None
+        ),
+        Err(DemandError::Source(Lost))
+    ));
+    assert_eq!(control.writes.load(Ordering::Relaxed), 0);
     let mut input =
         RelationStore::<CheckedDictionary, N>::with_dictionary(CheckedDictionary::default());
     input

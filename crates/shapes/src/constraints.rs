@@ -398,11 +398,14 @@ impl<'a> ConstraintSource<'a> {
 
     /// The severity of a result whose constraint node declares `own`: a pinned
     /// reifier severity, else `own`, else the shape's.
-    fn severity_over(&self, own: Option<&Severity>) -> Severity {
+    fn severity_over<'b>(&self, own: Option<&'b Severity>) -> &'b Severity
+    where
+        'a: 'b,
+    {
         if self.pinned_severity {
-            self.severity.clone()
+            self.severity
         } else {
-            own.unwrap_or(self.severity).clone()
+            own.unwrap_or(self.severity)
         }
     }
 
@@ -4116,7 +4119,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
-                &sev,
+                sev,
                 msg,
                 annotations,
                 shapes_graph_iri,
@@ -4137,7 +4140,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // what the sink decides is only whether they are kept.
             for produced_result in produced {
                 if sink
-                    .violation(&sev, || ResultRecord {
+                    .violation(sev, || ResultRecord {
                         value: produced_result,
                         evidence: crate::report::ResultEvidence {
                             source_constraint: source_constraint.cloned(),
@@ -4167,6 +4170,19 @@ fn eval_constraint<'a, S: ResultSink>(
         } => {
             let sev = source.severity_over(csev.as_ref());
             let msg = source.messages_over(cmsg);
+            let recursive_target = context
+                .fixed
+                .map(|_| {
+                    let target =
+                        crate::recursion::closed::original_conformance(expr, context.plan.model())
+                            .ok_or_else(|| {
+                                crate::error::ShapesError::internal(
+                                    "closed expression lost its original static target proof",
+                                )
+                            })?;
+                    lowered.shape(context.plan, 0, target)
+                })
+                .transpose()?;
             // Seed the guard with the ambient filter/exists depth so a
             // `sh:filterShape` re-entry through this expression keeps the
             // cross-shape recursion count monotone (fail-closed at the depth
@@ -4176,42 +4192,47 @@ fn eval_constraint<'a, S: ResultSink>(
             // loop-invariant — reusing it only avoids re-allocating the set.
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             for value_node in value_nodes {
-                // A node expression evaluates over the owned term model (it may
-                // produce non-interned terms), so resolve the value node here.
-                let value_node = value_node.to_term(ds);
-                // SHACL 1.2 Node Expressions §7.1 evaluates an expression
-                // constraint as `evalExpr(expr, data graph, focusNode,
-                // {value: v})`, so the value node under test is BOUND under the
-                // name `value` — this is what makes `[ shnex:var "value" ]` resolve
-                // inside an expression constraint. The binding is a borrowed stack
-                // frame, so the per-value cost is a pointer write, not an
-                // allocation.
-                let binding = crate::expression::Binding::new(
-                    crate::expression::VALUE_VAR,
-                    &value_node,
-                    crate::expression::Scope::EMPTY,
-                );
-                let out = crate::expression::eval_planned_node_expr_in_scope(
-                    store,
-                    &value_node,
-                    expr,
-                    lowered,
-                    context.plan,
-                    &mut guard,
-                    crate::expression::Scope::bound(&binding),
-                )
-                .map_err(|error| {
-                    error.context(&format!(
-                        "sh:expression constraint on shape {source_shape}: "
-                    ))
-                })?;
-                if !crate::expression::is_true(&out) {
-                    emit!(severity = &sev; {
+                let conforms = if let Some(target) = recursive_target {
+                    // This plan borrows the original expression's lowering and
+                    // the current execution's binding. Asking the ambient pair
+                    // relation must not start a fresh expression validation run.
+                    // The ordinary expression emits `bool_literal(verdict)`;
+                    // `is_true` of that canonical singleton is the verdict
+                    // itself. Keep it native here, without a synthetic term or
+                    // vector during fixed-point rounds.
+                    conforms_memoized(context, target, &value_node.as_focus(ds))?
+                } else {
+                    // General expressions may produce non-interned terms.
+                    let value_node = value_node.to_term(ds);
+                    // Node Expressions §7.1 binds the judged value under `value`.
+                    let binding = crate::expression::Binding::new(
+                        crate::expression::VALUE_VAR,
+                        &value_node,
+                        crate::expression::Scope::EMPTY,
+                    );
+                    let out = crate::expression::eval_planned_node_expr_in_scope(
+                        store,
+                        &value_node,
+                        expr,
+                        lowered,
+                        context.plan,
+                        &mut guard,
+                        crate::expression::Scope::bound(&binding),
+                    )
+                    .map_err(|error| {
+                        error.context(&format!(
+                            "sh:expression constraint on shape {source_shape}: "
+                        ))
+                    })?;
+                    crate::expression::is_true(&out)
+                };
+                if !conforms {
+                    emit!(severity = sev; {
                         let mut r = result!(
                             sh::EXPRESSION_CONSTRAINT_COMPONENT,
-                            Some(value_node.clone())
+                            Some(value_node.to_term(ds))
                         );
-                        r.severity.clone_from(&sev);
+                        r.severity.clone_from(sev);
                         r.messages = msg.to_vec();
                         r
                     });
@@ -4309,12 +4330,12 @@ fn eval_constraint<'a, S: ResultSink>(
                                     "sh:nodeByExpression constraint on shape {source_shape}: "
                                 )))?;
                         if !conforms {
-                            emit!(severity = &sev; {
+                            emit!(severity = sev; {
                                 let mut r = result!(
                                     sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
                                     Some(value_node.to_term(ds))
                                 );
-                                r.severity.clone_from(&sev);
+                                r.severity.clone_from(sev);
                                 r.messages = msg.to_vec();
                                 r
                             });
@@ -4417,7 +4438,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     component,
                     source_shape,
                     path,
-                    &sev,
+                    sev,
                     msg,
                     annotations,
                     shapes_graph_iri,
@@ -4433,7 +4454,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     component,
                     source_shape,
                     path,
-                    &sev,
+                    sev,
                     msg,
                     annotations,
                     shapes_graph_iri,
@@ -4454,7 +4475,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // As for `sh:sparql`: a custom component answers in results, so the
             // validator runs whatever the sink is.
             for produced_result in produced {
-                emit!(severity = &sev; produced_result);
+                emit!(severity = sev; produced_result);
             }
             Flow::Continue
         }

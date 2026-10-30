@@ -293,6 +293,21 @@ pub(crate) struct LoweredShapes {
 }
 
 impl LoweredShapes {
+    /// The original lowering and resolved dataset row used to discover targets.
+    pub(crate) fn target_binding<'a>(
+        &'a self,
+        binding: &'a DatasetBinding,
+        classes: &'a ClassCatalog,
+        model: Option<&'a Arc<crate::shapes::ModelOwner>>,
+    ) -> TargetBinding<'a> {
+        TargetBinding {
+            graph: self,
+            binding,
+            classes,
+            model,
+        }
+    }
+
     /// The class references this walk collected.
     ///
     /// The derivation's own answer, which a preparation restored from a prepared
@@ -466,6 +481,59 @@ impl LoweredShapes {
     #[inline]
     pub(crate) fn footprint(&self) -> &Footprint {
         &self.footprint
+    }
+}
+
+/// Target discovery borrows the same lowering, class catalog and dataset row
+/// as constraint evaluation. It never installs dataset answers in the lowering.
+#[derive(Clone, Copy)]
+pub(crate) struct TargetBinding<'a> {
+    graph: &'a LoweredShapes,
+    pub(crate) binding: &'a DatasetBinding,
+    pub(crate) classes: &'a ClassCatalog,
+    pub(crate) model: Option<&'a Arc<crate::shapes::ModelOwner>>,
+}
+
+impl<'a> TargetBinding<'a> {
+    pub(crate) fn where_plan(
+        self,
+        target: &Shape,
+    ) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
+        let original = self.model.and_then(|owner| {
+            crate::recursion::closed::where_reference(target, Some(owner))?;
+            let shape = owner.definition(&target.id)?;
+            let lowered = self
+                .graph
+                .indexes
+                .iter()
+                .find(|index| {
+                    Arc::ptr_eq(&index.owner, owner) && Arc::ptr_eq(&index.cell, &owner.index)
+                })?
+                .shapes
+                .get(&target.id)?;
+            Some((owner, shape, lowered))
+        });
+        let Some((owner, shape, lowered)) = original else {
+            return Err(PreparationRefusal::UnqualifiedRecursion(
+                crate::recursion::ClosedRecursionRefusal::new(
+                    &target.id,
+                    crate::model::sh::TARGET_WHERE,
+                    self.model,
+                    None,
+                )?,
+            )
+            .into());
+        };
+        Ok(ShapePlan {
+            owner: Some(owner),
+            origin: Some(owner),
+            shape,
+            lowered,
+            graph: self.graph,
+            binding: self.binding,
+            classes: self.classes,
+            targets: self.graph.no_targets(),
+        })
     }
 }
 
@@ -1186,7 +1254,12 @@ impl<'a> ShapePlan<'a> {
             .unique_values
             .get(slot as usize)
             .ok_or_else(|| slot_defect("unique-values", slot))?;
-        let built = UniqueGroups::build(data, spec, self.binding, self.classes)?;
+        let built = UniqueGroups::build(
+            data,
+            spec,
+            self.graph
+                .target_binding(self.binding, self.classes, spec.owner.as_ref()),
+        )?;
         // A lost race publishes nothing and reads the winner's grouping.
         let _ = cell.set(built);
         cell.get().ok_or_else(|| slot_defect("unique-values", slot))
@@ -3005,8 +3078,14 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
                 | Target::Node(_)
                 | Target::ImplicitClass(_)
                 | Target::Sparql { .. }
-                | Target::Where(_)
                 | Target::NodeExpression(_) => {}
+                Target::Where(target) => {
+                    if crate::recursion::closed::where_reference(target, walk.owner.as_ref())
+                        .is_some()
+                    {
+                        lower_reference(&target.id, false, walk)?;
+                    }
+                }
             }
         }
     }

@@ -34,6 +34,94 @@ where
 }
 
 #[test]
+fn prepared_execution_reuses_rules_and_reprepares_for_legitimate_namespace_collisions() {
+    prepared_reuse(atom);
+    prepared_reuse(|s, p, o| quad(s, p, o, "g"));
+}
+
+fn prepared_reuse<const N: usize>(atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>)
+where
+    Arity<N>: StoreShape<N>,
+{
+    for negative in [false, true] {
+        let mut rules = closure::closure_rules("edge", "reach", &atom);
+        let mut body = vec![atom("?x", "reach", "?y")];
+        if negative {
+            body.push(atom("?x", "blocked", "?y").into_negated());
+        }
+        rules.push(DlClause::datalog(atom("?x", "chosen", "?y"), body));
+        let goal = atom("0", "chosen", "?y");
+        let prepared = prepare_demanded(&rules, &goal, &TermInterner::default()).unwrap();
+        let mut generated = Vec::new();
+        for rows in [
+            vec![atom("0", "edge", "1"), atom("1", "edge", "2")],
+            vec![
+                atom("0", "blocked", "2"),
+                atom("2", "edge", "3"),
+                atom("0", "edge", "2"),
+            ],
+        ] {
+            let source = input(&rows);
+            let original = source.rows_from(0).map(|(_, row)| row).collect::<Vec<_>>();
+            let expected = full(&rules, &goal, source.clone());
+            let answer = prepared
+                .evaluate(source, &EvalOptions::default(), None)
+                .unwrap();
+            assert_eq!(
+                surfaces(answer.dictionary(), answer.answers().unwrap()),
+                expected
+            );
+            for (authored, ids) in rows.iter().zip(original) {
+                assert_eq!(
+                    ids.map(|id| answer.dictionary().resolve(id).to_owned()),
+                    authored.terms().map(|term| term.surface().unwrap())
+                );
+            }
+            generated = internal_terms(answer.dictionary());
+            assert_eq!(answer.preparation().original_facts, rows.len());
+        }
+        // Even an unused caller term invalidates a compiled namespace. It does
+        // not invalidate the source: fresh preparation must accept that source.
+        // This host dictionary cannot clone: compatibility must leave its
+        // original owner available for re-preparation.
+        let mut dictionary = CheckedDictionary::default();
+        dictionary.terms.intern(&generated[0]).unwrap();
+        let control = dictionary.control.clone();
+        let mut source = RelationStore::<_, N>::with_dictionary(dictionary);
+        let row = atom("0", "edge", "1")
+            .terms()
+            .map(|term| term.surface().unwrap());
+        source
+            .insert_terms(row.each_ref().map(|term| DictionaryTerm::Surface(term)))
+            .unwrap();
+        assert!(matches!(
+            prepared.check_compatibility(source.interner()),
+            Err(DemandError::PreparedNamespaceCollision { term }) if term == generated[0]
+        ));
+        control
+            .read_failure_on_lookup
+            .store(true, Ordering::Relaxed);
+        assert!(matches!(
+            prepared.check_compatibility(source.interner()),
+            Err(DemandError::Source(Lost))
+        ));
+        control
+            .read_failure_on_lookup
+            .store(false, Ordering::Relaxed);
+        control.read_failure.store(false, Ordering::Relaxed);
+        let revised = prepare_demanded(&rules, &goal, source.interner()).unwrap();
+        let expected = full(&rules, &goal, input(&[atom("0", "edge", "1")]));
+        let answer = revised
+            .evaluate(source, &EvalOptions::default(), None)
+            .unwrap();
+        assert_eq!(
+            surfaces(answer.dictionary(), answer.answers().unwrap()),
+            expected
+        );
+    }
+}
+
+#[test]
 fn generated_stratified_answers_match_full_triple_and_quad_models() {
     generated(atom);
     generated(|s, p, o| quad(s, p, o, "?g"));

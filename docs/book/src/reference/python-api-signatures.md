@@ -1082,7 +1082,7 @@ class _ValidationReport:
 class _Shapes:
     """Parsed SHACL shapes, reusable across many data graphs."""
 
-    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None) -> None:
+    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> None:
         ...
 
     def validate_nt(self, data_nt: str, *, xpath_regex: str | None=None) -> _ValidationReport:
@@ -1201,16 +1201,16 @@ class _ShapesProduct:
     def identity_components(self) -> list[tuple[str, str]]:
         ...
 
-    def admit(self) -> _PreparedShapes:
+    def admit(self, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def admit_expecting(self, expected_identity: str) -> _PreparedShapes:
+    def admit_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def rebuild(self) -> _PreparedShapes:
+    def rebuild(self, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def rebuild_expecting(self, expected_identity: str) -> _PreparedShapes:
+    def rebuild_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
     def certify(self) -> None:
@@ -1226,11 +1226,11 @@ class shapes:
     ShapesImportError: TypeAlias = _ShapesImportError
 
     @staticmethod
-    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None) -> bytes:
+    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> bytes:
         ...
 
     @staticmethod
-    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None) -> dict[str, builtins.object]:
+    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
@@ -1625,11 +1625,16 @@ class _RetrievalScore(TypedDict):
     raw: int
     scale_digits: int
 
+class _RetrievalOrdering(TypedDict):
+    semantics: str
+    leading: bool
+    keys: dict[str, tuple[bytes, bytes]]
+
 class retrieval:
     PlanDocumentError: TypeAlias = _PlanDocumentError
 
     @staticmethod
-    def plan(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def plan(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, caller_ordered: bool=False, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
@@ -1641,11 +1646,11 @@ class retrieval:
         ...
 
     @staticmethod
-    def compile(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, weights: dict[str, int] | None=None, k: int | None=None, decay: str | None=None, scale_digits: int | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def compile(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, weights: dict[str, int] | None=None, k: int | None=None, decay: str | None=None, scale_digits: int | None=None, ordering: _RetrievalOrdering | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def search(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], weights: dict[str, int], statistics: dict[str, builtins.object], k: int, decay: str, scale_digits: int, top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def search(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], weights: dict[str, int], statistics: dict[str, builtins.object], k: int, decay: str, scale_digits: int, top_k: int, ordering: _RetrievalOrdering | None=None, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
