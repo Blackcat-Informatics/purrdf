@@ -302,7 +302,11 @@ impl BoundShapes {
                 if shape.deactivated {
                     Ok(PreparedTargets::default())
                 } else {
-                    PreparedTargets::for_shape(data, shape, &binding, &classes)
+                    PreparedTargets::for_shape(
+                        data,
+                        shape,
+                        lowered.target_binding(&binding, &classes, shape.owner.as_ref()),
+                    )
                 }
             })
             .collect::<Result<Vec<_>, ShapesError>>()?;
@@ -407,9 +411,10 @@ impl PreparedTargets {
     fn for_shape(
         data: &ShaclData,
         shape: &Shape,
-        binding: &DatasetBinding,
-        classes: &ClassCatalog,
+        targets: crate::plan::TargetBinding<'_>,
     ) -> Result<Self, ShapesError> {
+        let binding = targets.binding;
+        let classes = targets.classes;
         let mut prepared = Self::default();
         for (index, target) in shape.targets.iter().enumerate() {
             match target {
@@ -467,13 +472,13 @@ impl PreparedTargets {
                 }
                 Target::ImplicitClass(_) => {}
                 Target::Where(where_shape) => {
-                    for node in crate::target_eval::where_targets(
-                        data,
-                        where_shape,
-                        binding.validation_request(),
-                        shape.owner.as_ref(),
-                    )? {
-                        prepared.explicit_ids.insert(node);
+                    for node in crate::target_eval::where_targets(data, where_shape, targets)? {
+                        if !prepared.explicit_ids.contains(&node) {
+                            prepared.explicit_ids.try_reserve(1).map_err(|_| {
+                                purrdf_lex::allocation::StorageError::AllocationFailed
+                            })?;
+                            prepared.explicit_ids.insert(node);
+                        }
                     }
                 }
                 Target::NodeExpression(expr) => {
@@ -1172,10 +1177,11 @@ pub(crate) fn resolve_focus_nodes(
     data: &ShaclData,
     shape: &Term,
     targets: &[Target],
-    binding: &DatasetBinding,
-    classes: &ClassCatalog,
-    model: Option<&Arc<crate::shapes::ModelOwner>>,
+    target_binding: crate::plan::TargetBinding<'_>,
 ) -> Result<Vec<FocusNode>, ShapesError> {
+    let binding = target_binding.binding;
+    let classes = target_binding.classes;
+    let model = target_binding.model;
     let ds = data.core_view();
     let mut seen_ids: IdSet = IdSet::default();
     let mut seen_foreign: FastSet<Term> = FastSet::default();
@@ -1192,12 +1198,21 @@ pub(crate) fn resolve_focus_nodes(
                 Some(instances_of_class(data, class, binding, classes)?)
             }
             Target::ImplicitClass(_) => Some(Vec::new()),
-            Target::Where(where_shape) => Some(crate::target_eval::where_targets(
-                data,
-                where_shape,
-                binding.validation_request(),
-                model,
-            )?),
+            Target::Where(where_shape) => {
+                let ids = crate::target_eval::where_targets(data, where_shape, target_binding)?;
+                let mut resident = purrdf_lex::allocation::Resident;
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+                for id in ids {
+                    if !seen_ids.contains(&id) {
+                        seen_ids
+                            .try_reserve(1)
+                            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+                        memory.push(&mut nodes, FocusNode::Interned(id))?;
+                        seen_ids.insert(id);
+                    }
+                }
+                continue;
+            }
             Target::Node(_) | Target::Sparql { .. } | Target::NodeExpression(_) => None,
         };
         if let Some(ids) = ids {
@@ -1503,9 +1518,9 @@ where
             data,
             &shape.id,
             &shape.targets,
-            bound.binding(),
-            bound.classes(),
-            shape.owner.as_ref(),
+            bound
+                .lowered
+                .target_binding(bound.binding(), bound.classes(), shape.owner.as_ref()),
         )?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
@@ -5314,9 +5329,11 @@ mod tests {
                 &validator.data,
                 &declared.id,
                 &declared.targets,
-                validator.bound.binding(),
-                validator.bound.classes(),
-                declared.owner.as_ref(),
+                validator.bound.lowered.target_binding(
+                    validator.bound.binding(),
+                    validator.bound.classes(),
+                    declared.owner.as_ref(),
+                ),
             )
             .expect("fixture targets resolve")
             .iter()

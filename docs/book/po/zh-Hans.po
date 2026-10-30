@@ -15281,6 +15281,22 @@ msgstr ""
 "义、参数及模型或索引作用域。选择一种不动点语义并不意味着可以采用未知的传递关"
 "系，也不意味着可以使用旧的深度有界近似。"
 
+#: src/validation/shacl.md:135
+msgid ""
+"A `sh:targetWhere :Target` can use the same explicit selection when its operand "
+"is a canonical named reference in the same original catalog. Discovery reuses "
+"the original plan and dataset binding, seeds every candidate pair into one "
+"fixed-point execution and publishes targets only after the whole sweep settles. "
+"Pair and round limits cover the candidate roots and their dependencies together; "
+"they do not bound raw graph scans. Anonymous where shapes and replaced operands "
+"remain refused under a selected recursive request."
+msgstr ""
+"当操作数是同一原始目录中的规范命名引用时，`sh:targetWhere :Target` 可以使用"
+"相同的显式语义选择。目标发现复用原始计划与数据集绑定，将每个候选配对作为种子"
+"放入同一次不动点执行，并且只有在整个遍历收敛后才发布目标集合。配对和轮数限制"
+"共同约束候选根及其依赖，但不限制原始图扫描。选择了递归语义的请求仍会拒绝匿名"
+"的 where 形状以及被替换的操作数。"
+
 #: src/validation/shacl.md:112
 msgid ""
 "`validate_with_recursion_evidence` and `validate_shape_with_recursion` "

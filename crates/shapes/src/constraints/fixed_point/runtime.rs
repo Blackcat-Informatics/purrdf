@@ -215,7 +215,7 @@ impl<'a> Execution<'a> {
     pub(super) fn solve(
         &self,
         mut evaluate: impl FnMut(Body<'a>, &FocusNode) -> Result<bool, ShapesError>,
-    ) -> Result<bool, ShapesError> {
+    ) -> Result<(), ShapesError> {
         'graph: loop {
             let mut resident = Resident;
             let mut memory = Memory::new(&mut resident);
@@ -291,7 +291,7 @@ impl<'a> Execution<'a> {
             }
             let mut state = self.state.borrow_mut();
             state.settled = true;
-            return Ok(state.pairs[0].value);
+            return Ok(());
         }
     }
 }

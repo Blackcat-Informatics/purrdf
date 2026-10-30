@@ -112,12 +112,36 @@ impl<'a> FixedPoint<'a> {
         context: ValidationContext<'a, '_>,
         focus: &FocusNode,
     ) -> Result<bool, ShapesError> {
+        self.settle(context, |fixed| {
+            fixed.ask_shape(context.plan, focus).map(|_| ())
+        })?;
+        self.answer(context.plan, focus)
+    }
+
+    fn answer(&self, plan: ShapePlan<'_>, focus: &FocusNode) -> Result<bool, ShapesError> {
+        let source = self
+            .source
+            .get()
+            .ok_or_else(|| ShapesError::internal("settled recursive work has no source"))?;
+        self.execution
+            .settled(
+                runtime::identity(source, runtime::original(plan)?, 0),
+                focus,
+            )
+            .map(|(answer, _)| answer)
+    }
+
+    fn settle(
+        &self,
+        context: ValidationContext<'a, '_>,
+        seed: impl FnOnce(&Self) -> Result<(), ShapesError>,
+    ) -> Result<(), ShapesError> {
         let source = Shared::try_new(context.store.retained())
             .map_err(|_| StorageError::AllocationFailed)?;
         self.source.set(source).map_err(|_| {
             ShapesError::internal("one recursive workspace was asked to start two root executions")
         })?;
-        self.ask_shape(context.plan, focus)?;
+        seed(self)?;
         self.execution.solve(|body, focus| {
             let memo = ConformanceMemo::default();
             let plan = body.plan();
@@ -268,4 +292,43 @@ impl<'a> FixedPoint<'a> {
         outcome.publish(conforms, cycles)?;
         Ok(())
     }
+}
+
+/// Settle a named where-target sweep as one governed execution. No target set
+/// escapes before every root and dependency has settled successfully.
+pub(crate) fn conforming_targets(
+    store: &ShaclData,
+    plan: ShapePlan<'_>,
+    candidates: &[purrdf_rdf::TermId],
+) -> Result<Vec<purrdf_rdf::TermId>, ShapesError> {
+    crate::recursion::model::admit_plan(plan)?;
+    let memo = ConformanceMemo::default();
+    let context = ValidationContext {
+        store,
+        plan,
+        depth: 0,
+        memo: &memo,
+        fixed: None,
+        box_role_vocab: None,
+        capture: None,
+        report_run: None,
+    };
+    let fixed = FixedPoint::for_plan(plan)?.ok_or_else(|| {
+        ShapesError::internal("a selected where-target sweep lost its recursion request")
+    })?;
+    fixed.settle(context, |fixed| {
+        for &node in candidates {
+            fixed.ask_shape(plan, &FocusNode::Interned(node))?;
+        }
+        Ok(())
+    })?;
+    let mut out = Vec::new();
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    for &node in candidates {
+        if fixed.answer(plan, &FocusNode::Interned(node))? {
+            memory.push(&mut out, node)?;
+        }
+    }
+    Ok(out)
 }
