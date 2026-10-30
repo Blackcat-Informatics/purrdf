@@ -778,9 +778,11 @@ paper_cases! {
     named_conformance_acyclic: PaperCase {
         data: ":a :p :b .",
         shapes: ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this :T ) ] .
+                 :C a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( :b :T ) ] .
                  :T a sh:NodeShape ; sh:hasValue :b .",
         admission: Admission::Acyclic,
-        pairs: &[("a", "S", false, false), ("b", "S", true, true)],
+        pairs: &[("a", "S", false, false), ("b", "S", true, true),
+                 ("a", "C", true, true), ("b", "C", true, true)],
     };
     named_conformance_self: PaperCase {
         data: ":a :p :a .", shapes: NAMED_CONFORMANCE_SELF,
@@ -1080,7 +1082,8 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
     use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
     use purrdf_shapes::term::NamedNode;
 
-    let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
+    let dataset =
+        parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b . :b :p :b ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
     let id = NamedNode::from("http://example.org/S").into_term();
     let focus = NamedNode::from("http://example.org/a").into_term();
@@ -1089,6 +1092,14 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
     let fresh_data = ShaclData::new(Arc::clone(&fresh_dataset), Arc::clone(&fresh_dataset), None);
     for (source, reads_p) in [
         (NAMED_CONFORMANCE_SELF, false),
+        (
+            ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:pathValues :p ] _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:hasValue :b ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
+            true,
+        ),
+        (
+            ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:var \"value\" ] _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
+            true,
+        ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
@@ -1235,8 +1246,13 @@ fn named_conformance_charges_callback_pairs_to_the_active_run() {
         :T a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this :S ) ] .");
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    for target in [":T", "_:t"] {
-        let source = source.replace(":T", target);
+    for (target, focus) in [
+        (":T", "sh:this"),
+        ("_:t", "sh:this"),
+        (":T", ":a"),
+        ("_:t", "[ shnex:pathValues :p ]"),
+    ] {
+        let source = source.replace(":T", target).replace("sh:this", focus);
         for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
             let no_rounds = ValidationOptions::default().with_recursion(RecursionOptions {
                 semantics,
@@ -1282,6 +1298,348 @@ fn named_conformance_charges_callback_pairs_to_the_active_run() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Every pure constructor can select a pair in the active relation. The target
+/// self-cycle separates LFP/GFP even for foreign and synthesized focus terms.
+#[test]
+fn pure_conformance_focus_compositions_use_the_selected_relation() {
+    use purrdf_shapes::constraints::conforms_with_recursion;
+    use purrdf_shapes::engine::PreparedShapes;
+    use purrdf_shapes::expression::{NodeExpr as E, ShapeArg};
+    use purrdf_shapes::shapes::{Constraint, ModelOwner, Path};
+    use purrdf_shapes::term::NamedNode;
+
+    let mut shapes = parse_shapes_with_options(
+        &format!("{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ."),
+        None,
+        None,
+        None,
+        &ShapesImports::new(),
+        &ValidationOptions::default(),
+    )
+    .unwrap();
+    let sid = NamedNode::from("http://example.org/S").into_term();
+    let tid = NamedNode::from("http://example.org/T").into_term();
+    let a = NamedNode::from("http://example.org/a").into_term();
+    let b = NamedNode::from("http://example.org/b").into_term();
+    let p = Path::Predicate(NamedNode::from("http://example.org/p"));
+    let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b ; a :C ."), None).unwrap();
+    let data = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
+    let prototype = shapes.owner.definition(&sid).unwrap().clone();
+    let mut target = prototype.clone();
+    target.id = tid.clone();
+    target.targets.clear();
+    target.constraints = vec![Constraint::Reference(tid)];
+    for (label, node, has_focus) in [
+        (
+            "constant foreign",
+            E::Constant(NamedNode::from("http://example.org/foreign").into_term()),
+            true,
+        ),
+        ("this", E::This, true),
+        ("path", E::Path(p.clone()), true),
+        ("empty", E::Empty, false),
+        ("value variable", E::Var("value".to_owned()), true),
+        ("focus variable", E::Var("focusNode".to_owned()), true),
+        ("unbound variable", E::Var("unbound".to_owned()), false),
+        ("list", E::List(vec![a.clone()]), true),
+        (
+            "union",
+            E::Union(vec![E::This, E::List(vec![a.clone()])]),
+            true,
+        ),
+        (
+            "intersection",
+            E::Intersection(vec![E::This, E::List(vec![a.clone()])]),
+            true,
+        ),
+        (
+            "if",
+            E::If {
+                cond: Box::new(E::Exists(Box::new(E::This))),
+                then: Box::new(E::This),
+                els: Box::new(E::Empty),
+            },
+            true,
+        ),
+        (
+            "count",
+            E::Count {
+                distinct: true,
+                of: Box::new(E::Empty),
+            },
+            true,
+        ),
+        (
+            "distinct",
+            E::Distinct(Box::new(E::Concat(vec![E::This, E::This]))),
+            true,
+        ),
+        ("min", E::Min(Box::new(E::List(vec![a.clone()]))), true),
+        ("max", E::Max(Box::new(E::List(vec![a.clone()]))), true),
+        ("sum", E::Sum(Box::new(E::Empty)), true),
+        (
+            "limit",
+            E::Limit {
+                of: Box::new(E::List(vec![a.clone(), b.clone()])),
+                n: 1,
+            },
+            true,
+        ),
+        (
+            "offset",
+            E::Offset {
+                of: Box::new(E::List(vec![a.clone(), b.clone()])),
+                n: 1,
+            },
+            true,
+        ),
+        (
+            "order",
+            E::OrderBy {
+                of: Box::new(E::This),
+                key: Box::new(E::This),
+                descending: false,
+            },
+            true,
+        ),
+        ("exists", E::Exists(Box::new(E::Empty)), true),
+        (
+            "path values",
+            E::PathValues {
+                path: p.clone(),
+                focus: Box::new(E::This),
+            },
+            true,
+        ),
+        ("concat", E::Concat(vec![E::Empty, E::This]), true),
+        (
+            "remove",
+            E::Remove {
+                nodes: Box::new(E::List(vec![a.clone(), b.clone()])),
+                remove: Box::new(E::List(vec![b])),
+            },
+            true,
+        ),
+        (
+            "flat map",
+            E::FlatMap {
+                nodes: Box::new(E::This),
+                map: Box::new(E::Path(p)),
+            },
+            true,
+        ),
+        (
+            "instances",
+            E::InstancesOf(Box::new(E::Constant(
+                NamedNode::from("http://example.org/C").into_term(),
+            ))),
+            true,
+        ),
+    ] {
+        let mut root = prototype.clone();
+        root.constraints = vec![Constraint::Expression {
+            expr: E::ConformsToShape {
+                node: Box::new(node),
+                shape: ShapeArg::Named(Box::new(target.clone())),
+            },
+            messages: Vec::new(),
+            severity: None,
+        }];
+        let owner = ModelOwner::from_definitions(vec![root, target.clone()]).unwrap();
+        let root = owner.root(&sid).unwrap();
+        shapes.node_shapes = vec![root.clone()];
+        shapes.owner = owner;
+        assert!(
+            matches!(PreparedShapes::new(Arc::new(shapes.clone())).bind_dataset(&dataset), Err(ShapesError::Recursion(refusal)) if refusal.reason == RecursionRefusalReason::MissingSelection),
+            "{label}"
+        );
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            let request = options(semantics);
+            let expected = has_focus && semantics == RecursionSemantics::Gfp;
+            assert_eq!(
+                conforms_with_recursion(&data, &a, &root, request.recursion.as_ref().unwrap())
+                    .unwrap(),
+                expected,
+                "{label}"
+            );
+            let report = PreparedShapes::new(Arc::new(shapes.clone()))
+                .with_validation_options(request)
+                .bind_dataset(&dataset)
+                .unwrap()
+                .validate()
+                .unwrap();
+            assert_eq!(report.conforms, expected, "{label}");
+            for result in report.results {
+                assert_eq!(
+                    result.focus_node, a,
+                    "the selected focus must not replace report focus: {label}"
+                );
+            }
+        }
+    }
+}
+
+/// A computed conformance focus never replaces the property's result focus,
+/// value or path; cardinality failures remain hard errors rather than false.
+#[test]
+fn pure_conformance_focus_keeps_property_results_and_cardinality() {
+    use purrdf_shapes::term::NamedNode;
+    let source = format!(
+        "{PREFIXES}
+        :S a sh:NodeShape ; sh:targetNode :a ; sh:property [
+            sh:path :p ; sh:expression [ shnex:conformsToShape ( [ shnex:pathValues :q ] :T ) ]
+        ] .
+        :T a sh:NodeShape ; sh:node :T ; sh:hasValue :c ."
+    );
+    let a = NamedNode::from("http://example.org/a").into_term();
+    let b = NamedNode::from("http://example.org/b").into_term();
+    for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+        let shapes = parse_shapes_with_options(
+            &source,
+            None,
+            None,
+            None,
+            &ShapesImports::new(),
+            &options(semantics),
+        )
+        .unwrap();
+        for (facts, matches_target) in [
+            (":a :p :b . :b :q :c .", true),
+            (":a :p :b . :b :q :d .", false),
+            (":a :p :b .", false),
+        ] {
+            let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} {facts}"), None).unwrap();
+            let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+            let report = validate_with(&data, &shapes).unwrap();
+            let expected = matches_target && semantics == RecursionSemantics::Gfp;
+            assert_eq!(report.conforms, expected);
+            assert_eq!(report.results.len(), usize::from(!expected));
+            if let Some(result) = report.results.first() {
+                assert_eq!(result.focus_node, a);
+                assert_eq!(result.value.as_ref(), Some(&b));
+                assert_eq!(
+                    result.result_path.as_ref(),
+                    Some(&NamedNode::from("http://example.org/p").into_term())
+                );
+                assert_eq!(
+                    result.source_constraint_component.as_str(),
+                    purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT
+                );
+            }
+        }
+        let dataset =
+            parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b . :b :q :c, :d ."), None)
+                .unwrap();
+        let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+        let error = validate_with(&data, &shapes).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("node argument must yield at most one node, got 2"),
+            "{error}"
+        );
+    }
+}
+
+/// Structural admission inspects untaken branches and ordering keys before
+/// evaluating any focus; callbacks and ownership wrappers cannot hide there.
+#[test]
+fn pure_conformance_focus_refuses_hidden_conformance_and_callbacks() {
+    use purrdf_shapes::constraints::conforms_with_recursion;
+    use purrdf_shapes::expression::{FnCall, NodeExpr as E, ShapeArg};
+    use purrdf_shapes::shapes::{Constraint, ModelOwner};
+    use purrdf_shapes::term::NamedNode;
+
+    let shapes = parse_shapes_with_options(
+        &format!("{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ."),
+        None,
+        None,
+        None,
+        &ShapesImports::new(),
+        &ValidationOptions::default(),
+    )
+    .unwrap();
+    let sid = NamedNode::from("http://example.org/S").into_term();
+    let a = NamedNode::from("http://example.org/a").into_term();
+    let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
+    let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+    let prototype = shapes.owner.definition(&sid).unwrap();
+    let mut target = prototype.clone();
+    target.targets.clear();
+    target.constraints = vec![Constraint::Reference(sid.clone())];
+    for (label, node) in [
+        (
+            "untaken conformance",
+            E::If {
+                cond: Box::new(E::Exists(Box::new(E::This))),
+                then: Box::new(E::This),
+                els: Box::new(E::ConformsToShape {
+                    node: Box::new(E::This),
+                    shape: ShapeArg::Named(Box::new(target.clone())),
+                }),
+            },
+        ),
+        (
+            "ordering query",
+            E::OrderBy {
+                of: Box::new(E::This),
+                key: Box::new(E::Select {
+                    query: "SELECT (<http://example.org/a> AS ?result) WHERE {}".to_owned(),
+                    variable: "result".to_owned(),
+                    key: "sh:select",
+                }),
+                descending: false,
+            },
+        ),
+        (
+            "untaken call",
+            E::If {
+                cond: Box::new(E::Exists(Box::new(E::This))),
+                then: Box::new(E::This),
+                els: Box::new(E::Call(FnCall::Builtin {
+                    iri: NamedNode::from("http://example.org/blocked-call"),
+                    args: vec![E::This],
+                })),
+            },
+        ),
+        (
+            "owned focus",
+            E::Owned {
+                expr: Box::new(E::This),
+                owner: Arc::clone(&shapes.owner),
+            },
+        ),
+    ] {
+        let mut root = prototype.clone();
+        root.constraints = vec![Constraint::Expression {
+            expr: E::ConformsToShape {
+                node: Box::new(node),
+                shape: ShapeArg::Named(Box::new(target.clone())),
+            },
+            messages: Vec::new(),
+            severity: None,
+        }];
+        let owner = ModelOwner::from_definitions(vec![root]).unwrap();
+        let root = owner.root(&sid).unwrap();
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            assert!(
+                matches!(
+                    conforms_with_recursion(
+                        &data,
+                        &a,
+                        &root,
+                        options(semantics).recursion.as_ref().unwrap()
+                    ),
+                    Err(ShapesError::Preparation(
+                        purrdf_shapes::PreparationRefusal::UnqualifiedRecursion(_)
+                    ))
+                ),
+                "{label}"
+            );
         }
     }
 }
@@ -2098,11 +2456,6 @@ fn selected_entries_refuse_unproved_original_scopes() {
     let cases = [
         (
             "sh:expression sh:this",
-            purrdf_shapes::model::sh::EXPRESSION,
-            false,
-        ),
-        (
-            "sh:expression [ shnex:conformsToShape ( :a :T ) ]",
             purrdf_shapes::model::sh::EXPRESSION,
             false,
         ),
