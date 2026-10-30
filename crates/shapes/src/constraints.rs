@@ -4173,14 +4173,23 @@ fn eval_constraint<'a, S: ResultSink>(
             let recursive_target = context
                 .fixed
                 .map(|_| {
-                    let target =
-                        crate::recursion::closed::original_conformance(expr, context.plan.model())
-                            .ok_or_else(|| {
-                                crate::error::ShapesError::internal(
-                                    "closed expression lost its original static target proof",
-                                )
-                            })?;
-                    lowered.shape(context.plan, 0, target)
+                    // The fixed execution proved this immutable original plan
+                    // before evaluation. Do not repeat its structural proof for
+                    // every focus and fixed-point round.
+                    let crate::expression::NodeExpr::ConformsToShape {
+                        node,
+                        shape: crate::expression::ShapeArg::Named(target),
+                    } = expr
+                    else {
+                        return Err(crate::error::ShapesError::internal(
+                            "closed expression lost its original static target proof",
+                        ));
+                    };
+                    let node = node.as_ref();
+                    Ok::<_, crate::error::ShapesError>((
+                        node,
+                        lowered.shape(context.plan, 0, target)?,
+                    ))
                 })
                 .transpose()?;
             // Seed the guard with the ambient filter/exists depth so a
@@ -4192,7 +4201,9 @@ fn eval_constraint<'a, S: ResultSink>(
             // loop-invariant — reusing it only avoids re-allocating the set.
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             for value_node in value_nodes {
-                let conforms = if let Some(target) = recursive_target {
+                let conforms = if let Some((crate::expression::NodeExpr::This, target)) =
+                    recursive_target
+                {
                     // This plan borrows the original expression's lowering and
                     // the current execution's binding. Asking the ambient pair
                     // relation must not start a fresh expression validation run.
@@ -4210,21 +4221,38 @@ fn eval_constraint<'a, S: ResultSink>(
                         &value_node,
                         crate::expression::Scope::EMPTY,
                     );
-                    let out = crate::expression::eval_planned_node_expr_in_scope(
-                        store,
-                        &value_node,
-                        expr,
-                        lowered,
-                        context.plan,
-                        &mut guard,
-                        crate::expression::Scope::bound(&binding),
-                    )
-                    .map_err(|error| {
+                    let evaluated = if let Some((node, target)) = recursive_target {
+                        crate::expression::eval_planned_conformance_focus(
+                            store,
+                            &value_node,
+                            node,
+                            lowered.operand(0)?,
+                            context.plan,
+                            &mut guard,
+                            crate::expression::Scope::bound(&binding),
+                        )
+                        .and_then(|focus| {
+                            focus.map_or(Ok(false), |focus| {
+                                conforms_memoized(context, target, &FocusNode::resolve(ds, &focus))
+                            })
+                        })
+                    } else {
+                        crate::expression::eval_planned_node_expr_in_scope(
+                            store,
+                            &value_node,
+                            expr,
+                            lowered,
+                            context.plan,
+                            &mut guard,
+                            crate::expression::Scope::bound(&binding),
+                        )
+                        .map(|out| crate::expression::is_true(&out))
+                    };
+                    evaluated.map_err(|error| {
                         error.context(&format!(
                             "sh:expression constraint on shape {source_shape}: "
                         ))
-                    })?;
-                    crate::expression::is_true(&out)
+                    })?
                 };
                 if !conforms {
                     emit!(severity = sev; {

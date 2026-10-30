@@ -128,11 +128,25 @@ same original catalog, including recognized anonymous node and property shapes.
 Typed empty shapes are static; untyped empty and path-only operands retain their
 computed-expression classification. It asks the current value node's target pair
 through the active fixed point; a false answer produces the ordinary
-expression-constraint violation. Original function bodies, computed or wrapped
+expression-constraint violation. Original function bodies, conformance-dependent or wrapped
 expressions, query/computed targets and unbound overlays without a closed dependency proof
 return `PreparationRefusal::UnqualifiedRecursion`, retaining the original
 definition, parameter and model/index scope. Selecting a law does not authorize
 an unknown transfer or the old depth-bound approximation.
+
+The same direct conformance expression can compute its focus independently of
+conformance using `Constant`, `This`, `Path`, `Empty`, `Var`, `List`, `Union`,
+`Intersection`, `If`, `Count`, `Distinct`, `Min`, `Max`, `Sum`, `Limit`, `Offset`,
+`OrderBy`, `Exists`, `PathValues`, `Concat`, `Remove`, `FlatMap` and `InstancesOf`.
+Every expression child must belong to this family, including untaken branches
+and ordering keys. For example, `shnex:conformsToShape ( [ shnex:pathValues :next ] :Target )`
+asks the original target about the node reached by `:next`. An empty focus result
+produces the ordinary expression violation; multiple focus results are an
+evaluation failure. One result joins the active pair relation under the same
+pair and round limits. Reports keep the original judged focus, value and path.
+Variable scope and all pure expression operations retain their ordinary native
+semantics. Nested conformance, function/query calls, argument expressions and
+ownership wrappers remain outside this proof.
 
 A `sh:targetWhere :Target` can use the same explicit selection when its operand
 is a canonical IRI or blank-node reference in the same original catalog. Discovery reuses
