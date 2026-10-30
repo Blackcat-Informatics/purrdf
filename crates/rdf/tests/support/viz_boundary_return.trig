@@ -1,0 +1,196 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <http://www.w3.org/2000/01/rdf-schema#label> "Customer" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-components> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-artifacts> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/workplan/1#produces> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/workplan/1#responsibility> "Submit parcels and receive decisions" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <http://www.w3.org/2000/01/rdf-schema#label> "Submitted parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <https://blackcatinformatics.ca/raf/workplan/1#artifactType> "Parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-artifacts> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <https://blackcatinformatics.ca/raf/workplan/1#consumedBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> <https://blackcatinformatics.ca/raf/workplan/1#publicInterface> <https://blackcatinformatics.ca/raf/workplan/1#source/cbe55032fdc9015e97b6de27da947c457da69fb82f47327c3fe6c51798c175df> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> <http://www.w3.org/2000/01/rdf-schema#label> "Accepted parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> <https://blackcatinformatics.ca/raf/workplan/1#artifactType> "Parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-artifacts> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> <https://blackcatinformatics.ca/raf/workplan/1#consumedBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> <http://www.w3.org/2000/01/rdf-schema#label> "Delivery service" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> <https://blackcatinformatics.ca/raf/workplan/1#componentKind> "boundary" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> <https://blackcatinformatics.ca/raf/workplan/1#responsibility> "Own parcel delivery" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <http://www.w3.org/2000/01/rdf-schema#label> "Router" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-components> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> .
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/dd79bfa63bf6059f2616e893d1922128ebd817785c870468156986d6fd3c111f> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#componentKind> "component" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-artifacts> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#containedBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-components> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#containedBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-artifacts> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#produces> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#publicInterface> <https://blackcatinformatics.ca/raf/workplan/1#source/dd79bfa63bf6059f2616e893d1922128ebd817785c870468156986d6fd3c111f> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/workplan/1#responsibility> "Validate and route parcels" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <http://www.w3.org/2000/01/rdf-schema#label> "Storage" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#capability> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/9e42811eb0e212a52a5e61d9f4f8d345739d322ddae3d42aac236fb575f5ac4b> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#componentKind> "component" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-artifacts> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#containedBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/graph/declared-components> {
+  <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#containedBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/delivery> .
+}
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> <https://blackcatinformatics.ca/raf/workplan/1#responsibility> "Retain accepted parcels" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <http://www.w3.org/2000/01/rdf-schema#label> "Parcel is valid" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#regionKind> "branch" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <http://www.w3.org/2000/01/rdf-schema#label> "Validation decision" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <https://blackcatinformatics.ca/raf/workplan/1#order> "1" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <https://blackcatinformatics.ca/raf/workplan/1#regionKind> "alternative" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <http://www.w3.org/2000/01/rdf-schema#label> "Declared independent effects" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/accepted> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#regionKind> "parallel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <http://www.w3.org/2000/01/rdf-schema#label> "Parcel is invalid" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#order> "1" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/decision> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#regionKind> "error" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <http://www.w3.org/2000/01/rdf-schema#label> "Customer reply" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#order> "1" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#regionKind> "lane" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <http://www.w3.org/2000/01/rdf-schema#label> "Persistence" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/fulfill> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#regionKind> "lane" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <http://www.w3.org/2000/01/rdf-schema#label> "Store accepted parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/workplan/1#artifact> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/stored-parcel> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/workplan/1#protocol> "Repository interface" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <http://www.w3.org/2000/01/rdf-schema#label> "Report decision" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <https://blackcatinformatics.ca/raf/workplan/1#protocol> "HTTPS response" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <http://www.w3.org/2000/01/rdf-schema#label> "Submit parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/workplan/1#artifact> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/artifact/parcel> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/workplan/1#protocol> "HTTPS" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <http://www.w3.org/2000/01/rdf-schema#label> "Accept or reject a submitted parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <https://blackcatinformatics.ca/raf/workplan/1#participant0> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <https://blackcatinformatics.ca/raf/workplan/1#participant1> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> <https://blackcatinformatics.ca/raf/workplan/1#participant2> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <http://www.w3.org/2000/01/rdf-schema#label> "Confirm acceptance" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/reply-lane> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#relationship> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/confirm> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <http://www.w3.org/2000/01/rdf-schema#label> "Receive parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/dd79bfa63bf6059f2616e893d1922128ebd817785c870468156986d6fd3c111f> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#relationship> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/receive> <https://blackcatinformatics.ca/raf/workplan/1#test> <https://blackcatinformatics.ca/raf/workplan/1#source/95276124546e7434336bfebba52d9ff0a60fde8aec3f7d81a3bca94f7733de89> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <http://www.w3.org/2000/01/rdf-schema#label> "Explain validation error" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/rejected> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#relationship> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/reject> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <http://www.w3.org/2000/01/rdf-schema#label> "Persist valid parcel" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#claimStrength> "declared" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/9e42811eb0e212a52a5e61d9f4f8d345739d322ddae3d42aac236fb575f5ac4b> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#declarationPath> "docs/capabilities/routing.md" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#declaredBy> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#order> "0" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#region> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/region/deliver/store-lane> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#relationship> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/step/deliver/save> <https://blackcatinformatics.ca/raf/workplan/1#scenario> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/scenario/deliver> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/9e42811eb0e212a52a5e61d9f4f8d345739d322ddae3d42aac236fb575f5ac4b> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/cbe55032fdc9015e97b6de27da947c457da69fb82f47327c3fe6c51798c175df> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> <https://blackcatinformatics.ca/raf/workplan/1#code> <https://blackcatinformatics.ca/raf/workplan/1#source/dd79bfa63bf6059f2616e893d1922128ebd817785c870468156986d6fd3c111f> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> <https://blackcatinformatics.ca/raf/workplan/1#contractDigest> "30152ef2a5850c4148c628d23ba39d0f6f3270e9217b6b86e124c04f559b6520" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> <https://blackcatinformatics.ca/raf/workplan/1#declarationDigest> "937c271499045fbe812da6940fe345a6094764b440f4beeeafc8b32120c51b77" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing> <https://blackcatinformatics.ca/raf/workplan/1#test> <https://blackcatinformatics.ca/raf/workplan/1#source/95276124546e7434336bfebba52d9ff0a60fde8aec3f7d81a3bca94f7733de89> .
+<https://blackcatinformatics.ca/raf/workplan/1#source/95276124546e7434336bfebba52d9ff0a60fde8aec3f7d81a3bca94f7733de89> <https://blackcatinformatics.ca/raf/workplan/1#bindingPath> "parcel::test_crate::flow::case" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/95276124546e7434336bfebba52d9ff0a60fde8aec3f7d81a3bca94f7733de89> <https://blackcatinformatics.ca/raf/workplan/1#sourceDigest> "5689eca7a20093b026d9ecd68a40726bfa61b4436d44eb3433e8f242b9f2d3ed" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/9e42811eb0e212a52a5e61d9f4f8d345739d322ddae3d42aac236fb575f5ac4b> <https://blackcatinformatics.ca/raf/workplan/1#bindingPath> "parcel::store" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/9e42811eb0e212a52a5e61d9f4f8d345739d322ddae3d42aac236fb575f5ac4b> <https://blackcatinformatics.ca/raf/workplan/1#sourceDigest> "5df279c0795bf85f34897ee25436adf6ab085659b627f4d178fd86458ff443a6" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/cbe55032fdc9015e97b6de27da947c457da69fb82f47327c3fe6c51798c175df> <https://blackcatinformatics.ca/raf/workplan/1#bindingPath> "parcel::Parcel" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/cbe55032fdc9015e97b6de27da947c457da69fb82f47327c3fe6c51798c175df> <https://blackcatinformatics.ca/raf/workplan/1#sourceDigest> "ad64c3e1af36363916c4262ca9d81cef81e2e4a4bd9b232786712476e948ee0b" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/dd79bfa63bf6059f2616e893d1922128ebd817785c870468156986d6fd3c111f> <https://blackcatinformatics.ca/raf/workplan/1#bindingPath> "parcel::route" .
+<https://blackcatinformatics.ca/raf/workplan/1#source/dd79bfa63bf6059f2616e893d1922128ebd817785c870468156986d6fd3c111f> <https://blackcatinformatics.ca/raf/workplan/1#sourceDigest> "131a95ef3bd3c6a8eac655c6287ab0930adce3bc8a99c7387e7af77ff08f1f5d" .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> rdf:reifies <<( <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/persist> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/storage> )>> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> rdf:reifies <<( <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/respond> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> )>> .
+<https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> rdf:reifies <<( <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/actor/customer> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/relation/submit> <https://blackcatinformatics.ca/raf/okf/document/capability/cap:routing/model/component/router> )>> .

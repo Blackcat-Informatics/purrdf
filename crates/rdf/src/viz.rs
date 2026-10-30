@@ -7,6 +7,22 @@
 //! Incidence Model that keeps structural statements separate from assertions,
 //! reifiers, annotations, graph context, and dialect diagnostics. Renderers use
 //! this model; they do not rediscover RDF 1.2 statement structure from flat quads.
+//!
+//! [`VizPresentation`] adds caller-owned labels, roles, navigation, compound
+//! boundaries and explicitly ordered scenarios over those identities. Use
+//! [`build_presented_export`] and [`render_presented_export_svg`] for the complete
+//! native result; the enriched export owns its normalized instructions, geometry
+//! and full element index. Its nested native export describes the visible RDF
+//! detail panel and retains its own native-only index. A scenario declares a view
+//! of interactions, never an observed runtime execution or inferred dependency order.
+//!
+//! Presentation admission accepts at most 2048 instructions and memberships,
+//! 262144 UTF-8 text bytes, 4096 bytes per display label and 64 containment levels.
+//! Navigation accepts at most 8192 bytes. Enriched layout admits at most 2048
+//! native scene elements, distances up to 4096, 64 crossing sweeps and a complete
+//! canvas (including the legend) no larger than 16384 units per axis. Exceeding
+//! these bounds refuses the view; labels and RDF facts are never silently dropped.
+//! The native compact, incidence and table factories remain available independently.
 
 use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,10 +37,12 @@ use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
 mod json;
 mod layout;
+mod presentation;
 mod scene;
 mod svg;
 
 pub use layout::*;
+pub use presentation::*;
 pub use scene::*;
 pub use svg::*;
 
@@ -611,6 +629,18 @@ pub enum VizElementKind {
     LegendEntry,
     /// Visual grammar legend label.
     LegendLabel,
+    /// Geometric component or scenario region frame.
+    PresentationFrame,
+    /// Component or scenario frame label.
+    PresentationFrameLabel,
+    /// Explicit component boundary crossing.
+    BoundaryPort,
+    /// Declared participant lifeline.
+    Lifeline,
+    /// Validated caller-supplied SVG navigation link.
+    Navigation,
+    /// Visible heading identifying the complete RDF detail panel.
+    DetailHeading,
 }
 
 /// Visualization projection errors.
@@ -648,6 +678,8 @@ pub enum VizError {
     Serialize(String),
     /// A JSON value is not the JSON form of the visualization type read from it.
     Decode(String),
+    /// A caller-owned presentation instruction is invalid or unsupported.
+    Presentation(VizPresentationError),
 }
 
 impl fmt::Display for VizError {
@@ -685,6 +717,11 @@ impl fmt::Display for VizError {
             Self::Layout(message) => f.write_str(message),
             Self::Serialize(message) => f.write_str(message),
             Self::Decode(message) => write!(f, "visualization JSON: {message}"),
+            Self::Presentation(error) => write!(
+                f,
+                "visualization presentation {:?} at {}: {}",
+                error.issue, error.instruction, error.message
+            ),
         }
     }
 }
