@@ -30,7 +30,9 @@ fn initialize(owner: &Arc<ModelOwner>, closed: bool) -> Result<Analysis, ShapesE
     }
     // Only cold initialization takes the lock. The model walk reads original
     // declarations directly and never re-enters admission, so this cannot
-    // recursively acquire its own initializer.
+    // recursively acquire its own initializer. It must not poll a signal,
+    // call a resolver or suspend while holding this guard: WASM jobs can
+    // interleave at those boundaries.
     let _guard = admission.initializing.lock().map_err(|_| {
         ShapesError::internal("original-model recursion admission initializer is poisoned")
     })?;
