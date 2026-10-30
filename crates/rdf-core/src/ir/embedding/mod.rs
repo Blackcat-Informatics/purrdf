@@ -13,11 +13,11 @@ mod contract;
 mod error;
 mod identity;
 mod metadata;
+mod model;
 mod target;
 mod verify;
 mod view;
 mod wire;
-mod writer;
 
 pub use contract::*;
 pub use error::{DigestKind, EmbeddingError, EmbeddingSourceError, EmbeddingWriteError};
@@ -27,6 +27,6 @@ pub use target::*;
 pub use verify::*;
 pub use view::*;
 // The normative PURREMB norm step, for `crate::distance::l2_norm`.
+pub use model::*;
 pub(crate) use view::norm_fold;
 pub use wire::*;
-pub use writer::*;

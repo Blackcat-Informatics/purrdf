@@ -25,6 +25,8 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
+purrdf-core.workspace = true
+sha2.workspace = true
 purrdf-columnar = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-slice = { workspace = true }
@@ -86,13 +88,12 @@ purrdf-glob.workspace = true
 purrdf-lex = { workspace = true }
 
 [dev-dependencies]
+purrdf-alloc-probe.workspace = true
+purrdf-hash.workspace = true
+rayon.workspace = true
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread
 # natively, the running stack under a fresh floor on wasm32.
 purrdf-stack = { workspace = true }
-# The doc-hidden PURREMB identity fixture (`purrdf_core::purremb_fixture`) the
-# multimodal exact-kNN test declares its family contract with, one definition
-# shared by every suite rather than a copy in each.
-purrdf-core = { workspace = true }
 # The timed bench (`benches/multimodal_on_demand_read.rs`). Report-only: it
 # compares the on-demand read against the materialised one over real text and
 # HNSW producers, which only the umbrella can wire together in one fixture
@@ -113,4 +114,48 @@ harness = false
 
 [[bench]]
 name = "multimodal_on_demand_read"
+harness = false
+
+[[test]]
+name = "hnsw_structured_errors"
+harness = false
+
+[[bench]]
+name = "hnsw_build"
+harness = false
+
+[[bench]]
+name = "hnsw_recall"
+harness = false
+
+[[bench]]
+name = "purremb"
+harness = false
+
+[[bench]]
+name = "purremb_alloc"
+harness = false
+
+[[test]]
+name = "embedding_attachment_inspection"
+harness = false
+
+[[bench]]
+name = "knn_relation"
+harness = false
+
+[[test]]
+name = "knn_wasm_determinism"
+harness = false
+
+[[test]]
+name = "knn_wasm_reassociated"
+harness = false
+
+[[test]]
+name = "retrieval_real_producers"
+harness = false
+
+[[bench]]
+name = "retrieval_on_demand_read"
 harness = false

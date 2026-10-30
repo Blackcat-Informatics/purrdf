@@ -8,10 +8,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::{
-    ContentDigest, DatasetView, PackId, PackView, QuadIds, RdfDataset, TermId, TermRef, TermValue,
-    dataset_from_view, try_canonicalize, verify_pack,
-};
+use crate::{ContentDigest, RdfDataset, TermId, TermValue};
 
 use crate::distance::{Arithmetic as _, Exact};
 
@@ -19,65 +16,17 @@ use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
     D_PROJECTION_CONTENT, D_TARGET_SET, ExternalBindingIdentity, FramedHasher, IndexIdentity,
-    ProjectionContentDigest, RdfcDigest, TargetId, TargetSetId, derive_artifact_root,
+    ProjectionContentDigest, TargetId, TargetSetId, derive_artifact_root,
     derive_external_binding_id, derive_external_contract_digest, derive_family_contract_digest,
     derive_family_id, derive_index_guard_digest, derive_index_id, derive_matrix_content_digest,
     derive_matrix_id, derive_projection_id, derive_relation_role_digest, derive_target_id,
     derive_target_identity_digest, derive_vector_space_id,
 };
-use super::target::{
-    RdfAnnotationTarget, RdfDatasetTarget, RdfGraphTarget, RdfReifierTarget, RdfStatementTarget,
-    RdfTermTargetRef, TargetKind,
-};
+use super::target::{RdfDatasetTarget, RdfTermTargetRef, TargetKind};
 use super::view::{
     EmbeddingView, ExternalBindingView, F32Scalars, F64Scalars, MatrixView, ProjectionView,
-    TargetView,
 };
 use super::wire::{PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH};
-
-/// Requested evidence level for an attached source pack.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceVerificationMode {
-    /// Check exact bytes and structural `.purrpck` validity.
-    Exact,
-    /// Also independently certify RDF identity and every retained pack ordinal.
-    Certified,
-}
-
-/// Evidence returned after verifying the attached source pack.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceVerificationReport {
-    mode: SourceVerificationMode,
-    exact_digest: ContentDigest,
-    certified_rdf_digest: Option<RdfcDigest>,
-    ordinals_checked: u64,
-}
-
-impl SourceVerificationReport {
-    /// Evidence level that completed successfully.
-    #[must_use]
-    pub const fn mode(self) -> SourceVerificationMode {
-        self.mode
-    }
-
-    /// Independently computed exact source SHA-256.
-    #[must_use]
-    pub const fn exact_digest(self) -> ContentDigest {
-        self.exact_digest
-    }
-
-    /// Independently certified RDF digest, absent in exact-only mode.
-    #[must_use]
-    pub const fn certified_rdf_digest(self) -> Option<RdfcDigest> {
-        self.certified_rdf_digest
-    }
-
-    /// Number of source-local ordinal hints cross-checked.
-    #[must_use]
-    pub const fn ordinals_checked(self) -> u64 {
-        self.ordinals_checked
-    }
-}
 
 /// Opaque proof that one exact resident byte range passed full verification.
 ///
@@ -207,7 +156,7 @@ pub fn verify_embedding<'a>(
     verify_external_bindings(view)?;
     let scalar_count = verify_matrices_and_projections(view)?;
     verify_index_guards(view)?;
-    verify_source_dataset_target(view)?;
+    verify_embedding_dataset_target(view)?;
 
     view.mark_fully_verified();
     Ok(EmbeddingVerificationReport {
@@ -231,54 +180,6 @@ pub fn reopen_prevalidated<'a>(
     Ok(view)
 }
 
-/// Verifies the exact attached pack and, optionally, its certified RDF identity.
-pub fn verify_embedding_source(
-    embedding: &EmbeddingView<'_>,
-    source_bytes: &[u8],
-    mode: SourceVerificationMode,
-) -> Result<SourceVerificationReport, EmbeddingError> {
-    let source = embedding.source();
-    let actual_length = u64::try_from(source_bytes.len())
-        .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?;
-    if actual_length != source.source_length() {
-        return Err(EmbeddingError::SourceLengthMismatch {
-            expected: source.source_length(),
-            actual: actual_length,
-        });
-    }
-    let exact_digest = ContentDigest::of(source_bytes);
-    compare_digest(
-        DigestKind::SourceExact,
-        source.source_exact_digest().as_bytes(),
-        exact_digest.as_bytes(),
-    )?;
-
-    let pack = PackView::from_bytes(source_bytes).map_err(EmbeddingError::source_pack)?;
-    if mode == SourceVerificationMode::Exact {
-        return Ok(SourceVerificationReport {
-            mode,
-            exact_digest,
-            certified_rdf_digest: None,
-            ordinals_checked: 0,
-        });
-    }
-
-    let certified = verify_pack(source_bytes).map_err(EmbeddingError::source_pack)?;
-    compare_digest(
-        DigestKind::CertifiedRdf,
-        &source.certified_rdf_digest(),
-        certified.as_bytes(),
-    )?;
-    verify_source_dataset_target(embedding)?;
-    let ordinals_checked = verify_source_ordinals(embedding, &pack)?;
-    Ok(SourceVerificationReport {
-        mode,
-        exact_digest,
-        certified_rdf_digest: Some(RdfcDigest::from_raw(*certified.as_bytes())),
-        ordinals_checked,
-    })
-}
-
 /// Checks exact bytes against one generic external-artifact binding.
 pub fn verify_external_artifact(
     binding: ExternalBindingView<'_>,
@@ -293,26 +194,8 @@ pub fn verify_external_artifact(
         });
     }
     let digest = ContentDigest::of(bytes);
-    compare_digest(
-        DigestKind::ExternalBinding,
-        binding.artifact_sha256().as_bytes(),
-        digest.as_bytes(),
-    )?;
+    DigestKind::ExternalBinding.verify(binding.artifact_sha256().as_bytes(), digest.as_bytes())?;
     Ok(digest)
-}
-
-/// Checks exact bytes and independently certifies a pack-backed external binding.
-pub fn verify_external_pack(
-    binding: ExternalBindingView<'_>,
-    bytes: &[u8],
-) -> Result<RdfcDigest, EmbeddingError> {
-    verify_external_artifact(binding, bytes)?;
-    let expected = binding
-        .certified_rdf_digest()
-        .ok_or(EmbeddingError::Missing("external certified RDF digest"))?;
-    let certified = verify_pack(bytes).map_err(EmbeddingError::external_pack)?;
-    compare_digest(DigestKind::CertifiedRdf, &expected, certified.as_bytes())?;
-    Ok(RdfcDigest::from_raw(*certified.as_bytes()))
 }
 
 /// Rejects a comparison across distinct effective vector spaces.
@@ -330,7 +213,7 @@ pub fn require_compatible_vector_spaces(
 fn verify_section_hashes_and_root(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
     for section in view.sections() {
         let actual: [u8; 32] = Sha256::digest(section.bytes()).into();
-        compare_digest(DigestKind::Section, &section.stored_sha256(), &actual)?;
+        DigestKind::Section.verify(&section.stored_sha256(), &actual)?;
     }
 
     let mut header = [0u8; PURREMB_HEADER_LENGTH as usize];
@@ -352,31 +235,19 @@ fn verify_section_hashes_and_root(view: &EmbeddingView<'_>) -> Result<(), Embedd
         .get(PURREMB_HEADER_LENGTH as usize..directory_end)
         .ok_or(EmbeddingError::Truncated)?;
     let actual = derive_artifact_root(&header, directory);
-    compare_digest(
-        DigestKind::ArtifactRoot,
-        view.artifact_root().as_bytes(),
-        actual.as_bytes(),
-    )
+    DigestKind::ArtifactRoot.verify(view.artifact_root().as_bytes(), actual.as_bytes())
 }
 
 fn verify_family_identities(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
     for family in view.families() {
         let digest = derive_family_contract_digest(family.contract_bytes());
-        compare_digest(
-            DigestKind::Contract,
-            family.contract_digest().as_bytes(),
-            digest.as_bytes(),
-        )?;
+        DigestKind::Contract.verify(family.contract_digest().as_bytes(), digest.as_bytes())?;
         let id = derive_family_id(digest);
-        compare_digest(DigestKind::Contract, family.id().as_bytes(), id.as_bytes())?;
+        DigestKind::Contract.verify(family.id().as_bytes(), id.as_bytes())?;
         for space in family.spaces() {
             let actual =
                 derive_vector_space_id(id, space.dimension(), space.postprocessing()?.code());
-            compare_digest(
-                DigestKind::Contract,
-                space.id().as_bytes(),
-                actual.as_bytes(),
-            )?;
+            DigestKind::Contract.verify(space.id().as_bytes(), actual.as_bytes())?;
         }
     }
     Ok(())
@@ -387,14 +258,10 @@ fn verify_target_identities(view: &EmbeddingView<'_>) -> Result<(), EmbeddingErr
         let kind = target.kind()?.code();
         if let Some(identity) = target.identity_bytes() {
             let digest = derive_target_identity_digest(kind, identity);
-            compare_digest(
-                DigestKind::Target,
-                target.identity_digest().as_bytes(),
-                digest.as_bytes(),
-            )?;
+            DigestKind::Target.verify(target.identity_digest().as_bytes(), digest.as_bytes())?;
         }
         let id = derive_target_id(kind, target.identity_digest());
-        compare_digest(DigestKind::Target, target.id().as_bytes(), id.as_bytes())?;
+        DigestKind::Target.verify(target.id().as_bytes(), id.as_bytes())?;
     }
     Ok(())
 }
@@ -409,11 +276,7 @@ fn verify_target_sets(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
             hasher.field(target.as_bytes());
         }
         let actual = TargetSetId::from_raw(hasher.finish());
-        compare_digest(
-            DigestKind::TargetSet,
-            set.id().as_bytes(),
-            actual.as_bytes(),
-        )?;
+        DigestKind::TargetSet.verify(set.id().as_bytes(), actual.as_bytes())?;
     }
     Ok(())
 }
@@ -423,7 +286,7 @@ fn verify_relation_roles(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError>
         let actual = relation
             .role_bytes()
             .map_or([0; 32], derive_relation_role_digest);
-        compare_digest(DigestKind::Contract, &relation.role_digest(), &actual)?;
+        DigestKind::Contract.verify(&relation.role_digest(), &actual)?;
     }
     Ok(())
 }
@@ -431,8 +294,7 @@ fn verify_relation_roles(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError>
 fn verify_external_bindings(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
     for binding in view.external_bindings() {
         let contract_digest = derive_external_contract_digest(binding.contract_bytes());
-        compare_digest(
-            DigestKind::ExternalBinding,
+        DigestKind::ExternalBinding.verify(
             binding.contract_digest().as_bytes(),
             contract_digest.as_bytes(),
         )?;
@@ -446,11 +308,7 @@ fn verify_external_bindings(view: &EmbeddingView<'_>) -> Result<(), EmbeddingErr
             certified_rdf_digest: certified,
             contract_digest,
         });
-        compare_digest(
-            DigestKind::ExternalBinding,
-            binding.id().as_bytes(),
-            actual.as_bytes(),
-        )?;
+        DigestKind::ExternalBinding.verify(binding.id().as_bytes(), actual.as_bytes())?;
     }
     Ok(())
 }
@@ -467,13 +325,9 @@ fn verify_matrices_and_projections(view: &EmbeddingView<'_>) -> Result<u64, Embe
             matrix.stored_dimension(),
             matrix.data_bytes(),
         );
-        compare_digest(
-            DigestKind::Matrix,
-            matrix.content_digest().as_bytes(),
-            content.as_bytes(),
-        )?;
+        DigestKind::Matrix.verify(matrix.content_digest().as_bytes(), content.as_bytes())?;
         let id = derive_matrix_id(matrix.target_set_id(), matrix.family_id(), content);
-        compare_digest(DigestKind::Matrix, matrix.id().as_bytes(), id.as_bytes())?;
+        DigestKind::Matrix.verify(matrix.id().as_bytes(), id.as_bytes())?;
     }
 
     for projection in view.projections() {
@@ -552,17 +406,9 @@ fn verify_projection(
         }
     }
     let content = ProjectionContentDigest::from_raw(hasher.finish());
-    compare_digest(
-        DigestKind::Projection,
-        projection.content_digest().as_bytes(),
-        content.as_bytes(),
-    )?;
+    DigestKind::Projection.verify(projection.content_digest().as_bytes(), content.as_bytes())?;
     let id = derive_projection_id(matrix.id(), projection.vector_space_id(), content);
-    compare_digest(
-        DigestKind::Projection,
-        projection.id().as_bytes(),
-        id.as_bytes(),
-    )
+    DigestKind::Projection.verify(projection.id().as_bytes(), id.as_bytes())
 }
 
 fn projection_hasher(
@@ -583,18 +429,10 @@ fn verify_index_guards(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
     for index in view.index_guards() {
         if let Some(payload) = index.payload_bytes() {
             let digest = ContentDigest::of(payload);
-            compare_digest(
-                DigestKind::Index,
-                index.payload_sha256().as_bytes(),
-                digest.as_bytes(),
-            )?;
+            DigestKind::Index.verify(index.payload_sha256().as_bytes(), digest.as_bytes())?;
         }
         let guard_digest = derive_index_guard_digest(index.guard_bytes());
-        compare_digest(
-            DigestKind::Index,
-            index.guard_digest().as_bytes(),
-            guard_digest.as_bytes(),
-        )?;
+        DigestKind::Index.verify(index.guard_digest().as_bytes(), guard_digest.as_bytes())?;
         let actual = derive_index_id(IndexIdentity {
             source_exact_digest: index.source_exact_digest(),
             family_id: index.family_id(),
@@ -608,19 +446,20 @@ fn verify_index_guards(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
             determinism: index.determinism()? as u32,
             guard_digest,
         });
-        compare_digest(DigestKind::Index, index.id().as_bytes(), actual.as_bytes())?;
+        DigestKind::Index.verify(index.id().as_bytes(), actual.as_bytes())?;
     }
     Ok(())
 }
 
-fn verify_source_dataset_target(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
+/// Check the source claim and stored dataset target for internal consistency.
+/// This does not certify any attached source bytes.
+pub fn verify_embedding_dataset_target(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
     let source = view.source();
     let expected = RdfDatasetTarget {
         rdfc_digest: source.certified_rdf_digest(),
     }
     .into_target(false)?;
-    compare_digest(
-        DigestKind::Target,
+    DigestKind::Target.verify(
         source.dataset_target_id().as_bytes(),
         expected.id.as_bytes(),
     )?;
@@ -635,108 +474,12 @@ fn verify_source_dataset_target(view: &EmbeddingView<'_>) -> Result<(), Embeddin
     Ok(())
 }
 
-fn verify_source_ordinals(
-    embedding: &EmbeddingView<'_>,
-    pack: &PackView<'_>,
-) -> Result<u64, EmbeddingError> {
-    let dataset = dataset_from_view(pack).map_err(EmbeddingError::source_pack)?;
-    // The refusal REASON is carried through rather than replaced by a fixed string:
-    // canonicalization now refuses for two different reasons, and a pack rejected for
-    // carrying reserved vocabulary must not be reported as one that merely ran out of
-    // budget — the first is an attempt to forge an identity, the second is not.
-    let canonical = try_canonicalize(&dataset).map_err(EmbeddingError::source_pack)?;
-    let dataset_target = embedding.source().dataset_target_id();
-    let mut checked = 0u64;
-
-    for target in embedding.targets() {
-        let Some(ordinal) = target.source_local_ordinal() else {
-            continue;
-        };
-        let expected = target_from_source_ordinal(
-            target,
-            ordinal,
-            pack,
-            &dataset,
-            &canonical.labels,
-            dataset_target,
-        )?;
-        if expected != target.id() {
-            return Err(EmbeddingError::OrdinalMismatch {
-                target_kind: target.kind()?.code(),
-                ordinal,
-            });
-        }
-        checked = checked
-            .checked_add(1)
-            .ok_or(EmbeddingError::ArithmeticOverflow("verified ordinal count"))?;
-    }
-    Ok(checked)
-}
-
-fn target_from_source_ordinal(
-    target: TargetView<'_>,
-    ordinal: u64,
-    pack: &PackView<'_>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
-    let kind = target.kind()?;
-    let mismatch = || EmbeddingError::OrdinalMismatch {
-        target_kind: kind.code(),
-        ordinal,
-    };
-    match kind {
-        TargetKind::RdfTerm => {
-            if ordinal == 0 || ordinal > pack.dict().n_terms() {
-                return Err(mismatch());
-            }
-            term_target_id(pack, ordinal, dataset, labels, dataset_target)
-        }
-        TargetKind::RdfStatement => {
-            let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
-            let quad = pack.quads().nth(index).ok_or_else(mismatch)?;
-            statement_target_id(pack, quad, dataset, labels, dataset_target)
-        }
-        TargetKind::RdfReifier => {
-            let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
-            let quad = pack.reifier_quads().nth(index).ok_or_else(mismatch)?;
-            reifier_target_id(pack, quad, dataset, labels, dataset_target)
-        }
-        TargetKind::RdfAnnotation => {
-            let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
-            let quad = pack.annotation_quads().nth(index).ok_or_else(mismatch)?;
-            if annotation_target_matches(pack, quad, dataset, labels, dataset_target, target.id())?
-            {
-                Ok(target.id())
-            } else {
-                Err(mismatch())
-            }
-        }
-        _ => Err(mismatch()),
-    }
-}
-
-fn term_target_id(
-    pack: &PackView<'_>,
-    id: u64,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
-    if id == 0 || id > pack.dict().n_terms() {
-        return Err(EmbeddingError::MissingReference("source pack term ordinal"));
-    }
-    let value = pack.dict().term_value(id);
-    term_value_target_id(&value, dataset, labels, dataset_target)
-}
-
 /// The target id of a reconstructed term value.
 ///
 /// A triple term's id is derived bottom-up over [`TermValue::try_fold`]'s work list:
 /// its subject, predicate and object are each derived fully, in that order, and the
 /// first failure ends the derivation; the triple's own id is derived from the three.
-fn term_value_target_id(
+pub fn term_value_target_id(
     value: &TermValue,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
@@ -785,144 +528,6 @@ fn term_value_target_id(
             .id)
         },
     )
-}
-
-fn graph_target_id(
-    pack: &PackView<'_>,
-    graph: Option<PackId>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
-    let graph_name = graph
-        .map(|id| term_target_id(pack, id.get(), dataset, labels, dataset_target))
-        .transpose()?;
-    Ok(RdfGraphTarget {
-        dataset_id: dataset_target,
-        graph_name,
-    }
-    .into_target(false)?
-    .id)
-}
-
-fn statement_target_id(
-    pack: &PackView<'_>,
-    quad: QuadIds<PackId>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
-    Ok(RdfStatementTarget {
-        graph: graph_target_id(pack, quad.g, dataset, labels, dataset_target)?,
-        subject: term_target_id(pack, quad.s.get(), dataset, labels, dataset_target)?,
-        predicate: term_target_id(pack, quad.p.get(), dataset, labels, dataset_target)?,
-        object: term_target_id(pack, quad.o.get(), dataset, labels, dataset_target)?,
-    }
-    .into_target(false, None)?
-    .id)
-}
-
-fn statement_from_triple_target_id(
-    pack: &PackView<'_>,
-    triple: PackId,
-    graph: Option<PackId>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
-    let guard = pack
-        .resolve(triple)
-        .expect("validated resident pack read is infallible");
-    let TermRef::Triple { s, p, o } = guard else {
-        return Err(EmbeddingError::Malformed(
-            "source reifier does not reference a triple term",
-        ));
-    };
-    statement_target_id(
-        pack,
-        QuadIds { s, p, o, g: graph },
-        dataset,
-        labels,
-        dataset_target,
-    )
-}
-
-fn reifier_target_id(
-    pack: &PackView<'_>,
-    quad: QuadIds<PackId>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
-    Ok(RdfReifierTarget {
-        graph: graph_target_id(pack, quad.g, dataset, labels, dataset_target)?,
-        statement: statement_from_triple_target_id(
-            pack,
-            quad.o,
-            quad.g,
-            dataset,
-            labels,
-            dataset_target,
-        )?,
-        reifier: term_target_id(pack, quad.s.get(), dataset, labels, dataset_target)?,
-    }
-    .into_target(false, None)?
-    .id)
-}
-
-fn annotation_target_matches(
-    pack: &PackView<'_>,
-    quad: QuadIds<PackId>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-    expected: TargetId,
-) -> Result<bool, EmbeddingError> {
-    // rdf:reifies is not functional. One annotation row can describe several
-    // statement bindings; the target identity selects the binding it names.
-    // The pack brackets this subject's run by binary search, without a second
-    // lookup table or a scan over unrelated reifiers.
-    let mut bindings = pack
-        .reifier_quads_of(quad.s)
-        .filter(|binding| binding.g == quad.g)
-        .peekable();
-    if bindings.peek().is_none() {
-        return Err(EmbeddingError::MissingReference(
-            "annotation reifier binding",
-        ));
-    }
-    let graph = graph_target_id(pack, quad.g, dataset, labels, dataset_target)?;
-    let predicate = term_target_id(pack, quad.p.get(), dataset, labels, dataset_target)?;
-    let object = term_target_id(pack, quad.o.get(), dataset, labels, dataset_target)?;
-    for binding in bindings {
-        let target = RdfAnnotationTarget {
-            graph,
-            reifier: reifier_target_id(pack, binding, dataset, labels, dataset_target)?,
-            predicate,
-            object,
-        }
-        .into_target(false, None)?;
-        if target.id == expected {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn compare_digest(
-    kind: DigestKind,
-    expected: &[u8; 32],
-    actual: &[u8; 32],
-) -> Result<(), EmbeddingError> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(EmbeddingError::DigestMismatch {
-            kind,
-            expected: *expected,
-            actual: *actual,
-        })
-    }
 }
 
 #[cfg(test)]

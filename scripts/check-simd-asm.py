@@ -1384,7 +1384,7 @@ IDENTITY_ALLOWED = (
     "crates/sparql-eval/tests/",
     "crates/sparql-eval/benches/",
     "crates/hnsw/tests/",
-    "crates/hnsw/benches/",
+    "crates/hnsw/benches/", "crates/purrdf/tests/", "crates/purrdf/benches/",
 )
 
 

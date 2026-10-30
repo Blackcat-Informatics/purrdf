@@ -1149,7 +1149,7 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
         ("core", lambda: _suite_cargo(
             "SPARQL embedding kNN (first-party)",
             "purrdf-embedding-knn (first-party)",
-            ["cargo", "test", "-p", "purrdf-sparql-eval", "--locked",
+            ["cargo", "test", "-p", "purrdf", "--locked",
              "--test", "embedding_knn_e2e", "--test", "knn_wasm_determinism"],
             detail=(
                 "the PURREMB kNN property-function seam end to end — rank order, "
@@ -1166,12 +1166,12 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
         ("core", lambda: _suite_cargo(
             "HNSW approximate kNN (first-party)",
             "purrdf-hnsw (first-party)",
-            ["cargo", "test", "-p", "purrdf-hnsw", "--locked",
-             "--test", "conformance", "--test", "invariants",
-             "--test", "oracle_contract", "--test", "sparql_e2e",
-             "--test", "purremb_roundtrip", "--test", "adversarial_payload",
-             "--test", "vector_query", "--test", "determinism",
-             "--test", "corpus_geometry"],
+            ["cargo", "test", "-p", "purrdf-hnsw", "-p", "purrdf", "--locked",
+             "--test", "hnsw_conformance", "--test", "hnsw_invariants",
+             "--test", "hnsw_oracle_contract", "--test", "hnsw_sparql_e2e",
+             "--test", "hnsw_purremb_roundtrip", "--test", "hnsw_adversarial_payload",
+             "--test", "hnsw_vector_query", "--test", "determinism",
+             "--test", "hnsw_corpus_geometry"],
             detail=(
                 "the approximate half of the retrieval pair, graded against the exact "
                 "path as its oracle: every offered row compared to the exact scan's "

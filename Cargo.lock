@@ -406,6 +406,7 @@ dependencies = [
 name = "purrdf"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-columnar",
  "purrdf-core",
  "purrdf-datalog",
@@ -414,6 +415,7 @@ dependencies = [
  "purrdf-geo",
  "purrdf-glob",
  "purrdf-gts",
+ "purrdf-hash",
  "purrdf-hnsw",
  "purrdf-iri",
  "purrdf-json",
@@ -434,6 +436,8 @@ dependencies = [
  "purrdf-toml",
  "purrdf-validate",
  "purrdf-xsd",
+ "rayon",
+ "sha2",
 ]
 
 [[package]]

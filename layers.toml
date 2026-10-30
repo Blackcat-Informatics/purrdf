@@ -358,6 +358,7 @@ deps = [
 name = "purrdf"
 deps = [
     "purrdf-columnar",
+    "purrdf-core",
     "purrdf-datalog",
     "purrdf-entail",
     "purrdf-events",

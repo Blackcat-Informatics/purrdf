@@ -348,14 +348,7 @@ fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     );
     let restored = purrdf_core::restore_pack(&corrupted).unwrap_err();
     assert_eq!(restored, err);
-    let attached = purrdf_core::CertifiedPurrpckSource::certify(&corrupted).unwrap_err();
-    let purrdf_core::EmbeddingError::InvalidSourcePack(owner) = attached else {
-        panic!("expected native attachment refusal")
-    };
-    assert_eq!(
-        owner.as_ref(),
-        &purrdf_core::EmbeddingSourceError::Pack(err)
-    );
+    assert_eq!(purrdf_core::verify_pack_bytes(&corrupted).unwrap_err(), err);
 
     // The untampered pack still verifies fine — the patch, not the fixture
     // itself, is what breaks reconstruction.

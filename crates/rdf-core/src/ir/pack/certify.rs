@@ -128,6 +128,48 @@ purrdf_lex::variant_from!(impl<E> DatasetMaterializationError<E> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PackDigest(Digest32);
 
+/// Independent pack verification bound to one immutable exact byte range.
+/// Construction always runs the native pack verifier; callers cannot supply
+/// digest claims or substitute another source's bytes for this evidence.
+#[derive(Clone, Copy)]
+pub struct VerifiedPack<'a> {
+    bytes: &'a [u8],
+    exact_digest: crate::ContentDigest,
+    rdf_digest: PackDigest,
+}
+
+purrdf_hash::debug_non_exhaustive!(VerifiedPack<'_> {});
+
+impl<'a> VerifiedPack<'a> {
+    /// The exact original immutable source range.
+    #[must_use]
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// SHA-256 of the exact original bytes.
+    #[must_use]
+    pub const fn exact_digest(self) -> crate::ContentDigest {
+        self.exact_digest
+    }
+
+    /// Independently verified canonical RDF identity.
+    #[must_use]
+    pub const fn rdf_digest(self) -> PackDigest {
+        self.rdf_digest
+    }
+}
+
+/// Independently verify a pack and retain byte-bound evidence of that result.
+pub fn verify_pack_bytes(bytes: &[u8]) -> Result<VerifiedPack<'_>, PackError> {
+    let rdf_digest = verify_pack(bytes)?;
+    Ok(VerifiedPack {
+        bytes,
+        exact_digest: crate::ContentDigest::of(bytes),
+        rdf_digest,
+    })
+}
+
 impl PackDigest {
     /// The raw 32 digest bytes.
     #[inline]
