@@ -389,7 +389,7 @@ pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
 /// # Errors
 ///
 /// Whatever the re-chase refuses with: [`EntailError::Evaluate`] for an evaluation ceiling,
-/// [`EntailError::MalformedList`] for a premise whose OWL collections are not well formed,
+/// [`EntailError::Collection`] for a premise whose OWL collections are not well formed,
 /// [`EntailError::Build`] for a subset that cannot be frozen, and
 /// [`EntailError::MatchBudget`] from the residual match.
 pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
@@ -468,11 +468,17 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         // that survives is irreducible with respect to THIS decision procedure, and the
         // decision procedure is "does the negation still clash?".
         let mut holds = |subset: &RdfDataset| -> Result<bool, EntailError> {
-            // A subset this crate cannot even seed — a truncated OWL collection, which
-            // `Axioms` avoids for a blank-node collection and cannot for a named one — is
-            // not a subset that refutes, so the candidate axiom stays.
-            let Ok(mut seeded) = refuter.seed(subset) else {
-                return Ok(false);
+            // Removing part of a named OWL collection can make the subset malformed;
+            // retain that candidate. Other seed refusals do not decide entailment and
+            // must stop shrinking with their original evidence.
+            let mut seeded = match refuter.seed(subset) {
+                Ok(seeded) => seeded,
+                Err(EntailError::Collection(cause))
+                    if cause.phase == crate::CollectionPhase::OwlRl =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
             };
             match seeded.refute(&negation)? {
                 Some(clash) => {
