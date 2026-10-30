@@ -281,9 +281,9 @@
 //! * SHACL validation fans focus nodes over `rayon` above its parallel threshold,
 //!   so a per-thread window would miss every worker. Every measurement here uses a
 //!   [`WholeProcessWindow`].
-//! * That window reads one process-global ledger and `cargo test` runs a binary's
-//!   tests concurrently, so [`MEASURE_LOCK`] serializes every measured region in
-//!   this binary. Poisoning is absorbed, so one failure does not cascade.
+//! * The shared serial runner executes cases and reporting synchronously on
+//!   the same thread, keeping runner allocation traffic outside each window.
+//!   Concurrent test requests are refused; Rayon workers remain parallel.
 //! * [`FOCUS_NODES`] and its double both sit above [`PARALLEL_MIN_FOCUS_NODES`],
 //!   checked when the file compiles, and [`assert_parallel_path_is_reachable`]
 //!   refuses to report a figure from a host whose pool cannot take that path.
@@ -324,7 +324,7 @@ mod measured;
 
 use std::sync::Arc;
 
-use measured::{assert_parallel_path_is_reachable, measure_lock, measure_min};
+use measured::{assert_parallel_path_is_reachable, measure_min};
 
 use purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
@@ -904,9 +904,7 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// file's module documentation for what remains and why removing it was out of
 /// reach here. Stating the achievable invariant exactly beats stating the
 /// unachievable one loosely.
-#[test]
 fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let fixture = Fixture::build(focus_nodes(2), VIOLATIONS);
@@ -1207,8 +1205,8 @@ fn warm_every_worker_governed(case: usize) {
 /// every pin in this workspace. It is not now.
 ///
 /// Pinned like the headline and for the same reasons: a closed form rather than a
-/// ratio, asserted as an exact equality with no tolerance, over the same
-/// [`measure_lock`], the same [`measure_min`], the same two-stage warm-up and the
+/// ratio, asserted as an exact equality with no tolerance, under the same
+/// serial runner, the same [`measure_min`], the same two-stage warm-up and the
 /// same [`without_memo_verification`] bracket.
 ///
 /// Two structural differences, both forced by the entry point rather than chosen.
@@ -1226,9 +1224,7 @@ fn warm_every_worker_governed(case: usize) {
 /// A third size settles it by measurement rather than by assumption, exactly as
 /// `tests/change_path_alloc.rs` uses four change sizes so its per-row term "cannot
 /// be confused with" a doubling one.
-#[test]
 fn every_sparql_surface_costs_a_constant_per_governed_change_focus_node() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let mut report = String::new();
@@ -1282,9 +1278,7 @@ fn every_sparql_surface_costs_a_constant_per_governed_change_focus_node() {
 /// satisfied perfectly by a governed lane that stopped evaluating. The measured
 /// fixture above is all-conforming, so this is the only thing standing between that
 /// figure and a validator that answers `conforms` without running a query.
-#[test]
 fn every_sparql_surface_still_reports_its_violations_when_governed() {
-    let _guard = measure_lock();
     let violating: Vec<String> = (0..VIOLATIONS).map(|i| format!("{NS}v{i}")).collect();
 
     for (case, spec) in CASES.iter().enumerate() {
@@ -1528,13 +1522,11 @@ fn warm_every_worker_fallback(fixture: &FallbackFixture) {
 /// invisible as the governed lane's was before `1b` above closed that gap for
 /// the prepared door.
 ///
-/// Same harness as the headline: [`measure_lock`] first, [`warm_every_worker_fallback`]
+/// Same serial runner as the headline: [`warm_every_worker_fallback`]
 /// outside the window, [`without_memo_verification`] bracketing the two
 /// [`measure_min`] calls, and an EXACT closed-form equality at both
 /// populations — no tolerance, for the same reason the headline gives.
-#[test]
 fn ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let fixture = FallbackFixture::build(focus_nodes(2), VIOLATIONS);
@@ -1589,9 +1581,7 @@ fn ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node() {
 /// population through [`PreparedValidator::validate_focus_node_ids`] — the surface
 /// the measurement uses, not a convenience wrapper beside it — and pins the focus
 /// node and the reported value of every result.
-#[test]
 fn every_sparql_surface_still_reports_its_violations() {
-    let _guard = measure_lock();
     let fixture = Fixture::build(focus_nodes(1), VIOLATIONS);
     let violating: Vec<String> = (0..VIOLATIONS).map(|i| format!("{NS}v{i}")).collect();
 
@@ -1625,9 +1615,7 @@ fn every_sparql_surface_still_reports_its_violations() {
 /// file's figures would be invisible, and the largest of the savings this revision
 /// makes is exactly there. So the fixture's own shape is asserted rather than
 /// assumed: this is the fact the ASK row's attribution rests on.
-#[test]
 fn the_fixture_gives_every_focus_node_two_value_nodes() {
-    let _guard = measure_lock();
     let dataset = build_dataset(4, 1);
     let name = dataset
         .term_id_by_iri(&format!("{NS}name"))
@@ -1649,10 +1637,6 @@ fn the_fixture_gives_every_focus_node_two_value_nodes() {
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// 4. The regression guard: every test in this binary holds MEASURE_LOCK first
-// ---------------------------------------------------------------------------
 
 /// `text` with comment markers and line breaks flattened away, so a claim that
 /// wraps across lines is one searchable string.
@@ -1709,10 +1693,7 @@ fn flattened(text: &str) -> String {
 ///
 /// Whitespace and comment markers are flattened first, because the same
 /// sentence is wrapped differently in Markdown and in rustdoc.
-#[test]
 fn every_registered_prose_site_quotes_the_measured_figures() {
-    let _guard = measure_lock();
-
     let readme = flattened(include_str!("../README.md"));
     let rustdoc = flattened(include_str!("../src/engine.rs"));
     let design_doc = flattened(include_str!(
@@ -1868,39 +1849,12 @@ fn every_registered_prose_site_quotes_the_measured_figures() {
     );
 }
 
-/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
-/// statement of its body.**
-///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift
-/// a pinned constant nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file exists to rule out, so it must
-/// fail loudly and name itself rather than show up as an occasional,
-/// unattributed shift in someone else's figure.
-///
-/// A source scan rather than a runtime check: nothing observable at runtime
-/// distinguishes "this test forgot to take the lock" from "this test never
-/// needed it", so the only place the distinction is visible is the source
-/// itself.
-#[test]
-fn every_test_in_this_binary_takes_the_measure_lock_first() {
-    let _guard = measure_lock();
-    let source = include_str!("sparql_path_alloc.rs");
-    let (tests, offenders) = measured::tests_and_unlocked(source);
-
-    assert!(
-        tests > 0,
-        "the scan found no #[test] function in this file at all, so this guard is reading \
-         nothing"
-    );
-
-    assert!(
-        offenders.is_empty(),
-        "these #[test] functions do not take MEASURE_LOCK as the first statement of their \
-         body, so they can allocate concurrently with another test's WholeProcessWindow and \
-         silently shift its pinned figure: {offenders:?}"
-    );
-}
+purrdf_testkit::harness_main!(serial;
+    every_sparql_surface_costs_a_constant_per_conforming_focus_node,
+    every_sparql_surface_costs_a_constant_per_governed_change_focus_node,
+    every_sparql_surface_still_reports_its_violations_when_governed,
+    ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node,
+    every_sparql_surface_still_reports_its_violations,
+    the_fixture_gives_every_focus_node_two_value_nodes,
+    every_registered_prose_site_quotes_the_measured_figures,
+);

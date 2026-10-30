@@ -137,14 +137,11 @@
 //! be green while measuring nearly nothing. Every measurement here therefore uses
 //! a [`WholeProcessWindow`], which counts every thread.
 //!
-//! That window reads one process-global ledger, and `cargo test` runs a binary's
-//! test functions concurrently, so a second test measuring at the same time would
-//! land its traffic inside the first one's figures — and so would a test that
-//! takes no measurement at all but allocates while someone else's window is open.
-//! [`MEASURE_LOCK`] serializes every measured region in this binary AND every
-//! test that does enough work to be seen from one; each takes it first and holds
-//! it for its whole body. Poisoning is absorbed rather than propagated, so one
-//! failing test does not cascade into unrelated failures that hide it.
+//! That window reads one process-global ledger. The shared serial runner executes
+//! each case and its reporting synchronously on the same thread, so runner
+//! allocation traffic cannot overlap a measurement. A test-body mutex alone
+//! cannot isolate libtest reporting or thread lifecycle outside that body.
+//! Concurrent test requests are refused; Rayon workers remain parallel.
 //!
 //! [`FOCUS_NODES`] and its double are both above [`PARALLEL_MIN_FOCUS_NODES`], so
 //! the invariant is stated over the parallel path rather than over a
@@ -199,7 +196,7 @@ mod measured;
 
 use std::sync::Arc;
 
-use measured::{measure, measure_lock, measure_min};
+use measured::{measure, measure_min};
 
 use purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
@@ -1412,9 +1409,7 @@ fn allocation_exclusion(case: &str) -> Option<&'static str> {
 /// An exclusion keyed by a name no case carries is invisible: it excludes
 /// nothing, reads as if it excludes something, and would just as happily survive
 /// the case being renamed out from under the assertion it was meant to skip.
-#[test]
 fn every_allocation_exclusion_names_a_real_case() {
-    let _guard = measure_lock();
     for (name, reason) in ALLOCATION_EXCLUSIONS {
         assert!(
             CASES.iter().any(|case| case.name == *name),
@@ -1783,9 +1778,7 @@ fn validate_conforming(
 /// exactly the term this test exists to forbid to hide.
 ///
 /// Both change-path entry points are driven, and the failure message names which.
-#[test]
 fn conforming_change_path_allocation_has_no_growth_term_in_focus_count() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     for case in CASES {
@@ -1859,9 +1852,7 @@ fn conforming_change_path_allocation_has_no_growth_term_in_focus_count() {
 ///
 /// The two populations are varied one at a time and never traded against each
 /// other; [`CaseFixture::focus_set`] says why that distinction is not cosmetic.
-#[test]
 fn violating_change_path_allocation_scales_with_violations_not_focus_count() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     for case in CASES {
@@ -1981,10 +1972,7 @@ const _: () = assert!(
 /// The non-vacuity check is the same one the rest of the file uses, and it
 /// matters more here than anywhere: a `sh:pattern` that never ran would have a
 /// beautifully flat slope.
-#[test]
 fn pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold() {
-    let _guard = measure_lock();
-
     let name = "pattern";
     let case = CASES
         .iter()
@@ -2263,9 +2251,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 /// term in the CHANGE.
 ///
 /// [`ShaclDatasetView`]: ../src/data_view.rs
-#[test]
 fn change_expansion_allocation_matches_its_pinned_closed_form() {
-    let _guard = measure_lock();
     let mut samples = Vec::with_capacity(EXPANSION_CHANGE_SIZES.len());
     for changes in EXPANSION_CHANGE_SIZES {
         let fixture = expansion_fixture(EXPANSION_SHAPES, changes);
@@ -2305,10 +2291,7 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 /// doubling series with their initial capacities and the fixed link check.
 /// So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
-#[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
-    let _guard = measure_lock();
-
     let mut measured = Vec::with_capacity(EXPANSION_CHANGE_SIZES.len());
     for changes in EXPANSION_CHANGE_SIZES {
         let fixture = expansion_fixture(EXPANSION_EMPTY_CHAIN_SHAPES, changes);
@@ -2343,17 +2326,9 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
 /// "the change path got cheaper" can never be satisfied by "the change path
 /// stopped saying anything".
 ///
-/// It takes no measurement of its own and still takes [`MEASURE_LOCK`], for the
-/// other half of that lock's job. [`WholeProcessWindow`] counts EVERY thread, and
-/// `cargo test` runs this binary's test functions concurrently, so this test's
-/// own allocation traffic would otherwise land inside a sibling's window and be
-/// reported as the change path's cost. Serializing it out is not a tolerance: it
-/// removes traffic that provably is not the measured region's, and it makes the
-/// figures the other tests print smaller and more stable rather than more
-/// permissive.
-#[test]
+/// The shared serial runner also isolates this case's allocation traffic from
+/// every whole-process measurement in the binary.
 fn change_path_report_bytes_match_pinned_golden() {
-    let _guard = measure_lock();
     let rendered = render_golden();
     assert_eq!(
         rendered, GOLDEN,
@@ -2451,10 +2426,7 @@ fn carried_report_text(report: &ValidationReport) -> String {
 /// timing threshold: an allocation count is a fact about the code, reproducible on
 /// any host at any core count, so asserting it costs nothing in flakiness and buys
 /// a build failure the day binding starts allocating per triple.
-#[test]
 fn bind_allocation_is_independent_of_dataset_size_beyond_the_catalog() {
-    let _guard = measure_lock();
-
     let shapes = Arc::new(parse_shapes(&seam_shapes_source(), None).expect("seam shapes parse"));
     let prepared = PreparedShapes::new(shapes);
     let small = seam_dataset(SEAM_FOCUS_NODES);
@@ -2516,10 +2488,7 @@ fn bind_allocation_is_independent_of_dataset_size_beyond_the_catalog() {
 /// path it is sold as. The measurement is therefore taken with a bound validator
 /// over each dataset size held live, so a figure that started depending on the
 /// data in scope would move.
-#[test]
 fn admit_allocation_is_independent_of_dataset_size() {
-    let _guard = measure_lock();
-
     let shapes = Arc::new(parse_shapes(&seam_shapes_source(), None).expect("seam shapes parse"));
     let prepared = PreparedShapes::new(shapes);
     let product = prepared
@@ -2570,47 +2539,6 @@ fn admit_allocation_is_independent_of_dataset_size() {
         "admit's constant term moved from {ADMIT_ALLOC_CONST} to {}; this is a determinism pin, so \
          the question is what changed in admission, not what the number should be now",
         small.allocations,
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 6. The regression guard: every test in this binary holds MEASURE_LOCK first
-// ---------------------------------------------------------------------------
-
-/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
-/// statement of its body.**
-///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift
-/// a pinned constant nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file exists to rule out, so it must
-/// fail loudly and name itself rather than show up as an occasional,
-/// unattributed shift in someone else's figure.
-///
-/// A source scan rather than a runtime check: nothing observable at runtime
-/// distinguishes "this test forgot to take the lock" from "this test never
-/// needed it", so the only place the distinction is visible is the source
-/// itself.
-#[test]
-fn every_test_in_this_binary_takes_the_measure_lock_first() {
-    let _guard = measure_lock();
-    let source = include_str!("change_path_alloc.rs");
-    let (tests, offenders) = measured::tests_and_unlocked(source);
-
-    assert!(
-        tests > 0,
-        "the scan found no #[test] function in this file at all, so this guard is reading \
-         nothing"
-    );
-
-    assert!(
-        offenders.is_empty(),
-        "these #[test] functions do not take MEASURE_LOCK as the first statement of their \
-         body, so they can allocate concurrently with another test's WholeProcessWindow and \
-         silently shift its pinned figure: {offenders:?}"
     );
 }
 
@@ -2890,9 +2818,7 @@ fn sibling_case_names(path: &str) -> Vec<String> {
 /// satisfying [`every_constraint_kind_is_covered_by_an_allocation_case`] while
 /// the kind it claims to cover quietly went unmeasured — exactly the failure
 /// shape this whole guard exists to rule out.
-#[test]
 fn every_sibling_file_coverage_entry_names_a_real_case() {
-    let _guard = measure_lock();
     for (kind, path, case_names, reason) in SIBLING_FILE_COVERAGE {
         assert!(
             !reason.trim().is_empty(),
@@ -2992,9 +2918,7 @@ fn covered_kind_names() -> FastSet<String> {
 /// constraint kind carries an allocation measurement" enforceable from here on,
 /// rather than a claim someone has to remember to re-check. A future kind that
 /// arrives without one fails HERE, by name.
-#[test]
 fn every_constraint_kind_is_covered_by_an_allocation_case() {
-    let _guard = measure_lock();
     let covered = covered_kind_names();
     let mut uncovered: Vec<String> = all_constraint_kind_names()
         .into_iter()
@@ -3007,3 +2931,17 @@ fn every_constraint_kind_is_covered_by_an_allocation_case() {
         "constraint kinds with no allocation coverage anywhere in this crate: {uncovered:?}"
     );
 }
+
+purrdf_testkit::harness_main!(serial;
+    every_allocation_exclusion_names_a_real_case,
+    conforming_change_path_allocation_has_no_growth_term_in_focus_count,
+    violating_change_path_allocation_scales_with_violations_not_focus_count,
+    pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold,
+    change_expansion_allocation_matches_its_pinned_closed_form,
+    change_expansion_with_no_chain_to_walk_costs_no_path_probe,
+    change_path_report_bytes_match_pinned_golden,
+    bind_allocation_is_independent_of_dataset_size_beyond_the_catalog,
+    admit_allocation_is_independent_of_dataset_size,
+    every_sibling_file_coverage_entry_names_a_real_case,
+    every_constraint_kind_is_covered_by_an_allocation_case,
+);
