@@ -59,8 +59,8 @@ pub(crate) fn canonical_handle(shape: &Shape) -> bool {
                 | (Target::ImplicitClass(a), Target::ImplicitClass(b)) => a == b,
                 (Target::Where(a), Target::Where(b)) => {
                     a.id == b.id
-                        && super::closed::named_where_reference(a, Some(owner)).is_some()
-                        && super::closed::named_where_reference(b, Some(owner)).is_some()
+                        && super::closed::where_reference(a, Some(owner)).is_some()
+                        && super::closed::where_reference(b, Some(owner)).is_some()
                 }
                 _ => false,
             })
@@ -647,7 +647,7 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
                     Target::Sparql { .. } => return self.unqualified(sh::TARGET, None),
                     Target::NodeExpression(_) => return self.unqualified(sh::TARGET_NODE, None),
                     Target::Where(shape)
-                        if super::closed::named_where_reference(shape, self.owner).is_none() =>
+                        if super::closed::where_reference(shape, self.owner).is_none() =>
                     {
                         return self.unqualified(sh::TARGET_WHERE, None);
                     }

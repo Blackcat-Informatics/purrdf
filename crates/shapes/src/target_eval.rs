@@ -109,7 +109,7 @@ pub(crate) fn where_targets(
 ) -> Result<Vec<TermId>, crate::error::ShapesError> {
     let request = targets.binding.validation_request();
     if request.recursion.is_some() {
-        return where_targets_with_plan(data, targets.named_where_plan(shape)?);
+        return where_targets_with_plan(data, targets.where_plan(shape)?);
     }
     let model = targets.model;
     let lowered = crate::plan::lower_shapes_in_model(std::iter::once(shape), model)?;

@@ -455,12 +455,13 @@ parameter and model/index scope when an expression, query/computed target or
 overlay has no closed dependency proof. The broader dynamic-expression contract
 remains outside this closed catalog surface.
 
-`sh:targetWhere :Target` also admits an original canonical named operand. Target
+`sh:targetWhere :Target` also admits an original canonical IRI or blank-node operand. Target
 discovery reuses the original lowering and fresh dataset binding, with one
 fixed-point execution for every candidate root and its dependencies. Pair and
 round limits apply cumulatively within that sweep; they do not bound raw graph
-scans. A refusal publishes no partial target set. Anonymous or replaced where
-operands remain outside this selected surface. Restored products rebind target
+scans. A refusal publishes no partial target set. Anonymous node and property
+operands retain their original focus domains; replaced operands remain refused.
+Restored products rebind target
 answers to their new data; they never carry a resolved target set or request.
 
 Read `RecursiveValidationReport` for the settled answer and native finite cycle

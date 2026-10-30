@@ -54,12 +54,19 @@ fn validate_named_where(
             max_iterations: 4_096,
         },
     );
-    let shapes = purrdf_shapes::engine::parse_shapes_with_options(
-        &format!("{PREFIXES} ex:S a sh:NodeShape ; sh:targetWhere ex:W ; {constraint} . ex:W a sh:NodeShape ; {body} ."),
+    let mut reports = Vec::new();
+    for target in ["ex:W", "_:w"] {
+        let shapes = purrdf_shapes::engine::parse_shapes_with_options(
+        &format!("{PREFIXES} ex:S a sh:NodeShape ; sh:targetWhere {target} ; {constraint} . {target} a sh:NodeShape ; {body} ."),
         None, None, None, &purrdf_shapes::ShapesImports::new(), &options,
-    ).expect("named target loads");
-    validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data), &shapes, None)
-        .expect("named target runs")
+    ).expect("original target loads");
+        reports.push(
+            validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data), &shapes, None)
+                .expect("original target runs"),
+        );
+    }
+    assert_eq!(focus_nodes(&reports[0]), focus_nodes(&reports[1]));
+    reports.remove(0)
 }
 
 /// The focus node of every result, sorted and deduplicated — the focus set, for a
