@@ -7,7 +7,12 @@ use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::FrameContext;
 use purrdf_gts::wire::digest_str;
 use purrdf_gts::writer::Writer;
+use purrdf_hash::error::ErrorValue;
 use purrdf_lex::cbor::Value;
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{
     DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits, GtsBlobSelector, import_gts_events,
     import_gts_events_with_blobs,
@@ -325,6 +330,142 @@ fn retained_total_wire_and_metadata_budgets_are_independent() {
 }
 
 #[test]
+fn cumulative_refusal_retains_native_context_after_the_source_is_dropped() {
+    let error = {
+        let mut writer = Writer::new("generic");
+        writer.add_blob(b"first", None, Some("a"));
+        writer.add_blob(b"second", None, Some("b"));
+        import_gts_events_with_blobs(
+            &writer.into_bytes(),
+            &[
+                GtsBlobSelector::Representation("a"),
+                GtsBlobSelector::Representation("b"),
+            ],
+            GtsBlobLimits::new(6, 10),
+        )
+        .expect_err("the second payload exceeds the remaining five bytes")
+    };
+    let native = error.native_cause().expect("owned native budget cause");
+    let inspected = Capture::read(native);
+    assert_eq!(inspected.code, "gts-blob-retention-refusal");
+    assert!(
+        matches!(inspected.field("digest"), ErrorValue::Text(digest) if digest == digest_str(b"second"))
+    );
+    assert!(matches!(
+        inspected.field("encoded_bytes"),
+        ErrorValue::ByteCount(6)
+    ));
+    assert!(matches!(
+        inspected.field("available_decoded_bytes"),
+        ErrorValue::ByteCount(5)
+    ));
+    assert!(matches!(
+        inspected.field("segment_index"),
+        ErrorValue::Unsigned(0)
+    ));
+    assert!(matches!(
+        inspected.field("frame_index"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert!(matches!(
+        inspected.child("limits").field("max_total_decoded_bytes"),
+        ErrorValue::ByteCount(10)
+    ));
+    assert!(matches!(
+        inspected.child("usage").field("retained_payload_bytes"),
+        ErrorValue::ByteCount(5)
+    ));
+    assert_eq!(inspected.child("cause").code, "gts-codec-limit");
+    assert!(matches!(
+        inspected.child("cause").field("limit"),
+        ErrorValue::ByteCount(5)
+    ));
+    assert!(
+        std::error::Error::source(native).is_some(),
+        "original codec error survives standard inspection too"
+    );
+}
+
+#[test]
+fn zero_exact_and_unbounded_blob_byte_ceilings_are_independent() {
+    let payload = b"bytes";
+    let digest = digest_str(payload);
+    let metadata = meta(&digest, "wanted");
+    let metadata_len = purrdf_lex::cbor::encoded_len(&metadata);
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, Some(payload.to_vec()), None, Some(metadata));
+    let bytes = writer.into_bytes();
+    let selector = [GtsBlobSelector::Digest(&digest)];
+    for field in 0..4 {
+        let mut exact = GtsBlobLimits::UNBOUNDED;
+        match field {
+            0 => exact.max_encoded_bytes = payload.len(),
+            1 => exact.max_decoded_bytes = payload.len(),
+            2 => exact.max_total_decoded_bytes = payload.len(),
+            3 => exact.max_metadata_bytes = metadata_len,
+            _ => unreachable!(),
+        }
+        let imported = import_gts_events_with_blobs(&bytes, &selector, exact)
+            .expect("independent exact ceiling");
+        assert_eq!(&*imported.blobs[0].bytes, payload);
+        let mut zero = exact;
+        match field {
+            0 => zero.max_encoded_bytes = 0,
+            1 => zero.max_decoded_bytes = 0,
+            2 => zero.max_total_decoded_bytes = 0,
+            3 => zero.max_metadata_bytes = 0,
+            _ => unreachable!(),
+        }
+        import_gts_events_with_blobs(&bytes, &selector, zero)
+            .expect_err("zero refuses a nonempty value of this kind");
+    }
+    let mut empty = Writer::new("generic");
+    empty.add_frame("blob", None, Some(Vec::new()), None, None);
+    let mut zero = GtsBlobLimits::new(0, 0);
+    zero.max_metadata_bytes = 0;
+    let imported = import_gts_events_with_blobs(
+        &empty.into_bytes(),
+        &[GtsBlobSelector::Digest(&digest_str(b""))],
+        zero,
+    )
+    .expect("zero bytes remain meaningful, not a sentinel for infinity");
+    assert!(imported.blobs[0].bytes.is_empty());
+}
+
+#[test]
+fn refused_metadata_charges_share_the_total_with_selected_payloads() {
+    let large = b"oversized";
+    // No published digest: the reader's eager path must actually reach its
+    // encoded ceiling instead of lazily skipping an unselected payload.
+    let metadata = Value::Map(vec![("rep".into(), "other".into())]);
+    let charge = purrdf_lex::cbor::encoded_len(&metadata);
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, Some(large.to_vec()), None, Some(metadata));
+    writer.add_blob(b"yes", None, Some("wanted"));
+    let bytes = writer.into_bytes();
+    let selector = [GtsBlobSelector::Representation("wanted")];
+    let mut exact = GtsBlobLimits::UNBOUNDED;
+    exact.max_encoded_bytes = 3;
+    exact.max_total_decoded_bytes = charge + 3;
+    let imported = import_gts_events_with_blobs(&bytes, &selector, exact)
+        .expect("exact combined retained charge");
+    assert_eq!(imported.usage.retained_payload_bytes, 3);
+    assert_eq!(imported.usage.retained_refusal_metadata_bytes, charge);
+    assert_eq!(imported.usage.peak_retained_bytes, charge + 3);
+    exact.max_total_decoded_bytes -= 1;
+    let error = import_gts_events_with_blobs(&bytes, &selector, exact)
+        .expect_err("refused metadata reduces the later payload allowance");
+    let inspected = Capture::read(error.native_cause().expect("native cumulative refusal"));
+    assert!(matches!(
+        inspected.field("available_decoded_bytes"),
+        ErrorValue::ByteCount(2)
+    ));
+    assert!(
+        matches!(inspected.child("usage").field("retained_refusal_metadata_bytes"), ErrorValue::ByteCount(bytes) if bytes == charge as u128)
+    );
+}
+
+#[test]
 fn malformed_selected_metadata_and_declared_lengths_fail() {
     let data = b"native";
     for (key, value, expected) in [
@@ -484,33 +625,78 @@ fn inherited_same_segment_metadata_keeps_its_original_frame_identity() {
 }
 
 #[test]
-fn selection_count_and_unadvertised_blob_expansion_are_bounded() {
-    let selectors: Vec<_> = (0..1025).map(|index| format!("rep-{index}")).collect();
-    let selectors: Vec<_> = selectors
-        .iter()
-        .map(|rep| GtsBlobSelector::Representation(rep))
+fn more_than_a_thousand_digest_selectors_retain_every_requested_blob() {
+    let mut writer = Writer::new("generic");
+    let digests: Vec<_> = (0_u32..1100)
+        .map(|index| {
+            let bytes = index.to_be_bytes();
+            writer.add_blob(&bytes, None, None);
+            digest_str(&bytes)
+        })
         .collect();
-    let bytes = Writer::new("generic").into_bytes();
+    let mut selectors: Vec<_> = digests
+        .iter()
+        .rev()
+        .map(|digest| GtsBlobSelector::Digest(digest))
+        .collect();
+    let bytes = writer.into_bytes();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let imported = import_gts_events_with_blobs(&bytes, &selectors, GtsBlobLimits::UNBOUNDED)
+        .expect("selector and retained digest counts derive from the input");
+    let measured = window.close();
+    println!(
+        "1100 selected digests: {measured:?}; logical usage: {:?}",
+        imported.usage
+    );
+    assert_eq!(imported.blobs.len(), 1100);
+    assert!(
+        imported
+            .blobs
+            .windows(2)
+            .all(|pair| pair[0].digest < pair[1].digest)
+    );
+    assert_eq!(imported.usage.retained_payload_bytes, 4400);
+    assert_eq!(imported.usage.peak_selected_digests, 1100);
+    // Validation still finds duplicates far apart in the caller's order.
+    selectors.push(selectors[0]);
     assert_eq!(
-        import_gts_events_with_blobs(&bytes, &selectors, limits())
+        import_gts_events_with_blobs(&bytes, &selectors, GtsBlobLimits::UNBOUNDED)
             .unwrap_err()
             .code,
         "rdf-ir-gts-blob-selection"
     );
+}
+
+#[test]
+fn transient_candidates_are_refunded_when_final_metadata_retags_them() {
     let mut writer = Writer::new("generic");
-    for index in 0_u32..1025 {
+    for index in 0_u32..1100 {
         writer.add_blob(&index.to_be_bytes(), None, Some("wanted"));
     }
-    assert_eq!(
-        import_gts_events_with_blobs(
-            &writer.into_bytes(),
-            &[GtsBlobSelector::Representation("wanted")],
-            limits()
-        )
-        .unwrap_err()
-        .code,
-        "rdf-ir-gts-blob-limit"
-    );
+    for index in 1_u32..1100 {
+        writer.add_frame(
+            "blob",
+            None,
+            None,
+            None,
+            Some(meta(&digest_str(&index.to_be_bytes()), "other")),
+        );
+    }
+    // Replacing the surviving digest refunds its own four bytes first.
+    writer.add_blob(&0_u32.to_be_bytes(), None, Some("wanted"));
+    let imported = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        GtsBlobLimits::new(4, 4400),
+    )
+    .expect("final selection settles after more than a thousand transient candidates");
+    assert_eq!(imported.blobs.len(), 1);
+    assert_eq!(&*imported.blobs[0].bytes, &0_u32.to_be_bytes());
+    assert_eq!(imported.usage.retained_payload_bytes, 4);
+    assert_eq!(imported.usage.retained_refusal_metadata_bytes, 0);
+    assert_eq!(imported.usage.peak_payload_bytes, 4400);
+    assert_eq!(imported.usage.peak_retained_bytes, 4400);
+    assert_eq!(imported.usage.peak_selected_digests, 1100);
 }
 
 /// An oversized *unrelated* payload must not refuse the archive.
@@ -888,6 +1074,7 @@ fn a_snapshot_cannot_smuggle_payloads_past_the_ceilings() {
         "blobs".into(),
         Value::Map(vec![("0".into(), Value::Bytes(embedded.clone()))]),
     )]);
+    let frame_len = purrdf_gts::wire::canonical(&snapshot).len();
     let mut writer = Writer::new("generic");
     writer
         .add_frame_with_options(
@@ -902,13 +1089,17 @@ fn a_snapshot_cannot_smuggle_payloads_past_the_ceilings() {
     let bytes = writer.into_bytes();
 
     // Neighbouring valid case: ceilings that admit it still import it.
-    let generous = import_gts_events_with_blobs(
-        &bytes,
-        &[GtsBlobSelector::Digest(&digest_str(&embedded))],
-        limits(),
-    )
-    .expect("an in-budget snapshot payload is selectable");
-    assert_eq!(&*generous.blobs[0].bytes, &embedded[..]);
+    for frame_limit in [frame_len, usize::MAX] {
+        let mut generous = GtsBlobLimits::UNBOUNDED;
+        generous.max_frame_decoded_bytes = frame_limit;
+        let imported = import_gts_events_with_blobs(
+            &bytes,
+            &[GtsBlobSelector::Digest(&digest_str(&embedded))],
+            generous,
+        )
+        .expect("exact and unbounded enclosing decode admit embedded selected bytes");
+        assert_eq!(&*imported.blobs[0].bytes, &embedded[..]);
+    }
 
     // The per-blob ceiling refuses the embedded entry rather than retaining it.
     let mut tight = limits();
@@ -928,6 +1119,9 @@ fn a_snapshot_cannot_smuggle_payloads_past_the_ceilings() {
     let error = import_gts_events_with_blobs(&bytes, &[], framed)
         .expect_err("a refused frame removes rows, so it cannot be reported as success");
     assert_eq!(error.code, "rdf-ir-gts-fold-diagnostic", "{error:?}");
+    framed.max_frame_decoded_bytes = 0;
+    import_gts_events_with_blobs(&bytes, &[], framed)
+        .expect_err("a zero frame ceiling refuses this nonempty decode");
 }
 
 /// An unknown extension key never refuses a payload.
@@ -1027,17 +1221,10 @@ fn an_external_blob_is_distinguished_from_a_metadata_only_update() {
     assert_eq!(&*updated.blobs[0].bytes, data);
 }
 
-/// The transient-candidate cap refuses at 1025, not at 1024.
-///
-/// The negative side of an off-by-one is invisible: a cap that fired one entry
-/// early would still look like correct strictness. The boundary case must be
-/// shown to pass through to ordinary selection instead.
+/// Candidate count never substitutes for final ambiguity checking.
 #[test]
-fn the_transient_candidate_cap_admits_its_own_boundary() {
-    for (count, expected) in [
-        (1024_u32, "rdf-ir-gts-blob-selection"),
-        (1025, "rdf-ir-gts-blob-limit"),
-    ] {
+fn large_candidate_sets_remain_ambiguous() {
+    for count in [1024_u32, 1025] {
         let mut writer = Writer::new("generic");
         for index in 0..count {
             writer.add_blob(&index.to_be_bytes(), None, Some("wanted"));
@@ -1048,7 +1235,10 @@ fn the_transient_candidate_cap_admits_its_own_boundary() {
             limits(),
         )
         .expect_err("every blob shares one representation, so selection is ambiguous");
-        assert_eq!(error.code, expected, "count={count}: {error:?}");
+        assert_eq!(
+            error.code, "rdf-ir-gts-blob-selection",
+            "count={count}: {error:?}"
+        );
     }
 }
 
@@ -1241,6 +1431,87 @@ fn a_refused_duplicate_copy_does_not_invent_an_ambiguity() {
     );
     assert_eq!(result.blobs.len(), 1);
     assert_eq!(result.blobs[0].digest, digest);
+
+    let mut both_refused = Writer::new("generic");
+    for _ in 0..2 {
+        both_refused.add_frame(
+            "blob",
+            None,
+            Some(data.clone()),
+            None,
+            Some(Value::Map(vec![("rep".into(), "wanted".into())])),
+        );
+    }
+    let error = import_gts_events_with_blobs(
+        &both_refused.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect_err("two proved refused occurrences are one unavailable digest");
+    assert_eq!(error.code, "rdf-ir-gts-blob-limit");
+    let context = Capture::read(
+        error
+            .native_cause()
+            .expect("original refused identity and budget"),
+    );
+    assert!(matches!(context.field("digest"), ErrorValue::Text(value) if value == digest));
+    assert_eq!(context.child("cause").code, "gts-payload-budget");
+
+    // A proved refusal's new declaration also retags a retained copy. Its
+    // payload charge is refunded before a different final match arrives.
+    let mut retagged = Writer::new("generic");
+    retagged
+        .add_blob_transformed(data.clone(), None, Some("wanted"), &["zstd".into()], None)
+        .expect("compressed initial copy");
+    let declaration = Value::Map(vec![("rep".into(), "other".into())]);
+    let declaration_id = retagged.add_frame(
+        "blob",
+        None,
+        Some(data.clone()),
+        None,
+        Some(declaration.clone()),
+    );
+    retagged.add_blob(b"yes", None, Some("wanted"));
+    let mut bytes = retagged.into_bytes();
+    for total in [data.len(), usize::MAX] {
+        tight.max_total_decoded_bytes = total;
+        let imported = import_gts_events_with_blobs(
+            &bytes,
+            &[GtsBlobSelector::Representation("wanted")],
+            tight,
+        )
+        .expect("a proved retag removes stale bytes and refunds their charge");
+        assert_eq!(imported.blobs.len(), 1);
+        assert_eq!(&*imported.blobs[0].bytes, b"yes");
+        assert_eq!(imported.usage.retained_payload_bytes, 3);
+        assert_eq!(imported.usage.peak_payload_bytes, data.len());
+        assert_eq!(imported.refused.len(), 1);
+    }
+    // An explicit digest keeps authenticated bytes while adopting the proved
+    // refusal's exact final metadata and declaration provenance.
+    let imported = import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Digest(&digest)], tight)
+        .expect("digest selection survives a representation retag");
+    assert_eq!(imported.blobs[0].metadata.as_ref(), Some(&declaration));
+    let source = imported.blobs[0]
+        .metadata_source
+        .as_ref()
+        .expect("proved declaration source");
+    assert_eq!(source.frame_id, declaration_id);
+    assert_eq!(source.frame_index, 1);
+    let mut later = Writer::new("generic");
+    later.add_frame("blob", None, Some(data), Some(&["zstd".into()]), None);
+    bytes.extend(later.into_bytes());
+    let inherited =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Digest(&digest)], tight)
+            .expect("later bare occurrences inherit the proved refused declaration");
+    assert_eq!(inherited.blobs[0].metadata.as_ref(), Some(&declaration));
+    let source = inherited.blobs[0]
+        .metadata_source
+        .as_ref()
+        .expect("inherited proved source");
+    assert_eq!(source.segment_index, 0);
+    assert_eq!(source.frame_id, declaration_id);
+    assert_eq!(inherited.blobs[0].segment_index, 1);
 }
 
 /// A metadata-only frame may precede its own inline payload.

@@ -339,7 +339,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn frame(&mut self, ctx: FrameContext<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
-            blobs.frame(ctx);
+            blobs.frame(ctx)?;
         }
         Ok(())
     }
@@ -365,7 +365,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn blob_refused(&mut self, refusal: BlobRefusal<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
-            blobs.refused(refusal);
+            blobs.refused(refusal)?;
         }
         Ok(())
     }
@@ -397,7 +397,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn segment_head(&mut self, segment_index: u64, head: &[u8]) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
-            blobs.segment_head(segment_index, head);
+            blobs.segment_head(segment_index, head)?;
         }
         // Grow/patch the per-segment record with its head id.
         self.ensure_segment_record(segment_index).head = Some(hex::encode(head));
@@ -430,13 +430,15 @@ impl ResolvedSink for SinkImporter<'_> {
         // fact: its rows are gone, so the dataset no longer matches what the
         // authoritative importer would build, and returning Ok would hand back
         // a silently truncated graph. That falls through to the hard failure.
-        if self.blobs.is_some() && is_blob_budget_refusal(diagnostic) {
-            return Ok(());
+        if let Some(blobs) = &mut self.blobs
+            && is_blob_budget_refusal(diagnostic)
+        {
+            return blobs.refusal_diagnostic(diagnostic);
         }
         // Any other reader diagnostic is a hard fold failure on the IR path (the
         // IR is the authority, no degraded fold). The `SegmentResolver` latches
         // the first one returned here.
-        Err(RdfDiagnostic::error(
+        let failure = RdfDiagnostic::error(
             "rdf-ir-gts-fold-diagnostic",
             format!(
                 "GTS fold diagnostic {}: {}",
@@ -449,7 +451,16 @@ impl ResolvedSink for SinkImporter<'_> {
                 Some(frame_index) => location.with_gts_frame(frame_index),
                 None => location,
             }
-        }))
+        });
+        match &diagnostic.cause {
+            Some(purrdf_gts::model::DiagnosticCause::Native(cause)) => {
+                let mut resident = purrdf_lex::allocation::Resident;
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+                Err(failure.with_native_cause(cause.clone(), &mut memory)?)
+            }
+            Some(purrdf_gts::model::DiagnosticCause::Storage(error)) => Err((*error).into()),
+            None => Err(failure),
+        }
     }
 }
 
