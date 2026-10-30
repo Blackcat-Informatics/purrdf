@@ -1257,8 +1257,8 @@ fn token_free_panics(arguments: &syn::punctuated::Punctuated<syn::Expr, syn::Tok
 
 /// Read an already parsed file reached from a shipping crate root.
 pub(crate) fn check(package: &str, file: &str, source: &str, parsed: &syn::File) -> Vec<RuleHit> {
-    if !matches!(package, "purrdf-core" | "purrdf-datalog")
-        && !(package == "purrdf" && file.starts_with("crates/purrdf/src/embedding/"))
+    if !(matches!(package, "purrdf-core" | "purrdf-datalog")
+        || package == "purrdf" && file.starts_with("crates/purrdf/src/embedding/"))
     {
         return Vec::new();
     }

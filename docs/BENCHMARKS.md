@@ -473,7 +473,7 @@ here.
 
 ### PURREMB companion format
 
-The shared `crates/rdf-core/benches/support/purremb.rs` module constructs three
+The shared `crates/purrdf/benches/support/purremb.rs` module constructs three
 deterministic fixtures without RNG, wall-clock values, local paths, or
 process-specific canonical input. The timed and allocation processes consume
 the exact same builders:

@@ -265,7 +265,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   `crates/purrdf/tests/knn_wasm_determinism.rs` — the embedding kNN lane.
   **There is no corpus directory**, deliberately: the lane grades the PURREMB
   kNN property-function seam, and its fixtures are PURREMB artifacts sealed
-  in-process by `purrdf-core`'s own writer rather than files on disk. The
+  in-process by `purrdf::embedding`'s writer rather than files on disk. The
   determinism cases' expectations are pinned Rust literals for the same reason
   frozen vectors would be — recomputing them with the kernel under test would
   agree with any kernel at all. These arithmetic probes run natively; `make wasm-test` selects the actual

@@ -354,7 +354,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run the purrdf_testkit::bench suites (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-geo-kernel -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
+	cargo bench -p purrdf -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-geo-kernel -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #

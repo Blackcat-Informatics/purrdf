@@ -76,6 +76,12 @@ fn verify_source_ordinals(
     embedding: &EmbeddingView<'_>,
     pack: &PackView<'_>,
 ) -> Result<u64, EmbeddingError> {
+    if embedding
+        .targets()
+        .all(|target| target.source_local_ordinal().is_none())
+    {
+        return Ok(0);
+    }
     let dataset = dataset_from_view(pack).map_err(EmbeddingError::source_pack)?;
     // The refusal REASON is carried through rather than replaced by a fixed string:
     // canonicalization now refuses for two different reasons, and a pack rejected for
