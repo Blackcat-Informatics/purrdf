@@ -53,23 +53,20 @@ pub fn producer_iri(predicate: &str) -> String {
 }
 
 pub fn strata() -> [Iri; 2] {
-    [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
+    profile()
+        .weights()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("the fixture has two configured strata")
 }
 
 /// Both strata at weight one, under reciprocal-rank decay with the library's
-/// smoothing constant.
+/// smoothing constant, decoded from its canonical configured law.
 pub fn profile() -> FusionProfile {
-    FusionProfile::with_decay(
-        strata()
-            .into_iter()
-            .map(|stratum| (stratum, PRECISION_12.score(PRECISION_12.scale())))
-            .collect(),
-        DecayRule::ReciprocalRank {
-            k: u32::try_from(RECIP_K).expect("the smoothing constant fits"),
-        },
-        PRECISION_12,
-    )
-    .expect("the fixture profile is valid")
+    FusionProfile::from_canonical_bytes(include_bytes!("../fixtures/lookup_profile.bin"))
+        .expect("the fixture profile is valid")
 }
 
 /// A stopped live stream's ceiling under the fixture's weight-one rank law.

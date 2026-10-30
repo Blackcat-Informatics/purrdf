@@ -106,7 +106,8 @@ pub use mutable::{
 };
 pub use pack::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
-    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    PackView, VerifiedPack, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    verify_pack_bytes,
 };
 pub use paged::{
     CanonicalPagedError, CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind,

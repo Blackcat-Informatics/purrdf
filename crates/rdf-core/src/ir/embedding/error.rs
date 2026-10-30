@@ -101,11 +101,7 @@ impl DigestKind {
     /// digest and typed identity PURREMB carries — written or read — is verified
     /// through this one comparison, so a mismatch always names its kind and both
     /// values.
-    pub(super) fn verify(
-        self,
-        expected: &[u8; 32],
-        actual: &[u8; 32],
-    ) -> Result<(), EmbeddingError> {
+    pub fn verify(self, expected: &[u8; 32], actual: &[u8; 32]) -> Result<(), EmbeddingError> {
         if expected != actual {
             return Err(EmbeddingError::DigestMismatch {
                 kind: self,
@@ -407,11 +403,13 @@ impl std::error::Error for EmbeddingError {
 }
 
 impl EmbeddingError {
-    pub(super) fn source_pack(cause: impl Into<EmbeddingSourceError>) -> Self {
+    /// Retain the original native pack opening or RDF certification refusal.
+    pub fn source_pack(cause: impl Into<EmbeddingSourceError>) -> Self {
         Self::InvalidSourcePack(Arc::new(cause.into()))
     }
 
-    pub(super) fn external_pack(cause: crate::PackError) -> Self {
+    /// Retain the original native refusal from an external pack attachment.
+    pub fn external_pack(cause: crate::PackError) -> Self {
         Self::InvalidExternalPack(Arc::new(cause.into()))
     }
 }

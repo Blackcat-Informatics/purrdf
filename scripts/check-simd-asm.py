@@ -104,8 +104,8 @@ Static checks
 * The identity-path scan: the fast float arithmetic (``algebraic_add`` and its
   siblings, and the ``Reassociated`` arithmetic) may appear only under
   ``crates/rdf-core/src/distance/``, ``crates/sparql-eval/src/knn/``,
-  ``crates/hnsw/src/`` and those crates' ``tests/`` and ``benches/``. Content identity,
-  canonical serialization, GTS and RDFC-1.0 are exact by contract.
+  ``crates/hnsw/src/``, their tests/benches, and ``crates/purrdf/tests/`` or
+  ``crates/purrdf/benches/``. Content identity, canonical serialization, GTS and RDFC-1.0 stay exact.
 * The multiplier scan: no speedup multiplier or percentage in the audit document or
   the current CHANGELOG section (``Unreleased`` during development, the exact workspace
   release after its version cut). The changelog uses ATX release headings; fences,
@@ -1384,7 +1384,7 @@ IDENTITY_ALLOWED = (
     "crates/sparql-eval/tests/",
     "crates/sparql-eval/benches/",
     "crates/hnsw/tests/",
-    "crates/hnsw/benches/",
+    "crates/hnsw/benches/", "crates/purrdf/tests/", "crates/purrdf/benches/",
 )
 
 

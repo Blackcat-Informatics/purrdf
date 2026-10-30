@@ -240,7 +240,8 @@ pub use ir::{
 };
 pub use ir::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
-    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    PackView, VerifiedPack, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    verify_pack_bytes,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,

@@ -1490,7 +1490,7 @@ subsequent accessor is bounds-safe and panic-free:
 
 Structural open does not claim cryptographic integrity, finite matrix values,
 projection-digest validity, source availability, or external-artifact validity.
-Those checks have explicit modes below. A structurally open view may expose exact
+Those checks have explicit operations below. A structurally open view may expose exact
 borrowed bytes and safe scalar decoding while accurately reporting its unverified
 state.
 
@@ -1517,21 +1517,18 @@ The certificate assumes the borrowed bytes remain immutable. A caller that maps 
 file MUST prevent in-process or external mutation, truncation, replacement, or
 hole-punching for the complete lifetime of every view and certificate.
 
-### 18.3 Source verification modes
+### 18.3 Source attachment verification
 
-Source verification is explicit and has two modes:
+Source attachment verification takes the complete source byte slice and performs
+one full check: length and plain SHA-256, the declared `.purrpck` version,
+independent pack RDF verification, the certified RDFC digest, the dataset target,
+and every recognized source-local ordinal. An exact mismatch is reported without
+substituting an RDFC comparison. RDFC and ordinal mismatches have distinct errors.
 
-- `EXACT` takes the complete source byte slice, checks length and plain SHA-256,
-  and opens it as the declared `.purrpck` version. An exact mismatch is reported
-  without substituting an RDFC comparison.
-- `CERTIFIED` performs `EXACT`, independently verifies the pack's RDF dataset,
-  compares the certified RDFC digest, checks the dataset target, and validates all
-  recognized source-local ordinals. An RDFC or ordinal mismatch has its own error.
-
-Neither source mode changes matrix access or constructs an access typestate. The
-verification report records which evidence was checked so callers do not confuse
-a stored claim, a structurally safe view, full artifact integrity, exact source
-attachment, and certified RDF attachment.
+Source verification does not change matrix access or construct an access typestate.
+The report records the independently verified RDF digest and checked ordinal count,
+so callers can distinguish stored claims, structural safety, full artifact integrity,
+and a fully verified source attachment.
 
 ### 18.4 Required access behavior
 
@@ -1637,7 +1634,7 @@ categories cover:
 
 Untrusted input MUST NOT cause a panic, out-of-bounds access, count-controlled
 large allocation, unbounded recursion, integer wrap, or partially trusted view.
-Verification stops with an error and never silently weakens the selected mode.
+Verification stops with an error and never silently omits a required check.
 
 ## 22. Extension rules
 

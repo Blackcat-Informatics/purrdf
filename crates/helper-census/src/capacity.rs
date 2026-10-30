@@ -132,7 +132,9 @@ pub(crate) fn proofs(
                 "crates/lex/src/allocation.rs",
             ],
             "encoded-shape" => &[
+                "crates/purrdf/src/embedding/wire.rs",
                 "crates/rdf-core/src/ir/embedding/wire.rs",
+                "crates/rdf-core/src/ir/embedding/model.rs",
                 "crates/rdf-core/src/ir/embedding/mod.rs",
                 "crates/rdf-core/src/ir/embedding/contract.rs",
             ],
@@ -1255,7 +1257,9 @@ fn token_free_panics(arguments: &syn::punctuated::Punctuated<syn::Expr, syn::Tok
 
 /// Read an already parsed file reached from a shipping crate root.
 pub(crate) fn check(package: &str, file: &str, source: &str, parsed: &syn::File) -> Vec<RuleHit> {
-    if !matches!(package, "purrdf-core" | "purrdf-datalog") {
+    if !(matches!(package, "purrdf-core" | "purrdf-datalog")
+        || package == "purrdf" && file.starts_with("crates/purrdf/src/embedding/"))
+    {
         return Vec::new();
     }
     let mut names = Names::default();
