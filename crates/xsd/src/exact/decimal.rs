@@ -602,7 +602,7 @@ impl Decimal {
             .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
     }
 
-    /// The exact decimal of a finite binary64 with staged native admission.
+    /// The exact decimal of a finite double with staged native admission.
     /// # Errors
     /// Keeps non-finite value failure separate from admission/allocation refusal.
     pub fn try_from_f64_admitted(
@@ -618,7 +618,7 @@ impl Decimal {
         )
     }
 
-    /// The exact decimal of a finite binary32, without decimal-text promotion.
+    /// The exact decimal of a finite float, without decimal-text promotion.
     /// # Errors
     /// Keeps non-finite value failure separate from admission/allocation refusal.
     pub fn try_from_f32_admitted(
@@ -629,6 +629,38 @@ impl Decimal {
     ) -> Result<Self, super::ExactOperationError> {
         Self::from_binary_admitted_using(
             decompose_f32(value).ok_or(ExactError::NotFinite)?,
+            &crate::bigint::scratch::Fallible,
+            admit,
+        )
+    }
+
+    /// The exact mathematical value `(-1)^negative × significand × 2^exponent`.
+    /// No floating-point rounding is involved, including below the least IEEE subnormal.
+    /// A zero significand yields canonical zero regardless of the sign.
+    /// Admission precedes every new coefficient/normalization destination; the caller
+    /// retains the granted storage with the result.
+    ///
+    /// An explicitly unbounded caller can admit every layout:
+    /// ```
+    /// use purrdf_xsd::exact::Decimal;
+    /// let value = Decimal::try_from_dyadic_admitted(false, 3, -1, &mut |_| Ok(()))?;
+    /// assert_eq!(value.canonical_lexical(), "1.5");
+    /// # Ok::<(), purrdf_xsd::exact::ExactOperationError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Preserves native checked layout, admission and allocator failures separately
+    /// from exact value-space failures. No partial numeric value is returned.
+    pub fn try_from_dyadic_admitted(
+        negative: bool,
+        significand: u64,
+        exponent: i32,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<Self, super::ExactOperationError> {
+        Self::from_binary_admitted_using(
+            (negative, significand, exponent),
             &crate::bigint::scratch::Fallible,
             admit,
         )
@@ -749,7 +781,7 @@ impl Decimal {
             .expect("unbounded integer storage")
     }
 
-    /// Round directly to binary64 with admission before native conversion.
+    /// Round directly to double precision with admission before native conversion.
     /// # Errors
     /// Returns physical admission/allocation refusal without changing IEEE results.
     pub fn try_to_f64_admitted(
@@ -775,7 +807,7 @@ impl Decimal {
             .map(f64::from_bits)
     }
 
-    /// Round directly to binary32 with admission before native conversion.
+    /// Round directly to single precision with admission before native conversion.
     /// # Errors
     /// Returns physical admission/allocation refusal without double rounding.
     pub fn try_to_f32_admitted(

@@ -3031,6 +3031,13 @@
     "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
   },
   {
+    "code": "plain:ieee-representability",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "The plain numeric carrier preserves finite IEEE values as exact mathematical JSON numbers, but unrestricted number membership does not establish single or double precision representability. Original SHACL datatype validation remains mandatory. A finite admitted enumeration or scalar constant proves this obligation and records no loss."
+  },
+  {
     "code": "rdfs:range",
     "from": "shacl",
     "to": "json-schema",
