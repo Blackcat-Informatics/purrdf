@@ -33,7 +33,7 @@ use purrdf_testkit::bench::{
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
 use purrdf_gts::mmr;
-use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
+use purrdf_gts::model::{Graph, ReifierRow, Suppression, Term, TermKind};
 use purrdf_gts::reader::{
     BlobPayload, ReadOptions, StreamingSink, read, read_to_sink_with_options,
 };
@@ -647,6 +647,83 @@ fn bench_reader_union(c: &mut Bench) {
     group.finish();
 }
 
+/// A segment of `count` reified statements, written as an RDF 1.2 exporter
+/// writes them: per statement a subject, a literal object, a self-describing
+/// triple term (`tt`) and a reifier, then a `reifies` row binding the reifier,
+/// in frames of 1,000 statements.
+fn reified_statement_container(count: usize) -> Vec<u8> {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[Term::iri("https://example.org/p")]);
+    let predicate = 0;
+    let mut next = 1;
+    for start in (0..count).step_by(1_000) {
+        let mut terms = Vec::new();
+        let mut rows = Vec::new();
+        for index in start..count.min(start + 1_000) {
+            let (subject, object, reifier) = (next, next + 1, next + 3);
+            terms.push(Term::iri(format!("https://example.org/s{index}")));
+            terms.push(Term::literal(format!("statement {index}"), None));
+            terms.push(Term {
+                kind: TermKind::Triple,
+                value: None,
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+                triple: Some((subject, predicate, object)),
+            });
+            terms.push(Term::blank(format!("r{index}")));
+            rows.push((reifier, (subject, predicate, object), None));
+            next += 4;
+        }
+        writer.add_terms(&terms);
+        writer.add_reifies(&rows);
+    }
+    writer.into_bytes()
+}
+
+#[derive(Default)]
+struct ReifierCount(usize);
+
+impl StreamingSink for ReifierCount {
+    fn reifier(&mut self, _segment_index: u64, _reifier: ReifierRow) {
+        self.0 += 1;
+    }
+}
+
+/// Folding cost per `reifies` row must not grow with the segment: each row's
+/// recursive-binding check, first-binding lookup and duplicate check are
+/// indexed, so time per element stays flat across these sizes.
+fn bench_reader_reifiers(c: &mut Bench) {
+    let mut group = c.benchmark_group("gts_reader_reifiers");
+    group.sample_size(10);
+    for count in [1_024, 4_096, 16_384] {
+        let data = reified_statement_container(count);
+        let graph = read(&data, true, None);
+        assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+        assert_eq!(graph.reifiers.len(), count);
+        drop(graph);
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::new("fold", count), &data, |bencher, data| {
+            bencher.iter(|| black_box(read(black_box(data), true, None)));
+        });
+        group.bench_with_input(BenchmarkId::new("stream", count), &data, |bencher, data| {
+            bencher.iter(|| {
+                let mut sink = ReifierCount::default();
+                let result = read_to_sink_with_options(
+                    black_box(data),
+                    ReadOptions::new(true, None),
+                    &mut sink,
+                );
+                assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+                assert_eq!(sink.0, count);
+                black_box(sink)
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_reader_decryption(c: &mut Bench) {
     use purrdf_gts::cose::{decrypt0, encrypt0};
 
@@ -782,6 +859,7 @@ bench_group!(
     bench_dict_compaction,
     bench_reader_scaling,
     bench_reader_union,
+    bench_reader_reifiers,
     bench_reader_decryption
 );
 bench_main!(benches);

@@ -5,7 +5,7 @@ use crate::{FastMap, FastSet};
 
 use purrdf_lex::cbor::Value;
 
-use crate::model::{Graph, Quad, Suppression, Term, TermKind, Triple3};
+use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind, Triple3};
 use crate::reader::{as_idx, text_or};
 use crate::reader_index::DigestIndex;
 use crate::wire::map_get;
@@ -27,7 +27,7 @@ use crate::wire::map_get;
 //     must too (or the term itself, handled without recursing) — see the
 //     sanitizing in `reader::Folder::h_terms`. Ids therefore strictly descend.
 //   * the `reifies` statement layer is the one field that may name any term,
-//     so `reader::reifier_binding_is_recursive` REFUSES, as a `DamagedFrame`,
+//     so `ReifierIndex::binding_is_recursive` REFUSES, as a `DamagedFrame`,
 //     any binding that would let a triple term reach itself.
 //
 // That is the fold-time-refusal strategy §7.3 permits; the alternative it
@@ -157,7 +157,7 @@ impl Unioner {
     /// for why: `union_segments` is `pub(crate)` in a private module, so
     /// `reader::read_with_options` is its only caller, and every `Graph` reaching it
     /// has already passed `reader::read`'s per-segment refusal of a self-reaching
-    /// triple term (`reifier_binding_is_recursive`, `DamagedFrame`, covering the
+    /// triple term (`ReifierIndex::binding_is_recursive`, `DamagedFrame`, covering the
     /// implicit self-bound spelling of §7.1 too). A guard was considered and rejected
     /// here: it would put two hash lookups per term on the fold's hot path to defend
     /// against a shape the reader cannot produce — a closed decision. Any path into
@@ -349,6 +349,9 @@ impl Unioner {
 pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
     let mut u = Unioner::default();
     let mut seen: FastSet<Quad> = FastSet::default();
+    // Reifier rows are a set too; a linear `Graph::set_reifier` per row would
+    // make the union quadratic in its rows.
+    let mut seen_reifiers: FastSet<ReifierRow> = FastSet::default();
     for (seg_idx, seg) in segments.iter().enumerate() {
         for &(s, p, o, gq) in &seg.quads {
             let q: Quad = (
@@ -370,7 +373,10 @@ pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
                 u.map_term(seg, seg_idx, o),
             );
             let graph_name = gr.map(|x| u.map_term(seg, seg_idx, x));
-            u.out.set_reifier(new_rf, spo, graph_name);
+            let row = (new_rf, spo, graph_name);
+            if seen_reifiers.insert(row) {
+                u.out.reifiers.push(row);
+            }
         }
         for &(r, p, v, gr) in &seg.annotations {
             let row = (

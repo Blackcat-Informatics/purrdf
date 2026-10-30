@@ -25,6 +25,9 @@ pub use append_error::AppendError;
 mod payload_error;
 use payload_error::{PayloadCause, PayloadError};
 
+mod reifier_index;
+use reifier_index::ReifierIndex;
+
 use purrdf_lex::cbor::{self, Value};
 
 use crate::codec::{
@@ -32,7 +35,7 @@ use crate::codec::{
 };
 use crate::model::{
     AnnotationRow, BlobEntry, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow,
-    Signature, StreamableInfo, Suppression, Term, TermKind, Triple3, language_tag_refusal,
+    Signature, StreamableInfo, Suppression, Term, TermKind, language_tag_refusal,
 };
 use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
@@ -83,82 +86,6 @@ pub fn public_blob_digest(value: &Value) -> Option<String> {
         Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(digest_label(bytes)),
         _ => None,
     }
-}
-
-/// The `(s, p, o)` a triple TERM would resolve to once `pending` is recorded.
-///
-/// This MUST mirror [`Graph::triple_of`] spelling for spelling. `triple_of` is
-/// the one place a folded quoted triple's components are resolved, and every
-/// walker of those components — the segment union, the canonical writer, every
-/// projection to text — recurses through it. A spelling this function fails to
-/// follow is a loop the fold admits and the first such walker then dies on.
-fn pending_binding(graph: &Graph, term_id: usize, pending: (usize, Triple3)) -> Option<Triple3> {
-    let term = graph.terms.get(term_id)?;
-    if term.kind != TermKind::Triple {
-        return None;
-    }
-    // A self-describing triple term (`tt`) can only name already-introduced
-    // components, so it is acyclic by construction and takes precedence.
-    if let Some(triple) = term.triple {
-        return Some(triple);
-    }
-    // Otherwise the components come from the statement layer, through the
-    // reifier id the term names — or, when it names none, through its OWN id
-    // (§7.1: a self-bound triple term may leave `rf` implicit). The row being
-    // read is not recorded yet, so substitute it for the id it binds.
-    let rid = term.reifier.unwrap_or(term_id);
-    if rid == pending.0 {
-        return Some(pending.1);
-    }
-    graph.reifier(rid)
-}
-
-fn term_depends_on_anchor(
-    graph: &Graph,
-    term_id: usize,
-    anchor: usize,
-    pending: (usize, Triple3),
-    seen: &mut FastSet<usize>,
-) -> bool {
-    if term_id == anchor {
-        return true;
-    }
-    if !seen.insert(term_id) {
-        return false;
-    }
-    let Some(triple) = pending_binding(graph, term_id, pending) else {
-        return false;
-    };
-    <[usize; 3]>::from(triple)
-        .into_iter()
-        .any(|component| term_depends_on_anchor(graph, component, anchor, pending, seen))
-}
-
-/// Would recording `(rid, triple)` let some quoted-triple term contain itself?
-///
-/// The anchors are the terms whose components this row would supply: those
-/// naming `rid` through `rf`, and — because a self-bound triple term may leave
-/// `rf` implicit — the term whose own id IS `rid`. Miss an anchor and the loop
-/// is recorded rather than refused.
-fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> bool {
-    let mut seen: FastSet<usize> = FastSet::default();
-    graph
-        .terms
-        .iter()
-        .enumerate()
-        .filter(|(tid, term)| {
-            term.kind == TermKind::Triple
-                && (term.reifier == Some(rid)
-                    || (*tid == rid && term.reifier.is_none() && term.triple.is_none()))
-        })
-        .any(|(anchor, _)| {
-            <[usize; 3]>::from(triple).into_iter().any(|component| {
-                // Each probe starts from an empty set; clearing the hoisted
-                // set reuses its table instead of allocating one per component.
-                seen.clear();
-                term_depends_on_anchor(graph, component, anchor, (rid, triple), &mut seen)
-            })
-        })
 }
 
 /// Diagnostic code for a payload refused by a caller-supplied byte ceiling.
@@ -533,6 +460,9 @@ struct Folder<'g, 's, 'k> {
     // legacy `rf`-only quoted-triple term, which is checked once the segment is
     // fully folded (see `report_ambiguous_reifiers`).
     rebound_reifiers: Vec<(usize, u64)>,
+    // Anchors, first bindings and recorded rows by reifier id, kept in step
+    // with `g.terms` and `g.reifiers` so a `reifies` row never scans either.
+    reifier_index: ReifierIndex,
 }
 
 impl Folder<'_, '_, '_> {
@@ -549,10 +479,9 @@ impl Folder<'_, '_, '_> {
         let ambiguous: Vec<(usize, u64)> = std::mem::take(&mut self.rebound_reifiers)
             .into_iter()
             .filter(|&(rid, _)| {
-                self.g.terms.iter().any(|term| {
-                    term.kind == TermKind::Triple
-                        && term.triple.is_none()
-                        && term.reifier == Some(rid)
+                self.reifier_index.anchors(rid).iter().any(|&tid| {
+                    let term = &self.g.terms[tid];
+                    term.triple.is_none() && term.reifier == Some(rid)
                 })
             })
             .collect();
@@ -965,6 +894,8 @@ impl Folder<'_, '_, '_> {
                 reifier: rf,
                 triple: tt,
             });
+            self.reifier_index
+                .observe_term(term_id, &self.g.terms[term_id]);
             if let Some(sink) = self.sink.as_deref_mut() {
                 sink.term(self.segment_index, term_id, &self.g.terms[term_id]);
             }
@@ -1049,10 +980,11 @@ impl Folder<'_, '_, '_> {
             // through `rf` and carries no `tt` of its own), whose meaning would
             // become double-valued. That shape is flagged after the fold, once
             // every term and every binding of the segment has been seen.
-            if matches!(self.g.reifier(rid), Some(existing) if existing != triple) {
+            if matches!(self.reifier_index.first_binding(rid), Some(existing) if existing != triple)
+            {
                 self.rebound_reifiers.push((rid, index));
             }
-            if reifier_binding_is_recursive(self.g, rid, triple) {
+            if self.reifier_index.binding_is_recursive(self.g, rid, triple) {
                 self.diag(
                     FoldError::RecursiveReifier {
                         reifier: rid,
@@ -1062,7 +994,7 @@ impl Folder<'_, '_, '_> {
                 );
                 continue;
             }
-            self.g.set_reifier(rid, triple, gslot);
+            self.reifier_index.record(self.g, (rid, triple, gslot));
             self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         }
     }
@@ -1891,6 +1823,9 @@ struct ActiveStreamingSegment {
     // Carried across this segment's frames (each frame gets a fresh `Folder`)
     // so the ambiguity check runs once the whole segment has been seen.
     rebound_reifiers: Vec<(usize, u64)>,
+    // Carried across frames for the same reason: it indexes the whole
+    // segment's terms and reifier rows, not one frame's.
+    reifier_index: ReifierIndex,
 }
 
 impl ActiveStreamingSegment {
@@ -1988,6 +1923,7 @@ impl ActiveStreamingSegment {
             described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
+            reifier_index: ReifierIndex::default(),
         }
     }
 
@@ -2014,6 +1950,7 @@ impl ActiveStreamingSegment {
         let described = std::mem::take(&mut self.described);
         let blob_events = std::mem::take(&mut self.blob_events);
         let rebound_reifiers = std::mem::take(&mut self.rebound_reifiers);
+        let reifier_index = std::mem::take(&mut self.reifier_index);
         let mut folder = Folder {
             g: &mut self.g,
             sink: Some(sink),
@@ -2030,6 +1967,7 @@ impl ActiveStreamingSegment {
             described,
             blob_events,
             rebound_reifiers,
+            reifier_index,
         };
         // `sink.frame()` is fired for THIS frame before any of its rows are
         // folded (the `StreamingSink::frame` contract), so index builders can
@@ -2133,6 +2071,7 @@ impl ActiveStreamingSegment {
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
         let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
+        let reifier_index = std::mem::take(&mut folder.reifier_index);
         self.provenance = std::mem::take(&mut folder.provenance);
         drop(folder);
         self.catalog = catalog;
@@ -2142,6 +2081,7 @@ impl ActiveStreamingSegment {
         self.described = described;
         self.blob_events = blob_events;
         self.rebound_reifiers = rebound_reifiers;
+        self.reifier_index = reifier_index;
     }
 
     fn finish_into_result(
@@ -2170,6 +2110,7 @@ impl ActiveStreamingSegment {
                     described: FastSet::default(),
                     blob_events: Vec::new(),
                     rebound_reifiers: std::mem::take(&mut self.rebound_reifiers),
+                    reifier_index: std::mem::take(&mut self.reifier_index),
                 };
                 folder.report_ambiguous_reifiers();
             }
@@ -2603,6 +2544,7 @@ fn read_segment_with_sink(
             described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
+            reifier_index: ReifierIndex::default(),
         };
         for (index, (_, raw)) in items[1..].iter().enumerate() {
             let abs_index = (index as u64)
