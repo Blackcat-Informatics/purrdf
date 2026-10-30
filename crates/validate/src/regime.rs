@@ -7037,11 +7037,12 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
         ] {
             let error = session.explain_conclusion(regime, conclusion).unwrap_err();
             assert!(error.contains(reason), "{error}");
-            let active = session.explanation.lock().unwrap();
-            let active = active.as_ref().unwrap();
+            let active_guard = session.explanation.lock().unwrap();
+            let active = active_guard.as_ref().unwrap();
             assert_eq!(active.regime(), Regime::OwlRl);
             assert!(active.graph().is_none());
             assert_eq!(active.preparation_work(), index_work);
+            drop(active_guard);
         }
         for (regime, conclusion) in [
             ("owl-rl", named.as_str()),
@@ -7054,13 +7055,14 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
             let answer = session.explain_conclusion(regime, conclusion).unwrap();
             assert_eq!(answer.answer(), expected.answer());
             assert_eq!(answer.certificate(), expected.certificate());
-            let active = session.explanation.lock().unwrap();
-            let active = active.as_ref().unwrap();
+            let active_guard = session.explanation.lock().unwrap();
+            let active = active_guard.as_ref().unwrap();
             assert_eq!(active.regime(), parse_regime(regime).unwrap());
             assert_eq!(
                 active.graph(),
                 parse_one_statement(conclusion).unwrap().0.as_ref()
             );
+            drop(active_guard);
         }
         assert!(
             session.reasoner.is_none(),
