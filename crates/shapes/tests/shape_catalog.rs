@@ -219,10 +219,11 @@ fn catalog_admission_allocation_growth_and_retained_reference_execution() {
     let dataset = parse_turtle_to_dataset("", None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
     let focus = Term::BlankNode("focus".to_owned());
-    // The complete domain also retains its immutable declaration slice header.
-    // Keep the original map allocation and peak limits; account for that one
-    // fixed header separately from definition-dependent storage.
-    let declaration_header = size_of::<Box<[Arc<purrdf_shapes::expression::CustomFunction>]>>();
+    // The original owner held only its index pointer. Account separately for
+    // the declaration header and inline admission state added to that owner;
+    // neither grows with the number of definitions. Keep the original map
+    // allocation count and peak limits.
+    let fixed_owner_fields = size_of::<ModelOwner>() - size_of::<Arc<()>>();
     for (population, bounds) in [
         (1, (4, 1670, 1358, 1590)),
         (8, (11, 6400, 3904, 6320)),
@@ -241,8 +242,8 @@ fn catalog_admission_allocation_growth_and_retained_reference_execution() {
         eprintln!("{population} definitions: {measured:?}");
         let (allocations, requested, retained, peak) = bounds;
         assert!(measured.allocations <= allocations);
-        assert!(measured.requested_bytes <= requested + u64::try_from(declaration_header).unwrap());
-        assert!(measured.retained_bytes <= retained + i64::try_from(declaration_header).unwrap());
+        assert!(measured.requested_bytes <= requested + u64::try_from(fixed_owner_fields).unwrap());
+        assert!(measured.retained_bytes <= retained + i64::try_from(fixed_owner_fields).unwrap());
         assert!(measured.peak_working_bytes <= peak);
         let root = catalog.root(&Term::BlankNode("s0".to_owned())).unwrap();
         drop(catalog);
