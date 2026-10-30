@@ -1762,6 +1762,33 @@ fn validate_conforming(
     report
 }
 
+/// Original-model admission is shared even with a worker that has never seen
+/// this model. One focus keeps the callback serial, so the current-thread
+/// ledger measures the whole validation without thread-launch traffic.
+fn a_fresh_worker_reuses_original_model_admission() {
+    let case = CASES
+        .iter()
+        .find(|case| case.name == "node_by_expression")
+        .expect("the data-dependent shape reference case exists");
+    let fixture = build_case(case, 1, 0);
+    drop(validate_conforming(&fixture, ChangePath::Ids, 1, case.name));
+    let sample = || {
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let report = validate_conforming(&fixture, ChangePath::Ids, 1, case.name);
+        (report, window.close())
+    };
+    let (report, warm) = sample();
+    drop(report);
+    let (report, fresh) =
+        std::thread::scope(|scope| scope.spawn(sample).join().expect("fresh worker completes"));
+    drop(report);
+    assert_eq!(
+        fresh.allocations, warm.allocations,
+        "a fresh worker repeated original-model admission: warm {warm:?}, fresh {fresh:?}"
+    );
+    assert_eq!(fresh.requested_bytes, warm.requested_bytes);
+}
+
 // ---------------------------------------------------------------------------
 // 1. The headline
 // ---------------------------------------------------------------------------
@@ -2933,6 +2960,7 @@ fn every_constraint_kind_is_covered_by_an_allocation_case() {
 }
 
 purrdf_testkit::harness_main!(serial;
+    a_fresh_worker_reuses_original_model_admission,
     every_allocation_exclusion_names_a_real_case,
     conforming_change_path_allocation_has_no_growth_term_in_focus_count,
     violating_change_path_allocation_scales_with_violations_not_focus_count,

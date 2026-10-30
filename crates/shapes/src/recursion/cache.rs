@@ -1,53 +1,70 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Bounded immutable admission metadata; no data graph or conformance answers.
+//! Immutable original-model admission facts, shared by every worker.
 
 use super::{RecursionSemantics, graph::Analysis};
 use crate::error::ShapesError;
 use crate::shapes::ModelOwner;
-use std::cell::RefCell;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, OnceLock};
 
-const CAPACITY: usize = 32;
-struct Entry {
-    owner: Weak<ModelOwner>,
-    analysis: Analysis,
-    closed: bool,
+/// Successful metadata only: a transient refusal must not poison a model's
+/// future admission or retain an owning refusal inside that same model.
+/// Analysis itself retains only weak model references.
+#[derive(Default)]
+pub(crate) struct Admission {
+    open: OnceLock<Analysis>,
+    closed: OnceLock<Analysis>,
+    initializing: Mutex<()>,
 }
-thread_local! {
-    // Inline slots make cold leaf admission and root export allocation-free.
-    static CACHE: RefCell<[Option<Entry>; CAPACITY]> = const { RefCell::new([const { None }; CAPACITY]) };
+
+fn initialize(owner: &Arc<ModelOwner>, closed: bool) -> Result<Analysis, ShapesError> {
+    let admission = &owner.recursion_admission;
+    let cell = if closed {
+        &admission.closed
+    } else {
+        &admission.open
+    };
+    if let Some(analysis) = cell.get() {
+        return Ok(analysis.clone());
+    }
+    // Only cold initialization takes the lock. The model walk reads original
+    // declarations directly and never re-enters admission, so this cannot
+    // recursively acquire its own initializer.
+    let _guard = admission.initializing.lock().map_err(|_| {
+        ShapesError::internal("original-model recursion admission initializer is poisoned")
+    })?;
+    if !closed && let Some(analysis) = admission.closed.get() {
+        return Ok(analysis.clone());
+    }
+    if let Some(analysis) = cell.get() {
+        return Ok(analysis.clone());
+    }
+    let analysis = if closed {
+        super::model::analyze_closed(owner)?
+    } else {
+        super::model::analyze(owner)?
+    };
+    cell.set(analysis.clone()).map_err(|_| {
+        ShapesError::internal("original-model recursion admission initialized twice")
+    })?;
+    Ok(analysis)
 }
 
 fn snapshot(owner: &Arc<ModelOwner>) -> Result<Analysis, ShapesError> {
-    let hit = CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let slot = cache.iter().position(|entry| {
-            entry.as_ref().is_some_and(|entry| {
-                // The Weak keeps the control allocation alive, so an address cannot
-                // be reused by another live model while this entry exists.
-                entry.owner.as_ptr() == Arc::as_ptr(owner)
-            })
-        })?;
-        cache.swap(0, slot);
-        Some(cache[0].as_ref()?.analysis.clone())
-    });
-    if let Some(analysis) = hit {
-        return Ok(analysis);
+    let admission = &owner.recursion_admission;
+    // A successful closed proof also supplies the native dependency analysis.
+    // Prefer it after it becomes available, preserving the stronger admission.
+    if let Some(analysis) = admission.closed.get().or_else(|| admission.open.get()) {
+        return Ok(analysis.clone());
     }
-    let analysis = super::model::analyze(owner)?;
-    install(owner, analysis.clone());
-    Ok(analysis)
+    initialize(owner, false)
 }
 
 pub(crate) fn admit(
     owner: &Arc<ModelOwner>,
     semantics: Option<RecursionSemantics>,
 ) -> Result<(), ShapesError> {
-    if semantics.is_none() && super::model::flat_terminals(owner) {
-        return Ok(());
-    }
     if semantics.is_some() {
         prove(owner)?;
     }
@@ -55,47 +72,5 @@ pub(crate) fn admit(
 }
 
 pub(crate) fn prove(owner: &Arc<ModelOwner>) -> Result<(), ShapesError> {
-    if CACHE.with(|cache| {
-        cache.borrow().iter().any(|entry| {
-            entry
-                .as_ref()
-                .is_some_and(|entry| entry.closed && entry.owner.as_ptr() == Arc::as_ptr(owner))
-        })
-    }) {
-        return Ok(());
-    }
-    let analysis = super::model::analyze_closed(owner)?;
-    install(owner, analysis);
-    CACHE.with(|cache| {
-        if let Some(entry) = cache
-            .borrow_mut()
-            .iter_mut()
-            .flatten()
-            .find(|entry| entry.owner.as_ptr() == Arc::as_ptr(owner))
-        {
-            entry.closed = true;
-        }
-    });
-    Ok(())
-}
-
-pub(crate) fn install(owner: &Arc<ModelOwner>, analysis: Analysis) {
-    CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let slot = cache
-            .iter()
-            .position(|entry| {
-                entry.as_ref().is_none_or(|entry| {
-                    entry.owner.as_ptr() == Arc::as_ptr(owner) || entry.owner.strong_count() == 0
-                })
-            })
-            .unwrap_or(CAPACITY - 1);
-        cache[slot] = None;
-        cache[..=slot].rotate_right(1);
-        cache[0] = Some(Entry {
-            owner: Arc::downgrade(owner),
-            analysis,
-            closed: false,
-        });
-    });
+    initialize(owner, true).map(|_| ())
 }

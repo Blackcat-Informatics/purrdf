@@ -947,6 +947,7 @@ impl Shape {
 pub struct ModelOwner {
     pub(crate) index: link::ShapeIndex,
     pub(crate) functions: Box<[Arc<crate::expression::CustomFunction>]>,
+    pub(crate) recursion_admission: crate::recursion::cache::Admission,
 }
 
 purrdf_hash::debug_non_exhaustive!(ModelOwner {});
@@ -968,6 +969,7 @@ impl ModelOwner {
         Self {
             index: Arc::new(OnceLock::from(FastMap::default())),
             functions: Box::new([]),
+            recursion_admission: crate::recursion::cache::Admission::default(),
         }
     }
 
@@ -984,6 +986,7 @@ impl ModelOwner {
         Ok(Arc::new(Self {
             index,
             functions: functions.into_boxed_slice(),
+            recursion_admission: crate::recursion::cache::Admission::default(),
         }))
     }
 
