@@ -1247,7 +1247,7 @@ pub use tool_arguments::{
 struct Ctx<'ns> {
     model: Option<Arc<ModelOwner>>,
     tool: Option<tool_arguments::ToolPolicy>,
-    catalog_keys: ::purrdf_rdf::FastMap<(usize, usize, bool), String>,
+    catalog_keys: ::purrdf_rdf::FastMap<(usize, usize, bool, u8), String>,
     catalog_defs: Map<String, (Value, String)>,
     catalog_ordinal: usize,
     reserved_defs: BTreeSet<String>,
@@ -1360,6 +1360,7 @@ impl<'ns> Ctx<'ns> {
             Arc::as_ptr(&model).addr(),
             std::ptr::from_ref(definition).addr(),
             member.is_some(),
+            tool_arguments::numeric::cache_key(self, definition),
         );
         if let Some(key) = self.catalog_keys.get(&identity) {
             let reference =
@@ -5355,7 +5356,14 @@ fn compile_property_refs(
     ctx: &mut Ctx<'_>,
 ) -> (Value, bool) {
     tool_arguments::with_predicate(ctx, pred_iri, |ctx| {
-        compile_property_refs_body(constraints, shape_iri, key, pred_iri, ctx)
+        tool_arguments::numeric::with_scope(
+            ctx,
+            constraints,
+            shape_iri,
+            key,
+            !pred_iri.is_empty(),
+            |ctx| compile_property_refs_body(constraints, shape_iri, key, pred_iri, ctx),
+        )
     })
 }
 
@@ -5444,7 +5452,7 @@ fn compile_property_refs_body(
                 tool_arguments::push!(ctx; &mut groups,
                     tool_arguments::values!(ctx; datatypes.len(); datatypes
                         .iter()
-                        .map(|dt| tool_arguments::datatype_schema(dt.as_str(), ctx))),
+                        .map(|dt| tool_arguments::datatype_schema(dt.as_str(), shape_iri, key, ctx))),
                 );
             }
             Constraint::Class(classes) => {
@@ -5537,7 +5545,7 @@ fn compile_property_refs_body(
             }
             Constraint::NodeKind(kinds) => {
                 if ctx.tool.is_some() {
-                    tool_arguments::push!(ctx; &mut groups,vec![tool_arguments::node_kind_schema(kinds, ctx)]);
+                    // Plain literal carriers are selected after positive references.
                     continue;
                 }
                 let mut alts: Vec<Value> = Vec::new();
@@ -5600,7 +5608,22 @@ fn compile_property_refs_body(
             }
             // SHACL 1.2 Core §7.8.3: at least one value node conforms to the shape.
             Constraint::SomeValue(inner) => {
-                tool_arguments::push!(ctx; &mut some_values,compile_member_schema(inner, shape_iri, key, ctx));
+                if tool_arguments::numeric::requires_logical_proof(ctx) {
+                    if let Some(mut schemas) = exact_member_schemas(
+                        std::slice::from_ref(inner.as_ref()),
+                        shape_iri,
+                        key,
+                        ctx,
+                    ) {
+                        if let Some(schema) = schemas.pop() {
+                            tool_arguments::push!(ctx; &mut some_values,schema);
+                        }
+                    } else {
+                        tool_arguments::numeric::refuse_logic(ctx, shape_iri, key);
+                    }
+                } else {
+                    tool_arguments::push!(ctx; &mut some_values,compile_member_schema(inner, shape_iri, key, ctx));
+                }
             }
             // Every value node conforms to the shape (§4.8.2) — or to every one
             // of the shapes (§4.6.2).
@@ -5893,6 +5916,18 @@ fn compile_property_refs_body(
         }
     }
 
+    let number_carrier = tool_arguments::numeric::number_carrier(&groups, &shape_conjuncts, ctx);
+    if ctx.tool.is_some() {
+        for constraint in constraints {
+            if !tool_arguments::step(ctx) {
+                break;
+            }
+            if let Constraint::NodeKind(kinds) = constraint {
+                tool_arguments::push!(ctx; &mut groups, vec![tool_arguments::node_kind_schema(kinds, number_carrier, ctx)]);
+            }
+        }
+    }
+
     // `sh:in`: a value is a member of every list.
     if let Some((first, rest)) = in_lists.split_first() {
         let mut members: Vec<Value> = tool_arguments::values!(ctx; first.len(); first
@@ -5994,9 +6029,16 @@ fn compile_property_refs_body(
     group_schemas.dedup();
     if group_schemas.len() == 1 {
         // Fold the one group into the value map.
-        if let Some(Ok(only)) = group_schemas.pop().map(crate::json_model::into_object) {
-            for (k, v) in only {
-                value.entry(k).or_insert(v);
+        match crate::json_model::into_object(group_schemas.pop().expect("one group schema")) {
+            Ok(only) => {
+                for (k, v) in only {
+                    value.entry(k).or_insert(v);
+                }
+            }
+            // A contradictory datatype group is the boolean false schema.
+            // It must remain a conjunct when it cannot be folded into a map.
+            Err(boolean) => {
+                tool_arguments::insert!(ctx; &mut value, "allOf", tool_arguments::emitted_json!(ctx; [boolean]));
             }
         }
     } else if !group_schemas.is_empty() {
@@ -6080,6 +6122,14 @@ fn compile_property_refs_body(
             &mut comments,
             ctx,
         );
+        lexical.judge_plain_numbers(
+            constraints,
+            shape_iri,
+            key,
+            &mut rejected,
+            &mut comments,
+            ctx,
+        );
     }
     if single_line {
         if ctx.tool.is_some() {
@@ -6139,9 +6189,9 @@ fn compile_property_refs_body(
     }
 
     if ctx.tool.is_some() {
-        value.entry("type".to_owned()).or_insert_with(
-            || tool_arguments::emitted_json!(ctx; ["string", "integer", "boolean", "object"]),
-        );
+        value
+            .entry("type".to_owned())
+            .or_insert_with(|| tool_arguments::numeric::default_types(number_carrier, ctx));
     }
     // `sh:hasValue` is existential — some value is the term — so it constrains
     // the property's values together, never each one: a lone value must be the
@@ -6619,6 +6669,56 @@ impl LexicalConstraints<'_> {
         }
     }
 
+    /// A finite admitted numeric domain has known canonical lexical forms.
+    fn judge_plain_numbers(
+        &self,
+        constraints: &[&Constraint],
+        shape: &str,
+        key: &str,
+        rejected: &mut Vec<Value>,
+        comments: &mut Vec<String>,
+        ctx: &mut Ctx<'_>,
+    ) {
+        if !tool_arguments::numeric::requires_logical_proof(ctx) || self.sources.is_empty() {
+            return;
+        }
+        let mut finite = finite_members(ctx, constraints, |term| {
+            matches!(term,
+            Term::Literal(literal) if tool_arguments::numeric::kind(literal.datatype_str()).is_some())
+        });
+        if finite.is_none()
+            && constraints
+                .iter()
+                .any(|constraint| matches!(constraint, Constraint::MaxCount(1)))
+        {
+            let mut constants = Vec::new();
+            for constraint in constraints {
+                if !tool_arguments::step(ctx) {
+                    return;
+                }
+                if let Constraint::HasValue(term) = constraint {
+                    tool_arguments::push!(ctx; &mut constants, term);
+                }
+            }
+            if !constants.is_empty() {
+                finite = Some(constants);
+            }
+        }
+        if let Some(members) = finite {
+            for member in members {
+                if let Term::Literal(literal) = member
+                    && self.violated_by_admitted(literal.value(), shape, key, ctx)
+                {
+                    tool_arguments::push!(ctx; rejected,tool_arguments::emitted_json!(ctx; { "const": tool_arguments::enum_value(member, ctx) }));
+                }
+            }
+        } else {
+            tool_arguments::record!(ctx; "sh:pattern", shape,
+                &tool_arguments::format!(ctx; "the numeric lexical pattern on property {key} requires original SHACL validation; JSON pattern applies only to strings"));
+            tool_arguments::push!(ctx; comments,tool_arguments::format!(ctx; "numeric lexical pattern on property {key} requires original SHACL validation"));
+        }
+    }
+
     /// Judge the bare integers — `xsd:integer` literals in canonical form,
     /// whose lexical form is the decimal numeral of the JSON number.
     ///
@@ -7007,37 +7107,7 @@ fn compile_bounds(
     ctx: &mut Ctx<'_>,
 ) {
     if ctx.tool.is_some() {
-        let kind = tool_arguments::native_value(ctx, "integer");
-        tool_arguments::insert!(ctx; &mut *value,"type", kind);
-        for (facet, term) in bounds {
-            let Term::Literal(literal) = term else {
-                unreachable!("admitted integer bound")
-            };
-            let integer = literal
-                .value()
-                .parse::<i128>()
-                .expect("admitted integer bound");
-            let (keyword, lower) = match facet {
-                Facet::MinInclusive => ("minimum", true),
-                Facet::MaxInclusive => ("maximum", false),
-                Facet::MinExclusive => ("exclusiveMinimum", true),
-                Facet::MaxExclusive => ("exclusiveMaximum", false),
-            };
-            let previous = value
-                .get(keyword)
-                .and_then(Value::as_number)
-                .and_then(purrdf_lex::json::Number::as_i128);
-            if previous.is_none_or(|previous| {
-                if lower {
-                    integer > previous
-                } else {
-                    integer < previous
-                }
-            }) {
-                let bound = tool_arguments::native_value(ctx, integer);
-                tool_arguments::insert!(ctx; &mut *value,keyword, bound);
-            }
-        }
+        tool_arguments::numeric::compile_bounds(bounds, value, ctx, (shape_iri, key));
         return;
     }
     let mut numeric = false;
@@ -7775,7 +7845,7 @@ fn value_shape_exact(
         .then(|| tool_arguments::format_text(ctx, format_args!("{}", shape.id)));
     let location = (source.as_deref().unwrap_or(location.0), location.1);
     let disallowed = ConformanceDisallows::default();
-    let result = (|| {
+    let result = tool_arguments::numeric::with_finite_scope(ctx, &shape.constraints, |ctx| {
         if !(disallowed.contains(&shape.severity)
             && !undecisive_annotation(&shape.constraint_annotations, &disallowed)
             && shape.deactivated_when.is_empty()
@@ -7803,7 +7873,7 @@ fn value_shape_exact(
             }
         }
         Ok(true)
-    })();
+    });
     active.pop();
     result
 }

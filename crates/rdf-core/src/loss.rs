@@ -1131,6 +1131,13 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// dropped and why), never an issue/PR reference or a minted IRI.
 const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
     (
+        "plain:ieee-representability",
+        "The plain numeric carrier preserves finite IEEE values as exact mathematical JSON \
+         numbers, but unrestricted number membership does not establish single or double precision \
+         representability. Original SHACL datatype validation remains mandatory. A finite \
+         admitted enumeration or scalar constant proves this obligation and records no loss.",
+    ),
+    (
         "rdfs:range",
         "A predicate's rdfs:range names a value-vocabulary class that conflicts with (or is \
          shadowed by) an explicit sh:class on the same property; the range-derived enum $ref is \

@@ -488,6 +488,32 @@ pre-bound term crosses the boundary as an owned `TermValue` whose IRI is a fresh
 `String`. Neither share is currently zero, and this crate does not claim
 otherwise.
 
+## Plain FnO argument schemas
+
+`json_schema::compile_tool_arguments` uses the shared compiler with explicit
+shape/class roots and complete caller-owned field bindings. It emits bare JSON
+objects, arrays, strings, booleans, integers and numbers. Decimal coefficients and
+boundaries remain exact at arbitrary precision. Finite floats and doubles are
+written as their exact dyadic decimal values, rather than decimal spellings that
+merely round back to the same IEEE bits.
+
+An unrestricted IEEE datatype carries a registered, source-located
+`plain:ieee-representability` loss: JSON `number` membership does not establish
+single or double precision representability. The original SHACL datatype check
+remains mandatory. A finite admitted enumeration or scalar constant proves this
+obligation and records no representability loss. Numeric patterns are checked on
+finite canonical members; an unrestricted lexical pattern retains its original
+SHACL check in the loss ledger.
+
+Numeric enum/constant terms require the native canonical RDF lexical form.
+Nonfinite values, negative IEEE zero, malformed values, ambiguous numeric datatype
+domains and unsupported exact logical positions return source-bearing typed
+refusals. Bounds compare by value using the existing SPARQL promotion/threshold
+authority. Residual checks cannot be negated or treated as exact exclusive
+alternatives, including through references. The ordinary JSON-LD compiler retains
+its existing carrier and behavior. `ToolSchemaLimits` keeps its documented native
+work, bytes and node ceilings; failure publishes no partial schema.
+
 ## Ontology-complete developer schemas
 
 `compile_schema` makes the developer-schema surface an explicit choice.
