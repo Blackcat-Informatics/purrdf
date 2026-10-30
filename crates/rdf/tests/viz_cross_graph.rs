@@ -8,9 +8,9 @@ use std::sync::Arc;
 use purrdf_rdf::dataset_view::DatasetMut;
 use purrdf_rdf::ir::MutableDataset;
 use purrdf_rdf::viz::{
-    VizGraphId, VizGraphInput, VizGraphPolicy, VizInputAnnotation, VizInputQuad, VizInputReifier,
-    VizInputStatement, VizProjection, VizRelation, VizSpec, VizTermValue, VizValueRef,
-    project_dataset, project_graph_input,
+    VizBoundaryPort, VizGraphId, VizGraphInput, VizGraphPolicy, VizInputAnnotation, VizInputQuad,
+    VizInputReifier, VizInputStatement, VizPoint, VizProjection, VizRelation, VizSpec,
+    VizTermValue, VizValueRef, project_dataset, project_graph_input,
 };
 use purrdf_rdf::{
     QuadValues, RdfDataset, RdfDatasetBuilder, TermValue, canonical_flat_nquads, parse_dataset,
@@ -28,6 +28,75 @@ const NQUADS: &str = concat!(
     "<https://example.org/claim> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/alice> <https://example.org/knows> <https://example.org/bob> )>> <https://example.org/claims> .\n",
     "<https://example.org/claim> <https://example.org/confidence> \"0.8\"^^<http://www.w3.org/2001/XMLSchema#decimal> <https://example.org/provenance> .\n",
 );
+
+fn boundary_return_routes_keep_required_ports() {
+    use purrdf_rdf::viz::{
+        VizLayoutOptions, VizSemanticRef, VizSvgOptions, build_presented_export,
+        render_presented_export_svg,
+    };
+    let spec = VizSpec::default();
+    let dataset = parse_dataset(
+        include_bytes!("support/viz_boundary_return.trig"),
+        "application/trig",
+        None,
+    )
+    .expect("cross-boundary RDF");
+    let model = project_dataset(&dataset, &spec).expect("complete projection");
+    let presentation = viz_presentation::boundary_return_architecture(&model);
+    let presented =
+        build_presented_export(&model, &spec, &presentation, &VizLayoutOptions::default())
+            .expect("a boundary route may double back through its required port");
+    let router = &presentation.components[1].binding;
+    let predicate = &model.terms.iter().find(|term| matches!(&term.value, VizTermValue::Iri { value } if value.ends_with("/model/relation/respond"))).expect("response predicate").id;
+    let statement = model.statements.iter().find(|statement| {
+        statement.predicate == *predicate
+            && matches!((&statement.subject, router), (VizValueRef::Term { id }, VizSemanticRef::Term(router)) if id == router)
+    }).expect("router response");
+    let edge = presented
+        .export
+        .scene
+        .edges
+        .iter()
+        .find(|edge| {
+            edge.bindings
+                .contains(&VizSemanticRef::Statement(statement.id.clone()))
+        })
+        .expect("response edge");
+    let port = presented
+        .geometry
+        .ports
+        .iter()
+        .find(|port| port.edge == edge.id && port.boundary == "present-component-router")
+        .expect("router boundary port");
+    let route = &presented
+        .export
+        .layout
+        .edges
+        .iter()
+        .find(|route| route.id == edge.id)
+        .expect("response route")
+        .points;
+    assert_port_on_route(port, route);
+    let svg = render_presented_export_svg(&presented, &VizSvgOptions::default())
+        .expect("the admitted boundary route renders");
+    assert!(svg.contains(&format!("id=\"svg-{}\"", port.id)));
+}
+
+fn assert_port_on_route(port: &VizBoundaryPort, route: &[VizPoint]) {
+    assert!(
+        route.windows(2).any(|points| {
+            (points[0].x == port.point.x
+                && points[1].x == port.point.x
+                && (points[0].y.min(points[1].y)..=points[0].y.max(points[1].y))
+                    .contains(&port.point.y))
+                || (points[0].y == port.point.y
+                    && points[1].y == port.point.y
+                    && (points[0].x.min(points[1].x)..=points[0].x.max(points[1].x))
+                        .contains(&port.point.x))
+        }),
+        "boundary port is not on its actual route: {port:?}"
+    );
+}
 
 fn fixture() -> Arc<RdfDataset> {
     parse_dataset(NQUADS.as_bytes(), "application/n-quads", None).expect("valid fixture")
@@ -270,6 +339,7 @@ fn nested_presentation_keeps_cross_boundary_semantics_and_exact_visible_exports(
     );
     assert_self_route_outside(node.rect, route);
     quoted_self_neighbors();
+    boundary_return_routes_keep_required_ports();
     assert_ne!(presented.geometry.ports, [] as [VizBoundaryPort; 0]);
     for port in &presented.geometry.ports {
         let edge = presented
@@ -279,17 +349,7 @@ fn nested_presentation_keeps_cross_boundary_semantics_and_exact_visible_exports(
             .iter()
             .find(|e| e.id == port.edge)
             .expect("real RDF edge");
-        assert!(
-            edge.points.windows(2).any(|p| {
-                (p[0].x == port.point.x
-                    && p[1].x == port.point.x
-                    && (p[0].y.min(p[1].y)..=p[0].y.max(p[1].y)).contains(&port.point.y))
-                    || (p[0].y == port.point.y
-                        && p[1].y == port.point.y
-                        && (p[0].x.min(p[1].x)..=p[0].x.max(p[1].x)).contains(&port.point.x))
-            }),
-            "boundary port is not on its actual route: {port:?}"
-        );
+        assert_port_on_route(port, &edge.points);
     }
     let svg = render_presented_export_svg(&presented, &VizSvgOptions::default()).expect("SVG");
     assert!(svg.contains("direction=\"rtl\""));
@@ -331,7 +391,7 @@ fn nested_presentation_keeps_cross_boundary_semantics_and_exact_visible_exports(
     ));
 }
 
-fn assert_self_route_outside(rect: purrdf_rdf::viz::VizRect, route: &[purrdf_rdf::viz::VizPoint]) {
+fn assert_self_route_outside(rect: purrdf_rdf::viz::VizRect, route: &[VizPoint]) {
     for segment in route.windows(2) {
         let horizontal_inside = segment[0].y == segment[1].y
             && segment[0].y > rect.y

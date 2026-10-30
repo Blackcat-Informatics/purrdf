@@ -1663,8 +1663,12 @@ fn dedup_points(points: &mut Vec<VizPoint>) {
         let previous = points[index - 1];
         let current = points[index];
         let next = points[index + 1];
-        if (previous.x == current.x && current.x == next.x)
-            || (previous.y == current.y && current.y == next.y)
+        if (previous.x == current.x
+            && current.x == next.x
+            && (previous.y.min(next.y)..=previous.y.max(next.y)).contains(&current.y))
+            || (previous.y == current.y
+                && current.y == next.y
+                && (previous.x.min(next.x)..=previous.x.max(next.x)).contains(&current.x))
         {
             points.remove(index);
         } else {
