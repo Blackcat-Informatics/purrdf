@@ -1418,7 +1418,7 @@ fn pure_conformance_focus_compositions_use_the_selected_relation() {
             "remove",
             E::Remove {
                 nodes: Box::new(E::List(vec![a.clone(), b.clone()])),
-                remove: Box::new(E::List(vec![b.clone()])),
+                remove: Box::new(E::List(vec![b])),
             },
             true,
         ),
