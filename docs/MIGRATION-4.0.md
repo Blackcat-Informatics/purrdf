@@ -452,8 +452,15 @@ reference in the same original catalog, including recognized anonymous node and
 property shapes. Typed empty shapes remain static; untyped empty and path-only
 operands keep their computed-expression classification. Its conformance question
 shares the active fixed point and original binding, including property-value
-focuses and restored products. Original function bodies and general expression
-callbacks remain outside this proved surface.
+focuses and restored products. The node operand can also be a composition of
+pure native expressions that cannot inspect conformance, including constants,
+paths, variables, sequence/set operations, conditionals, aggregates, paging,
+mapping and instance selection. Every child is checked, including untaken
+branches and ordering keys. Its zero/single/multiple-result behavior matches
+ordinary conformance expressions; reports retain the original judged focus,
+value and path. The book lists the complete admitted constructor family.
+Original function bodies, conformance-dependent focus expressions and general
+expression callbacks remain outside this proved surface.
 `PreparationRefusal::UnqualifiedRecursion` retains the original definition,
 parameter and model/index scope when an expression, query/computed target or
 overlay has no closed dependency proof. The broader dynamic-expression contract

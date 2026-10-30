@@ -687,11 +687,11 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
     }
     fn constraint(&mut self, constraint: &'a Constraint) -> Result<(), WalkError> {
         if let Constraint::Expression { expr, .. } = constraint
-            && let Some(target) = super::closed::original_conformance(expr, self.owner)
+            && let Some(target) =
+                super::closed::original_conformance(expr, self.owner).map_err(WalkError::Shape)?
         {
-            // `sh:this` is the current value-node focus, independently of the
-            // valuation. The expression is true exactly when this original
-            // target pair is true, so its dependency is positive in both the
+            // The focus operand is independent of the valuation. The expression
+            // asks only this original target, so its dependency is positive in both the
             // selected proof and the unselected cycle-admission graph.
             let previous = self.context;
             self.context = Context::default();

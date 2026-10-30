@@ -5,7 +5,13 @@
 
 use std::collections::BTreeMap;
 
+use super::layout::text_line_width;
 use super::*;
+
+mod presentation;
+pub use presentation::{
+    build_presented_export, presented_export_json, render_presented_export_svg,
+};
 
 const ROUTE_CORNER_RADIUS: i32 = 8;
 
@@ -56,11 +62,20 @@ pub fn build_export(
 ) -> Result<VizExport, VizError> {
     let scene = build_scene(projection, spec)?;
     let layout = layout_scene(&scene, layout_options)?;
+    Ok(assemble_export(projection, spec, scene, layout))
+}
+
+fn assemble_export(
+    projection: &VizProjection,
+    spec: &VizSpec,
+    scene: VizScene,
+    layout: VizLayout,
+) -> VizExport {
     let spec_json = purrdf_lex::json::write_compact(&spec.to_json());
     let model_json = purrdf_lex::json::write_compact(&projection.to_json());
     let scene_json = purrdf_lex::json::write_compact(&scene.to_json());
     let element_index = build_element_index(&scene, &layout);
-    Ok(VizExport {
+    VizExport {
         schema_version: VIZ_EXPORT_SCHEMA_VERSION.to_owned(),
         spec: spec.clone(),
         spec_hash: stable_hash_hex(&spec_json),
@@ -71,7 +86,7 @@ pub fn build_export(
         layout,
         element_index,
         diagnostics: projection.diagnostics.clone(),
-    })
+    }
 }
 
 /// Project a dataset into a complete structured visualization export.
@@ -132,11 +147,19 @@ pub fn render_graph_input_svg(
 
 /// Serialize a complete structured export as deterministic semantic SVG.
 pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<String, VizError> {
+    render_document(export, options, None)
+}
+
+fn render_document(
+    export: &VizExport,
+    options: &VizSvgOptions,
+    presented: Option<&VizPresentedExport>,
+) -> Result<String, VizError> {
     let mut out = String::new();
     writeln!(
         out,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" width="100%" role="img" aria-labelledby="purrdf-title purrdf-desc" data-purrdf-schema="{}">"#,
-        export.layout.width, export.layout.height, xml_attribute(&export.schema_version)?
+        export.layout.width, export.layout.height, xml_attribute(presented.map_or(export.schema_version.as_str(), |p| &p.schema_version))?
     )
     .expect("writing to String cannot fail");
     write!(out, "<title id=\"purrdf-title\">").expect("writing to String cannot fail");
@@ -153,7 +176,11 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
     )
     .expect("writing to String cannot fail");
     if options.embed_metadata {
-        let metadata = export_json(export)?;
+        let metadata = if let Some(presented) = presented {
+            purrdf_lex::json::write_compact(&presented.to_json())
+        } else {
+            export_json(export)?
+        };
         out.push_str(
             "<metadata id=\"purrdf-viz-export\" type=\"application/vnd.purrdf.viz+json\">",
         );
@@ -161,6 +188,9 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
         out.push_str("</metadata>\n");
     }
     render_defs(export, &mut out, options.include_styles)?;
+    if let Some(presented) = presented {
+        presentation::render_clips(&presented.geometry, &mut out)?;
+    }
     writeln!(
         out,
         "<rect class=\"canvas\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\"/>",
@@ -168,10 +198,13 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
     )
     .expect("writing to String cannot fail");
 
+    if let Some(presented) = presented {
+        presentation::render_geometry(presented, &mut out)?;
+    }
     if export.scene.mode == VizMode::Table {
         render_table(export, &mut out)?;
     } else {
-        render_graph(export, &mut out)?;
+        render_graph(export, presented.map(|p| &p.presentation), &mut out)?;
     }
     render_legend(export, &mut out)?;
     out.push_str("</svg>\n");
@@ -457,7 +490,11 @@ fn text_clip_rects(export: &VizExport) -> Vec<(String, VizRect)> {
     clips
 }
 
-fn render_graph(export: &VizExport, out: &mut String) -> Result<(), VizError> {
+fn render_graph(
+    export: &VizExport,
+    presented: Option<&VizPresentation>,
+    out: &mut String,
+) -> Result<(), VizError> {
     let scene_edges = export
         .scene
         .edges
@@ -466,7 +503,11 @@ fn render_graph(export: &VizExport, out: &mut String) -> Result<(), VizError> {
         .collect::<BTreeMap<_, _>>();
     for layout in &export.layout.edges {
         if let Some(scene) = scene_edges.get(layout.id.as_str()) {
+            let linked = presentation::open_navigation(&scene.id, &scene.bindings, presented, out)?;
             render_edge(scene, layout, out)?;
+            if linked {
+                out.push_str("</a>\n");
+            }
         }
     }
     let scene_nodes = export
@@ -477,7 +518,11 @@ fn render_graph(export: &VizExport, out: &mut String) -> Result<(), VizError> {
         .collect::<BTreeMap<_, _>>();
     for layout in &export.layout.nodes {
         if let Some(scene) = scene_nodes.get(layout.id.as_str()) {
+            let linked = presentation::open_navigation(&scene.id, &scene.bindings, presented, out)?;
             render_node(scene, layout, out)?;
+            if linked {
+                out.push_str("</a>\n");
+            }
         }
     }
     Ok(())
@@ -797,6 +842,12 @@ fn render_text(
         "<text id=\"{id}\" class=\"{class}\" text-anchor=\"middle\" unicode-bidi=\"isolate\" clip-path=\"url(#clip-{id})\""
     )
     .expect("writing to String cannot fail");
+    if matches!(
+        class,
+        "presentation-label" | "participant-label" | "interaction-label" | "detail-heading"
+    ) {
+        out.push_str(" font-size=\"14\"");
+    }
     if let Some(language) = &scene.language {
         out.push_str(" lang=\"");
         escape_xml_attr(language, out)?;
@@ -815,9 +866,10 @@ fn render_text(
     for (index, line) in layout.lines.iter().enumerate() {
         write!(
             out,
-            "<tspan x=\"{}\" y=\"{}\">",
+            "<tspan x=\"{}\" y=\"{}\" textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\">",
             layout.rect.x + layout.rect.width / 2,
-            first_y + i32::try_from(index).unwrap_or_default() * 18
+            first_y + i32::try_from(index).unwrap_or_default() * 18,
+            text_line_width(line).min(layout.rect.width).max(0)
         )
         .expect("writing to String cannot fail");
         escape_xml_text(line, out)?;
@@ -1097,7 +1149,7 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 .edge.reifies .edge-path,.legend-line.reifies{stroke:#b65c00;stroke-width:2.8;stroke-dasharray:10 4}
 .edge.annotation .edge-path,.legend-line.annotation{stroke:#257942;stroke-width:2.3}
 .edge.quoted .edge-path{stroke:#6f4ba8;stroke-width:1.7;stroke-dasharray:3 5}
-.edge-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
+.edge-label-box,.interaction-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
 .edge.assertion .edge-label-box{fill:#eef9fa;stroke:#66a8b0}
 .edge.role .edge-label-box{fill:#f7f8fa;stroke:#aeb7c2}
 .edge.reifies .edge-label-box{fill:#fff6e9;stroke:#d18a3d}
