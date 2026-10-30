@@ -115,7 +115,7 @@ pub(crate) struct ClosedProof(pub(super) ());
 /// recursive valuation. Only a canonical reference into the same original
 /// catalog is admitted: neither a local replacement body nor another model's
 /// equal-named shape may acquire this catalog's proof or borrowed binding.
-pub(crate) fn named_conformance<'a>(
+pub(crate) fn original_conformance<'a>(
     expression: &'a NodeExpr,
     owner: Option<&Arc<ModelOwner>>,
 ) -> Option<&'a crate::shapes::Shape> {
@@ -127,17 +127,6 @@ pub(crate) fn named_conformance<'a>(
         return None;
     };
     matches!(node.as_ref(), NodeExpr::This)
-        .then(|| named_reference(shape, owner))
-        .flatten()
-}
-
-/// A canonical named handle into this exact original catalog. Cloned handles
-/// retain their reference and metadata; equal names in foreign domains do not.
-pub(crate) fn named_reference<'a>(
-    shape: &'a crate::shapes::Shape,
-    owner: Option<&Arc<ModelOwner>>,
-) -> Option<&'a crate::shapes::Shape> {
-    matches!(shape.id, Term::NamedNode(_))
         .then(|| original_reference(shape, owner))
         .flatten()
 }
