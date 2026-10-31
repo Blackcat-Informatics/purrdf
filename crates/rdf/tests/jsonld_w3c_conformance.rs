@@ -263,15 +263,40 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
             None,
         )
         .unwrap_or_else(|error| panic!("{} invalid pinned N-Quads: {error}", vector.id));
-        if datasets_isomorphic(&actual, &expected).unwrap() {
+        if datasets_isomorphic(
+            &actual,
+            &expected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        {
             passed += 1;
         } else {
             failures.push(format!(
                 "{} ({}):\nexpected:\n{}\nactual:\n{}",
                 vector.id,
                 vector.name,
-                canonical_flat_nquads(&expected).expect("canonical expected dataset"),
-                canonical_flat_nquads(&actual).expect("canonical actual dataset")
+                canonical_flat_nquads(
+                    &expected,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .expect("canonical expected dataset")
+                .nquads(),
+                canonical_flat_nquads(
+                    &actual,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .expect("canonical actual dataset")
+                .nquads()
             ));
         }
     }

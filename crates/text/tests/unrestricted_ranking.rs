@@ -45,7 +45,7 @@ fn a_complete_five_thousand_term_needle_reaches_the_public_relation() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new().with_env(&environment),
+                &QueryOptions::new().with_env(&environment),
             )
             .expect("actual public query");
         let SparqlResult::Solutions { rows, .. } = result else {

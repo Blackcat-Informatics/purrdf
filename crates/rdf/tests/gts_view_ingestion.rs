@@ -1224,6 +1224,7 @@ fn keystone_carrier(
     base: &Arc<RdfDataset>,
     contribution: &Arc<RdfDataset>,
     ledger: &Arc<RetentionLedger>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> PipelineViewBundle<Note> {
     let (lookaside, blobs, provenance) = keystone_loadout();
     let mut carrier = PipelineViewBundle::from_dataset(
@@ -1236,7 +1237,7 @@ fn keystone_carrier(
     )
     .expect("the base is within the default ceilings");
     carrier
-        .accumulate_named_graph(KEY_G3, contribution, Note("g3"))
+        .accumulate_named_graph(KEY_G3, contribution, Note("g3"), control)
         .expect("a contained contribution folds in");
     carrier
 }
@@ -1260,6 +1261,8 @@ fn keystone_delta_carrier(
 
 #[test]
 fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
+    let mut canonical =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
     let base = base_dataset();
     let contribution = contribution_dataset();
     let delta = keystone_delta(&base);
@@ -1289,11 +1292,15 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     )
     .expect("the base composes within the default ceilings");
 
-    let g1 = carrier.graph_digest(KEY_G1).expect("<g1> canonicalizes");
-    let g2 = carrier.graph_digest(KEY_G2).expect("<g2> canonicalizes");
+    let g1 = carrier
+        .graph_digest(KEY_G1, &mut canonical)
+        .expect("<g1> canonicalizes");
+    let g2 = carrier
+        .graph_digest(KEY_G2, &mut canonical)
+        .expect("<g2> canonicalizes");
     assert_ne!(g1, g2, "the two graphs differ, or the leaves prove nothing");
     carrier
-        .pin_handle(KEY_G1, Note("g1"), g1)
+        .pin_handle(KEY_G1, Note("g1"), g1, &mut canonical)
         .expect("a handle pinned to its own graph's digest attaches");
 
     let before_accumulate = carrier.digest_work();
@@ -1303,7 +1310,7 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     );
 
     carrier
-        .accumulate_named_graph(KEY_G3, &contribution, Note("g3"))
+        .accumulate_named_graph(KEY_G3, &contribution, Note("g3"), &mut canonical)
         .expect("a contained contribution appends");
 
     // EXACT INVALIDATION: the accumulation canonicalized the graph it touched and
@@ -1314,8 +1321,14 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
         before_accumulate.graph_canonicalizations + 1,
         "exactly the accumulated graph is canonicalized again"
     );
-    assert_eq!(carrier.graph_digest(KEY_G1).expect("<g1>"), g1);
-    assert_eq!(carrier.graph_digest(KEY_G2).expect("<g2>"), g2);
+    assert_eq!(
+        carrier.graph_digest(KEY_G1, &mut canonical).expect("<g1>"),
+        g1
+    );
+    assert_eq!(
+        carrier.graph_digest(KEY_G2, &mut canonical).expect("<g2>"),
+        g2
+    );
     let served = carrier.digest_work();
     assert_eq!(
         served.graph_canonicalizations, after_accumulate.graph_canonicalizations,
@@ -1340,7 +1353,7 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
         g1
     );
     assert_eq!(
-        carrier.graph_digest(KEY_G1).expect("<g1>"),
+        carrier.graph_digest(KEY_G1, &mut canonical).expect("<g1>"),
         carrier
             .handle(KEY_G1)
             .expect("the pin survives")
@@ -1355,12 +1368,12 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     // A SECOND READER of the same base is answered from the SHARED ledger memo
     // rather than paying for the analysis twice. Its own memo is empty, so nothing
     // but the ledger can be answering.
-    let second_reader = keystone_carrier(&base, &contribution, &ledger);
+    let second_reader = keystone_carrier(&base, &contribution, &ledger, &mut canonical);
     assert_eq!(second_reader.digest_work().graph_cache_hits, 0);
     let hits_before = ledger.snapshot().memo_hits;
     assert_eq!(
         second_reader
-            .graph_digest(KEY_G1)
+            .graph_digest(KEY_G1, &mut canonical)
             .expect("<g1> on the second reader"),
         g1
     );
@@ -1461,7 +1474,7 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     // ---- The reference: the SAME carriers, materialized, ingested flat -------
     // A second, identically-constructed pair — so the measured carriers' own work
     // counters stay untouched by the freeze this reference path deliberately pays.
-    let reference_main = keystone_carrier(&base, &contribution, &ledger);
+    let reference_main = keystone_carrier(&base, &contribution, &ledger, &mut canonical);
     let reference_delta = keystone_delta_carrier(&delta, &ledger);
     let flat_main = reference_main.materialize().expect("the reference freezes");
     let flat_delta = reference_delta

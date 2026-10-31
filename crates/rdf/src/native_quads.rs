@@ -263,8 +263,11 @@ pub fn flat_dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, Rdf
 ///
 /// # Errors
 /// Returns the original canonicalization refusal. No partial document is returned.
-pub fn canonical_flat_nquads(dataset: &RdfDataset) -> Result<String, crate::CanonError> {
-    canonical_flat_nquads_with(dataset, crate::CanonHash::Sha256)
+pub fn canonical_flat_nquads(
+    dataset: &RdfDataset,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<crate::Canonicalized, crate::CanonError> {
+    canonical_flat_nquads_with(dataset, crate::CanonHash::Sha256, control)
 }
 
 /// [`canonical_flat_nquads`] with an explicit RDFC-1.0 hash algorithm
@@ -280,9 +283,10 @@ pub fn canonical_flat_nquads(dataset: &RdfDataset) -> Result<String, crate::Cano
 pub fn canonical_flat_nquads_with(
     dataset: &RdfDataset,
     hash: crate::CanonHash,
-) -> Result<String, crate::CanonError> {
-    match purrdf_core::try_canonicalize_flat_view(dataset, hash) {
-        Ok(canonicalized) => Ok(canonicalized.nquads),
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<crate::Canonicalized, crate::CanonError> {
+    match purrdf_core::try_canonicalize_flat_view(dataset, hash, control) {
+        Ok(canonicalized) => Ok(canonicalized),
         Err(purrdf_core::ViewCanonError::Refused(err)) => Err(err),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
             // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — the
@@ -414,7 +418,15 @@ ex:g {
 }
 "#;
         let ir = crate::parse_dataset(TRIG.as_bytes(), "application/trig", None).expect("parse");
-        let canon = canonical_flat_nquads(&ir).expect("native flat canon");
+        let canon_owner = canonical_flat_nquads(
+            &ir,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("native flat canon");
+        let canon = canon_owner.nquads();
 
         // (a) The statement layer is FLATTENED to plain triples: the `rdf:reifies`
         // binding and the annotation re-appear as ordinary N-Quads lines, and the
@@ -447,7 +459,15 @@ ex:g {
 "#;
         let ir_iso =
             crate::parse_dataset(TRIG_ISO.as_bytes(), "application/trig", None).expect("parse iso");
-        let canon_iso = canonical_flat_nquads(&ir_iso).expect("native flat canon iso");
+        let canon_iso_owner = canonical_flat_nquads(
+            &ir_iso,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("native flat canon iso");
+        let canon_iso = canon_iso_owner.nquads();
         assert_eq!(
             canon, canon_iso,
             "isomorphic datasets must canonicalize to identical flat N-Quads"
@@ -569,8 +589,24 @@ ex:g {
         let via_sources =
             flat_dataset_from_quad_sources(&[&quads]).expect("one-element sources freeze");
 
-        let canon_single = canonical_flat_nquads(&via_single).expect("canon single");
-        let canon_sources = canonical_flat_nquads(&via_sources).expect("canon sources");
+        let canon_single_owner = canonical_flat_nquads(
+            &via_single,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("canon single");
+        let canon_single = canon_single_owner.nquads();
+        let canon_sources_owner = canonical_flat_nquads(
+            &via_sources,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("canon sources");
+        let canon_sources = canon_sources_owner.nquads();
         assert_eq!(
             canon_single, canon_sources,
             "the 1-element delegate must not change the single-source canonical bytes"
@@ -591,8 +627,24 @@ ex:g {
     #[test]
     fn canonical_flat_nquads_with_returns_the_original_refusal() {
         let ds = reserved_vocabulary_dataset();
-        let flat = canonical_flat_nquads_with(&ds, crate::CanonHash::Sha256).unwrap_err();
-        let overlay = crate::try_canonicalize_with(&ds, crate::CanonHash::Sha256).unwrap_err();
+        let flat = canonical_flat_nquads_with(
+            &ds,
+            crate::CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
+        let overlay = crate::try_canonicalize_with(
+            &ds,
+            crate::CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
         assert!(matches!(&flat, crate::CanonError::ReservedVocabulary(_)));
         assert_eq!(flat, overlay);
     }
@@ -602,7 +654,14 @@ ex:g {
     #[test]
     fn try_canonicalize_flat_view_refuses_reserved_vocabulary_as_a_value() {
         let ds = reserved_vocabulary_dataset();
-        match purrdf_core::try_canonicalize_flat_view(&*ds, crate::CanonHash::Sha256) {
+        match purrdf_core::try_canonicalize_flat_view(
+            &*ds,
+            crate::CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(purrdf_core::ViewCanonError::Refused(
                 purrdf_core::CanonError::ReservedVocabulary(_),
             )) => {}
@@ -622,12 +681,19 @@ ex:g {
             RdfTerm::iri("https://e/o"),
         )];
         let ds = dataset_from_quads(&quads).expect("freeze");
-        let canonicalized = purrdf_core::try_canonicalize_flat_view(&*ds, crate::CanonHash::Sha256)
-            .expect("an ordinary dataset must canonicalize, not refuse");
+        let canonicalized = purrdf_core::try_canonicalize_flat_view(
+            &*ds,
+            crate::CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("an ordinary dataset must canonicalize, not refuse");
         assert!(
-            canonicalized.nquads.contains("https://e/p"),
+            canonicalized.nquads().contains("https://e/p"),
             "the canonical document must carry the asserted triple:\n{}",
-            canonicalized.nquads
+            canonicalized.nquads()
         );
     }
 }

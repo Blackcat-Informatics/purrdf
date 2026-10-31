@@ -88,6 +88,7 @@
 //! it without parsing the RDF or JSON artifact stdout must stay.
 
 mod argv_documents;
+mod canonical;
 mod cli;
 mod consistency;
 mod convert;
@@ -182,6 +183,31 @@ const fn cli_materialize_limits(
 }
 
 fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
+    let mut canonical = canonical::Request::new(
+        cli.canonical_search.as_deref(),
+        cli.canonicalization_receipts.as_deref(),
+    )?;
+    if cli.canonical_search.is_some()
+        && matches!(
+            &cli.cmd,
+            Command::GlobRdf(_)
+                | Command::Glob { .. }
+                | Command::GlobSet { .. }
+                | Command::Geo { .. }
+                | Command::Lift { .. }
+        )
+    {
+        return Err(CliError::Usage("the selected command performs no canonicalization; remove --canonical-search and --canonicalization-receipts".to_owned()));
+    }
+    canonical.protect(&cli.canonical_paths())?;
+    let result = dispatch_with_request(cli, &mut canonical);
+    canonical.finish(result)
+}
+
+fn dispatch_with_request(
+    cli: &Cli,
+    canonical: &mut canonical::Request,
+) -> Result<CliOutcome, CliError> {
     if cli.geo_profile.is_some()
         && !matches!(
             &cli.cmd,
@@ -310,7 +336,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_join_steps,
             max_term_arena_bytes,
             imports,
-            canonical,
+            canonical: canonical_output,
             input,
             output,
         } => convert::run(
@@ -328,13 +354,14 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     *max_term_arena_bytes,
                 ),
                 imports,
-                canonical: *canonical,
+                canonical: *canonical_output,
                 jsonld_options: jsonld_options.as_ref(),
             },
             input,
             output,
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Query {
@@ -354,6 +381,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
             no_ceiling,
             explain,
             aggregate_namespace,
@@ -386,6 +415,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    max_udf_depth: *max_udf_depth,
+                    unlimited_udf_depth: *unlimited_udf_depth,
                     no_ceiling: *no_ceiling,
                 },
                 explain: *explain,
@@ -402,6 +433,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         ),
         Command::Update {
             now,
@@ -416,6 +448,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
             no_ceiling,
             aggregate_namespace,
             path_relation,
@@ -442,6 +476,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    max_udf_depth: *max_udf_depth,
+                    unlimited_udf_depth: *unlimited_udf_depth,
                     no_ceiling: *no_ceiling,
                 },
                 jsonld_options: jsonld_options.as_ref(),
@@ -451,6 +487,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 division: division.unwrap_or_default(),
             },
             &ledger_target,
+            canonical,
         ),
         Command::Reason {
             regime,
@@ -478,6 +515,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             jsonld_options.as_ref(),
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Entails {
@@ -514,6 +552,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Consistency {
@@ -538,6 +577,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             },
             &ledger_target,
             jsonld_options.as_ref(),
+            canonical,
         ),
         Command::Validate {
             shapes,
@@ -562,6 +602,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
             no_ceiling,
             xpath_regex,
             shacl_profile,
@@ -599,12 +641,15 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    max_udf_depth: *max_udf_depth,
+                    unlimited_udf_depth: *unlimited_udf_depth,
                     no_ceiling: *no_ceiling,
                 },
                 xpath_regex: *xpath_regex,
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         ),
         Command::Shex {
             schema,
@@ -630,6 +675,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Describe {
@@ -650,6 +696,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Project {
@@ -670,6 +717,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Lift {
@@ -688,10 +736,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Pack { command } => match command {
-            PackCommand::Verify { input } => pack::verify(input),
+            PackCommand::Verify { input } => pack::verify(input, canonical),
         }
         .map(|()| CliOutcome::Complete),
         Command::Shacl { command } => match command {
@@ -714,10 +763,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 shapes_graph.as_deref(),
                 box_role_vocab.as_deref(),
                 out,
+                canonical,
             ),
-            ShaclCommand::Verify { input } => shacl::verify(input),
-            ShaclCommand::Explain { input } => shacl::explain(input),
-            ShaclCommand::Diff { a, b } => shacl::diff(a, b),
+            ShaclCommand::Verify { input } => shacl::verify(input, canonical),
+            ShaclCommand::Explain { input } => shacl::explain(input, canonical),
+            ShaclCommand::Diff { a, b } => shacl::diff(a, b, canonical),
         }
         .map(|()| CliOutcome::Complete),
         Command::Rules {
@@ -768,6 +818,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::NodeExpr {
@@ -810,6 +861,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             },
             &ledger_target,
             jsonld_options.as_ref(),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Shapes { command } => match command {
@@ -833,6 +885,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 },
                 &ledger_target,
                 jsonld_options.as_ref(),
+                canonical,
             ),
         }
         .map(|()| CliOutcome::Complete),

@@ -236,7 +236,7 @@ pub use purrdf_core::{
     PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView,
     PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot,
     PipelineBundle, PipelineBundleError, PipelineViewBundle, ProvenanceError, QuadHandle, QuadIds,
-    QuadPatternCursor, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS,
+    QuadPatternCursor, QuadRef, QuadValues, RDFC_V2_CORPUS_POLICY, RESEARCH_OBJECT_CODECS,
     RESERVED_NAMESPACE, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
     RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral,
     RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry,
@@ -262,10 +262,10 @@ pub use purrdf_core::{
     rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger,
     rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger,
     rdf_to_skos_loss_ledger, registered_pairs, research_object_to_rdf_loss_ledger, rule_iri,
-    skolemize, smallvec, try_canonicalize, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
-    try_canonicalize_view_with_stop, try_canonicalize_with, try_flat_digest_view,
-    try_graph_digest_view,
+    skolemize, smallvec, try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_sha256_view, try_canonicalize_view, try_canonicalize_with,
+    try_flat_digest_view, try_graph_digest_view,
 };
 pub use purrdf_core::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
@@ -286,3 +286,8 @@ pub mod ustar;
 pub mod prelude {
     pub use purrdf_core::prelude::*;
 }
+
+pub use purrdf_core::{
+    CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
+    SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
+};

@@ -2479,7 +2479,11 @@ mod tests {
     #[test]
     fn only_verified_external_purrpck_mints_certified_rdf() {
         let dataset = RdfDatasetBuilder::new().freeze().unwrap();
-        let pack = PackBuilder::build_bytes(&dataset).unwrap();
+        let pack = PackBuilder::build_bytes(
+            &dataset,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
         let contract = ExternalBindingContract {
             role: "https://example.org/role/source".into(),
             media_type: "application/vnd.purrdf.pack".into(),
@@ -2492,13 +2496,20 @@ mod tests {
         assert_eq!(exact.certified_rdf_digest(), None);
         let certified = ExternalBinding::from_verified_pack(
             scope,
-            crate::verify_pack_bytes(&pack).unwrap(),
+            crate::verify_pack_bytes(
+                &pack,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap(),
             &contract,
         )
         .unwrap();
         assert!(certified.certified_rdf_digest().is_some());
         assert!(matches!(
-            crate::verify_pack_bytes(b"ordinary bytes"),
+            crate::verify_pack_bytes(
+                b"ordinary bytes",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(crate::PackError::Truncated)
         ));
     }

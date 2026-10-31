@@ -124,6 +124,8 @@ enum ErrorText {
 #[derive(Debug, Clone)]
 pub(crate) struct JobError {
     execution_receipt: Option<Box<str>>,
+    canonicalization_json: Option<Box<str>>,
+    native_canonical_cause: Option<Box<purrdf_core::CanonError>>,
     kind: JobErrorKind,
     diagnostic: Box<RdfDiagnostic>,
     text: ErrorText,
@@ -137,6 +139,8 @@ impl JobError {
     pub(crate) fn diagnostic(diagnostic: RdfDiagnostic) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
             kind: JobErrorKind::Error,
             presentation: diagnostic.presentation().cloned().map(Box::new),
             diagnostic: Box::new(diagnostic),
@@ -148,6 +152,8 @@ impl JobError {
     pub(crate) fn message(code: &str, message: impl Into<String>) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
             kind: JobErrorKind::Error,
             diagnostic: Box::new(RdfDiagnostic::error(code, message)),
             text: ErrorText::Message,
@@ -159,6 +165,8 @@ impl JobError {
     pub(crate) fn not_acceptable(message: String) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
             kind: JobErrorKind::NotAcceptable,
             diagnostic: Box::new(RdfDiagnostic::error(
                 FailureCode::NotAcceptable.code(),
@@ -173,6 +181,8 @@ impl JobError {
     pub(crate) fn fault(message: impl Into<String>) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
             kind: JobErrorKind::Fault,
             diagnostic: Box::new(RdfDiagnostic::error(FailureCode::HostFault.code(), message)),
             text: ErrorText::Message,
@@ -206,6 +216,8 @@ impl JobError {
         };
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
             kind,
             diagnostic: Box::new(RdfDiagnostic::error(failure.code(), message)),
             text: ErrorText::Message,
@@ -224,6 +236,51 @@ impl JobError {
             },
             _ => Self::message(ENTAILMENT_CODE, error.to_string()),
         }
+    }
+
+    pub(crate) fn with_canonicalization(
+        mut self,
+        receipts: String,
+        cause: Option<purrdf_core::CanonError>,
+    ) -> Self {
+        self.canonicalization_json = Some(receipts.into_boxed_str());
+        self.native_canonical_cause = cause.map(Box::new);
+        self
+    }
+
+    pub(crate) fn canonicalization_json(&self) -> Option<String> {
+        self.canonicalization_json.as_deref().map(str::to_owned)
+    }
+
+    pub(crate) fn native_cause(&self) -> Option<crate::canonical::CanonicalCause> {
+        self.native_canonical_cause
+            .as_deref()
+            .cloned()
+            .map(Into::into)
+    }
+
+    pub(crate) fn native_cause_json(&self) -> Result<Option<String>, JsError> {
+        self.native_canonical_cause
+            .as_deref()
+            .map(|cause| {
+                purrdf_validate::native_error::to_json(cause)
+                    .map(|value| value.to_string())
+                    .map_err(|error| JsError::new(&error.to_string()))
+            })
+            .transpose()
+    }
+
+    /// Stop precedence preserves the completed request's owned canonical evidence.
+    pub(crate) fn stopped_preserving(tripped: TrippedGovernor, original: Self) -> Self {
+        Self::stopped(tripped).preserving_canonicalization(original)
+    }
+
+    /// Changing failure precedence does not release the original native owner.
+    pub(crate) fn preserving_canonicalization(mut self, original: Self) -> Self {
+        self.canonicalization_json = original.canonicalization_json;
+        self.native_canonical_cause = original.native_canonical_cause;
+        self.execution_receipt = original.execution_receipt;
+        self
     }
 
     pub(crate) const fn kind(&self) -> JobErrorKind {
@@ -312,7 +369,15 @@ impl JobError {
         {
             error.set_presentation(&presentation);
         }
-        error.into()
+        let error = error.into();
+        match self.canonicalization_json.as_deref() {
+            Some(receipts) => crate::canonical::attach_evidence(
+                error,
+                receipts,
+                self.native_canonical_cause.as_deref(),
+            ),
+            None => error,
+        }
     }
 }
 
@@ -527,7 +592,7 @@ impl JobRun<'_> {
         coordinates: &'o purrdf_validate::query::CoordinateInputs,
     ) -> QueryOptions<'o, 'o> {
         coordinates.apply(crate::xpath_regex::select(
-            self.options_under(env, division).with_geo(geo),
+            &self.options_under(env, division).with_geo(geo),
             xpath_regex,
         ))
     }
@@ -680,8 +745,8 @@ fn ungoverned_query(
         // the plan, then its evaluation with no governor state.
         let result = run
             .evaluate(|| {
-                let prepared = engine.prepare_query_with_options(sparql, base, options)?;
-                engine.query_prepared(frozen, &prepared, &[], options)
+                let prepared = engine.prepare_query_with_options(sparql, base, &options)?;
+                engine.query_prepared(frozen, &prepared, &[], &options)
             })
             .map_err(JobError::diagnostic);
         let receipt = capture
@@ -696,7 +761,7 @@ fn ungoverned_query(
             });
     };
     let outcome = run.evaluate(|| {
-        engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
+        engine.query_governed(frozen, sparql_request(sparql, base), &options, &governors)
     });
     if let Ok(outcome) = &outcome {
         run.record_evidence(outcome.evidence());
@@ -822,7 +887,7 @@ impl OperationInput<'_> {
                             engine.query_governed(
                                 &frozen,
                                 request,
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -849,7 +914,7 @@ impl OperationInput<'_> {
                             engine.query_governed(
                                 &frozen,
                                 request,
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -927,7 +992,7 @@ impl OperationInput<'_> {
                                 request,
                                 &EntailmentClosure::new(plan.entailment(), &imports)
                                     .with_limits(limits.eval_options()),
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -979,11 +1044,11 @@ impl OperationInput<'_> {
                                 &frozen,
                                 &sparql,
                                 base,
-                                options,
+                                &options,
                                 Arc::clone(stop),
                             ),
                             None => {
-                                engine.explain_query_with_options(&frozen, &sparql, base, options)
+                                engine.explain_query_with_options(&frozen, &sparql, base, &options)
                             }
                         })
                         .map_err(JobError::diagnostic)?;
@@ -1019,11 +1084,11 @@ impl OperationInput<'_> {
                         .with_coordinate_observer(&capture);
                     let result = match run.ungoverned_watch() {
                         None => run
-                            .evaluate(|| engine.update_with_options(&mut target, request, options))
+                            .evaluate(|| engine.update_with_options(&mut target, request, &options))
                             .map_err(JobError::diagnostic),
                         Some(governors) => run
                             .evaluate(|| {
-                                engine.update_governed(&mut target, request, options, &governors)
+                                engine.update_governed(&mut target, request, &options, &governors)
                             })
                             .map_err(JobError::diagnostic)
                             .and_then(|outcome| {
@@ -1063,7 +1128,7 @@ impl OperationInput<'_> {
                             engine.update_governed(
                                 &mut target,
                                 request,
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -1337,7 +1402,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 ),
                 Ok(SparqlResult::Boolean(true))
             )

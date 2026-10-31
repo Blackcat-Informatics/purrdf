@@ -4,11 +4,10 @@
 //! Cryptographic, numerical, source-pack, and external-binding verification.
 
 use core::fmt;
-use std::collections::BTreeMap;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::{ContentDigest, RdfDataset, TermId, TermValue};
+use crate::{Canonicalized, ContentDigest, RdfDataset, TermValue};
 
 use crate::distance::{Arithmetic as _, Exact};
 
@@ -482,7 +481,7 @@ pub fn verify_embedding_dataset_target(view: &EmbeddingView<'_>) -> Result<(), E
 pub fn term_value_target_id(
     value: &TermValue,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     value.try_fold(
@@ -493,8 +492,8 @@ pub fn term_value_target_id(
                     let id = dataset
                         .term_id_by_value(leaf)
                         .ok_or(EmbeddingError::MissingReference("reconstructed blank term"))?;
-                    let label = labels
-                        .get(&id)
+                    let label = canonical
+                        .label(&id)
                         .ok_or(EmbeddingError::MissingReference("canonical blank label"))?;
                     RdfTermTargetRef::Blank {
                         dataset_id: dataset_target,

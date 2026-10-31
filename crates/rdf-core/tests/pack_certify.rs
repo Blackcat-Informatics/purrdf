@@ -120,15 +120,27 @@ const RDFC_DIGEST_HEADER_OFFSET: usize = 32;
 
 fn verify_pack_certifies_a_round_tripped_pack_against_the_source_digest() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
-    let certified = verify_pack(&bytes).expect("a freshly built pack must verify");
+    let certified = verify_pack(
+        &bytes,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("a freshly built pack must verify");
 
     // The certificate must bind the pack to the SOURCE dataset's own RDFC-1.0
     // identity: canonicalize the source directly and compare.
-    let source_canon =
-        try_canonicalize_with(&dataset, CanonHash::Sha256).expect("source canonicalizes");
-    let source_digest: [u8; 32] = Sha256::digest(source_canon.nquads.as_bytes()).into();
+    let source_canon = try_canonicalize_with(
+        &dataset,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source canonicalizes");
+    let source_digest: [u8; 32] = Sha256::digest(source_canon.nquads().as_bytes()).into();
 
     assert_eq!(
         certified.as_bytes(),
@@ -144,7 +156,11 @@ fn verify_pack_certifies_a_round_tripped_pack_against_the_source_digest() {
 
 fn verify_pack_rejects_a_tampered_digest_header_field() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let mut corrupted = bytes.clone();
     corrupted[RDFC_DIGEST_HEADER_OFFSET] ^= 0xFF;
@@ -157,7 +173,11 @@ fn verify_pack_rejects_a_tampered_digest_header_field() {
     );
 
     // The independent recompute must catch it.
-    let err = verify_pack(&corrupted).expect_err("a tampered digest header must fail verify_pack");
+    let err = verify_pack(
+        &corrupted,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("a tampered digest header must fail verify_pack");
     match err {
         PackError::RdfcDigestMismatch { expected, computed } => {
             assert_ne!(expected, computed, "mismatch must report differing digests");
@@ -177,12 +197,25 @@ fn verify_pack_rejects_a_tampered_digest_header_field() {
     }
 
     // A correctly-built pack does not trip this path.
-    assert!(verify_pack(&bytes).is_ok());
+    assert!(
+        verify_pack(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
+    );
 }
 
 fn verify_pack_defers_to_section_integrity_for_body_corruption() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     // Flip a byte strictly inside a section body (well past the fixed
     // header + directory, so it lands inside SOME section's bytes).
@@ -190,8 +223,11 @@ fn verify_pack_defers_to_section_integrity_for_body_corruption() {
     let mut corrupted = bytes;
     corrupted[flip_at] ^= 0xFF;
 
-    let err =
-        verify_pack(&corrupted).expect_err("a flipped section byte must be caught by from_bytes");
+    let err = verify_pack(
+        &corrupted,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("a flipped section byte must be caught by from_bytes");
     assert!(
         matches!(err, PackError::SectionDigestMismatch { .. }),
         "expected SectionDigestMismatch (from_bytes's defense), got {err:?}"
@@ -200,11 +236,27 @@ fn verify_pack_defers_to_section_integrity_for_body_corruption() {
 
 fn verify_pack_is_deterministic_across_two_builds() {
     let dataset = rich_fixture();
-    let bytes_a = PackBuilder::build_bytes(&dataset).expect("builds");
-    let bytes_b = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes_a = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
+    let bytes_b = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
-    let digest_a = verify_pack(&bytes_a).expect("verifies");
-    let digest_b = verify_pack(&bytes_b).expect("verifies");
+    let digest_a = verify_pack(
+        &bytes_a,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verifies");
+    let digest_b = verify_pack(
+        &bytes_b,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verifies");
 
     assert_eq!(
         digest_a, digest_b,
@@ -259,7 +311,11 @@ const SIDE_ENTRY_INDEX: usize = 2;
 /// path a caller handed adversarial bytes would.
 fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     // -- Locate the SIDE section's directory entry (index 2 of 3) -----------
     let side_entry_start = HEADER_LEN + SIDE_ENTRY_INDEX * DIR_ENTRY_LEN;
@@ -324,7 +380,11 @@ fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     );
 
     // `verify_pack` must fail CLOSED, not panic, once reconstruction hits it.
-    let err = verify_pack(&corrupted).expect_err(
+    let err = verify_pack(
+        &corrupted,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err(
         "a reifier bound to a non-triple target must fail freeze's structural \
          validation inside verify_pack, not panic",
     );
@@ -348,17 +408,44 @@ fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     );
     let restored = purrdf_core::restore_pack(&corrupted).unwrap_err();
     assert_eq!(restored, err);
-    assert_eq!(purrdf_core::verify_pack_bytes(&corrupted).unwrap_err(), err);
+    assert_eq!(
+        purrdf_core::verify_pack_bytes(
+            &corrupted,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap_err(),
+        err
+    );
 
     // The untampered pack still verifies fine — the patch, not the fixture
     // itself, is what breaks reconstruction.
-    assert!(verify_pack(&bytes).is_ok());
+    assert!(
+        verify_pack(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
+    );
 }
 
 fn pack_digest_to_hex_is_64_lowercase_hex_chars() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
-    let digest = verify_pack(&bytes).expect("verifies");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
+    let digest = verify_pack(
+        &bytes,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verifies");
 
     let hex = digest.to_hex();
     assert_eq!(hex.len(), 64, "a SHA-256 digest hex-encodes to 64 chars");

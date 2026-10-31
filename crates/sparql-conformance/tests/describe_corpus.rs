@@ -30,13 +30,16 @@ fn manifest() -> PathBuf {
 /// Every case in the corpus must pass — no xfail ledger (see `construct_corpus.rs`).
 #[test]
 fn describe_corpus_is_green() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let manifest = manifest();
     assert!(manifest.is_file(), "corpus manifest missing: {manifest:?}");
 
     let total = purrdf_sparql_conformance::manifest::load(&manifest)
         .unwrap_or_else(|e| panic!("load the DESCRIBE corpus manifest: {e}"))
         .len();
-    let summary = purrdf_sparql_conformance::run_manifest(&manifest)
+    let summary = purrdf_sparql_conformance::run_manifest(&manifest, &mut control)
         .unwrap_or_else(|e| panic!("run the DESCRIBE corpus: {e}"));
 
     println!("DESCRIBE-CORPUS: passed {} total {total}", summary.passed);

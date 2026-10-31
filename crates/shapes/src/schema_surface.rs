@@ -5132,12 +5132,18 @@ mod tests {
             None,
         )
         .expect("ontology Turtle");
-        let compiled = crate::json_schema::compile_schema(&SchemaCompileRequest::new(
-            &shapes,
-            &namespaces(),
-            ontology.as_ref(),
-            SchemaSurfaceMode::OntologyComplete,
-        ))
+        let compiled = crate::json_schema::compile_schema(
+            &SchemaCompileRequest::new(
+                &shapes,
+                &namespaces(),
+                ontology.as_ref(),
+                SchemaSurfaceMode::OntologyComplete,
+            ),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("compiles");
         let data = crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{data}"), None)
             .expect("data Turtle");

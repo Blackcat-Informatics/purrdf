@@ -137,7 +137,7 @@ decoding. Successful updates retain the existing literal reconciliation.
 
 ## Governors and incomplete answers
 
-`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, `max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, `no_ceiling` and `cancel` to the query options. Ceilings are inclusive. Omitted ceilings retain metering. `no_ceiling=True` declines accounting and resource caps, retains deadline/cancellation, and conflicts with explicitly supplied caps.
+`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, `max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, `max_udf_depth`, `unlimited_udf_depth`, `no_ceiling` and `cancel` to the query options. Ceilings are inclusive. Omitted ceilings retain metering and the default UDF depth limit of 32. Set `max_udf_depth` to a finite logical invocation limit, or `unlimited_udf_depth=True` to remove it; supplying both is a typed conflict. `no_ceiling=True` declines accounting and resource caps, including UDF depth, retains deadline/cancellation, and conflicts with explicitly supplied finite caps.
 
 ```python
 stopped = store.query_governed("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", fuel=0)
@@ -307,12 +307,20 @@ namespace fallback. `project_statements_rdf12` and `normalize_rdf12_to_owl`
 provide the statement-codec conversions; `canonicalize_turtle` returns canonical
 bytes with optional extra prefix mappings.
 
-`Dataset.canonicalize` relabels blank nodes in place under
-`CanonicalizationAlgorithm.RDFC_1_0` or `UNSTABLE`. `RdfDataset.to_nquads()`
-uses the shipped flat canonicalization profile: it agrees with RDFC-1.0 on
-the RDF 1.1 subset, while the RDF 1.2 profile has its own reserved-vocabulary,
-statement-layer and refusal contract. Do not label an RDF 1.2 digest as RDFC-1.0.
-Canonicalization refusal raises `ValueError`. Read the
+`Dataset.canonicalize(canonical_search="unlimited")` relabels blank nodes in
+place and returns a `CanonicalResult` whose `value` is `None`. Refusal leaves the
+dataset unchanged. `RdfDataset.to_nquads(canonical_search="unlimited")` returns
+canonical N-Quads in its result's `value`, using the flat assertion presentation.
+It agrees with RDFC-1.0 on the RDF 1.1 subset; the RDF 1.2 profile has its own
+reserved-vocabulary, statement-layer and refusal contract. Do not label an RDF
+1.2 digest as RDFC-1.0.
+
+Both calls require an explicit `canonical_search`: `"unlimited"` or a canonical
+unsigned decimal `u64` string for a finite per-run limit. Both accept an optional
+`cancel` token. Each result carries immutable `canonicalization_json` receipt
+text. Canonicalization refusal raises `ValueError` with the finalized receipts;
+when a native canonical cause exists, `native_cause` and `native_cause_json`
+preserve its metadata. Read the
 [canonicalization chapter](../concepts/canonicalization.md) before using bytes
 as identities.
 
@@ -540,7 +548,7 @@ traversal is refused with `reasoning-closure-relation-witness`. See
 `purrdf.geo.GeoProfile` owns an immutable strict geographic profile; `to_json`
 returns its canonical version-one record with explicit limits. `GeoSession`
 accepts that profile, another session, profile JSON or `None`; omission selects
-the standard CRS84 profile. `profile()` returns the selected profile. Query,
+the standard `CRS84` profile. `profile()` returns the selected profile. Query,
 update and prepared methods accept these same choices through `geo`.
 
 `GeoSession.call` evaluates a strict scalar/batch JSON request; `point_index`

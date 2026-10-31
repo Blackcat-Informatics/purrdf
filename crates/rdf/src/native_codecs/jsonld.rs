@@ -2418,6 +2418,16 @@ mod list_depth {
                 .expect("the nested lists serialize");
         assert_eq!(document.matches("@list").count(), 3);
         let parsed = parse_jsonld(document.as_bytes(), None).expect("the document parses back");
-        assert!(crate::datasets_isomorphic(&*parsed, &*dataset).unwrap());
+        assert!(
+            crate::datasets_isomorphic(
+                &*parsed,
+                &*dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
     }
 }

@@ -42,9 +42,14 @@ pub(crate) fn carrier_pages(dataset: &PagedDataset) -> Vec<Vec<u8>> {
     let mut ordered = Vec::new();
     for ordinal in 0..dataset.page_count() {
         let selected = dataset.with_pages(&[PageId(ordinal)]);
-        let bytes =
-            PackBuilder::build_view_bytes(&selected.query_view(PagedQueryLimits::UNBOUNDED))
-                .expect("complete canonical page carrier");
+        let bytes = PackBuilder::build_view_bytes(
+            &selected.query_view(PagedQueryLimits::UNBOUNDED),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("complete canonical page carrier");
         ordered.push(bytes);
     }
     ordered

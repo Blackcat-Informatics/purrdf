@@ -365,6 +365,10 @@ fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
 /// inferred RDFS type appears just as it does from a text source.
 #[test]
 fn pack_input_is_reconstructed_and_reasoned() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -380,7 +384,21 @@ fn pack_input_is_reconstructed_and_reasoned() {
 
     // Build a pack from the RDFS fixture, then reason over the pack.
     let pack = path(dir, "sub.purrpck");
-    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "building the pack failed: {}",
@@ -388,7 +406,19 @@ fn pack_input_is_reconstructed_and_reasoned() {
     );
 
     let out = path(dir, "out.nt");
-    let o = run(&["reason", "--regime", "rdfs", &pack, &out]);
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        &pack,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "reason over a pack failed: {}",
@@ -415,6 +445,12 @@ fn pack_input_is_reconstructed_and_reasoned() {
 /// there, and refusing it would reject a flag doing real work.
 #[test]
 fn base_with_pack_from_or_to_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+    let canonical_receipt_4 = canonical_receipt_dir.path().join("request-4.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -423,7 +459,21 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "@prefix ex: <http://example.org/> .\nex:s a ex:Dog .\n",
     );
     let pack = path(dir, "sub.purrpck");
-    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "building the pack failed: {}",
@@ -443,6 +493,12 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "http://example.org/base/",
         &pack,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -474,6 +530,12 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "http://example.org/base/",
         &nt,
         &out_pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -498,6 +560,12 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "http://example.org/base/",
         &ttl,
         &out_pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_4
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -647,6 +715,10 @@ fn base_resolves_relative_iris_before_reasoning() {
 /// carry the inferred triple (re-converting the pack back to text shows the inference).
 #[test]
 fn pack_output_is_a_valid_pack_carrying_the_inference() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
@@ -662,7 +734,19 @@ fn pack_output_is_a_valid_pack_carrying_the_inference() {
 
     // Reason directly INTO a pack.
     let pack = path(dir, "closure.purrpck");
-    let o = run(&["reason", "--regime", "rdfs", &seed, &pack]);
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        &seed,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "reason to a pack failed: {}",
@@ -672,7 +756,19 @@ fn pack_output_is_a_valid_pack_carrying_the_inference() {
     // Re-convert the pack to N-Triples: a valid pack whose contents carry the inference.
     let back = path(dir, "back.nt");
     let o = run(&[
-        "convert", "--from", "pack", "--to", "ntriples", &pack, &back,
+        "convert",
+        "--from",
+        "pack",
+        "--to",
+        "ntriples",
+        &pack,
+        &back,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),

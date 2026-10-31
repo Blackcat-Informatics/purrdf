@@ -1329,6 +1329,12 @@ pub struct PyCancellationToken {
     flag: CancellationFlag,
 }
 
+impl purrdf_core::StopSignal for PyCancellationToken {
+    fn stopped(&self) -> bool {
+        self.flag.is_cancelled()
+    }
+}
+
 #[pymethods]
 impl PyCancellationToken {
     /// `CancellationToken()` — a fresh, uncancelled token. A written-out function
@@ -1529,6 +1535,10 @@ pub(super) struct GovernorArgs {
     pub(super) max_scratch_bytes: Option<u64>,
     /// Requests issued to remote or federated endpoints.
     pub(super) max_remote_requests: Option<u64>,
+    /// Inclusive logical depth; omitted keeps the native default.
+    pub(super) max_udf_depth: Option<u64>,
+    /// Remove the logical depth ceiling.
+    pub(super) unlimited_udf_depth: bool,
     /// Decline resource ceilings and accounting while retaining stop signals.
     pub(super) no_ceiling: bool,
 }
@@ -1554,6 +1564,8 @@ impl GovernorArgs {
             max_intermediate_cells: self.max_intermediate_cells,
             max_scratch_bytes: self.max_scratch_bytes,
             max_remote_requests: self.max_remote_requests,
+            max_udf_depth: self.max_udf_depth,
+            unlimited_udf_depth: self.unlimited_udf_depth,
             no_ceiling: self.no_ceiling,
         };
         let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);

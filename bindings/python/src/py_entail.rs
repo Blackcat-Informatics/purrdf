@@ -35,8 +35,10 @@
 //! C-ABI and WASM hosts call, so a byte difference between the three hosts is one
 //! shared golden vector failing rather than three surfaces that quietly stopped
 //! agreeing. This module converts Python values to plain Rust data, releases the
-//! GIL, calls that boundary, and maps its `Result<_, String>` onto `ValueError`.
-//! That is its whole job.
+//! GIL and calls that boundary. Canonicalizing operations require an explicit
+//! search policy and return CanonicalResult: its value holds the answer tuple
+//! or text, and its immutable canonicalization_json records the actual searches.
+//! Native canonical causes and finalized receipts survive Python exceptions.
 //!
 //! # Why all three of [`rules`], [`implemented_rules`] and [`extensions`]
 //!
@@ -306,7 +308,7 @@ fn materialize(
 /// witness triples included, exactly as [`materialize`] documents — and on a passed
 /// evaluation limit, naming the keyword argument that raises it.
 #[pyfunction]
-#[pyo3(signature = (data, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
+#[pyo3(signature = (data, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None, canonical_search, cancel=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(
     clippy::too_many_arguments,
@@ -323,7 +325,9 @@ fn materialize_nt(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     max_term_arena_bytes: Option<u64>,
-) -> PyResult<(String, String)> {
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
     let name = regime_name(native_regime(regime)?);
     let limits = MaterializeLimits {
         max_stored_facts,
@@ -335,12 +339,18 @@ fn materialize_nt(
     // (GIL released).
     let table = import_list(&imports);
     let premise_iris = premise_iri_refs(&premise_iris)?;
-    let closure = py
-        .detach(|| {
-            materialize_to_nquads_string_with(name, data, program, &table, &premise_iris, &limits)
-        })
-        .map_err(PyValueError::new_err)?;
-    Ok(closure.into_parts())
+    let (closure, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        materialize_to_nquads_string_with(
+            name,
+            data,
+            program,
+            &table,
+            &premise_iris,
+            &limits,
+            control,
+        )
+    })?;
+    crate::py_canonical::finish(py, (closure.nquads(), closure.report()), receipts)
 }
 
 // ── The rule inventories ────────────────────────────────────────────────────────
@@ -446,8 +456,12 @@ fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 /// Raises `ValueError` on a malformed document, an import-table refusal, or a failed
 /// reverse mapping.
 #[pyfunction]
-#[pyo3(signature = (data, imports, premise_iris, step_cap = 0, work_cap = 0))]
+#[pyo3(signature = (data, imports, premise_iris, step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the host exposes canonical search and cancellation beside the existing reasoning controls"
+)]
 fn consistency(
     py: Python<'_>,
     data: &str,
@@ -455,13 +469,15 @@ fn consistency(
     premise_iris: Vec<String>,
     step_cap: u32,
     work_cap: u32,
-) -> PyResult<(String, String)> {
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
     let table = import_list(&imports);
     let premise_iris = premise_iri_refs(&premise_iris)?;
-    let answer = py
-        .detach(|| consistency_to_string(data, &table, &premise_iris, step_cap, work_cap))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        consistency_to_string(data, &table, &premise_iris, step_cap, work_cap, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// The entailed subsumption hierarchy over the ontology's named classes.
@@ -480,17 +496,19 @@ fn consistency(
 /// every class then subsumes every other and the hierarchy would carry no
 /// information.
 #[pyfunction]
-#[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
+#[pyo3(signature = (data, step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
 fn classify(
     py: Python<'_>,
     data: &str,
     step_cap: u32,
     work_cap: u32,
-) -> PyResult<(String, String)> {
-    let answer = py
-        .detach(|| classify_to_string(data, step_cap, work_cap))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        classify_to_string(data, step_cap, work_cap, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// The entailed types of the ontology's named individuals, and the most specific of
@@ -502,12 +520,19 @@ fn classify(
 /// Raises `ValueError` on a malformed document, an ontology with no model, or
 /// incomplete directness. The latter retains the original certificate in the message.
 #[pyfunction]
-#[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
-fn realize(py: Python<'_>, data: &str, step_cap: u32, work_cap: u32) -> PyResult<(String, String)> {
-    let answer = py
-        .detach(|| realize_to_string(data, step_cap, work_cap))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+#[pyo3(signature = (data, step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
+fn realize(
+    py: Python<'_>,
+    data: &str,
+    step_cap: u32,
+    work_cap: u32,
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        realize_to_string(data, step_cap, work_cap, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// The named individuals entailed to be instances of `class_`.
@@ -521,18 +546,20 @@ fn realize(py: Python<'_>, data: &str, step_cap: u32, work_cap: u32) -> PyResult
 /// Raises `ValueError` on a malformed document, a `class_` that is not one
 /// N-Triples term, or an ontology with no model.
 #[pyfunction]
-#[pyo3(signature = (data, class_, step_cap = 0, work_cap = 0))]
+#[pyo3(signature = (data, class_, step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
 fn instances(
     py: Python<'_>,
     data: &str,
     class_: &str,
     step_cap: u32,
     work_cap: u32,
-) -> PyResult<(String, String)> {
-    let answer = py
-        .detach(|| instances_to_string(data, class_, step_cap, work_cap))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        instances_to_string(data, class_, step_cap, work_cap, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// Does the ontology entail `axiom`?
@@ -551,18 +578,20 @@ fn instances(
 /// Raises `ValueError` on a malformed document, an `axiom` that is not one triple,
 /// an axiom statement that names a graph, or an ontology with no model.
 #[pyfunction]
-#[pyo3(signature = (data, axiom, step_cap = 0, work_cap = 0))]
+#[pyo3(signature = (data, axiom, step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
 fn entails(
     py: Python<'_>,
     data: &str,
     axiom: &str,
     step_cap: u32,
     work_cap: u32,
-) -> PyResult<(String, String)> {
-    let answer = py
-        .detach(|| entails_to_string(data, axiom, step_cap, work_cap))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        entails_to_string(data, axiom, step_cap, work_cap, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// Which OWL 2 profiles the ontology is provably in, and what blocked the others.
@@ -603,17 +632,19 @@ fn profile(py: Python<'_>, data: &str) -> PyResult<(String, String)> {
 /// N-Triples term, an unknown `method` spelling (naming the accepted set), or a
 /// module that cannot be frozen.
 #[pyfunction]
-#[pyo3(signature = (data, signature, method))]
+#[pyo3(signature = (data, signature, method , *, canonical_search, cancel=None))]
 fn extract_module(
     py: Python<'_>,
     data: &str,
     signature: &str,
     method: &str,
-) -> PyResult<(String, String)> {
-    let answer = py
-        .detach(|| extract_module_to_string(data, signature, method))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        extract_module_to_string(data, signature, method, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// WHY a Description-Logic axiom is entailed: a minimal subset of the ontology that
@@ -637,12 +668,18 @@ fn extract_module(
 /// reads as "nothing is needed" and means the opposite — or if the tableau could not
 /// decide it, leaving no answer to shrink against.
 #[pyfunction]
-#[pyo3(signature = (data, axiom))]
-fn justify(py: Python<'_>, data: &str, axiom: &str) -> PyResult<(String, String)> {
-    let answer = py
-        .detach(|| justify_to_string(data, axiom))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_parts())
+#[pyo3(signature = (data, axiom , *, canonical_search, cancel=None))]
+fn justify(
+    py: Python<'_>,
+    data: &str,
+    axiom: &str,
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        justify_to_string(data, axiom, control)
+    })?;
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// WHY one triple of a chase closure holds: which rules, from which premises.
@@ -1008,7 +1045,11 @@ fn verify_entailment(
 /// Raises `ValueError` on a malformed document, an unknown service, an argument wrong for the
 /// service, or whatever that service itself refuses.
 #[pyfunction]
-#[pyo3(signature = (data, service, argument = "", step_cap = 0, work_cap = 0))]
+#[pyo3(signature = (data, service, argument = "", step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the host exposes canonical search and cancellation beside the existing proof controls"
+)]
 fn prove(
     py: Python<'_>,
     data: &str,
@@ -1016,11 +1057,21 @@ fn prove(
     argument: &str,
     step_cap: u32,
     work_cap: u32,
-) -> PyResult<(String, String, String)> {
-    let answer = py
-        .detach(|| prove_to_string(data, service, argument, step_cap, work_cap))
-        .map_err(PyValueError::new_err)?;
-    Ok(answer.into_proved_parts())
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        prove_to_string(data, service, argument, step_cap, work_cap, control)
+    })?;
+    crate::py_canonical::finish(
+        py,
+        (
+            answer.answer(),
+            answer.certificate(),
+            answer.proof_document(),
+        ),
+        receipts,
+    )
 }
 
 /// CHECK a proof against the CALLER's own ontology, question and answer.
@@ -1047,7 +1098,11 @@ fn prove(
 /// nobody asked to record is never presented as a verified one — and for every other
 /// rejection.
 #[pyfunction]
-#[pyo3(signature = (data, service, argument, answer, certificate, proof))]
+#[pyo3(signature = (data, service, argument, answer, certificate, proof , *, canonical_search, cancel=None))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the host exposes canonical search and cancellation beside the original proof operands"
+)]
 fn check_proof(
     py: Python<'_>,
     data: &str,
@@ -1056,9 +1111,13 @@ fn check_proof(
     answer: &str,
     certificate: &str,
     proof: &str,
-) -> PyResult<String> {
-    py.detach(|| check_dl_proof(data, service, argument, answer, certificate, proof))
-        .map_err(PyValueError::new_err)
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+        check_dl_proof(data, service, argument, answer, certificate, proof, control)
+    })?;
+    crate::py_canonical::finish(py, answer, receipts)
 }
 
 /// The seven Description-Logic services a proof term can be about, in the spellings `prove`
@@ -1149,59 +1208,105 @@ impl PyReasoner {
     ///
     /// Returns `(answer, certificate, proof)`, all `str`. Raises `ValueError` on a session
     /// that records nothing: construct it with `proofs=True`.
-    #[pyo3(signature = (service, argument = ""))]
+    #[pyo3(signature = (service, argument = "" , *, canonical_search, cancel=None))]
     fn prove(
         &mut self,
         py: Python<'_>,
         service: &str,
         argument: &str,
-    ) -> PyResult<(String, String, String)> {
-        let answer = py
-            .detach(|| self.session.prove(service, argument))
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_proved_parts())
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.prove(service, argument, control)
+            })?;
+        crate::py_canonical::finish(
+            py,
+            (
+                answer.answer(),
+                answer.certificate(),
+                answer.proof_document(),
+            ),
+            receipts,
+        )
     }
 
     /// Is the knowledge base consistent? See `purrdf.entail.consistency`.
-    fn consistency(&mut self, py: Python<'_>) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.consistency())
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
+    fn consistency(
+        &mut self,
+        py: Python<'_>,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.consistency(control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// The entailed subsumption hierarchy. See `purrdf.entail.classify`.
-    fn classify(&mut self, py: Python<'_>) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.classify())
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
+    fn classify(
+        &mut self,
+        py: Python<'_>,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.classify(control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// The entailed types of the named individuals. See `purrdf.entail.realize`.
-    fn realize(&mut self, py: Python<'_>) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.realize())
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
+    fn realize(
+        &mut self,
+        py: Python<'_>,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.realize(control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// The individuals entailed to be instances of `class_`. See `purrdf.entail.instances`.
-    #[pyo3(signature = (class_))]
-    fn instances(&mut self, py: Python<'_>, class_: &str) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.instances(class_))
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+    #[pyo3(signature = (class_ , *, canonical_search, cancel=None))]
+    fn instances(
+        &mut self,
+        py: Python<'_>,
+        class_: &str,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.instances(class_, control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// Does the ontology entail `axiom`? See `purrdf.entail.entails`.
-    #[pyo3(signature = (axiom))]
-    fn entails(&mut self, py: Python<'_>, axiom: &str) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.entails(axiom))
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+    #[pyo3(signature = (axiom , *, canonical_search, cancel=None))]
+    fn entails(
+        &mut self,
+        py: Python<'_>,
+        axiom: &str,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.entails(axiom, control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// Which OWL 2 profiles the ontology is provably in. See `purrdf.entail.profile`.
@@ -1213,26 +1318,36 @@ impl PyReasoner {
     }
 
     /// A module for `signature`. See `purrdf.entail.extract_module`.
-    #[pyo3(signature = (signature, method))]
+    #[pyo3(signature = (signature, method , *, canonical_search, cancel=None))]
     fn extract_module(
         &self,
         py: Python<'_>,
         signature: &str,
         method: &str,
-    ) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.extract_module(signature, method))
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.extract_module(signature, method, control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// A justification for `axiom`. See `purrdf.entail.justify`.
-    #[pyo3(signature = (axiom))]
-    fn justify(&self, py: Python<'_>, axiom: &str) -> PyResult<(String, String)> {
-        let answer = py
-            .detach(|| self.session.justify(axiom))
-            .map_err(PyValueError::new_err)?;
-        Ok(answer.into_parts())
+    #[pyo3(signature = (axiom , *, canonical_search, cancel=None))]
+    fn justify(
+        &self,
+        py: Python<'_>,
+        axiom: &str,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+        let (answer, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                self.session.justify(axiom, control)
+            })?;
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// Why `conclusion` holds under `regime`. See `purrdf.entail.explain_conclusion`.

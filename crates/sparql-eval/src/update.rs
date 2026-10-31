@@ -727,7 +727,7 @@ fn delete_insert(
     // registered", regardless of whether one was configured for the request. The same
     // holds for a `SERVICE` in this `WHERE`: it federates through the request's source
     // or, with none, fails exactly as a source-less query's does.
-    let mut ctx = apply_query_options(ctx, cfg.options)
+    let mut ctx = apply_query_options(ctx, &cfg.options)
         .map_err(crate::engine::EvaluationFailure::into_diagnostic)?;
     // The request's governors, so the `WHERE` charges and stops exactly as the same
     // pattern would inside a governed `SELECT`. Without this the ceilings a caller set
@@ -801,7 +801,7 @@ fn delete_insert(
     let captured = crate::engine::coordinates::capture_request(
         &ctx,
         *request.finalize().as_bytes(),
-        cfg.options,
+        &cfg.options,
         receipt.external_source,
     )
     .map_err(|error| execution_abort(&error, cfg.governors))?;

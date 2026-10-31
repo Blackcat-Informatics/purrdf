@@ -53,7 +53,11 @@ fn fixture_with_indexes(
 ) -> Fixture {
     let dimension = u32::try_from(rows.first().map_or(0, |(_, v)| v.len())).expect("small");
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let mut targets = Vec::with_capacity(rows.len());
     let mut bindings = Vec::with_capacity(rows.len());
@@ -1414,7 +1418,11 @@ fn a_derived_index_guard_naming_this_space_is_checked_and_a_matching_one_is_admi
     let space_view = view.vector_space(plain.vector_space).expect("space");
 
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
     let coordinates = IndexCoordinates {
         source_exact_digest: source.source_exact_digest(),
         family_id: space_view.family_id(),
@@ -1497,7 +1505,11 @@ fn prefixed_fixture(
 ) -> Fixture {
     let stored = u32::try_from(rows.first().map_or(0, |(_, v)| v.len())).expect("small");
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let mut targets = Vec::with_capacity(rows.len());
     let mut bindings = Vec::with_capacity(rows.len());

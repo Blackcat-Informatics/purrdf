@@ -27,7 +27,7 @@ import {
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
 } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 
 const TEST = fileURLToPath(
@@ -87,7 +87,7 @@ test("wasm_shacl_shapes_graph: the change path, a packed product and lint carry 
     );
     assert.equal(verdict(change.sarif)[1].length, expected, `change path, ${graph}`);
     change.free();
-    const product = shaclPackProduct(SHAPES, BASE, undefined, undefined, graph);
+    const product = canonicalValue(shaclPackProduct(SHAPES, BASE, undefined, undefined, graph, "unlimited"));
     assert.equal(
       verdict(shaclProductValidateToSarif(product, DATA))[1].length,
       expected,
@@ -169,7 +169,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
   assert.ok(without.includes(unnamed) && !without.includes(marked), without);
 
   const entail = (shapesGraph) => {
-    const out = shaclEntail(rules, data, undefined, undefined, undefined, shapesGraph);
+    const out = shaclEntail(rules, data, undefined, undefined, undefined, shapesGraph, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited");
     const ntriples = out.ntriples;
     out.free();
     return ntriples;

@@ -21,7 +21,7 @@ import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init, { asyncStackRegionBytes } from "../pkg/purrdf_wasm.js";
 import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
 import { assertSurfacePoisoned, threwAtGate } from "./fixtures/poisoned-surface.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 // Already instantiated: `init` hands back the one instance's raw exports.
 const exports = await init();
@@ -163,7 +163,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   const baseline = {
     select: rowsOf(baselineEngine.select(data, PATH_SELECT)),
     backward: rowsOf(baselineEngine.select(data, PATH_BACKWARD)),
-    construct: baselineEngine.construct(data, PATH_CONSTRUCT).dataset.canonicalize(),
+    construct: canonicalValue(baselineEngine.construct(data, PATH_CONSTRUCT).dataset.canonicalize("unlimited")),
   };
   // 12 edges: 78 pairs one or more steps apart, 12 subjects reaching n12, and 91
   // reflexive-or-longer pairs to construct.
@@ -182,7 +182,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
    * suspended — mostly mid-traversal, with its walk scope open — then one turn. */
   const turn = async () => {
     assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select, `sync select, turn ${turns}`);
-    assert.equal(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize(), baseline.construct, `sync construct, turn ${turns}`);
+    assert.equal(canonicalValue(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize("unlimited")), baseline.construct, `sync construct, turn ${turns}`);
     assert.equal(stackPointer(), IDLE);
     turns += 1;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -205,12 +205,12 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   assert.equal(backward.isComplete, true);
   assert.deepEqual(rowsOf(backward.result), baseline.backward, "the backward job's answer");
   assert.ok(backward.evidence.async.yields > 10, `${backward.evidence.async.yields} yields`);
-  assert.equal((await jobs.construct).canonicalize(), baseline.construct, "the construct job's graph");
+  assert.equal(canonicalValue((await jobs.construct).canonicalize("unlimited")), baseline.construct, "the construct job's graph");
 
   // Afterwards every lane still answers exactly — nothing a job left behind (a scope
   // it never closed, a refusal it latched) outlives it.
   assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select);
-  assert.equal(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize(), baseline.construct);
+  assert.equal(canonicalValue(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize("unlimited")), baseline.construct);
   assert.deepEqual(rowsOf(await engine.queryAsync(data, PATH_BACKWARD, yieldEvery)), baseline.backward);
   assert.equal(stackPointer(), IDLE);
 });
@@ -385,7 +385,7 @@ const subjectsOf = (result) =>
 test("admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned", async (t) => {
   const engine = new QueryEngine();
   const data = Dataset.parse(NEST_DATA, "nquads");
-  const before = data.canonicalize();
+  const before = canonicalValue(data.canonicalize("unlimited"));
   const lateral = (depth) => nestedAround(`?s <${EX}p> ?o LATERAL { `, depth);
   const notExists = (depth) => nestedAround(`?s <${EX}p> ?o FILTER NOT EXISTS { `, depth);
   // An odd number of negations of "`?s` has a `<q>`" holds for every subject but `s1`, an
@@ -482,7 +482,7 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   }
   // Not poisoned: both lanes answer exactly, over a dataset whose canonical form is
   // byte-identical to what it was before.
-  assert.equal(data.canonicalize(), before);
+  assert.equal(canonicalValue(data.canonicalize("unlimited")), before);
   const plain = `SELECT ?s WHERE { ?s <${EX}q> ?o }`;
   assert.deepEqual(subjectsOf(engine.select(data, plain)), ["s1"]);
   assert.deepEqual(subjectsOf(await engine.selectAsync(data, plain)), ["s1"]);

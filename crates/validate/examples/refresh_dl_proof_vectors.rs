@@ -33,6 +33,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             case.argument().trim_end(),
             0,
             0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )?;
         if proof.answer() != case.answer() {
             return Err(
@@ -46,6 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             proof.answer(),
             proof.certificate(),
             proof.proof_document(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )?;
         if produced
             .insert(case.name(), (proof.proof_document().to_owned(), check))

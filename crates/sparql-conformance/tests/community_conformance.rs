@@ -31,8 +31,11 @@ fn copy_tree(from: &Path, to: &Path) {
 
 #[test]
 fn every_applicable_dated_execution_passes_exactly() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let corpus = Corpus::acquire(&corpus_root()).unwrap();
-    let (totals, executions) = corpus.run().unwrap();
+    let (totals, executions) = corpus.run(&mut control).unwrap();
     print!("{}", totals.scoreboard());
     for execution in &executions {
         for record in execution.records.iter().filter(|record| !record.passed) {
@@ -90,6 +93,9 @@ fn every_applicable_dated_execution_passes_exactly() {
 
 #[test]
 fn nested_suite_executes_the_same_reviewed_inputs() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let scratch = purrdf_testkit::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let copy = scratch.path().join("community");
     let nested = copy.join("nested");
@@ -113,7 +119,7 @@ fn nested_suite_executes_the_same_reviewed_inputs() {
     std::fs::write(index_path, index).unwrap();
 
     let corpus = Corpus::acquire(&copy).expect("relocated reviewed bytes are admitted");
-    let (totals, executions) = corpus.run().unwrap();
+    let (totals, executions) = corpus.run(&mut control).unwrap();
     assert_eq!(totals.cases, 64);
     assert_eq!(totals.executions, 115);
     assert_eq!(totals.unsupported, 0);
@@ -123,6 +129,9 @@ fn nested_suite_executes_the_same_reviewed_inputs() {
 
 #[test]
 fn an_unimplemented_profile_is_reported_apart_from_failures() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let mut profiles = Value::object::<&str, Value>([]);
     profiles["shacl12-20991231"] = Value::object([(
         "specification",
@@ -149,12 +158,14 @@ fn an_unimplemented_profile_is_reported_apart_from_failures() {
         .find(|case| case.case.id == "anchored-optional-iri-violating")
         .unwrap();
     let probe = corpus
-        .execute_selected(case, "shacl12-20991231", &unsupported)
+        .execute_selected(case, "shacl12-20991231", &unsupported, &mut control)
         .unwrap();
     assert!(probe.unsupported());
     assert!(!probe.passed());
     assert_eq!(probe.records[0].observed.kind, OutcomeKind::Unsupported);
-    let neighbour = corpus.execute(case, "shacl12-20260918").unwrap();
+    let neighbour = corpus
+        .execute(case, "shacl12-20260918", &mut control)
+        .unwrap();
     assert!(neighbour.passed());
     let totals = Totals::of(1, &[probe, neighbour]);
     assert_eq!(
@@ -165,6 +176,9 @@ fn an_unimplemented_profile_is_reported_apart_from_failures() {
 
 #[test]
 fn a_report_graded_against_another_expectation_is_a_mismatch() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let corpus = Corpus::acquire(&corpus_root()).unwrap();
     let cases = corpus.cases().unwrap();
     let by_id = |id: &str| *cases.iter().find(|case| case.case.id == id).unwrap();
@@ -176,6 +190,7 @@ fn a_report_graded_against_another_expectation_is_a_mismatch() {
             &draft,
             "shacl-20170720",
             &Selection::Supported(ShaclProfile::REC_20170720),
+            &mut control,
         )
         .unwrap();
     assert!(!crossed.passed());
@@ -183,7 +198,12 @@ fn a_report_graded_against_another_expectation_is_a_mismatch() {
         crossed.records[0].observed.reason.as_deref(),
         Some("explicit-values")
     );
-    assert!(corpus.execute(&draft, "shacl12-20260918").unwrap().passed());
+    assert!(
+        corpus
+            .execute(&draft, "shacl12-20260918", &mut control)
+            .unwrap()
+            .passed()
+    );
 }
 
 #[test]
@@ -231,7 +251,12 @@ fn digest(bytes: &[u8]) -> String {
 
 /// Corrupt one reviewed expected report in a copy, re-bind its registry digest
 /// so acquisition admits the corrupted bytes, and require that no route passes.
-fn corrupted_expectation_fails(case_id: &str, from: &str, to: &str) {
+fn corrupted_expectation_fails(
+    case_id: &str,
+    from: &str,
+    to: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
     let scratch = purrdf_testkit::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let copy = scratch.path().join("community");
     copy_tree(&corpus_root(), &copy);
@@ -250,7 +275,7 @@ fn corrupted_expectation_fails(case_id: &str, from: &str, to: &str) {
     let cases = corpus.cases().unwrap();
     let case = cases.iter().find(|case| case.case.id == case_id).unwrap();
     for profile in case.case.selected_profiles().unwrap() {
-        let execution = corpus.execute(case, profile).unwrap();
+        let execution = corpus.execute(case, profile, control).unwrap();
         assert!(
             !execution.passed(),
             "{case_id} {profile} passed a corrupted oracle"
@@ -273,21 +298,28 @@ fn corrupted_expectation_fails(case_id: &str, from: &str, to: &str) {
     let cases = original.cases().unwrap();
     let case = cases.iter().find(|case| case.case.id == case_id).unwrap();
     for profile in case.case.selected_profiles().unwrap() {
-        assert!(original.execute(case, profile).unwrap().passed());
+        assert!(original.execute(case, profile, control).unwrap().passed());
     }
 }
 
 #[test]
 fn an_omitted_source_constraint_is_not_excused() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     corrupted_expectation_fails(
         "anchored-optional-blank-violating",
         "_:result0 sh:sourceConstraint ex:Constraint .\n",
         "",
+        &mut control,
     );
 }
 
 #[test]
 fn a_wrong_source_blank_is_not_repaired_by_report_isomorphism() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     // Moving the first result onto the conforming blank keeps the report graph
     // isomorphic to the original; only the source correspondence can tell.
     corrupted_expectation_fails(
@@ -296,24 +328,33 @@ fn a_wrong_source_blank_is_not_repaired_by_report_isomorphism() {
          sh:sourceConstraintComponent sh:SPARQLConstraintComponent .\n_:result0 sh:value _:b .",
         "sh:focusNode _:a ; sh:resultSeverity sh:Violation ; sh:sourceShape ex:Shape ; \
          sh:sourceConstraintComponent sh:SPARQLConstraintComponent .\n_:result0 sh:value _:a .",
+        &mut control,
     );
 }
 
 #[test]
 fn a_changed_path_topology_is_a_mismatch() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     corrupted_expectation_fails(
         "complex-sequence-inverse-path",
         "_:inverse sh:inversePath ex:q .",
         "_:inverse sh:inversePath ex:p .",
+        &mut control,
     );
 }
 
 #[test]
 fn a_missing_row_message_is_a_mismatch() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     corrupted_expectation_fails(
         "solution-message-priority",
         "_:result0 sh:resultMessage \"row message\" .",
         "_:result0 sh:resultMessage \"declared message\" .",
+        &mut control,
     );
 }
 
@@ -338,12 +379,15 @@ fn a_suite_kind_without_a_runner_is_refused() {
 /// described, and no subject is asserted about one test twice.
 #[test]
 fn the_community_earl_asserts_each_subject_and_test_once() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     use purrdf_conformance_kit::outcome::{AssertorDescription, DescriptionTerm, to_earl};
     use purrdf_iri::vocab::{earl, rdf, rdfs};
     use std::collections::{BTreeMap, BTreeSet};
 
     let corpus = Corpus::acquire(&corpus_root()).unwrap();
-    let (_, executions) = corpus.run().unwrap();
+    let (_, executions) = corpus.run(&mut control).unwrap();
     let records: Vec<_> = executions
         .iter()
         .flat_map(|execution| execution.records.iter().cloned())

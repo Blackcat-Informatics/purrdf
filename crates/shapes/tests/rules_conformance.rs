@@ -154,8 +154,19 @@ fn run_case(case: &Case) -> Result<(), String> {
     .map_err(|e| format!("cannot parse expected graph: {e}"))?;
     let expected_full = merge(projected.as_ref(), derived_ds.as_ref())?;
 
-    let produced_canon = try_canonicalize(produced.as_ref()).unwrap().nquads;
-    let expected_canon = try_canonicalize(expected_full.as_ref()).unwrap().nquads;
+    let produced_canon_owner = try_canonicalize(
+        produced.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+
+    let produced_canon = produced_canon_owner.nquads();
+    let expected_canon_owner = try_canonicalize(
+        expected_full.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let expected_canon = expected_canon_owner.nquads();
     if produced_canon != expected_canon {
         return Err(format!(
             "inferred-graph mismatch (RDFC-1.0):\n  --- PRODUCED (base ⊎ derived) ---\n{produced_canon}\n  --- EXPECTED (base ⊎ expected-derived) ---\n{expected_canon}"
@@ -293,8 +304,24 @@ fn entail_dataset_composes_project_then_apply_rules() {
     let via_apply = apply_rules(&data, &shapes).expect("apply_rules");
 
     assert_eq!(
-        try_canonicalize(via_entail.as_ref()).unwrap().nquads,
-        try_canonicalize(via_apply.as_ref()).unwrap().nquads,
+        try_canonicalize(
+            via_entail.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
+        try_canonicalize(
+            via_apply.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
         "entail_dataset must equal apply_rules over the projected dataset"
     );
 }
@@ -330,21 +357,24 @@ fn sh_order_is_order_independent_over_the_closure() {
             purrdf_shapes::entail_dataset(data.as_ref(), &shapes)
                 .expect("entail")
                 .as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap()
-        .nquads
     };
 
     let forward = entail(
         "ex:S a sh:NodeShape ; sh:targetClass ex:Person ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x ] ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 2 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y ] .",
-    );
+    ).nquads();
     let swapped = entail(
         "ex:S a sh:NodeShape ; sh:targetClass ex:Person ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 2 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x ] ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y ] .",
-    );
+    ).nquads();
     assert_eq!(
         forward, swapped,
         "swapping sh:order must not change the fixpoint closure"

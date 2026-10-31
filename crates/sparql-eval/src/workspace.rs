@@ -2809,7 +2809,7 @@ pub(crate) mod owned_row_regressions {
         let engine = crate::NativeSparqlEngine::new();
         let query = "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }";
         let prepared = engine
-            .prepare_query_admitted(query, None, crate::QueryOptions::default(), &capability)
+            .prepare_query_admitted(query, None, &crate::QueryOptions::default(), &capability)
             .expect("original admitted parser and cache");
         let live = ledger.live.load(Ordering::Relaxed);
         assert!(live > base);
@@ -2820,7 +2820,7 @@ pub(crate) mod owned_row_regressions {
                 query,
                 None,
                 &["candidate"],
-                crate::QueryOptions::default(),
+                &crate::QueryOptions::default(),
                 &capability,
             )
             .expect("original native plan and parameter slots");
@@ -2850,7 +2850,7 @@ pub(crate) mod owned_row_regressions {
                 "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }",
                 None,
                 &[],
-                crate::QueryOptions::default(),
+                &crate::QueryOptions::default(),
                 &capability,
             )
             .expect("native prepared query");
@@ -2858,7 +2858,7 @@ pub(crate) mod owned_row_regressions {
             .execute_governed_admitted(
                 &mut execution,
                 &dataset,
-                crate::QueryOptions::default(),
+                &crate::QueryOptions::default(),
                 &crate::QueryGovernors::UNBOUNDED,
                 &capability,
                 |outcome| {
@@ -2897,7 +2897,7 @@ pub(crate) mod owned_row_regressions {
             "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }",
             None,
             &["candidate"],
-            crate::QueryOptions::default(),
+            &crate::QueryOptions::default(),
             &workspace.capability(),
         );
         let Err(crate::EvaluationFailure::Evaluation(error)) = result else {
@@ -3866,14 +3866,14 @@ pub(crate) mod owned_row_regressions {
         refused(engine.query_interned_evidence_fallible_view(
             &view,
             request,
-            crate::QueryOptions::EMPTY,
+            &crate::QueryOptions::EMPTY,
             &Closed,
             |_| 7,
         ));
         refused(engine.query_evidence_status_fallible_view(
             &view,
             request,
-            crate::QueryOptions::EMPTY,
+            &crate::QueryOptions::EMPTY,
             &Closed,
             answer,
             |_, _| 7,
@@ -3881,18 +3881,18 @@ pub(crate) mod owned_row_regressions {
         refused(engine.query_evidence_answer_fallible_view(
             &view,
             request,
-            crate::QueryOptions::EMPTY,
+            &crate::QueryOptions::EMPTY,
             &Closed,
             answer,
             |_, _, _| 7,
         ));
         let mut execution = engine
-            .prepare_execution(query, None, &[], crate::QueryOptions::EMPTY)
+            .prepare_execution(query, None, &[], &crate::QueryOptions::EMPTY)
             .unwrap();
         refused(engine.execute_witnessed_evidence_fallible(
             &mut execution,
             &view,
-            crate::QueryOptions::EMPTY,
+            &crate::QueryOptions::EMPTY,
             &Closed,
             |_| 7,
         ));

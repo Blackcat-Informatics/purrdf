@@ -116,12 +116,13 @@ pub(crate) fn read_shapes_document(
     format: SourceFormat,
     base: Option<&str>,
     what: &str,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesDocument, CliError> {
     let native = match format {
         SourceFormat::Native(native) => native,
         SourceFormat::Pack | SourceFormat::Gts => {
             return Ok(ShapesDocument {
-                dataset: source::load_dataset(path, format, base)?,
+                dataset: source::load_dataset(path, format, base, canonical)?,
                 prefixes: Vec::new(),
                 loaded: base.into_iter().map(str::to_owned).collect(),
             });
@@ -174,6 +175,7 @@ pub(crate) fn read_shapes_document(
 pub(crate) fn shapes_imports(
     root: &ShapesDocument,
     imports: &[String],
+    canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesImports, CliError> {
     let pairs = resolve_shapes_import_pairs(imports)?;
     let mut table = ShapesImports::new();
@@ -186,6 +188,7 @@ pub(crate) fn shapes_imports(
             pair.format,
             Some(pair.iri),
             &format!("--import {}", pair.iri),
+            canonical,
         )?;
         for loaded in &document.loaded {
             if loaded != pair.iri {
@@ -215,6 +218,12 @@ pub(crate) fn shapes_error(
     base_flag: &str,
 ) -> CliError {
     let error = match error {
+        ShapesError::Canonical(cause) => {
+            return CliError::Canonical {
+                message: format!("{context}: {cause}"),
+                cause,
+            };
+        }
         ShapesError::RuleExecution(error) => {
             eprintln!(
                 "purrdf-execution {}",

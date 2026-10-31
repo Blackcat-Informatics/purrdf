@@ -725,10 +725,10 @@ fn scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion() {
             unit.sparql()
         );
         let prepared = engine
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
         let mut cursor = engine
-            .open_call_cursor_admitted(&prepared, options, &workspace)
+            .open_call_cursor_admitted(&prepared, &options, &workspace)
             .unwrap();
         assert!(cursor.physical_row_bound() >= 1);
         let mut unknowns = 0;
@@ -1239,7 +1239,11 @@ fn artifact_over(
 ) {
     let dimension = u32::try_from(rows[0].1.len()).expect("the fixture dimension is small");
     let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&empty).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &empty,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let mut targets = Vec::with_capacity(rows.len());
     let mut bindings = Vec::with_capacity(rows.len());
@@ -3587,7 +3591,7 @@ fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
                 "SELECT ?candidate WHERE {}",
                 None,
                 &["candidate"],
-                purrdf_sparql_eval::QueryOptions::default(),
+                &purrdf_sparql_eval::QueryOptions::default(),
             )
             .unwrap(),
     );

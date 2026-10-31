@@ -302,43 +302,6 @@ pub(crate) fn annotation_range_constraint(
     }
 }
 
-/// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
-/// `true`; an error/unbound (or `false`) drops the row.
-///
-/// [`crate::parallel::is_parallel_safe`] gates the strategy: an expression that
-/// can reach a stateful builtin (`RAND`/`UUID`/`STRUUID`/`BNODE`, the PurRDF list
-/// constructors) MUST run on the real `ctx` sequentially, so its per-query
-/// counter/RNG state advances exactly as it would without this parallel path — a
-/// forked child would advance a throwaway copy instead, silently diverging from
-/// the sequential result. A safe expression only decides keep/drop; the
-/// surviving rows are the ORIGINAL rows (never a value derived from the child's
-/// scratch), so each forked child's scratch is discarded after use — nothing to
-/// re-intern via [`crate::parallel::reintern_minted_row`].
-///
-/// # Under a truncated child
-///
-/// A `FILTER`'s own data child is prefix-monotone: the predicate is evaluated in full
-/// over every row that reaches it and no surviving row moves, so filtering a prefix
-/// yields a prefix. A truncation **inside an `EXISTS` in the predicate** is a different
-/// matter — it is an opaque edge, because a truncated `EXISTS` inner bag drops rows the
-/// true query keeps and a truncated `NOT EXISTS` inner bag fabricates rows outright — so
-/// the whole output is withheld and only the barrier crosses.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_filter<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    expr: &Expression,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let range = if matches!(inner, GraphPattern::Bgp { .. }) {
-        annotation_range_constraint(expr, &ctx.growth)?
-    } else {
-        None
-    };
-    eval_filter_range(node, expr, inner, range, ctx)
-}
-
 /// Execute a direct FILTER using already admitted range constraints. The ordinary
 /// worklist only takes this path for a nonempty range, whose grammar excludes EXISTS.
 pub(crate) fn eval_filter_range<D: DatasetView + Sync>(
@@ -366,7 +329,12 @@ pub(crate) fn finish_filter_child<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     match begin_filter_child(node, expr, lift, child, ctx)? {
         FilterStart::Complete(done) => Ok(done),
-        FilterStart::Sequence(sequence) => sequence.run_recursive(node, expr, ctx),
+        FilterStart::Sequence(sequence) => match sequence.step(node, expr, ctx)? {
+            FilterSequenceStep::Complete(done) => Ok(done),
+            FilterSequenceStep::Suspend(_, _) => Err(EvalError::internal(
+                "an admitted annotation range suspended outside its literal comparison grammar",
+            )),
+        },
     }
 }
 
@@ -393,6 +361,7 @@ pub(crate) fn begin_filter_child<'e, D: DatasetView + Sync>(
     begin_filter_child_with_owner(node, expr, FilterLink::Borrowed(expr), lift, child, ctx)
 }
 
+#[derive(Clone)]
 pub(crate) enum FilterLink<'e> {
     Borrowed(&'e Expression),
     Copied(PreparedPattern),
@@ -411,39 +380,6 @@ pub(crate) fn begin_filter_child_with_owner<'e, D: DatasetView + Sync>(
         return Ok(FilterStart::Complete(lift.withheld()));
     };
     begin_filter_sequence(node, expr, owner, seq, lift, ctx)
-}
-
-// Erase the static delivery wrapper; the native operator retains its call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    expr: &Expression,
-    inner: &GraphPattern,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if M::ACTIVE {
-        let range = if matches!(inner, GraphPattern::Bgp { .. }) {
-            annotation_range_constraint(expr, &ctx.growth)?
-        } else {
-            None
-        };
-        let previous = std::mem::replace(&mut ctx.annotation_range, range);
-        let result = crate::eval::yield_transform(
-            node,
-            inner,
-            delivery,
-            |seq, ctx| {
-                eval_filter_sequence(node, expr, seq, Lift::at_admitted(node, &ctx.growth)?, ctx)
-            },
-            ctx,
-        );
-        ctx.annotation_range = previous;
-        result
-    } else {
-        eval_filter(node, expr, inner, ctx)
-    }
 }
 
 // A variable alias carries the source column's aggregate certificate.
@@ -525,35 +461,12 @@ pub(crate) struct FilterSequence<'e, I: ViewTermId> {
     clippy::large_enum_variant,
     reason = "avoid an extra box for each FILTER VM step"
 )]
-pub(crate) enum FilterSequenceStep<'e, I: ViewTermId> {
+pub(crate) enum FilterSequenceStep<'e, 'd, I: ViewTermId> {
     Complete(Evaluated<I>),
-    Exists(FilterSequence<'e, I>, u32),
+    Suspend(FilterSequence<'e, I>, crate::vm::Suspend<'d>),
 }
 
 impl<'e, I: ViewTermId> FilterSequence<'e, I> {
-    pub(crate) fn suspended_row(&self) -> &RetainedRow<I> {
-        self.active
-            .as_ref()
-            .expect("one suspended FILTER row")
-            .row()
-    }
-
-    pub(crate) fn schema(&self) -> &VarSchema {
-        &self.schema
-    }
-
-    pub(crate) fn prepare_exists<D: DatasetView<Id = I> + Sync>(
-        &self,
-        site: u32,
-        expression: &Expression,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<(ExistsDecision<I>, Option<crate::evidence_exec::RowEvidence>), EvalError> {
-        self.active
-            .as_ref()
-            .expect("one suspended FILTER row")
-            .prepare_exists(site, expression, &self.schema, ctx)
-    }
-
     fn new(
         seq: SolutionSeq<I>,
         checkpoint: crate::row_checkpoint::RowCheckpoint,
@@ -572,26 +485,14 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
         }
     }
 
-    pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
-        &mut self,
-        value: Option<SolutionTerm<I>>,
-        record: Option<crate::evidence_exec::RowEvidence>,
-        ctx: &EvalCtx<'_, D>,
-    ) -> Result<(), EvalError> {
-        self.active
-            .as_mut()
-            .expect("one suspended FILTER row")
-            .resume(value, record, ctx)
-    }
-
-    pub(crate) fn step<D: DatasetView<Id = I> + Sync>(
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
         mut self,
         node: &GraphPattern,
         expression: &Expression,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<FilterSequenceStep<'e, I>, EvalError> {
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<FilterSequenceStep<'e, 'd, I>, EvalError> {
         loop {
-            let frame = if let Some(frame) = self.active.take() {
+            let mut frame = if let Some(frame) = self.active.take() {
                 frame
             } else {
                 let Some(row) = self.input.as_mut().and_then(Iterator::next) else {
@@ -606,17 +507,19 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
                     ctx,
                 )?
             };
-            match frame.step(expression, &self.schema, ctx)? {
-                crate::vm::FilterRowStep::Complete((linked, row, keep, evidence)) => {
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Value(value) => {
+                    let (linked, row, keep, evidence) =
+                        frame.finish_filter(expression, &self.schema, value, ctx)?;
                     self.linked = Some(linked);
                     if keep {
                         self.output
                             .push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
                     }
                 }
-                crate::vm::FilterRowStep::Exists(frame, site) => {
+                crate::vm::VmStep::Suspend(request) => {
                     self.active = Some(frame);
-                    return Ok(FilterSequenceStep::Exists(self, site));
+                    return Ok(FilterSequenceStep::Suspend(self, request));
                 }
             }
         }
@@ -634,39 +537,189 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
             },
         )))
     }
+}
 
-    pub(crate) fn run_recursive<D: DatasetView<Id = I> + Sync>(
+/// The sequential BIND loop retains its padded output row while the VM waits
+/// for a graph or function child. A completed row is filled before publication.
+pub(crate) struct ExtendSequence<'e, I: ViewTermId> {
+    schema: crate::solution::SharedSchema,
+    input: Option<crate::solution::RowBagIntoIter<I>>,
+    source: Option<RetainedRow<I>>,
+    output: RowsBuilder<I>,
+    checkpoint: crate::row_checkpoint::RowCheckpoint,
+    linked: Option<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    lift: crate::governor::lift::DetachedLift,
+    search_evidence: crate::evidence_exec::RowEvidence,
+    next_row: u64,
+    column: usize,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a suspended BIND sequence moves into the driver's admitted frame"
+)]
+pub(crate) enum ExtendStep<'e, 'd, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(ExtendSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a BIND sequence moves into its existing admitted owner"
+)]
+pub(crate) enum ExtendStart<'e, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(ExtendSequence<'e, I>),
+}
+
+/// Absorb the original child once, then retain a movable sequential row loop.
+pub(crate) fn begin_extend_child_with_owner<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expression: &Expression,
+    owner: FilterLink<'e>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<ExtendStart<'e, D::Id>, EvalError> {
+    let GraphPattern::Extend {
+        inner,
+        variable: var,
+        ..
+    } = node
+    else {
+        return Err(EvalError::internal(
+            "BIND continuation has another node kind",
+        ));
+    };
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
+        let mut schema = lift.absorbed_schema().map_or_else(
+            || (*crate::eval::syntactic_schema(inner)).clone(),
+            |schema| (*schema).clone(),
+        );
+        schema.push_admitted(var.clone(), &ctx.growth)?;
+        return Ok(ExtendStart::Complete(
+            lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)),
+        ));
+    };
+    // Actual registry classification rejects SPARQL and expression bodies;
+    // EXISTS is excluded even when its inner graph is declared parallel-safe.
+    if !ctx.growth.is_bounded()
+        && ctx.may_fork_row_loop(expression)
+        && !crate::parallel::expression_re_enters_evaluation(expression)
+        && ctx.may_fork_governed_loop()
+        && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len())
+    {
+        return complete_parallel_extend(node, var, expression, seq, lift, ctx)
+            .map(ExtendStart::Complete);
+    }
+    let checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
+        ctx,
+        crate::governor::ChargePoint::RowExpressionEvaluation,
+        false,
+        seq.rows.len(),
+    );
+    let mut schema = (*seq.schema).clone();
+    let column = schema.push_admitted(var.clone(), &ctx.growth)?;
+    let schema = schema.shared_admitted(&ctx.growth)?;
+    let program = crate::vm::program_at(ctx, node, expression)?;
+    let linked = match owner {
+        FilterLink::Borrowed(original) => {
+            if !std::ptr::eq(original, expression) {
+                return Err(EvalError::internal("BIND changed its expression owner"));
+            }
+            crate::vm::Linked::link_admitted(program, original, &schema, ctx)?
+        }
+        FilterLink::Copied(pattern) => crate::vm::Linked::link_copied_filter_owner_admitted(
+            program, expression, pattern, &schema, ctx,
+        )?,
+    };
+    Ok(ExtendStart::Sequence(ExtendSequence {
+        schema,
+        search_evidence: seq.rows.search_evidence().clone(),
+        input: Some(seq.rows.into_iter()),
+        source: None,
+        output: RowsBuilder::new(&ctx.growth),
+        checkpoint,
+        linked: Some(linked),
+        active: None,
+        lift: lift.detach(),
+        next_row: 0,
+        column,
+    }))
+}
+
+impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
         mut self,
         node: &GraphPattern,
         expression: &Expression,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Evaluated<I>, EvalError> {
-        let mut frame_stack = crate::AdmittedVec::new(&ctx.growth);
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<ExtendStep<'e, 'd, I>, EvalError> {
+        let GraphPattern::Extend { variable: var, .. } = node else {
+            return Err(EvalError::internal(
+                "BIND continuation has another node kind",
+            ));
+        };
         loop {
-            match self.step(node, expression, ctx)? {
-                FilterSequenceStep::Complete(done) => return Ok(done),
-                FilterSequenceStep::Exists(mut pending, site) => {
-                    let frame = pending.active.take().expect("one suspended FILTER row");
-                    frame_stack.push(frame)?;
-                    let resolved: Result<_, EvalError> = (|| {
-                        let frame = frame_stack.last().expect("one admitted FILTER row");
-                        let (decision, mut record) =
-                            frame.prepare_exists(site, expression, &pending.schema, ctx)?;
-                        let found = decision.run_recursive(
-                            frame.row(),
-                            &pending.schema,
-                            record.as_mut(),
-                            ctx,
-                        )?;
-                        Ok((Some(intern_boolean(ctx, found)?), record))
-                    })();
-                    pending.active = Some(frame_stack.pop().expect("one admitted FILTER row"));
-                    let (value, record) = resolved?;
-                    pending.resume(value, record, ctx)?;
-                    self = pending;
+            let mut frame = if let Some(frame) = self.active.take() {
+                frame
+            } else {
+                let Some(source) = self.input.as_mut().and_then(Iterator::next) else {
+                    break;
+                };
+                if self.checkpoint.pass(ctx).is_err() {
+                    break;
+                }
+                // Keep BNODE(string)'s original input-row identity across every
+                // child suspension; entering the next row advances it once.
+                ctx.current_row = self.next_row;
+                self.next_row = self
+                    .next_row
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let row = RetainedRow::try_build(self.schema.len(), &ctx.growth, |row| {
+                    row[..source.len()].copy_from_slice(&source);
+                    Ok(())
+                })?;
+                self.source = Some(source);
+                crate::vm::RowExpressionFrame::begin(
+                    self.linked.take().expect("one sequential BIND link"),
+                    row,
+                    ctx,
+                )?
+            };
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(request) => {
+                    self.active = Some(frame);
+                    return Ok(ExtendStep::Suspend(self, request));
+                }
+                crate::vm::VmStep::Value(value) => {
+                    let (linked, mut row, value, computed) = frame.finish_term(value)?;
+                    self.linked = Some(linked);
+                    row.set_unpublished_cell_unique(self.column, value)?;
+                    let source = self.source.take().expect("one BIND source row");
+                    let evidence = extend_evidence(&source, computed, expression, var)?;
+                    self.output
+                        .push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
                 }
             }
         }
+        drop(self.input.take());
+        let mut rows = self.output.finish()?;
+        rows.retain_search_evidence(self.search_evidence);
+        if let Some(tripped) = ctx.expression_barrier.observed() {
+            return Ok(ExtendStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.schema),
+            )));
+        }
+        Ok(ExtendStep::Complete(self.lift.attach(node).finish(
+            SolutionSeq {
+                schema: self.schema,
+                rows,
+            },
+        )))
     }
 }
 
@@ -696,8 +749,10 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     // commits them in source order after the join, so both paths charge the same
     // sequence and trip at the same row.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked =
-        !ctx.growth.is_bounded() && ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+    let forked = !ctx.growth.is_bounded()
+        && ctx.may_fork_row_loop(expr)
+        && !crate::parallel::expression_re_enters_evaluation(expr)
+        && ctx.may_fork_governed_loop();
     let checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let program = crate::vm::program_at(ctx, node, expr)?;
@@ -714,10 +769,8 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     };
     let rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
-        // Harvesting, not plain: a predicate can reach a property function through an
-        // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
-        // context. Dropping it would make a governed receipt depend on whether the row
-        // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
+        // Preserve worker witnesses alongside the original admitted predicate
+        // rows and their ordered checkpoints.
         let snapshot = ctx.loop_snapshot(admissible.len());
         let (rows, harvests) = crate::parallel::par_loop_try_map_init_fallible(
             ctx.needs_bounded_loop_blocks(),
@@ -804,87 +857,12 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     ))
 }
 
-fn eval_filter_sequence<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    expr: &Expression,
-    seq: SolutionSeq<D::Id>,
-    lift: Lift<'_>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    match begin_filter_sequence(node, expr, FilterLink::Borrowed(expr), seq, lift, ctx)? {
-        FilterStart::Complete(done) => Ok(done),
-        FilterStart::Sequence(sequence) => sequence.run_recursive(node, expr, ctx),
-    }
-}
+// ---------------------------------------------------------------------------
+// internals
+// ---------------------------------------------------------------------------
 
-/// `Extend(inner, var, expr)` (BIND): add `var` bound to `expr`'s value for each
-/// solution. An error/unbound value leaves `var` unbound (the row is NOT dropped).
-///
-/// Gated on [`crate::parallel::is_parallel_safe`] like `eval_filter`: an unsafe
-/// `expr` MUST run on the real `ctx` sequentially. A safe `expr` mints a NEW
-/// `Computed` term that escapes into the output row (unlike FILTER's read-only
-/// predicate), so each worker's forked child materializes its bound row via
-/// [`crate::parallel::portable_row`] while its scratch is still alive, and this
-/// function re-interns each portable row against `ctx.scratch` afterwards, in
-/// source-index order, via [`crate::parallel::reintern_portable_row`].
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_extend<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    var: &Variable,
-    expr: &Expression,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        let mut schema = lift.absorbed_schema().map_or_else(
-            || (*crate::eval::syntactic_schema(inner)).clone(),
-            |s| (*s).clone(),
-        );
-        schema.push_admitted(var.clone(), &ctx.growth)?;
-        return Ok(lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)));
-    };
-    eval_extend_sequence(node, var, expr, seq, lift, ctx)
-}
-
-// Erase the static delivery wrapper; the native operator retains its call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_extend_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    var: &Variable,
-    expr: &Expression,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if M::ACTIVE {
-        crate::eval::yield_transform(
-            node,
-            inner,
-            delivery,
-            |seq, ctx| {
-                eval_extend_sequence(
-                    node,
-                    var,
-                    expr,
-                    seq,
-                    Lift::at_admitted(node, &ctx.growth)?,
-                    ctx,
-                )
-            },
-            ctx,
-        )
-    } else {
-        eval_extend(node, inner, var, expr, ctx)
-    }
-}
-
-// Share the sequence loop without a second call boundary or native result copy.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-fn eval_extend_sequence<D: DatasetView + Sync>(
+/// Complete the original parallel BIND row kernel after its graph child.
+fn complete_parallel_extend<D: DatasetView + Sync>(
     node: &GraphPattern,
     var: &Variable,
     expr: &Expression,
@@ -899,12 +877,8 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
     let growth = ctx.growth.clone();
     let search_evidence = seq.rows.search_evidence().clone();
-    let forked = !growth.is_bounded()
-        && ctx.may_fork_row_loop(expr)
-        && ctx.may_fork_governed_loop()
-        && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len());
-    let mut checkpoint =
-        crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
+    let checkpoint =
+        crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, true, seq.rows.len());
     let mut schema = (*seq.schema).clone();
     let col = schema.push_admitted(var.clone(), &growth)?;
     let width = schema.len();
@@ -912,15 +886,14 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     let program = crate::vm::program_at(ctx, node, expr)?;
     let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
 
-    let mut rows = if forked {
+    let mut rows = {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.
         let base = ctx.scratch.computed_count();
-        // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
-        // property function through an embedded `EXISTS`, and the worker's attestation
-        // must reach the parent's receipt.
+        // Preserve the original worker witness harvest with each ordered row
+        // checkpoint and the values its BIND expression minted.
         let snapshot = ctx.loop_snapshot(admissible.len());
         let (minted, harvests) = crate::parallel::par_loop_try_map_init_fallible(
             ctx.needs_bounded_loop_blocks(),
@@ -1008,28 +981,6 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
         }
         RowsBuilder::from_storage(crate::AdmittedVec::from_parts(rows, None, &growth), &growth)
             .finish()?
-    } else {
-        let mut rows = RowsBuilder::new(&growth);
-        for (idx, in_row) in seq.rows.into_iter().enumerate() {
-            if checkpoint.pass(ctx).is_err() {
-                break;
-            }
-            // §17.4.2.9: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
-            // doc. This Extend maps `seq`'s rows 1:1 in order, so the row's position
-            // here matches its position in every other Extend of the same chain. A
-            // BNODE-bearing `expr` is exactly what forces this sequential branch.
-            ctx.current_row = idx as u64;
-            let row = RetainedRow::try_build(width, &growth, |row| {
-                row[..in_row.len()].copy_from_slice(&in_row);
-                row[col] = linked.term(Some(expr), row, &schema, ctx)?;
-                Ok(())
-            })?;
-            rows.push_row(row.with_optional_evidence(
-                extend_evidence(&in_row, linked.result_evidence()?, expr, var)?,
-                &growth,
-            )?)?;
-        }
-        rows.finish()?
     };
     rows.retain_search_evidence(search_evidence);
     // An `EXISTS` inside the bound expression is an opaque edge; see `eval_filter`.
@@ -1042,10 +993,6 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     }
     Ok(lift.finish(SolutionSeq { schema, rows }))
 }
-
-// ---------------------------------------------------------------------------
-// internals
-// ---------------------------------------------------------------------------
 
 /// Intern a value to a solution term (promoting to an existing dataset id).
 ///
@@ -15493,13 +15440,19 @@ fn join_selected_values(
     )
 }
 
-/// Immutable native site tree; ordinary clones retain its original body and grant.
+/// An immutable copied pattern, or the pattern of an admitted function query.
 #[derive(Clone)]
-pub(crate) struct PreparedPattern(crate::workspace::NativeSharedWorkspace<CorrelatedPattern>);
+pub(crate) enum PreparedPattern {
+    Pattern(crate::workspace::NativeSharedWorkspace<CorrelatedPattern>),
+    Query(crate::workspace::NativeSharedWorkspace<crate::user_fn::InvocationQuery>),
+}
 impl std::ops::Deref for PreparedPattern {
     type Target = GraphPattern;
     fn deref(&self) -> &GraphPattern {
-        &self.0
+        match self {
+            Self::Pattern(pattern) => pattern,
+            Self::Query(query) => crate::eval::query_pattern(&query.query),
+        }
     }
 }
 impl AsRef<GraphPattern> for PreparedPattern {
@@ -15512,43 +15465,68 @@ impl PreparedPattern {
         pattern: CorrelatedPattern,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
-        crate::workspace::NativeSharedWorkspace::new_admitted(pattern, workspace).map(Self)
+        crate::workspace::NativeSharedWorkspace::new_admitted(pattern, workspace).map(Self::Pattern)
     }
 
     pub(crate) fn into_cursor(self) -> PreparedPatternCursor {
-        PreparedPatternCursor(self.0.into_projected(|pattern| pattern.as_ref()))
+        match self {
+            Self::Pattern(pattern) => {
+                PreparedPatternCursor::Pattern(pattern.into_projected(|pattern| pattern.as_ref()))
+            }
+            Self::Query(query) => PreparedPatternCursor::Query(
+                query.into_projected(|query| crate::eval::query_pattern(&query.query)),
+            ),
+        }
     }
 }
 
-/// A copied pattern selected from its original admitted, immutable owner.
+/// A selected node retains the one immutable tree and its native grants.
 #[derive(Clone)]
-pub(crate) struct PreparedPatternCursor(
-    crate::workspace::ProjectedNative<CorrelatedPattern, GraphPattern>,
-);
+pub(crate) enum PreparedPatternCursor {
+    Pattern(crate::workspace::ProjectedNative<CorrelatedPattern, GraphPattern>),
+    Query(crate::workspace::ProjectedNative<crate::user_fn::InvocationQuery, GraphPattern>),
+}
+
+pub(crate) fn immediate_pattern_child<'p>(
+    parent: &'p GraphPattern,
+    child: &GraphPattern,
+) -> Option<&'p GraphPattern> {
+    let mut selected = None;
+    purrdf_sparql_algebra::NodeRef::Pattern(parent).for_each_child(|next| {
+        if let purrdf_sparql_algebra::NodeRef::Pattern(next) = next
+            && std::ptr::eq(next, child)
+        {
+            selected = Some(next);
+        }
+    });
+    selected
+}
 
 impl PreparedPatternCursor {
     pub(crate) fn owner(&self) -> PreparedPattern {
-        PreparedPattern(self.0.owner())
+        match self {
+            Self::Pattern(pattern) => PreparedPattern::Pattern(pattern.owner()),
+            Self::Query(query) => PreparedPattern::Query(query.owner()),
+        }
     }
 
     pub(crate) fn pattern(&self) -> &GraphPattern {
-        &self.0
+        match self {
+            Self::Pattern(pattern) => pattern,
+            Self::Query(query) => query,
+        }
     }
 
     pub(crate) fn child(&self, child: &GraphPattern) -> Result<Self, EvalError> {
-        self.0
-            .try_project(|parent| {
-                let mut selected = None;
-                purrdf_sparql_algebra::NodeRef::Pattern(parent).for_each_child(|next| {
-                    if let purrdf_sparql_algebra::NodeRef::Pattern(next) = next
-                        && std::ptr::eq(next, child)
-                    {
-                        selected = Some(next);
-                    }
-                });
-                selected
-            })
-            .map(Self)
+        let selected = match self {
+            Self::Pattern(pattern) => pattern
+                .try_project(|parent| immediate_pattern_child(parent, child))
+                .map(Self::Pattern),
+            Self::Query(query) => query
+                .try_project(|parent| immediate_pattern_child(parent, child))
+                .map(Self::Query),
+        };
+        selected
             .ok_or_else(|| EvalError::internal("a copied node's child is absent from its owner"))
     }
 }
@@ -15679,3 +15657,7 @@ impl crate::eval::PreparedExists {
         })
     }
 }
+
+crate::vm::row_continuation!(FilterSequence, schema);
+
+crate::vm::row_continuation!(ExtendSequence, schema);

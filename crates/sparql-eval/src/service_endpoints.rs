@@ -21,7 +21,7 @@
 //!
 //! * **A pattern earlier in the same group** — `?s ex:endpoint ?e . SERVICE ?e { … }`,
 //!   including `VALUES`, `BIND` and an explicit `LATERAL` — is parsed into a `LATERAL`
-//!   join, and [`crate::binop::eval_lateral`] substitutes each left solution's IRI into
+//!   join, and [`crate::binop::begin_lateral`] substitutes each left solution's IRI into
 //!   the clause (the per-solution dependency the section describes).
 //! * **The left side of a group join, an `OPTIONAL` or a `MINUS`** — `{ ?s ex:endpoint
 //!   ?e } { SERVICE ?e { … } }`, `?s ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`,
@@ -83,7 +83,7 @@ use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
+use crate::eval::EvalCtx;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::governor::soundness::{ExpressionPart, PatternPart};
 use crate::plan::NodeId;
@@ -294,7 +294,7 @@ impl<I: purrdf_core::ViewTermId> EndpointFrames<I> {
         Ok(())
     }
 
-    fn truncate(&mut self, depth: usize) {
+    pub(crate) fn truncate(&mut self, depth: usize) {
         self.frames.truncate(depth);
     }
 
@@ -1267,22 +1267,35 @@ fn binding_for<'c, I>(
 /// # Errors
 ///
 /// Whatever evaluating `right` raises.
-pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
+/// Setup owns the depth before any fallible append can call caller admission.
+struct EndpointDepth(usize);
+impl<D: DatasetView + Sync> crate::eval::ResidentAbort<D> for EndpointDepth {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        ctx.endpoint_frames.truncate(self.0);
+    }
+}
+
+pub(crate) fn enter_right_operand<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
     role: FrameRole,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
+) -> Result<usize, EvalError> {
     let EndpointScan::Present(index) = ctx.endpoint_scan() else {
-        return eval_evaluated(right, ctx);
+        return Ok(ctx.endpoint_frames.len());
     };
     let index = index.clone();
     let served = served_in(right, &index, ctx)?;
     if served.is_empty() {
-        return eval_evaluated(right, ctx);
+        return Ok(ctx.endpoint_frames.len());
     }
     let depth = ctx.endpoint_frames.len();
-    let evaluated = (|| {
+    let mut guard = crate::eval::ResidentPending {
+        child: Some(EndpointDepth(depth)),
+        ctx,
+    };
+    let ctx = &mut *guard.ctx;
+    let entered: Result<(), EvalError> = (|| {
         for variable in served.iter() {
             let column = left.schema.index_of(variable);
             let binding = match column {
@@ -1319,12 +1332,13 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
                 &ctx.growth,
             )?;
         }
-        eval_evaluated(right, ctx)
+        Ok(())
     })();
-    // Choose the original result before destroying frame payloads. This also
-    // runs on admission failure during frame construction, not only evaluation.
-    ctx.endpoint_frames.truncate(depth);
-    evaluated
+    entered?;
+    // The caller has already admitted its continuation slot and publishes this
+    // depth immediately, with no intervening fallible operation.
+    let _ = guard.child.take();
+    Ok(depth)
 }
 
 /// One partition of a `MINUS`'s left solutions: the positions of the solutions that bind
@@ -1336,14 +1350,14 @@ pub(crate) struct MinusPartition<I> {
 
 /// Partition `left`, the left solutions of `left MINUS right`, by the endpoints of the
 /// variable-endpoint `SERVICE` clauses served in `right` — or `None` when there are none
-/// to partition by, and `right` is evaluated once, as [`eval_right_operand`] evaluates
+/// to partition by, and `right` is evaluated once, as [`enter_right_operand`] evaluates
 /// it.
 ///
 /// A variable is partitioned by when every left solution binds it. One that some
 /// solution leaves unbound is not an endpoint list at all, and the `SERVICE` is refused
 /// where it is evaluated, so the whole operand takes the unpartitioned route; one an
 /// enclosing operator already lists endpoints for keeps that list, as in
-/// [`eval_right_operand`].
+/// [`enter_right_operand`].
 pub(crate) fn minus_partitions<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
@@ -1430,13 +1444,17 @@ pub(crate) fn minus_partitions<D: DatasetView + Sync>(
 /// # Errors
 ///
 /// Whatever evaluating `right` raises.
-pub(crate) fn eval_minus_partition<D: DatasetView + Sync>(
+pub(crate) fn enter_minus_partition<D: DatasetView + Sync>(
     partition: &MinusPartition<D::Id>,
-    right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
+) -> Result<usize, EvalError> {
     let depth = ctx.endpoint_frames.len();
-    let evaluated = (|| {
+    let mut guard = crate::eval::ResidentPending {
+        child: Some(EndpointDepth(depth)),
+        ctx,
+    };
+    let ctx = &mut *guard.ctx;
+    let entered: Result<(), EvalError> = (|| {
         for (variable, endpoint) in &partition.endpoints {
             let mut endpoints = AdmittedVec::with_capacity(1, &ctx.growth)?;
             endpoints.push_reserved(*endpoint);
@@ -1450,10 +1468,13 @@ pub(crate) fn eval_minus_partition<D: DatasetView + Sync>(
                 &ctx.growth,
             )?;
         }
-        eval_evaluated(right, ctx)
+        Ok(())
     })();
-    ctx.endpoint_frames.truncate(depth);
-    evaluated
+    entered?;
+    // The caller has already admitted its continuation slot and publishes this
+    // depth immediately, with no intervening fallible operation.
+    let _ = guard.child.take();
+    Ok(depth)
 }
 
 /// Whether a group join `left ⋈ right` should take the endpoints of the variable-endpoint
@@ -1677,16 +1698,17 @@ fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)
 /// # Errors
 ///
 /// Whatever evaluating `inner` raises.
-pub(crate) fn eval_projected<D: DatasetView + Sync>(
-    inner: &GraphPattern,
+pub(crate) fn enter_projected<D: DatasetView + Sync>(
     variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if ctx.endpoint_frames.is_empty() {
-        return eval_evaluated(inner, ctx);
-    }
+) -> Result<usize, EvalError> {
     let depth = ctx.endpoint_frames.len();
-    let evaluated = (|| {
+    let mut guard = crate::eval::ResidentPending {
+        child: Some(EndpointDepth(depth)),
+        ctx,
+    };
+    let ctx = &mut *guard.ctx;
+    let entered: Result<(), EvalError> = (|| {
         let mut hidden = AdmittedVec::new(&ctx.growth);
         for frame in &ctx.endpoint_frames[..depth] {
             if !variables.contains(&frame.variable) {
@@ -1703,10 +1725,13 @@ pub(crate) fn eval_projected<D: DatasetView + Sync>(
                 &ctx.growth,
             )?;
         }
-        eval_evaluated(inner, ctx)
+        Ok(())
     })();
-    ctx.endpoint_frames.truncate(depth);
-    evaluated
+    entered?;
+    // The caller has already admitted its continuation slot and publishes this
+    // depth immediately, with no intervening fallible operation.
+    let _ = guard.child.take();
+    Ok(depth)
 }
 
 /// Evaluate `SERVICE ?variable { … }` (`node`) over the endpoints the enclosing operator

@@ -1696,10 +1696,17 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
         for claim in slice(GUIDE, profile) {
             let dataset = parse_dataset(claim.turtle.as_bytes(), "text/turtle", None)
                 .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
-            let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
-                .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+            let canonical = try_canonicalize_with(
+                &dataset,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
             assert_eq!(
-                canonical.nquads.lines().count(),
+                canonical.nquads().lines().count(),
                 claim.turtle.lines().count(),
                 "every line is one distinct triple"
             );
@@ -4895,10 +4902,17 @@ fn the_designated_heading_and_lineage_literals_carry_their_own_datatypes() {
     for claim in &claims {
         let dataset = parse_dataset(claim.turtle.as_bytes(), "text/turtle", None)
             .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
-        let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
-            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+        let canonical = try_canonicalize_with(
+            &dataset,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
         assert_eq!(
-            canonical.nquads.lines().count(),
+            canonical.nquads().lines().count(),
             claim.turtle.lines().count()
         );
     }

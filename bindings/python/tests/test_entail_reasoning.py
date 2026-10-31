@@ -93,17 +93,17 @@ def _every_service(data: str = TAXONOMY) -> list[tuple[str, tuple[str, str]]]:
     missing entry a reader can see rather than an omission nobody notices.
     """
     return [
-        ("consistency", entail.consistency(data, [], [])),
-        ("classify", entail.classify(data)),
-        ("realize", entail.realize(data)),
-        ("instances", entail.instances(data, "<https://example.org/Animal>")),
-        ("entails", entail.entails(data, CHAIN_AXIOM)),
+        ("consistency", entail.consistency(data, [], [], canonical_search="1000000").value),
+        ("classify", entail.classify(data, canonical_search="1000000").value),
+        ("realize", entail.realize(data, canonical_search="1000000").value),
+        ("instances", entail.instances(data, "<https://example.org/Animal>", canonical_search="1000000").value),
+        ("entails", entail.entails(data, CHAIN_AXIOM, canonical_search="1000000").value),
         ("profile", entail.profile(data)),
         (
             "extract-module",
-            entail.extract_module(data, "<https://example.org/Cat>\n", "star"),
+            entail.extract_module(data, "<https://example.org/Cat>\n", "star", canonical_search="1000000").value,
         ),
-        ("justify", entail.justify(data, CHAIN_AXIOM)),
+        ("justify", entail.justify(data, CHAIN_AXIOM, canonical_search="1000000").value),
         (
             "explain-conclusion",
             entail.explain_conclusion(data, entail.Regime.OWL_RL, DERIVED_TRIPLE),
@@ -184,8 +184,8 @@ def test_every_certificate_names_its_service_and_ends_with_its_gate() -> None:
 
 def test_the_dl_certificate_is_not_the_chase_report() -> None:
     """Two lanes, two completeness notions, two banners — never interchanged."""
-    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "", [], [])
-    _answer, certificate = entail.consistency(TAXONOMY, [], [])
+    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "", [], [], canonical_search="1000000").value
+    _answer, certificate = entail.consistency(TAXONOMY, [], [], canonical_search="1000000").value
     assert report.startswith("purrdf-reasoning-report 4\n")
     assert certificate.startswith("purrdf-dl-certificate 1\n")
     # The chase says `exact`/`sound-incomplete`; the tableau says
@@ -214,11 +214,11 @@ def test_every_service_is_byte_stable(name: str) -> None:
 
 def test_consistency_answers_both_ways() -> None:
     """The one service that answers for an ontology with no model."""
-    answer, certificate = entail.consistency(TAXONOMY, [], [])
+    answer, certificate = entail.consistency(TAXONOMY, [], [], canonical_search="1000000").value
     assert answer == "consistency true\n"
     assert "\ncompleteness decided\n" in certificate
 
-    answer, certificate = entail.consistency(UNSATISFIABLE, [], [])
+    answer, certificate = entail.consistency(UNSATISFIABLE, [], [], canonical_search="1000000").value
     assert answer == "consistency false\n"
     # A decided `false` met no boundary either: nothing here to overclaim.
     assert "\ncompleteness decided\n" in certificate
@@ -227,7 +227,7 @@ def test_consistency_answers_both_ways() -> None:
 
 def test_classify_emits_the_closure_and_its_reduction() -> None:
     """`subclass` is the full relation; `direct` is its transitive reduction."""
-    answer, _certificate = entail.classify(TAXONOMY)
+    answer, _certificate = entail.classify(TAXONOMY, canonical_search="1000000").value
     # Cat ⊑ Animal is entailed but not asserted…
     assert (
         "subclass <https://example.org/Cat> <https://example.org/Animal>\n" in answer
@@ -242,7 +242,7 @@ def test_classify_emits_the_closure_and_its_reduction() -> None:
 
 def test_realize_marks_the_most_specific_type() -> None:
     """Every entailed type is listed; exactly one of tom's is most specific."""
-    answer, _certificate = entail.realize(TAXONOMY)
+    answer, _certificate = entail.realize(TAXONOMY, canonical_search="1000000").value
     for klass in ("Cat", "Mammal", "Animal"):
         assert f"type <https://example.org/tom> <https://example.org/{klass}>\n" in answer
     # `owl:Thing` is a type of every individual and IS listed: an entailed answer
@@ -254,11 +254,11 @@ def test_realize_marks_the_most_specific_type() -> None:
 
 def test_instances_retrieves_through_the_hierarchy() -> None:
     """Retrieval reaches through subsumption, and an unmentioned class is empty."""
-    answer, _certificate = entail.instances(TAXONOMY, "<https://example.org/Animal>")
+    answer, _certificate = entail.instances(TAXONOMY, "<https://example.org/Animal>", canonical_search="1000000").value
     assert answer == "instance <https://example.org/tom>\n"
     # A class no axiom constrains is a real question with a real, empty answer —
     # which is what the Direct Semantics says an unconstrained name is.
-    answer, certificate = entail.instances(TAXONOMY, "<https://example.org/Unmentioned>")
+    answer, certificate = entail.instances(TAXONOMY, "<https://example.org/Unmentioned>", canonical_search="1000000").value
     assert answer == ""
     # An empty answer is still a DECIDED one: no boundary was met deciding it.
     assert "\ncompleteness decided\n" in certificate
@@ -286,16 +286,16 @@ def test_the_axiom_encoding_is_the_owl_2_rdf_mapping(predicate: str, kind: str) 
     which kind the predicate selected, because the predicate DISPATCHES.
     """
     statement = f"<https://example.org/s> <{predicate}> <https://example.org/o> .\n"
-    answer, _certificate = entail.entails(TAXONOMY, statement)
+    answer, _certificate = entail.entails(TAXONOMY, statement, canonical_search="1000000").value
     assert f"\naxiom {kind}\n" in answer, answer
     assert answer.count("\nterm <") in (2, 3)
 
 
 def test_entails_decides_both_directions() -> None:
     """`Cat ⊑ Animal` follows from the chain; `Animal ⊑ Cat` does not."""
-    answer, _certificate = entail.entails(TAXONOMY, CHAIN_AXIOM)
+    answer, _certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, canonical_search="1000000").value
     assert answer.startswith("entails true\n")
-    answer, _certificate = entail.entails(TAXONOMY, REVERSED_AXIOM)
+    answer, _certificate = entail.entails(TAXONOMY, REVERSED_AXIOM, canonical_search="1000000").value
     assert answer.startswith("entails false\n")
 
 
@@ -306,7 +306,7 @@ def test_an_exhausted_budget_is_unknown_and_never_false() -> None:
     used to make a hard instance answerable — only to make this branch, the third
     completeness state, reachable from a test.
     """
-    answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 1)
+    answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 1, canonical_search="1000000").value
     assert answer.splitlines()[0] == "entails unknown"
     assert "\ncompleteness budget-exhausted\n" in certificate
     assert "\nbudget 1\n" in certificate
@@ -315,7 +315,7 @@ def test_an_exhausted_budget_is_unknown_and_never_false() -> None:
     # `decided`: the exhausted flag takes precedence over an empty boundary list.
     assert "\nboundary " not in certificate
     # …and 0 means the knowledge base's own cap, not a cap of zero steps.
-    answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 0)
+    answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 0, canonical_search="1000000").value
     assert answer.startswith("entails true\n")
     assert "\ncompleteness decided\n" in certificate
 
@@ -336,7 +336,7 @@ def test_a_narrowed_work_cap_is_the_second_budget_and_reports_itself() -> None:
     reach the caller. Which cap ended a run is read off `work` and `work-budget`
     being equal.
     """
-    answer, certificate = entail.consistency(TAXONOMY, [], [], 0, 1)
+    answer, certificate = entail.consistency(TAXONOMY, [], [], 0, 1, canonical_search="1000000").value
     assert answer == "consistency unknown\n"
     assert "\ncompleteness budget-exhausted\n" in certificate
     assert "\nwork 1\n" in certificate
@@ -344,22 +344,22 @@ def test_a_narrowed_work_cap_is_the_second_budget_and_reports_itself() -> None:
     # By keyword, and on every service that takes it.
     for service in [entail.classify, entail.realize]:
         with pytest.raises(ValueError, match="owl-directness-unavailable:") as refused:
-            service(TAXONOMY, work_cap=1)
+            service(TAXONOMY, work_cap=1, canonical_search="1000000").value
         assert str(refused.value).count("\nwork-budget 1\n") == 1
     _, instance_certificate = entail.instances(
-        TAXONOMY, "<https://example.org/Cat>", work_cap=1
-    )
+        TAXONOMY, "<https://example.org/Cat>", work_cap=1, canonical_search="1000000"
+    ).value
     assert instance_certificate.count("\nwork-budget 1\n") == 1
-    assert entail.entails(TAXONOMY, CHAIN_AXIOM, work_cap=1)[1].count(
+    assert entail.entails(TAXONOMY, CHAIN_AXIOM, work_cap=1, canonical_search="1000000").value[1].count(
         "\nwork-budget 1\n"
     ) == 1
     # …and the session takes it too, for every question asked through it.
     session = entail.Reasoner(TAXONOMY, work_cap=1)
-    session_answer, session_certificate = session.consistency()
+    session_answer, session_certificate = session.consistency(canonical_search="1000000").value
     assert session_answer == "consistency unknown\n"
     assert "\nwork-budget 1\n" in session_certificate
     # 0 means the knowledge base's own cap, not a cap of zero work.
-    answer, certificate = entail.consistency(TAXONOMY, [], [], 0, 0)
+    answer, certificate = entail.consistency(TAXONOMY, [], [], 0, 0, canonical_search="1000000").value
     assert answer == "consistency true\n"
     assert "\ncompleteness decided\n" in certificate
 
@@ -371,7 +371,7 @@ def test_the_certificate_reports_both_budgets_it_ran_under() -> None:
     inside them. A caller that sees only the first pair cannot tell a search with
     room to spare from one that is about to be stopped by the other cap.
     """
-    _answer, certificate = entail.consistency(TAXONOMY, [], [])
+    _answer, certificate = entail.consistency(TAXONOMY, [], [], canonical_search="1000000").value
     lines = certificate.splitlines()
     fields = {line.split(" ", 1)[0] for line in lines}
     assert {"steps", "budget", "work", "work-budget"} <= fields
@@ -385,9 +385,9 @@ def test_the_certificate_reports_both_budgets_it_ran_under() -> None:
 def test_an_unsatisfiable_ontology_is_refused_rather_than_answered_vacuously() -> None:
     """Every class subsumes every other with no model, so no answer is given."""
     for call in (
-        lambda: entail.classify(UNSATISFIABLE),
-        lambda: entail.realize(UNSATISFIABLE),
-        lambda: entail.instances(UNSATISFIABLE, "<https://example.org/Cat>"),
+        lambda: entail.classify(UNSATISFIABLE, canonical_search="1000000").value,
+        lambda: entail.realize(UNSATISFIABLE, canonical_search="1000000").value,
+        lambda: entail.instances(UNSATISFIABLE, "<https://example.org/Cat>", canonical_search="1000000").value,
     ):
         with pytest.raises(ValueError, match="no model"):
             call()
@@ -438,8 +438,8 @@ def test_a_profile_violation_names_its_term_and_reason() -> None:
 def test_extract_module_is_smaller_than_the_ontology() -> None:
     """The ⊥-module for {Cat} follows the chain up and leaves the sibling behind."""
     answer, certificate = entail.extract_module(
-        TAXONOMY, "<https://example.org/Cat>\n", "bot"
-    )
+        TAXONOMY, "<https://example.org/Cat>\n", "bot", canonical_search="1000000"
+    ).value
     assert "<https://example.org/Cat>" in answer
     assert "<https://example.org/Fish>" not in answer, answer
     assert "\nmethod BOT\n" in certificate
@@ -452,15 +452,15 @@ def test_extract_module_is_smaller_than_the_ontology() -> None:
 def test_every_module_method_is_reachable(method: str) -> None:
     """All three locality notions cross the boundary and name themselves."""
     _answer, certificate = entail.extract_module(
-        TAXONOMY, "<https://example.org/Cat>\n", method
-    )
+        TAXONOMY, "<https://example.org/Cat>\n", method, canonical_search="1000000"
+    ).value
     assert f"\nmethod {method.upper()}\n" in certificate
 
 
 def test_an_unknown_module_method_names_the_accepted_set() -> None:
     """The error a caller three language boundaries away has to act on."""
     with pytest.raises(ValueError) as raised:
-        entail.extract_module(TAXONOMY, "", "nested")
+        entail.extract_module(TAXONOMY, "", "nested", canonical_search="1000000").value
     message = str(raised.value)
     assert "nested" in message
     for method in ("bot", "top", "star"):
@@ -469,7 +469,7 @@ def test_an_unknown_module_method_names_the_accepted_set() -> None:
 
 def test_justify_re_decides_both_halves_of_its_claim() -> None:
     """A justification is sufficient AND minimal, and both are re-decided here."""
-    answer, certificate = entail.justify(TAXONOMY, CHAIN_AXIOM)
+    answer, certificate = entail.justify(TAXONOMY, CHAIN_AXIOM, canonical_search="1000000").value
     # The chain, and NOT the sibling: two axioms of the four.
     assert len(answer.splitlines()) == 2, answer
     assert "<https://example.org/Fish>" not in answer
@@ -490,7 +490,7 @@ def test_justify_re_decides_both_halves_of_its_claim() -> None:
 def test_an_unentailed_axiom_has_no_justification() -> None:
     """A refusal, not an empty set — which reads as "nothing is needed"."""
     with pytest.raises(ValueError, match="does not entail"):
-        entail.justify(TAXONOMY, REVERSED_AXIOM)
+        entail.justify(TAXONOMY, REVERSED_AXIOM, canonical_search="1000000").value
 
 
 def test_explain_conclusion_re_derives_rather_than_re_reads() -> None:
@@ -574,11 +574,11 @@ def test_an_underivable_conclusion_is_a_hard_error() -> None:
 def test_a_malformed_document_is_an_error_not_an_empty_answer() -> None:
     """Every service refuses a document it cannot parse."""
     for call in (
-        lambda: entail.consistency("this is not n-quads\n", [], []),
-        lambda: entail.classify("this is not n-quads\n"),
-        lambda: entail.realize("this is not n-quads\n"),
+        lambda: entail.consistency("this is not n-quads\n", [], [], canonical_search="1000000").value,
+        lambda: entail.classify("this is not n-quads\n", canonical_search="1000000").value,
+        lambda: entail.realize("this is not n-quads\n", canonical_search="1000000").value,
         lambda: entail.profile("this is not n-quads\n"),
-        lambda: entail.extract_module("this is not n-quads\n", "", "bot"),
+        lambda: entail.extract_module("this is not n-quads\n", "", "bot", canonical_search="1000000").value,
     ):
         with pytest.raises(ValueError):
             call()
@@ -587,18 +587,18 @@ def test_a_malformed_document_is_an_error_not_an_empty_answer() -> None:
 def test_a_malformed_term_or_axiom_is_refused() -> None:
     """A class is ONE N-Triples term; an axiom is ONE ungraphed triple."""
     with pytest.raises(ValueError, match="N-Triples term"):
-        entail.instances(TAXONOMY, "not a term")
+        entail.instances(TAXONOMY, "not a term", canonical_search="1000000").value
     with pytest.raises(ValueError, match="N-Triples term"):
-        entail.instances(TAXONOMY, "<https://example.org/A> <https://example.org/B>")
+        entail.instances(TAXONOMY, "<https://example.org/A> <https://example.org/B>", canonical_search="1000000").value
     # A literal is not a name, so it is not a class, an individual or a property.
     with pytest.raises(ValueError):
-        entail.instances(TAXONOMY, '"Cat"')
+        entail.instances(TAXONOMY, '"Cat"', canonical_search="1000000").value
     graph_scoped = (
         f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <https://example.org/Animal> "
         "<https://example.org/g> .\n"
     )
     with pytest.raises(ValueError, match="names a graph"):
-        entail.entails(TAXONOMY, graph_scoped)
+        entail.entails(TAXONOMY, graph_scoped, canonical_search="1000000").value
 
 
 # ── The session ──────────────────────────────────────────────────────────────
@@ -615,16 +615,16 @@ def test_the_session_answers_what_the_free_functions_answer() -> None:
     """
     session = entail.Reasoner(TAXONOMY)
     cat = "<https://example.org/Cat>"
-    assert session.consistency() == entail.consistency(TAXONOMY, [], [])
-    assert session.classify() == entail.classify(TAXONOMY)
-    assert session.realize() == entail.realize(TAXONOMY)
-    assert session.instances(cat) == entail.instances(TAXONOMY, cat)
-    assert session.entails(CHAIN_AXIOM) == entail.entails(TAXONOMY, CHAIN_AXIOM)
+    assert session.consistency(canonical_search="1000000").value == entail.consistency(TAXONOMY, [], [], canonical_search="1000000").value
+    assert session.classify(canonical_search="1000000").value == entail.classify(TAXONOMY, canonical_search="1000000").value
+    assert session.realize(canonical_search="1000000").value == entail.realize(TAXONOMY, canonical_search="1000000").value
+    assert session.instances(cat, canonical_search="1000000").value == entail.instances(TAXONOMY, cat, canonical_search="1000000").value
+    assert session.entails(CHAIN_AXIOM, canonical_search="1000000").value == entail.entails(TAXONOMY, CHAIN_AXIOM, canonical_search="1000000").value
     assert session.profile() == entail.profile(TAXONOMY)
-    assert session.justify(CHAIN_AXIOM) == entail.justify(TAXONOMY, CHAIN_AXIOM)
-    assert session.extract_module(cat, "star") == entail.extract_module(
-        TAXONOMY, cat, "star"
-    )
+    assert session.justify(CHAIN_AXIOM, canonical_search="1000000").value == entail.justify(TAXONOMY, CHAIN_AXIOM, canonical_search="1000000").value
+    assert session.extract_module(cat, "star", canonical_search="1000000").value == entail.extract_module(
+        TAXONOMY, cat, "star", canonical_search="1000000"
+    ).value
     for _ in range(3):
         assert session.explain_conclusion(entail.Regime.OWL_RL, DERIVED_TRIPLE) == (
             entail.explain_conclusion(TAXONOMY, entail.Regime.OWL_RL, DERIVED_TRIPLE)
@@ -669,7 +669,7 @@ def test_the_session_does_not_reason_until_it_has_to() -> None:
     assert "reasoned: false" in repr(session)
     session.profile()
     assert "reasoned: false" in repr(session), "profile must not reason"
-    session.consistency()
+    session.consistency(canonical_search="1000000").value
     assert "reasoned: true" in repr(session)
 
 
@@ -718,9 +718,9 @@ def test_every_proof_bearing_service_produces_a_checkable_proof(
 ) -> None:
     """Seven services, one grammar, and a check that runs against the caller's own
     document, question and answer."""
-    answer, certificate, proof = entail.prove(TAXONOMY, service, argument)
+    answer, certificate, proof = entail.prove(TAXONOMY, service, argument, canonical_search="1000000").value
     assert proof.startswith(f"purrdf-dl-proof 1\nservice {service}\navailability recorded\n")
-    report = entail.check_proof(TAXONOMY, service, argument, answer, certificate, proof)
+    report = entail.check_proof(TAXONOMY, service, argument, answer, certificate, proof, canonical_search="1000000").value
     assert report.startswith(f"purrdf-dl-proof-check 1\nservice {service}\n")
     assert "\nanswer checked " in report
     # No proof is fully attested: reading a clause set is the PRODUCER's
@@ -733,21 +733,21 @@ def test_every_proof_bearing_service_produces_a_checkable_proof(
 @pytest.mark.parametrize(("service", "argument"), PROOF_QUESTIONS)
 def test_asking_for_a_proof_changes_no_answer(service: str, argument: str) -> None:
     """The answer and the certificate are byte-identical with and without a proof."""
-    proved_answer, proved_certificate, _ = entail.prove(TAXONOMY, service, argument)
+    proved_answer, proved_certificate, _ = entail.prove(TAXONOMY, service, argument, canonical_search="1000000").value
     session = entail.Reasoner(TAXONOMY)
     assert session.records_proofs is False
     if service == "extract-module":
         method, *terms = argument.splitlines()
-        bare = session.extract_module("\n".join(terms) + "\n", method.removeprefix("method "))
+        bare = session.extract_module("\n".join(terms) + "\n", method.removeprefix("method "), canonical_search="1000000").value
     elif service == "class-satisfiability":
         proving = entail.Reasoner(TAXONOMY, proofs=True)
         # The one service with no non-proving entry point of its own; asked twice
         # through the recording session instead, which is the same code path.
-        bare = proving.prove(service, argument)[:2]
+        bare = proving.prove(service, argument, canonical_search="1000000").value[:2]
     elif argument:
-        bare = getattr(session, service)(argument)
+        bare = getattr(session, service)(argument, canonical_search="1000000").value
     else:
-        bare = getattr(session, service)()
+        bare = getattr(session, service)(canonical_search="1000000").value
     assert bare[0] == proved_answer
     assert bare[1] == proved_certificate
 
@@ -755,21 +755,21 @@ def test_asking_for_a_proof_changes_no_answer(service: str, argument: str) -> No
 def test_an_answer_nobody_recorded_is_never_presented_as_verified() -> None:
     """The three availabilities are three different documents, and no two of them
     can be read as each other."""
-    answer, certificate = entail.consistency(TAXONOMY, [], [])
+    answer, certificate = entail.consistency(TAXONOMY, [], [], canonical_search="1000000").value
     absent = "purrdf-dl-proof 1\navailability not-recorded\n"
     with pytest.raises(ValueError, match="nothing was recorded"):
-        entail.check_proof(TAXONOMY, "consistency", "", answer, certificate, absent)
+        entail.check_proof(TAXONOMY, "consistency", "", answer, certificate, absent, canonical_search="1000000").value
 
     # …while a RECORDED zero-run proof is a real measurement, and it checks.
     argument = "method bot\n<https://example.org/Cat>"
     module_answer, module_certificate, module_proof = entail.prove(
-        TAXONOMY, "extract-module", argument
-    )
+        TAXONOMY, "extract-module", argument, canonical_search="1000000"
+    ).value
     assert "\navailability recorded\n" in module_proof
     assert "\nruns 0\n" in module_proof, "locality extraction opens no tableau"
     report = entail.check_proof(
-        TAXONOMY, "extract-module", argument, module_answer, module_certificate, module_proof
-    )
+        TAXONOMY, "extract-module", argument, module_answer, module_certificate, module_proof, canonical_search="1000000"
+    ).value
     assert "\nruns 0\n" in report and "\nreplayed 0\n" in report
 
 
@@ -779,13 +779,13 @@ def test_a_session_records_only_when_asked() -> None:
     plain = entail.Reasoner(TAXONOMY)
     assert plain.records_proofs is False
     with pytest.raises(ValueError, match="records nothing"):
-        plain.prove("consistency", "")
+        plain.prove("consistency", "", canonical_search="1000000").value
 
     recording = entail.Reasoner(TAXONOMY, proofs=True)
     assert recording.records_proofs is True
-    answer, certificate, proof = recording.prove("classify", "")
+    answer, certificate, proof = recording.prove("classify", "", canonical_search="1000000").value
     assert "\navailability recorded\n" in proof
-    entail.check_proof(TAXONOMY, "classify", "", answer, certificate, proof)
+    entail.check_proof(TAXONOMY, "classify", "", answer, certificate, proof, canonical_search="1000000").value
 
 
 # `<urn:purrdf:rdfc:Animal>` in place of `Animal`: the RDFC-1.0 overlay's own
@@ -812,7 +812,7 @@ def test_extract_module_with_proofs_raises_value_error_naming_the_reserved_iri()
     """
     session = entail.Reasoner(_RESERVED_TAXONOMY, proofs=True)
     with pytest.raises(ValueError, match="urn:purrdf:rdfc:Animal"):
-        session.extract_module("<https://example.org/Cat>", "bot")
+        session.extract_module("<https://example.org/Cat>", "bot", canonical_search="1000000").value
 
 
 def test_extract_module_with_proofs_still_admits_the_ordinary_taxonomy() -> None:
@@ -820,7 +820,7 @@ def test_extract_module_with_proofs_still_admits_the_ordinary_taxonomy() -> None
     over the ORDINARY `TAXONOMY` (no reserved IRI), still extracts and still
     records a proof — the migration changed no admitted-input behavior."""
     session = entail.Reasoner(TAXONOMY, proofs=True)
-    answer, certificate = session.extract_module("<https://example.org/Cat>", "bot")
+    answer, certificate = session.extract_module("<https://example.org/Cat>", "bot", canonical_search="1000000").value
     assert "<https://example.org/Cat>" in answer
     assert certificate.endswith("conservative false\n")
 
@@ -828,32 +828,32 @@ def test_extract_module_with_proofs_still_admits_the_ordinary_taxonomy() -> None
 def test_a_proof_is_bound_to_its_ontology_its_question_and_its_answer() -> None:
     """Three separate refusals: a genuine proof is still not a proof of a different
     document, a different axiom, or a different answer."""
-    answer, certificate, proof = entail.prove(TAXONOMY, "entails", CHAIN_AXIOM)
+    answer, certificate, proof = entail.prove(TAXONOMY, "entails", CHAIN_AXIOM, canonical_search="1000000").value
     other_document = (
         f"<https://example.org/a> <{RDF_TYPE}> <https://example.org/B> .\n"
     )
     with pytest.raises(ValueError, match="does not check"):
         entail.check_proof(
-            other_document, "entails", CHAIN_AXIOM, answer, certificate, proof
-        )
+            other_document, "entails", CHAIN_AXIOM, answer, certificate, proof, canonical_search="1000000"
+        ).value
     with pytest.raises(ValueError, match="does not check"):
         entail.check_proof(
-            TAXONOMY, "entails", REVERSED_AXIOM, answer, certificate, proof
-        )
+            TAXONOMY, "entails", REVERSED_AXIOM, answer, certificate, proof, canonical_search="1000000"
+        ).value
     # An answer the proof does not establish: `entails false` reports no claim at
     # all, and this proof establishes one.
     with pytest.raises(ValueError, match="does not cover"):
         entail.check_proof(
-            TAXONOMY, "entails", CHAIN_AXIOM, "entails false\n", certificate, proof
-        )
+            TAXONOMY, "entails", CHAIN_AXIOM, "entails false\n", certificate, proof, canonical_search="1000000"
+        ).value
 
 
 def test_a_rendered_proof_is_byte_identical_run_to_run() -> None:
     """A proof is a function of its input alone, which is what makes a pinned
     digest mean anything."""
     for service, argument in PROOF_QUESTIONS:
-        first = entail.prove(TAXONOMY, service, argument)[2]
-        again = entail.prove(TAXONOMY, service, argument)[2]
+        first = entail.prove(TAXONOMY, service, argument, canonical_search="1000000").value[2]
+        again = entail.prove(TAXONOMY, service, argument, canonical_search="1000000").value[2]
         assert first == again, service
 
 
@@ -909,10 +909,10 @@ def test_the_committed_proof_bytes_reproduce_through_this_host() -> None:
     )
     for case in cases:
         argument = case.get("argument", "").rstrip("\n")
-        answer, certificate, proof = entail.prove(case["input"], case["service"], argument)
+        answer, certificate, proof = entail.prove(case["input"], case["service"], argument, canonical_search="1000000").value
         assert answer == case["answer"], case["case"]
         assert proof == case["proof"], case["case"]
         report = entail.check_proof(
-            case["input"], case["service"], argument, answer, certificate, proof
-        )
+            case["input"], case["service"], argument, answer, certificate, proof, canonical_search="1000000"
+        ).value
         assert report == case["check"], case["case"]

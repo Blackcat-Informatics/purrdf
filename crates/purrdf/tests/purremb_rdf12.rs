@@ -94,24 +94,37 @@ fn rdf_fixture_with_columnar(
         )
         .unwrap();
     let dataset = dataset.freeze().expect("valid RDF 1.2 dataset");
-    let canonical = try_canonicalize(&dataset).expect("canonical labels");
-    let (source, source_bytes) =
-        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let canonical = try_canonicalize(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("canonical labels");
+    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
     let files = compression.map(|compression| {
         purrdf::columnar::write(&*dataset, &purrdf::ContentStore::new(), compression)
             .unwrap()
             .files
     });
     let source = files.as_ref().map_or(source, |files| {
-        CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(files)).unwrap()
+        CertifiedEmbeddingSource::certify(
+            EmbeddingSource::Columnar(files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     });
     let dataset_target = source.dataset_target(true).expect("dataset target");
 
     let subject_target = RdfTermTarget::Blank {
         dataset_id: dataset_target.id,
         canonical_label: canonical
-            .labels
-            .get(&subject)
+            .label(&subject)
             .expect("canonical blank label")
             .to_string(),
     }
@@ -424,7 +437,15 @@ fn columnar_rdf12_source_ordinals_use_original_rows_and_canonical_blank_labels()
         let bytes = build(&fixture, fixture.relations.clone()).unwrap();
         let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
         verify_embedding(&mut view).unwrap();
-        let report = verify_embedding_source(&view, EmbeddingSource::Columnar(&files)).unwrap();
+        let report = verify_embedding_source(
+            &view,
+            EmbeddingSource::Columnar(&files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(report.ordinals_checked(), 7);
         assert_eq!(
             report.certified_rdf_digest(),
@@ -441,7 +462,7 @@ fn columnar_rdf12_source_ordinals_use_original_rows_and_canonical_blank_labels()
             let bytes = build(&changed, changed.relations.clone()).unwrap();
             let view = EmbeddingView::from_bytes(&bytes).unwrap();
             assert!(matches!(
-                verify_embedding_source(&view, EmbeddingSource::Columnar(&files)),
+                verify_embedding_source(&view, EmbeddingSource::Columnar(&files), &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)),
                 Err(SourceAttachmentError::Columnar(cause))
                     if matches!(*cause, purrdf::columnar::ColumnarError::OrdinalOutOfRange { .. })
             ));
@@ -452,7 +473,14 @@ fn columnar_rdf12_source_ordinals_use_original_rows_and_canonical_blank_labels()
             let bytes = build(&changed, changed.relations.clone()).unwrap();
             let view = EmbeddingView::from_bytes(&bytes).unwrap();
             assert!(matches!(
-                verify_embedding_source(&view, EmbeddingSource::Columnar(&files)),
+                verify_embedding_source(
+                    &view,
+                    EmbeddingSource::Columnar(&files),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                ),
                 Err(SourceAttachmentError::Embedding(
                     EmbeddingError::OrdinalMismatch { .. }
                 ))
@@ -515,8 +543,12 @@ fn rdf12_composites_round_trip_through_one_identity_model() {
     let bytes = build(&fixture, fixture.relations.clone()).expect("RDF 1.2 PURREMB");
     let mut view = EmbeddingView::from_bytes(&bytes).expect("structural view");
     verify_embedding(&mut view).expect("full RDF target verification");
-    verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
-        .expect("certified RDF source");
+    verify_embedding_source(
+        &view,
+        EmbeddingSource::Purrpck(&fixture.source_bytes),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("certified RDF source");
     assert_eq!(view.target_count(), fixture.targets.len());
     assert_eq!(view.relation_count(), fixture.relations.len());
     assert_eq!(
@@ -594,8 +626,11 @@ fn multi_binding_carrier(
             .unwrap();
     }
     let dataset = dataset.freeze().expect("multiple RDF 1.2 bindings");
-    let (source, source_bytes) =
-        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
     let projection = columnar
         .then(|| purrdf::columnar::project(&*dataset, &purrdf::ContentStore::new()).unwrap());
     let files = projection.as_ref().map(|projection| {
@@ -605,7 +640,14 @@ fn multi_binding_carrier(
             .files
     });
     let source = files.as_ref().map_or(source, |files| {
-        CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(files)).unwrap()
+        CertifiedEmbeddingSource::certify(
+            EmbeddingSource::Columnar(files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     });
     let pack = PackView::from_bytes(&source_bytes).expect("pack view");
     let dataset_target = source.dataset_target(true).unwrap();
@@ -753,7 +795,14 @@ fn columnar_annotation_ordinal_resolves_all_bindings_of_the_original_resource() 
         let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
         verify_embedding(&mut view).unwrap();
         let files = files.unwrap();
-        let result = verify_embedding_source(&view, EmbeddingSource::Columnar(&files));
+        let result = verify_embedding_source(
+            &view,
+            EmbeddingSource::Columnar(&files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         if include_unbound {
             assert!(matches!(
                 result,
@@ -773,8 +822,12 @@ fn source_ordinals_accept_each_statement_bound_by_one_reifier() {
     let bytes = build(&fixture, fixture.relations.clone()).expect("multi-binding artifact");
     let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
     verify_embedding(&mut view).expect("valid target identities and relations");
-    let report = verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
-        .expect("each binding matches its source ordinal");
+    let report = verify_embedding_source(
+        &view,
+        EmbeddingSource::Purrpck(&fixture.source_bytes),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("each binding matches its source ordinal");
     assert_eq!(report.ordinals_checked(), 6);
 }
 
@@ -785,7 +838,14 @@ fn annotation_ordinal_refuses_a_statement_not_bound_in_its_graph() {
     let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
     verify_embedding(&mut view).expect("valid identities are distinct from source binding");
     assert!(matches!(
-        verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+        verify_embedding_source(
+            &view,
+            EmbeddingSource::Purrpck(&fixture.source_bytes),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(SourceAttachmentError::Embedding(
             EmbeddingError::OrdinalMismatch { .. }
         ))
@@ -798,7 +858,7 @@ fn assert_certified_ordinal_mismatch(fixture: &RdfFixture, kind: TargetKind) {
     verify_embedding(&mut view).expect("valid target identities and relations");
 
     assert!(matches!(
-        verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+        verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes), &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)),
         Err(SourceAttachmentError::Embedding(EmbeddingError::OrdinalMismatch { target_kind, .. }))
             if target_kind == kind.code()
     ));

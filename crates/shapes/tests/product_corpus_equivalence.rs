@@ -426,7 +426,10 @@ fn run_lane(shapes: &Shapes, data: &RdfDataset) -> LaneOutcome {
 fn classify(loaded: &Loaded) -> Bucket {
     let parsed = PreparedShapes::new(Arc::clone(&loaded.shapes));
 
-    let bytes = match parsed.to_product(&ShapesProfile::CORE) {
+    let bytes = match parsed.to_product(
+        &ShapesProfile::CORE,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         Ok(bytes) => bytes,
         Err(e) => return Bucket::Refused(e),
     };

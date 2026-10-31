@@ -50,12 +50,26 @@ fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
     let expected = original.inferred_dataset().unwrap();
     let actual = triple.inferred_dataset().unwrap();
     assert_eq!(
-        try_canonicalize_flat_view(&actual.read().unwrap(), CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_flat_view(expected.as_ref(), CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_flat_view(
+            &actual.read().unwrap(),
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
+        try_canonicalize_flat_view(
+            expected.as_ref(),
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
         "{rule_text}"
     );
     Ok(original.inferred().to_vec())

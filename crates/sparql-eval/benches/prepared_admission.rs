@@ -21,7 +21,7 @@ fn bench(c: &mut Bench) {
         b.iter(|| {
             black_box(
                 engine
-                    .query_prepared(black_box(&data), &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(black_box(&data), &prepared, &[], &QueryOptions::EMPTY)
                     .unwrap(),
             )
         });

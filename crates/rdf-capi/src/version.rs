@@ -301,7 +301,23 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `out_receipt` buffer slot after the seed input. Release it with
 /// `purrdf_buffer_free`. Failed executions expose their receipt through
 /// `purrdf_error_execution_receipt_json` on the original error handle.
-pub const PURRDF_ABI_MINOR: u32 = 16;
+///
+/// # `0.16.0` → `0.17.0`: explicit canonical-search policy and evidence
+///
+/// Canonicalizing entailment, session, SHACL materialization and product exports
+/// require `canonical_search`, optional `cancellation`, and an independent
+/// `out_canonicalization_json` slot before `out_error`. The policy is `unlimited`
+/// or a canonical decimal `u64`. Every run reports its own effective policy and
+/// charged work. Errors retain original native causes and receipts until freed.
+/// All output slots must be distinct; rebuild affected callers against this header.
+///
+/// # `0.17.0` → `0.18.0`: caller-selected logical UDF depth
+///
+/// `PurrdfQueryGovernors` gains `max_udf_depth` before `deadline_millis`.
+/// MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
+/// the default depth limit of 32. The two flag bits conflict. Rebuild callers
+/// against the new structure layout and regenerate any copied declarations.
+pub const PURRDF_ABI_MINOR: u32 = 18;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

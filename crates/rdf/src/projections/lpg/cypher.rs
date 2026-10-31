@@ -486,9 +486,26 @@ mod tests {
             &write_lpg_cypher(&decoded, &config).expect("rewrite")
         ));
         let lifted = lift_lpg(&decoded, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &lifted.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
 
-        let pack = PackBuilder::build_bytes(&dataset).expect("pack");
+        let pack = PackBuilder::build_bytes(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let view = PackView::from_bytes(&pack).expect("view");
         let packed = project_lpg_cypher(&view, &config).expect("pack projection");
         assert!(same_artifacts(&projected.package, &packed.package));

@@ -110,7 +110,15 @@ fn render(result: &SparqlResult) -> String {
         SparqlResult::Graph(graph) => {
             format!(
                 "graph\n{}",
-                purrdf_core::try_canonicalize(graph).unwrap().nquads
+                purrdf_core::try_canonicalize(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads()
             )
         }
         SparqlResult::Solutions {
@@ -125,7 +133,15 @@ fn render(result: &SparqlResult) -> String {
             write!(
                 out,
                 "aux\n{}",
-                purrdf_core::try_canonicalize(aux).unwrap().nquads
+                purrdf_core::try_canonicalize(
+                    aux,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads()
             )
             .expect("writing to a String cannot fail");
             out
@@ -151,7 +167,7 @@ fn ungoverned(
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);
     engine
-        .query_with_source(dataset, request(query), remote, options)
+        .query_with_source(dataset, request(query), remote, &options)
         .map_err(|error| error.to_string())
 }
 
@@ -238,7 +254,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     &remote,
-                    QueryOptions::new().with_env(&governed_env),
+                    &QueryOptions::new().with_env(&governed_env),
                     &QueryGovernors::UNBOUNDED,
                 )
                 .map_err(|error| error.to_string());

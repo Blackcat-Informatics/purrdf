@@ -321,13 +321,18 @@ fn a_rule_fires_at_an_explicit_shape_target() {
         let entailed =
             purrdf_shapes::entail_dataset(turtle::data(PREFIXES, data_ttl).as_ref(), &shapes)
                 .expect("rules run");
-        purrdf_rdf::try_canonicalize(entailed.as_ref())
-            .unwrap()
-            .nquads
+        purrdf_rdf::try_canonicalize(
+            entailed.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     };
     let fired = "<http://example.org/ns#a> <http://example.org/ns#q> <http://example.org/ns#v>";
-    assert!(entail("ex:a sh:shape ex:S .").contains(fired));
-    assert!(!entail("ex:a ex:p ex:S .").contains(fired));
+    assert!(entail("ex:a sh:shape ex:S .").nquads().contains(fired));
+    assert!(!entail("ex:a ex:p ex:S .").nquads().contains(fired));
 }
 
 // ── Where targets (sh:targetWhere) ─────────────────────────────────────────────

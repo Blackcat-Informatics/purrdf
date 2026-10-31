@@ -1212,7 +1212,7 @@ fn run_query_view<
                         base_iri: None,
                         substitutions,
                     },
-                    options,
+                    &options,
                 )
             })
             .map_err(crate::xpath::query_error)?;
@@ -1221,13 +1221,13 @@ fn run_query_view<
 
     let Some(state) = scopes.governors.as_ref() else {
         return Ok(SPARQL_ENGINE
-            .with(|engine| engine.query_interned_view(dataset, request, options, visit))
+            .with(|engine| engine.query_interned_view(dataset, request, &options, visit))
             .map_err(crate::xpath::query_error)??);
     };
 
     let outcome = SPARQL_ENGINE
         .with(|engine| {
-            engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
+            engine.query_governed_interned_in_operation(dataset, request, &options, state, visit)
         })
         .map_err(crate::xpath::query_error)?;
     certify_governed(outcome)
@@ -1619,7 +1619,7 @@ impl ShaclExecution {
             .with_env(&scopes.env)
             .with_declared_prebound(declared_shape_context(parameters, scopes));
         let execution = SPARQL_ENGINE
-            .with(|engine| engine.prepare_execution(query, None, parameters, options))
+            .with(|engine| engine.prepare_execution(query, None, parameters, &options))
             .map_err(crate::xpath::query_error)?;
         Ok(Self {
             execution,
@@ -1775,7 +1775,7 @@ fn run_bound_view<
 
     let Some(state) = scopes.governors.as_ref() else {
         return Ok(SPARQL_ENGINE
-            .with(|engine| engine.execute(&mut handle.execution, dataset, options, visit))
+            .with(|engine| engine.execute(&mut handle.execution, dataset, &options, visit))
             .map_err(crate::xpath::query_error)??);
     };
 
@@ -1784,7 +1784,7 @@ fn run_bound_view<
             engine.execute_governed_in_operation(
                 &mut handle.execution,
                 dataset,
-                options,
+                &options,
                 state,
                 visit,
             )

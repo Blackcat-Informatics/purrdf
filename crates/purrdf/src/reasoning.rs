@@ -47,8 +47,9 @@ use purrdf_sparql_eval::{
 /// let data = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
 /// let mut session = ReasonerSession::open(data, 0, 0).expect("parses");
-/// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
-/// let hierarchy = session.classify().expect("decides"); // no second parse
+/// let mut canonical = purrdf::CanonicalizationControl::new(purrdf::RDFC_V2_CORPUS_POLICY, None);
+/// assert_eq!(session.consistency(&mut canonical).expect("decides").answer(), "consistency true\n");
+/// let hierarchy = session.classify(&mut canonical).expect("decides"); // no second parse
 /// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));
 /// ```
 pub use purrdf_validate::regime::ReasonerSession;
@@ -426,7 +427,7 @@ pub fn query_with_entailment<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
 ) -> Result<(SparqlResult, ReasoningReport), ReasoningError<D::ReadError>> {
     // Parse first so invalid queries fail before potentially expensive closure work.
@@ -490,10 +491,8 @@ pub fn query_with_entailment<D: DatasetView>(
         })?),
         None => None,
     };
-    let options = match rebound_env.as_ref() {
-        Some(env) => options.with_env(env),
-        None => options,
-    };
+    let rebound_options = rebound_env.as_ref().map(|env| options.with_env(env));
+    let options = rebound_options.as_ref().unwrap_or(options);
     let prepared_query = if rebound.is_some() {
         engine.prepare_query_with_options(request.query, request.base_iri, options)?
     } else {
@@ -962,7 +961,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError<D::ReadError>> {
@@ -1004,7 +1003,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     closure: &EntailmentClosure<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError<D::ReadError>> {
@@ -1082,10 +1081,8 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
         })?),
         None => None,
     };
-    let options = match rebound_env.as_ref() {
-        Some(env) => options.with_env(env),
-        None => options,
-    };
+    let rebound_options = rebound_env.as_ref().map(|env| options.with_env(env));
+    let options = rebound_options.as_ref().unwrap_or(options);
     let prepared_query = if rebound.is_some() {
         engine.prepare_query_with_options(request.query, request.base_iri, options)?
     } else {
@@ -2013,7 +2010,7 @@ mod tests {
             unreachable!()
         };
         *root = rewritten;
-        let error = PreparedQuery::rewritten(query, QueryOptions::EMPTY).unwrap_err();
+        let error = PreparedQuery::rewritten(query, &QueryOptions::EMPTY).unwrap_err();
         assert!(error.to_string().contains("contextual"), "{error}");
     }
 
@@ -2279,7 +2276,7 @@ mod tests {
                     substitutions: &[],
                 },
                 mode,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &ClosureRelations::NONE,
             )
         };
@@ -2352,7 +2349,7 @@ mod tests {
                 substitutions: &[],
             },
             mode,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap()
@@ -2404,7 +2401,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::D,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2423,7 +2420,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryEntailment::Simple,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &ClosureRelations::NONE,
             )
             .unwrap()
@@ -2488,7 +2485,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdfs,
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),
@@ -2524,7 +2521,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdfs,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .expect_err("an unregistered custom aggregate must be refused, entailed or not");
@@ -2559,7 +2556,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdf,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2649,7 +2646,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2694,7 +2691,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2738,7 +2735,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2794,7 +2791,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .expect("owl-direct answers")
@@ -2809,7 +2806,7 @@ mod tests {
         let (closure, _) =
             purrdf_entail::materialize(ds, Materialization::OwlDirect(&pattern)).expect("augment");
         engine
-            .query_prepared(&closure, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&closure, &prepared, &[], &QueryOptions::EMPTY)
             .expect("evaluate")
     }
 

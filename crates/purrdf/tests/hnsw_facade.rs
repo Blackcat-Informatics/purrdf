@@ -63,7 +63,7 @@ fn answer(registry: &PropertyFunctionRegistry<'static>, query: &str) -> usize {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),

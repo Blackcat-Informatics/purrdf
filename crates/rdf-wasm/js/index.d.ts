@@ -107,6 +107,10 @@ export interface GovernorOptions {
   readonly maxScratchBytes?: GovernorCeiling | null;
   /** Requests issued to remote or federated endpoints. */
   readonly maxRemoteRequests?: GovernorCeiling | null;
+  /** Inclusive logical user-function depth; the default is thirty-two. */
+  readonly maxUdfDepth?: GovernorCeiling | null;
+  /** Remove the logical depth ceiling. Cannot be combined with maxUdfDepth. */
+  readonly unlimitedUdfDepth?: boolean;
   /** A cancellation bit the host can flip. The engine is handed a share of it. */
   readonly cancel?: CancellationToken | null;
 }
@@ -856,8 +860,8 @@ export class Dataset implements Iterable<Quad> {
    * refusal is a thrown `Error` naming the cause; it never aborts the
    * module.
    */
-  canonicalize(): string;
-  isomorphic(other: Dataset): boolean;
+  canonicalize(canonicalSearch: string, cancel?: CancellationToken): CanonicalResult<string>;
+  isomorphic(other: Dataset, canonicalSearch: string, cancel?: CancellationToken): CanonicalResult<boolean>;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
   free(): void;
@@ -969,7 +973,35 @@ export class ProjectionLift {
  * N-Quads and the byte-stable rendered reasoning report. Returned by
  * `entailMaterialize`.
  */
+/**
+ * Required canonicalSearch values are "unlimited" or canonical unsigned decimal u64
+ * text, without leading zeros. Each constituent run has an independent ceiling.
+ * Synchronous calls block callbacks on the same JavaScript event loop; cancellation
+ * observes an already signaled token, and does not promise same-event-loop preemption.
+ */
+export class CanonicalResult<T = unknown> {
+  readonly value: T;
+  readonly canonicalizationJson: string;
+  free(): void;
+}
+
+/** Original native failure ownership, including its retained admission grant. */
+export class CanonicalCause {
+  readonly json: string;
+  free(): void;
+}
+
+/** A canonicalizing request's refusal, with evidence even when no run started. */
+export interface CanonicalizationFailure extends Error {
+  readonly canonicalizationJson: string;
+  readonly nativeCauseJson?: string;
+  /** Free this owned native cause when the refusal is no longer needed. */
+  readonly nativeCause?: CanonicalCause;
+}
+
 export class RegimeClosure {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
   private constructor();
   /** The materialized dataset (input quads + inferred triples) as canonical N-Quads. */
   readonly nquads: string;
@@ -987,6 +1019,8 @@ export class RegimeClosure {
  * `entailVerifyEntailment`.
  */
 export class ReasoningAnswer {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
   private constructor();
   /**
    * The service's answer, in the service's own line-oriented rendering. A
@@ -1071,15 +1105,15 @@ export class Reasoner {
    *
    * Throws on a session that records nothing: open it with `Reasoner.withProofs`.
    */
-  prove(service: ProofService | string, argument: string): ReasoningAnswer;
-  consistency(): ReasoningAnswer;
-  classify(): ReasoningAnswer;
-  realize(): ReasoningAnswer;
-  instances(class_: string): ReasoningAnswer;
-  entails(axiom: string): ReasoningAnswer;
+  prove(service: ProofService | string, argument: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  consistency(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  classify(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  realize(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  instances(class_: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  entails(axiom: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
   profile(): ReasoningAnswer;
-  extractModule(signature: string, method: string): ReasoningAnswer;
-  justify(axiom: string): ReasoningAnswer;
+  extractModule(signature: string, method: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  justify(axiom: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
   explainConclusion(regime: string, conclusion: string): ReasoningAnswer;
   free(): void;
 }
@@ -2094,10 +2128,12 @@ export function entailMaterialize(
   importIris: readonly string[],
   importDocuments: readonly string[],
   premiseIris: readonly string[],
-  maxStoredFacts?: bigint,
-  maxJoinSteps?: bigint,
+  maxStoredFacts: bigint | undefined,
+  maxJoinSteps: bigint | undefined,
   /** Retained term-surface bytes; omitted, no logical ceiling. */
-  maxTermArenaBytes?: bigint,
+  maxTermArenaBytes: bigint | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
@@ -2109,8 +2145,16 @@ export function entailImplementedRules(regime: EntailmentRegime | string): strin
  * sound rule the table happens not to list. `[]` for a lane with nothing added to it.
  */
 export function entailExtensions(regime: EntailmentRegime | string): string[];
-export function entailCheckGoldenVectors(): void;
-export function entailCheckInconsistentRefusal(): void;
+export function entailCheckGoldenVectors(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+export function entailCheckInconsistentRefusal(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /**
  * Run the committed proof golden-vector artifact through this build and throw on the
@@ -2121,7 +2165,11 @@ export function entailCheckInconsistentRefusal(): void;
  * a rendered proof carries the proof term's own canonical encoding, so a divergence
  * here is a divergence in the TERM rather than in a rendering of one.
  */
-export function entailCheckProofGoldenVectors(): void;
+export function entailCheckProofGoldenVectors(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /**
  * Prove that an answer nobody asked to record is NOT presentable as a verified one,
@@ -2130,7 +2178,11 @@ export function entailCheckProofGoldenVectors(): void;
  * An unrecorded answer must carry `availability not-recorded`, `entailCheckProof` must
  * refuse that document by name, and the same question asked WITH a proof must check.
  */
-export function entailCheckAbsentProof(): void;
+export function entailCheckAbsentProof(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /** The seven Description-Logic services a proof term can be about. */
 export type ProofService =
@@ -2161,6 +2213,8 @@ export function entailProve(
   argument: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2185,7 +2239,9 @@ export function entailCheckProof(
   answer: string,
   certificate: string,
   proof: string,
-): string;
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<string>;
 
 /** The `bot`/`top`/`star` locality-module extraction methods `entailExtractModule` accepts. */
 export type ModuleExtractionMethod = "bot" | "top" | "star";
@@ -2216,6 +2272,8 @@ export function entailConsistency(
   premiseIris: readonly string[],
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2229,6 +2287,8 @@ export function entailClassify(
   document: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2241,6 +2301,8 @@ export function entailRealize(
   document: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2259,6 +2321,8 @@ export function entailInstances(
   classTerm: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2277,6 +2341,8 @@ export function entailEntails(
   axiom: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2299,6 +2365,8 @@ export function entailExtractModule(
   document: string,
   signature: string,
   method: ModuleExtractionMethod | string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2308,7 +2376,11 @@ export function entailExtractModule(
  * Throws if the ontology does not entail the axiom, or if the tableau could not
  * decide it.
  */
-export function entailJustify(document: string, axiom: string): ReasoningAnswer;
+export function entailJustify(
+  document: string, axiom: string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
 
 /**
  * `entailExplainConclusion(document, regime, conclusion)` → WHY one triple of a
@@ -2544,17 +2616,19 @@ export class ShaclImportError {
 export function shaclEntail(
   shapesTtl: string,
   dataNt: string,
-  shapesBase?: string,
-  importIris?: readonly string[],
-  importDocuments?: readonly string[],
-  shapesGraph?: string,
-  maxTermGeneratingRounds?: bigint,
-  maxGeneratedTerms?: bigint,
-  maxStoredFacts?: bigint,
-  maxJoinSteps?: bigint,
-  xpathRegex?: XPathRegexLaw,
-  now?: string | null,
-  entropySeed?: bigint | number | null,
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  maxTermGeneratingRounds: bigint | undefined,
+  maxGeneratedTerms: bigint | undefined,
+  maxStoredFacts: bigint | undefined,
+  maxJoinSteps: bigint | undefined,
+  xpathRegex: XPathRegexLaw | undefined,
+  now: string | null | undefined,
+  entropySeed: bigint | number | null | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ShaclEntailment;
 
 /**
@@ -2562,6 +2636,8 @@ export function shaclEntail(
  * memory: call `free()`.
  */
 export class ShaclEntailment {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
   readonly executionReceiptJson: string;
   free(): void;
   /**
@@ -3045,11 +3121,13 @@ export class ShaclProductRefusal {
  */
 export function shaclPackProduct(
   shapesTtl: string,
-  shapesBase?: string,
-  importIris?: readonly string[],
-  importDocuments?: readonly string[],
-  shapesGraph?: string,
-): Uint8Array;
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<Uint8Array>;
 
 /**
  * What a prepared product says it was compiled from, as deterministic `key value`
@@ -3069,7 +3147,11 @@ export function shaclProductExplain(product: Uint8Array): string;
  *
  * Throws a `ShaclProductRefusal`.
  */
-export function shaclProductCertify(product: Uint8Array): void;
+export function shaclProductCertify(
+  product: Uint8Array,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /**
  * Restore a prepared product and validate an N-Triples data graph with it, returning
@@ -3252,14 +3334,15 @@ export function shaclValidateChangesToSarifAsync(
 export function shaclEntailAsync(
   shapesTtl: string,
   dataNt: string,
-  shapesBase?: string | null,
-  importIris?: readonly string[] | null,
-  importDocuments?: readonly string[] | null,
-  shapesGraph?: string | null,
-  maxTermGeneratingRounds?: bigint | null,
-  maxGeneratedTerms?: bigint | null,
-  maxStoredFacts?: bigint | null,
-  maxJoinSteps?: bigint | null,
+  shapesBase: string | null | undefined,
+  importIris: readonly string[] | null | undefined,
+  importDocuments: readonly string[] | null | undefined,
+  shapesGraph: string | null | undefined,
+  maxTermGeneratingRounds: bigint | null | undefined,
+  maxGeneratedTerms: bigint | null | undefined,
+  maxStoredFacts: bigint | null | undefined,
+  maxJoinSteps: bigint | null | undefined,
+  canonicalSearch: string,
   options?: AsyncShaclRuleOptions | null,
 ): Promise<ShaclEntailment>;
 

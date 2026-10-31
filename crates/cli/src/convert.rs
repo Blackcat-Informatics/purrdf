@@ -90,6 +90,7 @@ impl ViewOp for ConvertOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        canonical: &mut crate::canonical::Request,
     ) -> Result<LossLedger, CliError> {
         sink::write_rdf(
             view,
@@ -98,6 +99,7 @@ impl ViewOp for ConvertOp<'_> {
             self.base,
             self.src_codec,
             self.jsonld_options,
+            canonical,
         )
     }
 }
@@ -137,6 +139,7 @@ pub(crate) fn run(
     output: &str,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let sources = Sources::new(
         input,
@@ -162,6 +165,7 @@ pub(crate) fn run(
             output,
             ledger_target,
             report_target,
+            canonical,
         );
     }
 
@@ -188,12 +192,13 @@ pub(crate) fn run(
             output,
             target_format,
             ledger_target,
+            canonical,
         );
     }
 
     // Otherwise: materialize (folding GTS through the authoritative importer, merging a
     // list through the deterministic union) and serialize the result.
-    let (dataset, mut merged) = ingest::ingest(&sources, &formats)?;
+    let (dataset, mut merged) = ingest::ingest(&sources, &formats, canonical)?;
     let write = sink::write_rdf(
         &*dataset,
         output,
@@ -201,6 +206,7 @@ pub(crate) fn run(
         options.base,
         source_codec(&formats),
         options.jsonld_options,
+        canonical,
     )?;
     for entry in write.entries() {
         merged.record(entry.clone());
@@ -216,6 +222,7 @@ fn convert_one_view(
     output: &str,
     target_format: SourceFormat,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     // Pack → pack: a verified byte passthrough (no decode/re-encode churn). The pack
     // is acquired through the one immutable-input seam — a DISK pack is borrowed from
@@ -223,8 +230,8 @@ fn convert_one_view(
     // guarantee immutability), stdin is owned — and verified once before its bytes
     // are written straight through.
     if source_format.is_pack() && target_format.is_pack() {
-        let owner = source::verified_pack_input(input)?;
-        sink::write_out(output, owner.as_bytes())?;
+        let owner = source::verified_pack_input(input, canonical)?;
+        sink::write_out_with_request(output, owner.as_bytes(), canonical)?;
         return ledger::surface(ledger_target, &LossLedger::new());
     }
 
@@ -241,6 +248,7 @@ fn convert_one_view(
             src_codec,
             jsonld_options: options.jsonld_options,
         },
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }
@@ -347,6 +355,7 @@ fn run_with_transforms(
     output: &str,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let target_format = if options.canonical {
         // `--canonical` writes RDFC-1.0 canonical N-Quads unconditionally, so the egress
@@ -387,6 +396,7 @@ fn run_with_transforms(
                 options.from,
                 options.base,
                 &premises,
+                canonical,
             )?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
@@ -401,25 +411,27 @@ fn run_with_transforms(
                         &premise_imports,
                         &options.limits,
                         report_target,
+                        canonical,
                     )?
                 }
                 _ => {
                     // A merged list (or a GTS source, whose envelope ledger must be
                     // carried) has no single view to reason over: materialize first,
                     // then reason over the merged dataset.
-                    let (merged, ledger) = ingest::ingest(sources, formats)?;
+                    let (merged, ledger) = ingest::ingest(sources, formats, canonical)?;
                     read_ledger = ledger;
                     premise_imports.materialize(
                         &*merged,
                         plan.materialization(),
                         &options.limits,
                         report_target,
+                        canonical,
                     )?
                 }
             }
         }
         None => {
-            let (merged, ledger) = ingest::ingest(sources, formats)?;
+            let (merged, ledger) = ingest::ingest(sources, formats, canonical)?;
             read_ledger = ledger;
             merged
         }
@@ -431,16 +443,17 @@ fn run_with_transforms(
     // n-degree search budget exhaustion) must come back as a value this CLI reports,
     // never as a process abort.
     if options.canonical {
-        let nquads = match try_canonicalize_flat_view(&dataset, CanonHash::Sha256) {
-            Ok(canonicalized) => canonicalized.nquads,
-            Err(ViewCanonError::Refused(err)) => return Err(CliError::Runtime(err.to_string())),
-            Err(ViewCanonError::NotReady { error, .. }) => match error {
+        let nquads =
+            match try_canonicalize_flat_view(&dataset, CanonHash::Sha256, canonical.control()?) {
+                Ok(canonicalized) => canonicalized,
+                Err(ViewCanonError::Refused(err)) => return Err(CliError::native(err)),
+                Err(ViewCanonError::NotReady { error, .. }) => match error {
                 // LAW: an owned `Arc<RdfDataset>`'s `FallibleDatasetView::Error` is
                 // `Infallible` — the frozen dataset never faults, so this arm is
                 // unreachable by construction.
             },
-        };
-        sink::write_out(output, nquads.as_bytes())?;
+            };
+        sink::write_out_with_request(output, nquads.nquads().as_bytes(), canonical)?;
         // The RDFC-1.0 canonical N-Quads document flattens the RDF 1.2 statement
         // overlay into plain triples; it is a lossless re-rendering, so the only
         // entries are whatever reading the sources already dropped.
@@ -456,6 +469,7 @@ fn run_with_transforms(
         options.base,
         source_codec(formats),
         options.jsonld_options,
+        canonical,
     )?;
     for entry in write.entries() {
         read_ledger.record(entry.clone());

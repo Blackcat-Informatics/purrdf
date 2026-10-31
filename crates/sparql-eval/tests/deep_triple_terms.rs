@@ -198,7 +198,7 @@ fn query_on<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
 }
 
@@ -520,7 +520,7 @@ fn a_deep_term_walked_at_the_deepest_evaluation_fits_the_stack_left() {
         let answer = |bytes: usize| {
             with_stack_left(bytes, || {
                 engine
-                    .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
                     .map(|result| {
                         let (_, mut rows) = solutions(result);
                         let value = rows.pop().and_then(|mut row| row.pop().flatten());
@@ -662,7 +662,7 @@ fn a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts() {
                         &data,
                         &prepared,
                         &[],
-                        QueryOptions::new().with_functions(&functions),
+                        &QueryOptions::new().with_functions(&functions),
                     )
                     .map(|result| {
                         let (_, mut rows) = solutions(result);
@@ -740,7 +740,7 @@ fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() 
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::new().with_functions(&functions),
+                    &QueryOptions::new().with_functions(&functions),
                 )
             };
             match run(100_000) {
@@ -861,7 +861,7 @@ fn a_term_built_on_a_worker_answers_every_row() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::new().with_functions(&functions),
+                        &QueryOptions::new().with_functions(&functions),
                     )
                     .unwrap_or_else(|refusal| panic!("{levels} levels: {refusal:?}"));
                 solutions(result).1.len()

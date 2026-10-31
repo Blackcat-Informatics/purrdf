@@ -187,7 +187,14 @@ struct State {
 
 impl State {
     fn digest(&self) -> DatasetStateDigest {
-        DatasetStateDigest::from_view(&self.materialize()).expect("valid finite state")
+        DatasetStateDigest::from_view(
+            &self.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("valid finite state")
     }
     fn blanks(&self) -> Vec<u8> {
         let mut nodes = BTreeSet::new();
@@ -327,8 +334,24 @@ fn legacy_canonical_form_omits_an_empty_named_declaration() {
     assert!(!isomorphic(&a, &b));
     assert_ne!(a.digest(), b.digest());
     assert_eq!(
-        try_canonicalize(&a.materialize()).unwrap().nquads,
-        try_canonicalize(&b.materialize()).unwrap().nquads
+        try_canonicalize(
+            &a.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
+        try_canonicalize(
+            &b.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads()
     );
 }
 
@@ -338,8 +361,24 @@ fn legacy_flat_digest_erases_ordinary_annotation_roles() {
     assert!(!isomorphic(&a, &b));
     assert_ne!(a.digest(), b.digest());
     assert_eq!(
-        try_flat_digest_view(&*a.materialize(), CanonHash::Sha256).unwrap(),
-        try_flat_digest_view(&*b.materialize(), CanonHash::Sha256).unwrap(),
+        try_flat_digest_view(
+            &*a.materialize(),
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        try_flat_digest_view(
+            &*b.materialize(),
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
     );
 }
 
@@ -351,8 +390,24 @@ fn legacy_flat_digest_erases_ordinary_reifier_roles() {
     assert!(!isomorphic(&a, &b));
     assert_ne!(a.digest(), b.digest());
     assert_eq!(
-        try_flat_digest_view(&*a.materialize(), CanonHash::Sha256).unwrap(),
-        try_flat_digest_view(&*b.materialize(), CanonHash::Sha256).unwrap(),
+        try_flat_digest_view(
+            &*a.materialize(),
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        try_flat_digest_view(
+            &*b.materialize(),
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
     );
 }
 
@@ -363,8 +418,22 @@ fn per_graph_digests_do_not_enforce_a_global_bijection() {
     assert_ne!(a.digest(), b.digest());
     for graph in [G, H] {
         assert_eq!(
-            try_graph_digest_view(&*a.materialize(), graph),
-            try_graph_digest_view(&*b.materialize(), graph)
+            try_graph_digest_view(
+                &*a.materialize(),
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
+            try_graph_digest_view(
+                &*b.materialize(),
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
         );
     }
     for kept in 0..2 {
@@ -447,8 +516,24 @@ fn oracle_accepts_global_relabeling_and_insertion_permutations() {
     assert!(isomorphic(&a, &b));
     assert_eq!(a.digest(), b.digest());
     assert_eq!(
-        try_canonicalize(&a.materialize()).unwrap().nquads,
-        try_canonicalize(&b.materialize()).unwrap().nquads
+        try_canonicalize(
+            &a.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
+        try_canonicalize(
+            &b.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads()
     );
 }
 
@@ -690,8 +775,13 @@ fn operational_failures_never_certify_partial_state() {
         (FaultMode::PointRead, DrainCheckpoint::After),
     ] {
         let probe = Probe::new(state.materialize(), mode);
-        let Err(DatasetStateError::Operation(failure)) = DatasetStateDigest::from_view(&probe)
-        else {
+        let Err(DatasetStateError::Operation(failure)) = DatasetStateDigest::from_view(
+            &probe,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) else {
             panic!("an incomplete source must refuse")
         };
         assert_eq!(failure.checkpoint, expected);
@@ -712,7 +802,14 @@ fn operational_failures_never_certify_partial_state() {
     }
     let neighbor = Probe::new(state.materialize(), FaultMode::Ready);
     assert_eq!(
-        DatasetStateDigest::from_view(&neighbor).unwrap(),
+        DatasetStateDigest::from_view(
+            &neighbor,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         state.digest()
     );
     assert_eq!(neighbor.checkpoints.get(), 2);
@@ -739,7 +836,13 @@ fn workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors() {
     };
     let refused = Probe::new(state.materialize(), FaultMode::Reservation);
     assert_eq!(
-        DatasetStateDigest::from_view(&refused),
+        DatasetStateDigest::from_view(
+            &refused,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(DatasetStateError::Read(SourceFault::new(
             "workspace refused"
         )))
@@ -753,14 +856,27 @@ fn workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors() {
     for mode in [FaultMode::MissingEmbedded, FaultMode::WrongEmbedded] {
         let probe = Probe::new(state.materialize(), mode);
         assert_eq!(
-            DatasetStateDigest::from_view(&probe),
+            DatasetStateDigest::from_view(
+                &probe,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(DatasetStateError::IncoherentEmbeddedBlank)
         );
         assert!(!probe.reservation_live.get());
     }
     let good = Probe::new(state.materialize(), FaultMode::Ready);
     assert_eq!(
-        DatasetStateDigest::from_view(&good).unwrap(),
+        DatasetStateDigest::from_view(
+            &good,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         state.digest()
     );
 }
@@ -770,7 +886,14 @@ fn repeated_same_role_rows_are_set_semantic_before_refinement() {
     let mut duplicate = Probe::new(state.materialize(), FaultMode::Ready);
     duplicate.duplicate_rows = true;
     assert_eq!(
-        DatasetStateDigest::from_view(&duplicate).unwrap(),
+        DatasetStateDigest::from_view(
+            &duplicate,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         state.digest()
     );
     let mut explicit = state.clone();
@@ -799,7 +922,14 @@ fn named_graphs_from_each_role_are_part_of_state_even_without_a_declaration_iter
         let mut probe = Probe::new(state.materialize(), FaultMode::Ready);
         probe.omit_named = true;
         assert_eq!(
-            DatasetStateDigest::from_view(&probe).unwrap(),
+            DatasetStateDigest::from_view(
+                &probe,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             state.digest()
         );
         let mut default = state.clone();
@@ -932,7 +1062,14 @@ fn scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles() {
         });
         assert_eq!(
             state.digest(),
-            DatasetStateDigest::from_view(&renamed).unwrap()
+            DatasetStateDigest::from_view(
+                &renamed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
         );
         let mut crossed = state.clone();
         let Node::Composite { blanks, .. } = &mut crossed.rows[2].terms[2] else {
@@ -959,7 +1096,14 @@ fn interchangeable_empty_blank_declarations_do_not_require_factorial_search() {
     });
     assert_eq!(
         state.digest(),
-        DatasetStateDigest::from_view(&renamed).unwrap()
+        DatasetStateDigest::from_view(
+            &renamed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
 }
 
@@ -974,10 +1118,25 @@ fn refinable_connected_cycle_finishes_without_exhausting_search_work() {
             })
             .collect(),
     };
-    assert!(DatasetStateDigest::from_view(&state.materialize()).is_ok());
     assert!(
-        DatasetStateDigest::from_view(&cycle_fixture(false, [0, 1, 2, 3, 4, 5]).materialize())
-            .is_ok()
+        DatasetStateDigest::from_view(
+            &state.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
+    );
+    assert!(
+        DatasetStateDigest::from_view(
+            &cycle_fixture(false, [0, 1, 2, 3, 4, 5]).materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
     );
 }
 
@@ -1024,19 +1183,47 @@ fn complete_state_agrees_across_production_view_carriers() {
     for (name, digest) in [
         (
             "independent composite",
-            DatasetStateDigest::from_view(&independent).unwrap(),
+            DatasetStateDigest::from_view(
+                &independent,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap(),
         ),
         (
             "shared composite",
-            DatasetStateDigest::from_view(&shared).unwrap(),
+            DatasetStateDigest::from_view(
+                &shared,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap(),
         ),
         (
             "mutated delta",
-            DatasetStateDigest::from_view(&delta).unwrap(),
+            DatasetStateDigest::from_view(
+                &delta,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap(),
         ),
         (
             "paged query",
-            DatasetStateDigest::from_view(&reader).unwrap(),
+            DatasetStateDigest::from_view(
+                &reader,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap(),
         ),
     ] {
         assert_eq!(digest, expected, "{name}");
@@ -1110,7 +1297,14 @@ fn exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors() {
     let renamed = state.materialize_with(&|_| ("renamed".to_owned(), BlankScope(u32::MAX)));
     assert_eq!(
         state.digest(),
-        DatasetStateDigest::from_view(&renamed).unwrap()
+        DatasetStateDigest::from_view(
+            &renamed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
     let accepted = state.digest();
     state.rows[0].terms[2] = Node::Triple(Box::new([Node::Blank(0), Node::Iri(Q), Node::Blank(0)]));
@@ -1156,7 +1350,13 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     let source = state.materialize();
     let capacity = Probe::new(source.clone(), FaultMode::Capacity);
     assert_eq!(
-        DatasetStateDigest::from_view(&capacity),
+        DatasetStateDigest::from_view(
+            &capacity,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(DatasetStateError::Capacity)
     );
     assert_eq!(
@@ -1168,7 +1368,13 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     assert!(!capacity.reservation_live.get());
     let invalid = Probe::new(source.clone(), FaultMode::InvalidDatatype);
     assert_eq!(
-        DatasetStateDigest::from_view(&invalid),
+        DatasetStateDigest::from_view(
+            &invalid,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(DatasetStateError::InvalidTerm)
     );
     assert!(invalid.reads.get() > 0);
@@ -1176,17 +1382,41 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     assert!(!invalid.reservation_live.get());
     let ready = Probe::new(source, FaultMode::Ready);
     assert_eq!(
-        DatasetStateDigest::from_view(&ready).unwrap(),
+        DatasetStateDigest::from_view(
+            &ready,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         state.digest()
     );
 }
 
 fn disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor() {
-    assert_eq!(
-        DatasetStateDigest::from_view(&fixtures::triangle_components(8)),
-        Err(DatasetStateError::SearchBudgetExceeded),
+    assert!(matches!(
+        DatasetStateDigest::from_view(
+            &fixtures::triangle_components(8),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
+        Err(DatasetStateError::SearchBudgetExceeded { limit, work })
+            if purrdf_core::SearchPolicy::Finite(limit) == purrdf_core::RDFC_V2_CORPUS_POLICY
+                && work.total() == limit
+    ));
+    assert!(
+        DatasetStateDigest::from_view(
+            &fixtures::triangle_components(2),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
     );
-    assert!(DatasetStateDigest::from_view(&fixtures::triangle_components(2)).is_ok());
 }
 
 fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocations() {
@@ -1204,9 +1434,23 @@ fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocat
             32 * 1024 * 1024,
         ),
     ] {
-        let expected = DatasetStateDigest::from_view(&source).unwrap();
+        let expected = DatasetStateDigest::from_view(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(
-            DatasetStateDigest::from_view(&renamed).unwrap(),
+            DatasetStateDigest::from_view(
+                &renamed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             expected,
             "{name} global relabeling"
         );
@@ -1215,7 +1459,13 @@ fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocat
         probe
             .allocation_window
             .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
-        let actual = DatasetStateDigest::from_view(&probe);
+        let actual = DatasetStateDigest::from_view(
+            &probe,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let observed = probe.allocation_window.take().unwrap().close();
         assert_eq!(actual.unwrap(), expected);
         assert!(
@@ -1226,7 +1476,7 @@ fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocat
         let mut lower = Probe::new(Arc::clone(&probe.source), FaultMode::Ready);
         lower.workspace_limit = probe.reservation_peak.get() - 1;
         assert!(matches!(
-            DatasetStateDigest::from_view(&lower),
+            DatasetStateDigest::from_view(&lower, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)),
             Err(DatasetStateError::Read(error)) if error == SourceFault::new("workspace ceiling"),
         ));
         assert!(!lower.reservation_live.get());
@@ -1277,7 +1527,13 @@ fn high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbo
         probe
             .allocation_window
             .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
-        let actual = DatasetStateDigest::from_view(&probe);
+        let actual = DatasetStateDigest::from_view(
+            &probe,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let observed = probe.allocation_window.take().unwrap().close();
         assert_eq!(actual.unwrap(), expected);
         assert!(

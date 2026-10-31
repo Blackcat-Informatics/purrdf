@@ -7,6 +7,7 @@
 //! knob in the calling host's own spelling; the neighbour one fact or step inside the
 //! limit completes.
 
+use purrdf_validate::canonical::CanonicalServiceError;
 use purrdf_validate::{
     MaterializeLimits, RegimeHost, RulesHost, RulesRequest, apply_rules_to_ntriples,
     materialize_to_nquads_string, materialize_to_nquads_string_with,
@@ -133,7 +134,16 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
     // `rdfs` runs through the restricted chase and `owl-rl` through the semi-naive
     // evaluator, so both refusal paths are observed.
     for regime in ["rdfs", "owl-rl"] {
-        let unlimited = materialize_to_nquads_string(regime, DATA, "").expect("the default");
+        let unlimited = materialize_to_nquads_string(
+            regime,
+            DATA,
+            "",
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the default");
         let stored: usize = unlimited
             .report()
             .lines()
@@ -149,8 +159,24 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 host,
             };
             let short = limits(Some(stored as u64 - 1), None);
-            let refused = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &short)
-                .expect_err("one fact short");
+            let refused = materialize_to_nquads_string_with(
+                regime,
+                DATA,
+                "",
+                &[],
+                &[],
+                &short,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect_err("one fact short");
+            assert!(
+                matches!(&refused, CanonicalServiceError::Text(_)),
+                "{refused:?}"
+            );
+            let refused = refused.to_string();
             assert!(
                 refused.starts_with(&format!(
                     "entailment regime \"{regime}\": evaluation exceeded the stored-fact \
@@ -160,8 +186,19 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 "{regime} {host:?}: {refused}"
             );
             let exact = limits(Some(stored as u64), None);
-            let closed = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &exact)
-                .expect("exactly the store it needs");
+            let closed = materialize_to_nquads_string_with(
+                regime,
+                DATA,
+                "",
+                &[],
+                &[],
+                &exact,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("exactly the store it needs");
             assert_eq!(closed.nquads(), unlimited.nquads(), "{regime} {host:?}");
 
             let refused = materialize_to_nquads_string_with(
@@ -171,8 +208,17 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 &[],
                 &[],
                 &limits(None, Some(1)),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .expect_err("one join step");
+            assert!(
+                matches!(&refused, CanonicalServiceError::Text(_)),
+                "{refused:?}"
+            );
+            let refused = refused.to_string();
             assert!(
                 refused.contains("evaluation exceeded the join-step limit: ")
                     && refused.ends_with(&format!("raise it with {join_steps}")),
@@ -188,13 +234,24 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
 #[test]
 fn the_limits_in_force_reach_the_reports_contract_hash() {
     let hash = |limits: &MaterializeLimits| {
-        materialize_to_nquads_string_with("owl-rl", DATA, "", &[], &[], limits)
-            .expect("closes")
-            .report()
-            .lines()
-            .find(|line| line.starts_with("contract-hash "))
-            .expect("a contract hash")
-            .to_owned()
+        materialize_to_nquads_string_with(
+            "owl-rl",
+            DATA,
+            "",
+            &[],
+            &[],
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("closes")
+        .report()
+        .lines()
+        .find(|line| line.starts_with("contract-hash "))
+        .expect("a contract hash")
+        .to_owned()
     };
     let default = hash(&MaterializeLimits::default());
     let restated = hash(&MaterializeLimits {
@@ -214,7 +271,16 @@ fn the_limits_in_force_reach_the_reports_contract_hash() {
 #[test]
 fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
     for regime in ["rdfs", "owl-rl"] {
-        let reference = materialize_to_nquads_string(regime, DATA, "").unwrap();
+        let reference = materialize_to_nquads_string(
+            regime,
+            DATA,
+            "",
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let bytes: u64 = reference
             .report()
             .lines()
@@ -227,8 +293,24 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
             max_term_arena_bytes: Some(bytes - 1),
             ..MaterializeLimits::default()
         };
-        let refused = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &short)
-            .expect_err("one original byte short");
+        let refused = materialize_to_nquads_string_with(
+            regime,
+            DATA,
+            "",
+            &[],
+            &[],
+            &short,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("one original byte short");
+        assert!(
+            matches!(&refused, CanonicalServiceError::Text(_)),
+            "{refused:?}"
+        );
+        let refused = refused.to_string();
         assert!(
             refused.contains(&format!(
                 "term arena bytes limit: {bytes} observed, {} permitted",
@@ -244,7 +326,19 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
             max_term_arena_bytes: Some(bytes),
             ..MaterializeLimits::default()
         };
-        let actual = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &exact).unwrap();
+        let actual = materialize_to_nquads_string_with(
+            regime,
+            DATA,
+            "",
+            &[],
+            &[],
+            &exact,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(actual.nquads(), reference.nquads());
     }
 }

@@ -420,7 +420,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
   const data =
     '<http://example.org/ns#a> <http://example.org/ns#n> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .\n';
   const entail = (rounds, terms, facts, steps) =>
-    shaclEntail(counter, data, undefined, undefined, undefined, undefined, rounds, terms, facts, steps);
+    shaclEntail(counter, data, undefined, undefined, undefined, undefined, rounds, terms, facts, steps, undefined, undefined, undefined, "unlimited");
   const cases = [
     [[1n, undefined, undefined, undefined], "shaclEntail's maxTermGeneratingRounds"],
     [[undefined, 1n, undefined, undefined], "shaclEntail's maxGeneratedTerms"],

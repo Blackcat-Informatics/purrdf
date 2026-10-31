@@ -107,7 +107,11 @@ fn assert_closure_parity(
     let dataset = sample_dataset();
 
     // The byte-equivalent pack, opened zero-copy.
-    let pack_bytes = PackBuilder::build_bytes(&dataset).expect("build pack bytes");
+    let pack_bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("build pack bytes");
     let view = PackView::from_bytes(&pack_bytes).expect("open pack view");
 
     // The OLD path's reference: rebuild an owned `RdfDataset` from the SAME pack

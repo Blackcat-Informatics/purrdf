@@ -317,13 +317,13 @@ fn complete_bounded_text_prepared_and_governed_entries_preserve_bag_and_ties() {
         let output = match entry {
             0 => {
                 engine
-                    .query_fallible_view(&source, request(), QueryOptions::EMPTY)
+                    .query_fallible_view(&source, request(), &QueryOptions::EMPTY)
                     .unwrap()
                     .result
             }
             1 => {
                 engine
-                    .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                     .unwrap()
                     .result
             }
@@ -332,7 +332,7 @@ fn complete_bounded_text_prepared_and_governed_entries_preserve_bag_and_ties() {
                     .query_governed_fallible_view(
                         &source,
                         request(),
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &QueryGovernors::METERED,
                     )
                     .unwrap()
@@ -344,7 +344,7 @@ fn complete_bounded_text_prepared_and_governed_entries_preserve_bag_and_ties() {
                         &source,
                         &prepared,
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &QueryGovernors::METERED,
                     )
                     .unwrap()

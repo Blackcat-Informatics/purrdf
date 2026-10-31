@@ -159,12 +159,20 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
         };
 
         if expected_path.exists() {
-            let outcome = try_canonicalize_with(&quads, hash_for(&stem));
+            let outcome = try_canonicalize_with(
+                &quads,
+                hash_for(&stem),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
             match outcome {
                 Ok(canonical) => {
-                    let actual = canonical.nquads;
+                    let actual_owner = canonical;
+                    let actual = actual_owner.nquads();
                     let expected = std::fs::read_to_string(&expected_path).expect("read expected");
-                    if norm_lines(&actual) != norm_lines(&expected) {
+                    if norm_lines(actual) != norm_lines(&expected) {
                         failures.push(format!(
                             "{stem}: canonical output mismatch\n--- expected ---\n{expected}\n--- actual ---\n{actual}"
                         ));
@@ -176,7 +184,14 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
             }
         } else {
             // Negative poison input must return the native work-budget refusal.
-            match try_canonicalize_with(&quads, hash_for(&stem)) {
+            match try_canonicalize_with(
+                &quads,
+                hash_for(&stem),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            ) {
                 Err(purrdf_rdf::CanonError::BudgetExceeded { .. }) => {}
                 Err(error) => failures.push(format!(
                     "{stem}: NEGATIVE test returned a different refusal: {error}"

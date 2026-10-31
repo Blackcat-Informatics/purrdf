@@ -464,7 +464,15 @@ mod tests {
         let reparsed =
             parse_dataset(&hext, "application/x-hextuples", None).expect("re-parse hext");
         assert!(
-            datasets_isomorphic(&ds, &reparsed).unwrap(),
+            datasets_isomorphic(
+                &ds,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "HexTuples round-trip must be isomorphic; produced:\n{}",
             String::from_utf8_lossy(&hext)
         );

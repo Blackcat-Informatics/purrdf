@@ -71,6 +71,9 @@ fn execute(
                     &raw mut receipt.0,
                     &raw mut output,
                     &raw mut diagnostics,
+                    c"1000000".as_ptr(),
+                    null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 ),
                 1 => purrdf_shacl_entail_to_ntriples_xpath_regex(
@@ -91,6 +94,9 @@ fn execute(
                     &raw mut receipt.0,
                     &raw mut output,
                     &raw mut diagnostics,
+                    c"1000000".as_ptr(),
+                    null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 ),
                 2 | 4 => purrdf_shacl_apply_rules(

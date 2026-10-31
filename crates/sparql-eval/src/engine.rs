@@ -279,7 +279,7 @@ impl PreparedQuery {
     /// Refuses malformed algebra, unregistered or invalid calls, infeasible
     /// property-function orders, and registry declaration panics. Diagnostics
     /// identify the algebra, property-function or aggregate admission failure.
-    pub fn rewritten(query: Query, options: QueryOptions<'_, '_>) -> Result<Self, RdfDiagnostic> {
+    pub fn rewritten(query: Query, options: &QueryOptions<'_, '_>) -> Result<Self, RdfDiagnostic> {
         Self::from_algebra::<false>(query, options, &PlanMemoryObserver::default())
     }
 
@@ -325,7 +325,7 @@ impl PreparedQuery {
 
     fn from_algebra<const CONTEXTUAL: bool>(
         query: Query,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         memory: &PlanMemoryObserver,
     ) -> Result<Self, RdfDiagnostic> {
         let planned = admit_algebra_with::<CONTEXTUAL>(
@@ -1566,7 +1566,7 @@ impl NativeSparqlEngine {
     pub fn prepare_algebra(
         &self,
         query: Query,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         PreparedQuery::from_algebra::<false>(query, options, &self.plan_memory_observer())
             .map(Arc::new)
@@ -1580,7 +1580,7 @@ impl NativeSparqlEngine {
         text: &str,
         base_iri: Option<&str>,
         bindings: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<PreparedRdflibQuery, RdfDiagnostic> {
         self.prepare_rdflib_query_for::<false>(text, base_iri, bindings, options)
     }
@@ -1590,7 +1590,7 @@ impl NativeSparqlEngine {
         text: &str,
         base_iri: Option<&str>,
         bindings: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<PreparedRdflibQuery, RdfDiagnostic> {
         let parser = base_iri.map_or_else(SparqlParser::new, |base| {
             SparqlParser::new().with_base_iri(base)
@@ -1618,7 +1618,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         single_graph: bool,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let bindings = crate::substitute::build_probes(Prebindings::Owned(request.substitutions))?;
@@ -1646,7 +1646,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         prepared: &PreparedRdflibQuery,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         self.query_prepared_view(dataset, &prepared.prepared, &[], options)
             .map(|result| prepared.publish(result))
@@ -1662,7 +1662,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         prepared: &PreparedRdflibQuery,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let outcome = self.query_prepared_governed_view(
@@ -1721,7 +1721,7 @@ impl NativeSparqlEngine {
         query: &str,
         base_iri: Option<&str>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_query_with_options(query, base_iri, QueryOptions::EMPTY)
+        self.prepare_query_with_options(query, base_iri, &QueryOptions::EMPTY)
     }
 
     /// [`Self::prepare_query`] against the [`QueryOptions`] the plan will be evaluated
@@ -1741,7 +1741,7 @@ impl NativeSparqlEngine {
         &self,
         query: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         self.prepare_for(query, base_iri, options.env, options.geo)
     }
@@ -1754,7 +1754,7 @@ impl NativeSparqlEngine {
         &self,
         query: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<crate::SharedWorkspace<PreparedQuery>, EvaluationFailure> {
         self.prepare_for_admitted(query, base_iri, options.env, options.geo, workspace)
@@ -1776,7 +1776,7 @@ impl NativeSparqlEngine {
     pub fn prepare_interned_request(
         &self,
         request: InternedRequest<'_>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         let admitted = RequestParameters::of(
             Prebindings::Borrowed(request.substitutions),
@@ -1811,7 +1811,7 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         self.query_prepared_view(&**dataset, prepared, substitutions, options)
     }
@@ -1830,7 +1830,7 @@ impl NativeSparqlEngine {
     /// use purrdf_core::DatasetView;
     /// use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
     /// fn incomplete_contract<D: DatasetView + Sync>(engine: &NativeSparqlEngine, view: &D, plan: &PreparedQuery) {
-    ///     engine.query_prepared_view(view, plan, &[], QueryOptions::EMPTY);
+    ///     engine.query_prepared_view(view, plan, &[], &QueryOptions::EMPTY);
     /// }
     /// ```
     ///
@@ -1839,7 +1839,7 @@ impl NativeSparqlEngine {
     /// use purrdf_core::{DatasetView, RdfDiagnostic, SparqlResult};
     /// use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
     /// fn complete_contract<D: DatasetView<ReadError = Infallible> + Sync>(engine: &NativeSparqlEngine, view: &D, plan: &PreparedQuery) -> Result<SparqlResult, RdfDiagnostic> {
-    ///     engine.query_prepared_view(view, plan, &[], QueryOptions::EMPTY)
+    ///     engine.query_prepared_view(view, plan, &[], &QueryOptions::EMPTY)
     /// }
     /// ```
     ///
@@ -1853,23 +1853,27 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let workspace = bounded_workspace::reserve(
                 dataset,
                 &prepared.query,
                 !substitutions.is_empty(),
-                options,
+                &options,
             )?;
-            RequestParameters::none().check_admitted(prepared, options, &workspace.capability())?;
+            RequestParameters::none().check_admitted(
+                prepared,
+                &options,
+                &workspace.capability(),
+            )?;
             self.query_prepared_admitted(
                 dataset,
                 prepared,
                 substitutions,
-                options,
+                &options,
                 Sequencing::Free,
                 &workspace,
             )
@@ -1901,7 +1905,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
@@ -1924,7 +1928,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         workspace: crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
@@ -1934,7 +1938,7 @@ impl NativeSparqlEngine {
         let workspace = reserve_fallible_execution(dataset, workspace)?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
-            .options(dataset, options)
+            .options(dataset, *options)
             .map_err(|diagnostic| {
                 fallible_admission_failure(
                     dataset,
@@ -1944,12 +1948,12 @@ impl NativeSparqlEngine {
         let evaluation = (|| {
             substitutions
                 .parameters
-                .check_admitted(prepared, options, &workspace.capability())?;
+                .check_admitted(prepared, &options, &workspace.capability())?;
             self.query_prepared_admitted(
                 dataset,
                 prepared,
                 substitutions.values,
-                options,
+                &options,
                 Sequencing::for_view::<D>(),
                 &workspace,
             )
@@ -1966,7 +1970,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<SparqlResult, EvaluationFailure> {
@@ -1995,7 +1999,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
@@ -2076,7 +2080,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         self.query_governed_view(&**dataset, request, options, governors)
@@ -2091,12 +2095,12 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
@@ -2121,7 +2125,7 @@ impl NativeSparqlEngine {
                 dataset,
                 &prepared,
                 &admitted,
-                options,
+                &options,
                 &state,
                 Sequencing::Free,
                 &workspace,
@@ -2155,12 +2159,12 @@ impl NativeSparqlEngine {
         dataset: &D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
@@ -2172,7 +2176,7 @@ impl NativeSparqlEngine {
                 dataset,
                 prepared,
                 &AdmittedSubstitutions::prepared(substitutions),
-                options,
+                &options,
                 &state,
                 Sequencing::Free,
                 &workspace,
@@ -2212,7 +2216,7 @@ impl NativeSparqlEngine {
     pub fn open_call_cursor<'query>(
         &self,
         prepared: &PreparedQuery,
-        options: QueryOptions<'_, 'query>,
+        options: &QueryOptions<'_, 'query>,
     ) -> Result<crate::CallCursor<'query>, RdfDiagnostic> {
         self.open_call_cursor_admitted(prepared, options, &crate::WorkspaceCapability::resident())
             .map_err(EvaluationFailure::into_diagnostic)
@@ -2226,7 +2230,7 @@ impl NativeSparqlEngine {
     pub fn open_call_cursor_admitted<'query>(
         &self,
         prepared: &PreparedQuery,
-        options: QueryOptions<'_, 'query>,
+        options: &QueryOptions<'_, 'query>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<crate::CallCursor<'query>, EvaluationFailure> {
         let mut frame = crate::workspace::LexicalFrame::new(workspace);
@@ -2275,7 +2279,7 @@ impl NativeSparqlEngine {
     pub fn open_call_cursor_evidence<'query, I: purrdf_core::ViewTermId>(
         &self,
         prepared: &PreparedQuery,
-        options: QueryOptions<'_, 'query>,
+        options: &QueryOptions<'_, 'query>,
         workspace: &crate::WorkspaceCapability,
         source: &dyn crate::EvidenceSource<I>,
     ) -> Result<crate::CallCursor<'query>, EvaluationFailure> {
@@ -2299,7 +2303,7 @@ impl NativeSparqlEngine {
     fn query_ctx<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<EvalCtx<'d, D>, EvaluationFailure> {
         apply_query_options(self.eval_ctx(dataset, workspace, options)?, options)
@@ -2325,12 +2329,17 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         state: impl Into<crate::workspace::SharedWorkspace<GovernorState>>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<EvalCtx<'d, D>, EvaluationFailure> {
+        let state: crate::workspace::SharedWorkspace<GovernorState> = state.into();
+        let mut options = *options;
+        // Copy policy even for an unengaged state; EMPTY's default must not survive
+        // an explicit UNBOUNDED request or a future metering fast path.
+        options.max_udf_depth = state.max_udf_depth();
         let mut ctx = self
-            .query_ctx(dataset, options, workspace)?
-            .with_governor_owner(state.into());
+            .query_ctx(dataset, &options, workspace)?
+            .with_governor_owner(state);
         ctx.witnessing = true;
         Ok(ctx)
     }
@@ -2354,24 +2363,24 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         sequencing: Sequencing,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let workspace = bounded_workspace::reserve(
                 dataset,
                 &prepared.query,
                 !substitutions.values.is_empty(),
-                options,
+                &options,
             )?;
             self.query_governed_prepared_admitted(
                 dataset,
                 prepared,
                 substitutions,
-                options,
+                &options,
                 &crate::workspace::SharedWorkspace::from(state.clone()),
                 sequencing,
                 &workspace,
@@ -2391,7 +2400,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &crate::workspace::SharedWorkspace<GovernorState>,
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
@@ -2477,15 +2486,15 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
         source: &(dyn crate::remote::ServiceResolver + Sync),
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         self.query_governed(
             dataset,
             request,
-            QueryOptions {
+            &QueryOptions {
                 remote: Some(source),
-                ..options
+                ..*options
             },
             governors,
         )
@@ -2507,15 +2516,15 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         request: SparqlRequest<'_>,
         source: &'d (dyn crate::remote::ServiceResolver + Sync),
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         self.query_governed_view(
             dataset,
             request,
-            QueryOptions {
+            &QueryOptions {
                 remote: Some(source),
-                ..options
+                ..*options
             },
             governors,
         )
@@ -2559,12 +2568,12 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
@@ -2585,7 +2594,7 @@ impl NativeSparqlEngine {
                 dataset,
                 &prepared,
                 &admitted,
-                options,
+                &options,
                 &crate::workspace::SharedWorkspace::from(state.clone()),
                 Sequencing::Free,
                 &workspace,
@@ -2614,7 +2623,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         self.query_governed_prepared_in_state(
@@ -2659,7 +2668,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
     where
@@ -2737,7 +2746,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         request: SparqlRequest<'_>,
         source: &'d (dyn crate::remote::ServiceResolver + Sync),
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
     where
@@ -2746,9 +2755,9 @@ impl NativeSparqlEngine {
         self.query_governed_fallible_view(
             dataset,
             request,
-            QueryOptions {
+            &QueryOptions {
                 remote: Some(source),
-                ..options
+                ..*options
             },
             governors,
         )
@@ -2817,7 +2826,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &mut Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
         self.update_governed_over(
@@ -2838,7 +2847,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &mut purrdf_core::DatasetHandle,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
         self.update_governed_over(dataset.clone(), request, options, governors, |frozen| {
@@ -2850,13 +2859,15 @@ impl NativeSparqlEngine {
         &self,
         dataset: purrdf_core::DatasetHandle,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         governors: &QueryGovernors,
         publish: impl FnOnce(Arc<RdfDataset>),
     ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
         let update = self.parse_update(&request, options.env)?;
         let publication = crate::user_fn::RefusalPublication::default();
-        let options = publication.options(dataset.as_ref(), options)?;
+        let mut options = publication.options(dataset.as_ref(), *options)?;
+        // UPDATE forwards options through UpdateEvalConfig, not governed_ctx.
+        options.max_udf_depth = governors.max_udf_depth();
         let state = Arc::new(GovernorState::new(governors));
         let mut m = MutableDataset::new_with_graph_existence(dataset, options.graph_existence);
         let cfg = crate::update::UpdateEvalConfig {
@@ -2870,7 +2881,7 @@ impl NativeSparqlEngine {
         let tripped = match eval_update(
             &update,
             &mut m,
-            self.load_resolver(options),
+            self.load_resolver(&options),
             &cfg,
             Some(&mut coordinates),
         ) {
@@ -2972,11 +2983,11 @@ impl NativeSparqlEngine {
         &self,
         dataset: &mut Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<(), RdfDiagnostic> {
         let update = self.parse_update(&request, options.env)?;
         let publication = crate::user_fn::RefusalPublication::default();
-        let options = publication.options(&**dataset, options)?;
+        let options = publication.options(&**dataset, *options)?;
         // Atomicity is structural: branch a COW MutableDataset off the frozen base,
         // apply every op to the delta, and only on FULL success freeze back. Any
         // error drops `m` and leaves `*dataset` untouched.
@@ -2993,7 +3004,7 @@ impl NativeSparqlEngine {
             governors: None,
             options,
         };
-        match eval_update(&update, &mut m, self.load_resolver(options), &cfg, None) {
+        match eval_update(&update, &mut m, self.load_resolver(&options), &cfg, None) {
             Ok(()) => {}
             Err(UpdateAbort::Failed(diagnostic)) => {
                 return publication.finish(Err(diagnostic), |_| true);
@@ -3016,7 +3027,10 @@ impl NativeSparqlEngine {
     /// ([`QueryOptions::load`]) when it names one, otherwise the engine's
     /// ([`Self::with_resolver`]). Both UPDATE seams read it here so the precedence is
     /// stated once.
-    fn load_resolver<'r>(&'r self, options: QueryOptions<'r, 'r>) -> Option<&'r dyn GraphResolver> {
+    fn load_resolver<'r>(
+        &'r self,
+        options: &QueryOptions<'r, 'r>,
+    ) -> Option<&'r dyn GraphResolver> {
         match options.load {
             Some(load) => Some(load),
             None => self.resolver.as_deref(),
@@ -3281,7 +3295,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> Result<EvalCtx<'d, D>, crate::EvalError> {
         let capability = workspace.capability();
         let mut ctx = EvalCtx::new_admitted(dataset, &capability, || {
@@ -3363,7 +3377,7 @@ impl NativeSparqlEngine {
         query_text: &str,
         base_iri: Option<&str>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_query_with_options_view(dataset, query_text, base_iri, QueryOptions::EMPTY)
+        self.explain_query_with_options_view(dataset, query_text, base_iri, &QueryOptions::EMPTY)
     }
 
     /// [`Self::explain_query`] with the full [`QueryOptions`] a query evaluation takes —
@@ -3395,7 +3409,7 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         self.explain_query_with_options_view(&**dataset, query_text, base_iri, options)
     }
@@ -3414,7 +3428,7 @@ impl NativeSparqlEngine {
         dataset: &D,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         self.explain_for(dataset, query_text, base_iri, options, None)
     }
@@ -3446,7 +3460,7 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         stop: Arc<dyn crate::governor::StopSignal>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         self.explain_for(&**dataset, query_text, base_iri, options, Some(stop))
@@ -3478,7 +3492,7 @@ impl NativeSparqlEngine {
             dataset,
             query_text,
             base_iri,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
     }
 
@@ -3500,7 +3514,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> FallibleScopedResult<crate::RetainedQueryExplanation, D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
@@ -3524,7 +3538,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         stop: Arc<dyn crate::governor::StopSignal>,
     ) -> FallibleScopedResult<crate::RetainedQueryExplanation, D::Error, D::Evidence>
     where
@@ -3540,7 +3554,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         stop: Option<Arc<dyn crate::governor::StopSignal>>,
     ) -> FallibleScopedResult<crate::RetainedQueryExplanation, D::Error, D::Evidence>
     where
@@ -3588,7 +3602,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleScopedResult<
         crate::RetainedQueryExplanation,
@@ -3643,7 +3657,7 @@ impl NativeSparqlEngine {
             })?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
-            .options(dataset, options)
+            .options(dataset, *options)
             .map_err(|diagnostic| {
                 fallible_admission_failure(
                     dataset,
@@ -3654,7 +3668,7 @@ impl NativeSparqlEngine {
         let mut capture = QueryCoordinates::NotStarted;
         let measured = admitted
             .parameters
-            .check_admitted(&prepared, options, &workspace.capability())
+            .check_admitted(&prepared, &options, &workspace.capability())
             .and_then(|()| {
                 self.explain_prepared(
                     dataset,
@@ -3663,7 +3677,7 @@ impl NativeSparqlEngine {
                         substitutions: Prebindings::Owned(admitted.values),
                         state: &state,
                     },
-                    options,
+                    &options,
                     Sequencing::for_view::<D>(),
                     &workspace,
                     &mut capture,
@@ -3712,12 +3726,12 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         query_text: &str,
         base_iri: Option<&str>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         stop: Option<Arc<dyn crate::governor::StopSignal>>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read_with_permit(dataset, &publication, || {
-            let options = match publication.options(dataset, options) {
+            let options = match publication.options(dataset, *options) {
                 Ok(options) => options,
                 Err(error) => return (Err(error.into()), None),
             };
@@ -3763,7 +3777,7 @@ impl NativeSparqlEngine {
                     substitutions: Prebindings::Owned(&[]),
                     state: &state,
                 },
-                options,
+                &options,
                 Sequencing::Free,
                 &execution,
                 &mut QueryCoordinates::NotStarted,
@@ -3778,7 +3792,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         execution: ExplanationExecution<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
         capture: &mut QueryCoordinates,
@@ -3980,11 +3994,11 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
@@ -4005,7 +4019,7 @@ impl NativeSparqlEngine {
                 dataset,
                 &prepared,
                 request.substitutions,
-                options,
+                &options,
                 Sequencing::Free,
                 &workspace,
             )
@@ -4079,7 +4093,7 @@ impl NativeSparqlEngine {
     ///     "SELECT ?o WHERE { ?this <http://example.org/p> ?o }",
     ///     None,
     ///     &["this"],
-    ///     QueryOptions::EMPTY,
+    ///     &QueryOptions::EMPTY,
     /// )?;
     /// assert_eq!(execution.parameters().len(), 1);
     /// assert_eq!(execution.slot("this"), Some(0));
@@ -4091,7 +4105,7 @@ impl NativeSparqlEngine {
         query: &str,
         base_iri: Option<&str>,
         parameters: &[&str],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<PreparedExecution, RdfDiagnostic> {
         self.prepare_execution_admitted(
             query,
@@ -4112,7 +4126,7 @@ impl NativeSparqlEngine {
         query: &str,
         base_iri: Option<&str>,
         parameters: &[&str],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<PreparedExecution, EvaluationFailure> {
         for (index, name) in parameters.iter().enumerate() {
@@ -4219,14 +4233,14 @@ impl NativeSparqlEngine {
     /// let engine = NativeSparqlEngine::new();
     /// let data = RdfDatasetBuilder::new().freeze().unwrap();
     /// let mut execution = engine
-    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .prepare_execution("ASK {}", None, &[], &QueryOptions::EMPTY)
     ///     .unwrap();
     /// engine
-    ///     .execute(&mut execution, &*data, QueryOptions::EMPTY, |_outcome| {
+    ///     .execute(&mut execution, &*data, &QueryOptions::EMPTY, |_outcome| {
     ///         // The SAME handle, borrowed again while the outer call above still
     ///         // holds it: `cannot borrow `execution` as mutable more than once`.
     ///         engine
-    ///             .execute(&mut execution, &*data, QueryOptions::EMPTY, |_| ())
+    ///             .execute(&mut execution, &*data, &QueryOptions::EMPTY, |_| ())
     ///             .unwrap();
     ///     })
     ///     .unwrap();
@@ -4241,17 +4255,17 @@ impl NativeSparqlEngine {
     /// let engine = NativeSparqlEngine::new();
     /// let data = RdfDatasetBuilder::new().freeze().unwrap();
     /// let mut execution_a = engine
-    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .prepare_execution("ASK {}", None, &[], &QueryOptions::EMPTY)
     ///     .unwrap();
     /// let mut execution_b = engine
-    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .prepare_execution("ASK {}", None, &[], &QueryOptions::EMPTY)
     ///     .unwrap();
     /// engine
-    ///     .execute(&mut execution_a, &*data, QueryOptions::EMPTY, |_outcome| {
+    ///     .execute(&mut execution_a, &*data, &QueryOptions::EMPTY, |_outcome| {
     ///         // A DIFFERENT handle, borrowed while the outer call above holds
     ///         // `execution_a`: two distinct borrows, so this is unremarkable.
     ///         engine
-    ///             .execute(&mut execution_b, &*data, QueryOptions::EMPTY, |_| ())
+    ///             .execute(&mut execution_b, &*data, &QueryOptions::EMPTY, |_| ())
     ///             .unwrap();
     ///     })
     ///     .unwrap();
@@ -4270,7 +4284,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
         self.execute_ungoverned(
@@ -4300,7 +4314,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> FallibleScopedResult<R, D::Error, D::Evidence>
     where
@@ -4321,7 +4335,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::EvidenceSource<D::Id>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> FallibleScopedResult<(R, crate::witness::RelationWitness), D::Error, D::Evidence>
@@ -4335,7 +4349,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         witnessing: bool,
         source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -4349,7 +4363,7 @@ impl NativeSparqlEngine {
             let workspace = reserve_fallible_execution(dataset, reporting.execution())?;
             let publication = crate::user_fn::RefusalPublication::default();
             let options = publication
-                .options(dataset, options)
+                .options(dataset, *options)
                 .map_err(|diagnostic| {
                     fallible_admission_failure(
                         dataset,
@@ -4359,7 +4373,7 @@ impl NativeSparqlEngine {
             let evaluated = self.execute_ungoverned_admitted(
                 execution,
                 dataset,
-                options,
+                &options,
                 witnessing,
                 Sequencing::for_view::<D>(),
                 source,
@@ -4411,7 +4425,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<(R, crate::witness::RelationWitness), RdfDiagnostic> {
         self.execute_ungoverned(
@@ -4440,7 +4454,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::EvidenceSource<D::Id>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<(R, crate::witness::RelationWitness), RdfDiagnostic> {
@@ -4468,7 +4482,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
         capability: &crate::WorkspaceCapability,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -4493,7 +4507,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
         operation: &ReadOperation<D::ReadError>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -4501,11 +4515,11 @@ impl NativeSparqlEngine {
         let publication = crate::user_fn::RefusalPublication::default();
         let workspace = &operation.workspace;
         let result = (|| {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             self.execute_ungoverned_admitted(
                 execution,
                 dataset,
-                options,
+                &options,
                 true,
                 Sequencing::for_view::<D>(),
                 source,
@@ -4530,7 +4544,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         witnessing: bool,
         sequencing: Sequencing,
         source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
@@ -4539,15 +4553,15 @@ impl NativeSparqlEngine {
         let result = {
             let publication = crate::user_fn::RefusalPublication::default();
             checked_query_read(dataset, &publication, || {
-                let options = publication.options(dataset, options)?;
+                let options = publication.options(dataset, *options)?;
                 let workspace = bounded_workspace::reserve(
                     dataset,
                     &execution.prepared.query,
                     !execution.parameters().is_empty(),
-                    options,
+                    &options,
                 )?;
                 self.execute_ungoverned_admitted(
-                    execution, dataset, options, witnessing, sequencing, source, &workspace, visit,
+                    execution, dataset, &options, witnessing, sequencing, source, &workspace, visit,
                 )
             })
         };
@@ -4566,7 +4580,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         witnessing: bool,
         sequencing: Sequencing,
         source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
@@ -4665,24 +4679,24 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
         let result = {
             let publication = crate::user_fn::RefusalPublication::default();
             checked_query_read(dataset, &publication, || {
-                let options = publication.options(dataset, options)?;
+                let options = publication.options(dataset, *options)?;
                 let workspace = bounded_workspace::reserve(
                     dataset,
                     &execution.prepared.query,
                     !execution.parameters().is_empty(),
-                    options,
+                    &options,
                 )?;
                 self.execute_governed_in_workspace(
                     execution,
                     dataset,
-                    options,
+                    &options,
                     &crate::SharedWorkspace::from(state.clone()),
                     &workspace,
                     visit,
@@ -4708,7 +4722,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
         capability: &crate::WorkspaceCapability,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -4732,7 +4746,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
         operation: &ReadOperation<D::ReadError>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -4741,13 +4755,13 @@ impl NativeSparqlEngine {
         let workspace = &operation.workspace;
         let capability = &workspace.capability();
         let result = (|| {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let state = crate::SharedWorkspace::new_admitted(
                 GovernorState::with_workspace(governors, capability.clone()),
                 capability,
             )?;
             self.execute_governed_in_workspace(
-                execution, dataset, options, &state, workspace, visit,
+                execution, dataset, &options, &state, workspace, visit,
             )
         })();
         if result.is_err()
@@ -4762,7 +4776,7 @@ impl NativeSparqlEngine {
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &crate::SharedWorkspace<GovernorState>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -4899,7 +4913,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
         self.query_interned_input(dataset, request, options, None, None, |outcome, ctx| {
@@ -4924,7 +4938,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::evidence_exec::EvidenceSource<D::Id>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
@@ -4948,7 +4962,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::EvidenceSource<D::Id>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> FallibleScopedResult<R, D::Error, D::Evidence>
@@ -4997,7 +5011,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::evidence_exec::EvidenceSource<D::Id>,
         answer: purrdf_core::evidence::AnswerRequest,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>, purrdf_core::evidence::AnswerStatus<'_>) -> R,
@@ -5022,7 +5036,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::EvidenceSource<D::Id>,
         answer: purrdf_core::evidence::AnswerRequest,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>, purrdf_core::evidence::AnswerStatus<'_>) -> R,
@@ -5062,7 +5076,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::evidence_exec::EvidenceSource<D::Id>,
         answer: purrdf_core::evidence::AnswerRequest,
         visit: impl FnOnce(
@@ -5092,7 +5106,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::EvidenceSource<D::Id>,
         answer: purrdf_core::evidence::AnswerRequest,
         visit: impl FnOnce(
@@ -5161,19 +5175,19 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: Option<&'d dyn crate::evidence_exec::EvidenceSource<D::Id>>,
         answer: Option<purrdf_core::evidence::AnswerRequest>,
         visit: impl FnOnce(&Outcome<D::Id>, &EvalCtx<'_, D>) -> Result<R, crate::EvalError>,
     ) -> Result<R, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
             self.query_interned_input_admitted(
-                dataset, request, options, source, answer, &workspace, visit,
+                dataset, request, &options, source, answer, &workspace, visit,
             )
         })
     }
@@ -5182,7 +5196,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: &'d dyn crate::EvidenceSource<D::Id>,
         answer: Option<purrdf_core::evidence::AnswerRequest>,
         visit: impl FnOnce(&Outcome<D::Id>, &EvalCtx<'_, D>) -> Result<R, crate::EvalError>,
@@ -5195,7 +5209,7 @@ impl NativeSparqlEngine {
         let workspace = reserve_fallible_execution(dataset, reporting.execution())?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
-            .options(dataset, options)
+            .options(dataset, *options)
             .map_err(|diagnostic| {
                 fallible_admission_failure(
                     dataset,
@@ -5205,7 +5219,7 @@ impl NativeSparqlEngine {
         let evaluated = self.query_interned_input_admitted(
             dataset,
             request,
-            options,
+            &options,
             Some(source),
             answer,
             &workspace,
@@ -5231,7 +5245,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
         answer: Option<purrdf_core::evidence::AnswerRequest>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
@@ -5295,13 +5309,13 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: InternedRequest<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read(dataset, &publication, || {
-            let options = publication.options(dataset, options)?;
+            let options = publication.options(dataset, *options)?;
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
@@ -5318,7 +5332,7 @@ impl NativeSparqlEngine {
                 options.geo,
                 &workspace.capability(),
             )?;
-            admitted.check_admitted(&prepared, options, &workspace.capability())?;
+            admitted.check_admitted(&prepared, &options, &workspace.capability())?;
             let mut identity_owner = relation_identity(
                 &prepared,
                 options.property_functions(),
@@ -5335,12 +5349,12 @@ impl NativeSparqlEngine {
                 return refused
                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
             }
-            let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+            let mut ctx = self.governed_ctx(dataset, state.clone(), &options, &workspace)?;
             let coordinates = coordinates::capture_query(
                 &ctx,
                 &prepared,
                 Prebindings::Borrowed(request.substitutions),
-                options,
+                &options,
             )?;
             let evaluated = evaluate_governed_with_substitutions(
                 &prepared,
@@ -5402,7 +5416,7 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
         source: &(dyn crate::remote::ServiceResolver + Sync),
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         self.query_with_source_view(&**dataset, request, source, options)
     }
@@ -5426,14 +5440,14 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         request: SparqlRequest<'_>,
         source: &'d (dyn crate::remote::ServiceResolver + Sync),
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         self.query_with_options_view(
             dataset,
             request,
-            QueryOptions {
+            &QueryOptions {
                 remote: Some(source),
-                ..options
+                ..*options
             },
         )
     }
@@ -6437,6 +6451,9 @@ pub struct QueryOptions<'a, 'providers> {
     /// [`ExprFnCall::depth`](crate::ExprFnCall::depth) here, so a recursion that
     /// leaves the evaluator and re-enters it through a fresh query is still bounded.
     pub call_depth: u32,
+    /// Inclusive logical UDF depth ceiling. `None` removes this logical limit;
+    /// physical host stack guards remain independent. [`Self::EMPTY`] selects 32.
+    pub max_udf_depth: Option<u64>,
     /// The source this request's `SERVICE` clauses resolve through — in a query, and
     /// in an UPDATE's `WHERE` alike.
     ///
@@ -6531,6 +6548,7 @@ impl std::fmt::Debug for QueryOptions<'_, '_> {
             .field("bnode_mint_prefix", &self.bnode_mint_prefix)
             .field("focus_graph", &self.focus_graph)
             .field("call_depth", &self.call_depth)
+            .field("max_udf_depth", &self.max_udf_depth)
             .field("remote", &self.remote.is_some())
             .field("load", &self.load.is_some())
             .field("xpath_regex", &self.xpath_regex)
@@ -6589,6 +6607,7 @@ impl QueryOptions<'_, '_> {
         bnode_mint_prefix: None,
         focus_graph: None,
         call_depth: 0,
+        max_udf_depth: Some(crate::eval::DEFAULT_UDF_DEPTH),
         remote: None,
         load: None,
         xpath_regex: None,
@@ -6787,6 +6806,20 @@ impl<'a, 'providers> QueryOptions<'a, 'providers> {
         self
     }
 
+    /// Set an inclusive logical UDF depth ceiling without enabling metering.
+    #[must_use]
+    pub const fn with_max_udf_depth(mut self, limit: u64) -> Self {
+        self.max_udf_depth = Some(limit);
+        self
+    }
+
+    /// Remove the logical UDF depth limit without disabling physical stack guards.
+    #[must_use]
+    pub const fn without_udf_depth_limit(mut self) -> Self {
+        self.max_udf_depth = None;
+        self
+    }
+
     /// Set the source this request's `SERVICE` clauses resolve through (`None` is
     /// the engine with no federation).
     #[must_use]
@@ -6915,7 +6948,7 @@ impl<'a> RequestParameters<'a> {
     fn check_admitted(
         &self,
         prepared: &PreparedQuery,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<(), EvaluationFailure> {
         let mut frame = crate::workspace::LexicalFrame::new(workspace);
@@ -7018,7 +7051,7 @@ impl<'a> AdmittedSubstitutions<'a> {
 #[cfg(test)]
 fn check_plan_matches_relations(
     prepared: &PreparedQuery,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     parameters: &crate::DetHashSet<Variable>,
 ) -> Result<(), RdfDiagnostic> {
     check_plan_soundness(prepared)?;
@@ -7079,7 +7112,7 @@ fn check_plan_matches_relations(
 /// reading declarations retains its own execution diagnostic.
 fn check_prepared_registries_unchanged(
     prepared: &PreparedQuery,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<(), EvaluationFailure> {
     let mut frame = crate::workspace::LexicalFrame::new(workspace);
@@ -7173,7 +7206,7 @@ fn admit_structure_with_memory<const CONTEXTUAL: bool>(
 
 fn check_plan_matches_registries_with_memory(
     prepared: &PreparedQuery,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     parameters: &[&str],
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<(), EvaluationFailure> {
@@ -7222,7 +7255,7 @@ fn check_plan_matches_registries_with_memory(
 
 fn check_prepared_registries_with_memory(
     prepared: &PreparedQuery,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<(), EvaluationFailure> {
     options
@@ -7294,7 +7327,7 @@ fn admit_structure_with<const CONTEXTUAL: bool>(query: &Query) -> Result<(), Rdf
 #[cfg(test)]
 fn check_plan_matches_registries(
     prepared: &PreparedQuery,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     parameters: &crate::DetHashSet<Variable>,
 ) -> Result<(), RdfDiagnostic> {
     let names: Vec<&str> = parameters.iter().map(Variable::as_str).collect();
@@ -7493,8 +7526,9 @@ impl Sequencing {
 
 pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
-    options: QueryOptions<'d, 'd>,
+    options: &QueryOptions<'d, 'd>,
 ) -> Result<EvalCtx<'d, D>, EvaluationFailure> {
+    ctx.max_udf_depth = options.max_udf_depth;
     ctx.candidate_scope = options.candidate_scope;
     ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
     ctx = ctx
@@ -7537,7 +7571,7 @@ impl SparqlEngine for NativeSparqlEngine {
             dataset,
             &prepared,
             request.substitutions,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
     }
 
@@ -7549,7 +7583,7 @@ impl SparqlEngine for NativeSparqlEngine {
         // The trait seam configures nothing: a caller who wants a property-function
         // registry (or any other `QueryOptions` piece) reachable from an UPDATE's
         // `WHERE` names it at `NativeSparqlEngine::update_with_options`.
-        self.update_with_options(dataset, request, QueryOptions::EMPTY)
+        self.update_with_options(dataset, request, &QueryOptions::EMPTY)
     }
 }
 
@@ -7866,17 +7900,17 @@ mod tests {
         let engine = NativeSparqlEngine::new();
         let query = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
         let ordinary = engine
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
-        assert!(engine.open_call_cursor(&ordinary, options).is_ok());
+        assert!(engine.open_call_cursor(&ordinary, &options).is_ok());
         for query in [
             query,
             format!("SELECT ?s ?o WHERE {{ OPTIONAL {{ ?s <{iri}> ?o }} }}"),
         ] {
             let contextual = engine
-                .prepare_rdflib_query(&query, None, &[], options)
+                .prepare_rdflib_query(&query, None, &[], &options)
                 .unwrap();
-            let Err(error) = engine.open_call_cursor(&contextual.prepared, options) else {
+            let Err(error) = engine.open_call_cursor(&contextual.prepared, &options) else {
                 panic!("contextual cursor is refused")
             };
             assert!(error.message.contains("contextual application"), "{error}");
@@ -8404,7 +8438,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[("this".to_owned(), TermValue::Iri(focus.to_owned()))],
                 },
-                QueryOptions {
+                &QueryOptions {
                     prebinding,
                     ..QueryOptions::EMPTY
                 },
@@ -8456,7 +8490,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[("this".to_owned(), TermValue::Iri(focus.to_owned()))],
                     },
-                    QueryOptions {
+                    &QueryOptions {
                         prebinding: ShaclPrebinding::Applied,
                         ..QueryOptions::EMPTY
                     },
@@ -8550,7 +8584,7 @@ mod tests {
                     base_iri: None,
                     substitutions,
                 },
-                QueryOptions {
+                &QueryOptions {
                     prebinding: ShaclPrebinding::Applied,
                     ..QueryOptions::EMPTY
                 },
@@ -8657,7 +8691,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[("g".to_owned(), value)],
                 },
-                QueryOptions {
+                &QueryOptions {
                     prebinding,
                     ..QueryOptions::EMPTY
                 },
@@ -8778,10 +8812,10 @@ mod tests {
         ] {
             let value = crate::scratch::term_id_to_value(&*ds, id);
             let mut by_value = engine
-                .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
                 .expect("prepare");
             let mut by_id = engine
-                .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
                 .expect("prepare");
             by_value.bind(0, value).expect("the value door");
             by_id.bind_id(0, &*ds, id).expect("the id door");
@@ -8840,11 +8874,11 @@ mod tests {
                 .expect("the fixture interns this term");
             let answer = |bind: &dyn Fn(&mut PreparedExecution) -> Result<(), RdfDiagnostic>| {
                 let mut execution = engine
-                    .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                    .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
                     .expect("prepare");
                 bind(&mut execution).expect("bind");
                 engine
-                    .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+                    .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
                         let InternedOutcome::Solutions(solutions) = outcome else {
                             panic!("expected solutions");
                         };
@@ -8910,7 +8944,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     prebinding: ShaclPrebinding::Applied,
                     bnode_mint_prefix: Some("fTag_"),
                     ..QueryOptions::EMPTY
@@ -8959,7 +8993,7 @@ mod tests {
             .query_with_options_view(
                 &*ds,
                 request(),
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_relations(registry)
                         .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
@@ -9029,7 +9063,7 @@ mod tests {
                     &ds,
                     query,
                     None,
-                    QueryOptions {
+                    &QueryOptions {
                         env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                             .expect("the fixture declarations read cleanly"),
                         ..QueryOptions::EMPTY
@@ -9184,7 +9218,7 @@ mod tests {
                 &ds,
                 query,
                 None,
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
                         .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
@@ -9276,7 +9310,7 @@ mod tests {
             .expect("fixture declarations");
         let options = QueryOptions::EMPTY.with_env(&env);
         let resident = engine
-            .explain_query_with_options(&ds, query, None, options)
+            .explain_query_with_options(&ds, query, None, &options)
             .expect("resident explanation");
         let inert = QueryOptions {
             prebinding: ShaclPrebinding::Applied,
@@ -9287,7 +9321,7 @@ mod tests {
         };
         for _ in 0..2 {
             let (typed, ()) = engine
-                .explain_query_with_options_fallible_view(&*ds, query, None, inert)
+                .explain_query_with_options_fallible_view(&*ds, query, None, &inert)
                 .expect("typed explanation with both registries");
             assert_eq!(typed.render(), resident.render());
             assert_eq!(typed.relations().len(), 1);
@@ -9304,7 +9338,7 @@ mod tests {
                 &ds,
                 query,
                 None,
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::new(
                         parser_options.clone(),
                         relations.clone(),
@@ -9350,7 +9384,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::new(
                         parser_options,
                         relations,
@@ -9389,7 +9423,7 @@ mod tests {
                 &ds,
                 query,
                 None,
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::new(
                         parser_options,
                         crate::property_fn::PropertyFunctionRegistry::EMPTY,
@@ -9426,7 +9460,7 @@ mod tests {
                 &ds,
                 query,
                 None,
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::new(
                         parser_options,
                         relations,
@@ -9461,7 +9495,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     prebinding: ShaclPrebinding::Applied,
                     ..QueryOptions::EMPTY
                 },
@@ -9762,7 +9796,15 @@ mod tests {
             panic!("a CONSTRUCT returns a graph");
         };
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/from> <http://ex/g1> <http://ex/audit> .\n\
              <http://ex/a> <http://ex/from> <http://ex/g2> <http://ex/audit> .\n\
              <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g1> .\n\
@@ -10158,7 +10200,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &configured_env,
                     ..QueryOptions::EMPTY
                 },
@@ -10183,7 +10225,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &configured_env,
                     ..QueryOptions::EMPTY
                 },
@@ -10294,7 +10336,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED,
             )
             .unwrap_err();
@@ -10391,7 +10433,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions {
+                    &QueryOptions {
                         env: &env,
                         ..QueryOptions::EMPTY
                     },
@@ -10429,7 +10471,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &env,
                     ..QueryOptions::EMPTY
                 },
@@ -10575,7 +10617,7 @@ mod tests {
         assert!(
             check_plan_matches_relations(
                 &prepared,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &crate::DetHashSet::default()
             )
             .is_ok(),
@@ -10587,7 +10629,7 @@ mod tests {
         assert!(
             check_plan_matches_relations(
                 &prepared,
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::new(
                         ParserOptions::default(),
                         fresh_relations,
@@ -10613,7 +10655,7 @@ mod tests {
         assert!(
             check_plan_matches_relations(
                 &prepared,
-                QueryOptions {
+                &QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_relations(
                         real_relations.clone()
                     )
@@ -10679,7 +10721,7 @@ mod tests {
     #[test]
     fn the_borrowed_iri_scan_refuses_and_accepts_exactly_what_the_owned_one_did() {
         let relative =
-            PreparedQuery::rewritten(select_over_predicate("knows"), QueryOptions::EMPTY)
+            PreparedQuery::rewritten(select_over_predicate("knows"), &QueryOptions::EMPTY)
                 .expect_err("a relative predicate IRI is not evaluable algebra");
         assert!(
             relative
@@ -10691,7 +10733,7 @@ mod tests {
 
         let malformed = PreparedQuery::rewritten(
             select_over_predicate("http://ex/<bad>"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect_err("`<` is not a legal path character, scheme or no scheme");
 
@@ -10701,7 +10743,7 @@ mod tests {
         // would fail on the row.
         let prepared = PreparedQuery::rewritten(
             select_over_predicate("http://ex/knows"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| {
             panic!(
@@ -10711,7 +10753,7 @@ mod tests {
             )
         });
         let answer = NativeSparqlEngine::new()
-            .query_prepared(&social(), &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&social(), &prepared, &[], &QueryOptions::EMPTY)
             .expect("the admitted plan evaluates");
         let SparqlResult::Solutions { rows, .. } = answer else {
             panic!("a SELECT answers with solutions, got {answer:?}");
@@ -10774,10 +10816,10 @@ mod tests {
             let engine = NativeSparqlEngine::new();
             // A thousand levels, eight times the count the evaluator used to
             // refuse past, prepare and ANSWER where the stack holds them.
-            let admitted = PreparedQuery::rewritten(nested(1_000), QueryOptions::EMPTY)
+            let admitted = PreparedQuery::rewritten(nested(1_000), &QueryOptions::EMPTY)
                 .expect("a thousand nested levels prepare");
             let answer = engine
-                .query_prepared(&social(), &admitted, &[], QueryOptions::EMPTY)
+                .query_prepared(&social(), &admitted, &[], &QueryOptions::EMPTY)
                 .expect("a thousand nested levels evaluate");
             let SparqlResult::Solutions { rows, .. } = answer else {
                 panic!("a SELECT answers with solutions, got {answer:?}");
@@ -10793,10 +10835,15 @@ mod tests {
             // more than the C library hands a 256 KiB request, so the same plan
             // evaluated there is the evaluation's own typed stack refusal. The
             // plan is built and dropped here, where its drop fits.
-            let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
+            let tall = PreparedQuery::rewritten(nested(10_000), &QueryOptions::EMPTY)
                 .expect("ten thousand nested levels prepare on a large stack");
             let refused = purrdf_stack::on_stack_scoped(256 * 1024, || {
-                NativeSparqlEngine::new().query_prepared(&social(), &tall, &[], QueryOptions::EMPTY)
+                NativeSparqlEngine::new().query_prepared(
+                    &social(),
+                    &tall,
+                    &[],
+                    &QueryOptions::EMPTY,
+                )
             })
             .expect("the small stack runs the evaluation")
             .expect_err("a plan too tall for the evaluating thread's stack is refused");
@@ -10960,7 +11007,7 @@ mod tests {
                 .query_governed(
                     &ds,
                     request(),
-                    QueryOptions {
+                    &QueryOptions {
                         env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                             .expect("the fixture declarations read cleanly"),
                         ..QueryOptions::EMPTY
@@ -10991,7 +11038,7 @@ mod tests {
                     &ds,
                     &query,
                     None,
-                    QueryOptions {
+                    &QueryOptions {
                         env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                             .expect("the fixture declarations read cleanly"),
                         ..QueryOptions::EMPTY
@@ -11515,7 +11562,7 @@ mod tests {
 
         let quiet = crate::governor::CancellationFlag::new();
         let unfired = engine
-            .explain_query_with_stop_signal(&ds, query, None, QueryOptions::EMPTY, Arc::new(quiet))
+            .explain_query_with_stop_signal(&ds, query, None, &QueryOptions::EMPTY, Arc::new(quiet))
             .expect("explain under an unfired signal");
         assert_eq!(unfired.evidence().tripped, None);
         assert_eq!(unfired.render(), plain.render());
@@ -11523,7 +11570,7 @@ mod tests {
         let fired = crate::governor::CancellationFlag::new();
         fired.cancel();
         let stopped = engine
-            .explain_query_with_stop_signal(&ds, query, None, QueryOptions::EMPTY, Arc::new(fired))
+            .explain_query_with_stop_signal(&ds, query, None, &QueryOptions::EMPTY, Arc::new(fired))
             .expect("a stop is reported on the explanation, not as an error");
         assert_eq!(
             stopped.evidence().tripped,

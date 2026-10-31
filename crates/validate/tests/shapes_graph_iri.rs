@@ -132,7 +132,16 @@ fn a_relative_shapes_graph_with_no_base_is_refused() {
         lint_shapes_ttl_with_shapes_graph(SHAPES, None, Some("shapes"), &[])
             .expect_err("lint")
             .to_string(),
-        match pack_shapes_product_with_shapes_graph(SHAPES, None, Some("shapes"), &[]) {
+        match pack_shapes_product_with_shapes_graph(
+            SHAPES,
+            None,
+            Some("shapes"),
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(refusal) => refusal.to_string(),
             Ok(_) => panic!("pack must refuse a relative shapes graph with no base"),
         },
@@ -209,8 +218,17 @@ fn shapes_graph_001_through_parsed_prepared_and_packed_shapes() {
             );
         }
 
-        let product = pack_shapes_product_with_shapes_graph(&shapes_ttl, Some(&base), graph, &[])
-            .expect("packs");
+        let product = pack_shapes_product_with_shapes_graph(
+            &shapes_ttl,
+            Some(&base),
+            graph,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("packs");
         let (conforms, focus) = verdict(
             &validate_with_shapes_product(&product, &data_nt, &SarifOptions::default())
                 .expect("the product validates"),

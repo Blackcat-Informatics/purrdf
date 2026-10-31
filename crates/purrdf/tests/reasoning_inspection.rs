@@ -39,7 +39,7 @@ fn actual_query_and_entailment_failures_retain_their_original_owners() {
                 substitutions: &[],
             },
             regime,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap_err();
@@ -55,7 +55,7 @@ fn actual_query_and_entailment_failures_retain_their_original_owners() {
                 substitutions: &[],
             },
             QueryEntailment::Simple,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .is_ok()

@@ -55,8 +55,12 @@ const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNega
 
 /// The native flat RDFC-1.0 canonical N-Quads of a dataset — the comparator for every
 /// round-trip property (blank-node labels canonicalized, lines sorted/deduped).
-fn canonical(dataset: &RdfDataset) -> String {
-    canonical_flat_nquads(dataset).expect("native RDFC-1.0 canonicalization")
+fn canonical(dataset: &RdfDataset) -> purrdf_core::Canonicalized {
+    canonical_flat_nquads(
+        dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("native RDFC-1.0 canonicalization")
 }
 
 /// Serialize a dataset to RDF text of `format` (full RDF 1.2 statement layer).
@@ -422,7 +426,7 @@ prop_test! {
     fn nquads_roundtrip(dataset in arb_dataset_star()) {
         let bytes = serialize(dataset.as_ref(), NativeRdfFormat::NQuads);
         let after = parse(&bytes, NativeRdfFormat::NQuads);
-        prop_assert_eq!(canonical(&flat(dataset.as_ref())), canonical(after.as_ref()));
+        prop_assert_eq!(canonical(&flat(dataset.as_ref())).nquads(), canonical(after.as_ref()).nquads());
     }
 
     /// TriG: same property, exercising named graphs and quoted triples.
@@ -430,7 +434,7 @@ prop_test! {
     fn trig_roundtrip(dataset in arb_dataset_star()) {
         let bytes = serialize(dataset.as_ref(), NativeRdfFormat::TriG);
         let after = parse(&bytes, NativeRdfFormat::TriG);
-        prop_assert_eq!(canonical(&flat(dataset.as_ref())), canonical(after.as_ref()));
+        prop_assert_eq!(canonical(&flat(dataset.as_ref())).nquads(), canonical(after.as_ref()).nquads());
     }
 
     /// GTS fold/unfold: RdfDataset -> `to_gts` -> fold -> purrdf import preserves the
@@ -443,8 +447,8 @@ prop_test! {
         prop_assert!(graph.diagnostics.is_empty(), "GTS fold diagnostics: {:?}", graph.diagnostics);
         let after = purrdf_rdf::import_gts_graph(graph).expect("import folded GTS graph");
         prop_assert_eq!(
-            canonical(&flat(dataset.as_ref())),
-            canonical(&flat(after.dataset.as_ref()))
+            canonical(&flat(dataset.as_ref())).nquads(),
+            canonical(&flat(after.dataset.as_ref())).nquads()
         );
     }
 
@@ -479,7 +483,7 @@ prop_test! {
     fn rdfxml_roundtrip(dataset in arb_dataset_rdfxml()) {
         let bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
         let after = parse(&bytes, NativeRdfFormat::RdfXml);
-        prop_assert_eq!(canonical(&flat(dataset.as_ref())), canonical(after.as_ref()));
+        prop_assert_eq!(canonical(&flat(dataset.as_ref())).nquads(), canonical(after.as_ref()).nquads());
     }
 
     /// The egress escape is INERT on an in-alphabet label: a legal
@@ -570,10 +574,10 @@ prop_test! {
         let reference = {
             let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&dataset))
                 .expect("an already-valid dataset's own flat quad stream must re-freeze");
-            try_canonicalize_with(&flat, hash).unwrap().nquads
+            try_canonicalize_with(&flat, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).unwrap()
         };
-        match try_canonicalize_flat_view(&*dataset, hash) {
-            Ok(canonicalized) => prop_assert_eq!(canonicalized.nquads, reference),
+        match try_canonicalize_flat_view(&*dataset, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)) {
+            Ok(canonicalized) => prop_assert_eq!(canonicalized.nquads(), reference.nquads()),
             Err(err) => prop_assert!(
                 false,
                 "generated non-reserved-vocabulary input was refused: {err}"
@@ -651,14 +655,14 @@ prop_test! {
         // The swap removes every reserved-namespace IRI, so the only way this can
         // still refuse is an unrelated poison-budget exhaustion — skip rather than
         // fail on that, since it is not what this property is about either.
-        let Ok(swapped_canonicalized) = try_canonicalize_flat_view(&*swapped_dataset, hash) else {
+        let Ok(swapped_canonicalized) = try_canonicalize_flat_view(&*swapped_dataset, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)) else {
             return Ok(());
         };
 
-        match try_canonicalize_flat_view(&*dataset, hash) {
+        match try_canonicalize_flat_view(&*dataset, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)) {
             Ok(canonicalized) => prop_assert_eq!(
-                canonicalized.nquads,
-                swapped_canonicalized.nquads,
+                canonicalized.nquads(),
+                swapped_canonicalized.nquads(),
                 "a sentinel-spelled reifier row must flat-try_canonicalize identically \
                  to its real-predicate spelling"
             ),
@@ -716,8 +720,8 @@ fn nquads_dotted_label_is_verbatim_on_wire_and_stays_one_node() {
         "the dotted label must lex as exactly one blank node"
     );
     assert_eq!(
-        canonical(&flat(dataset.as_ref())),
-        canonical(after.as_ref())
+        canonical(&flat(dataset.as_ref())).nquads(),
+        canonical(after.as_ref()).nquads()
     );
 }
 
@@ -733,8 +737,8 @@ fn assert_text_roundtrip(text: &str, format: NativeRdfFormat, blanks: usize) {
     let bytes = serialize(first.as_ref(), format);
     let second = parse(&bytes, format);
     assert_eq!(
-        canonical(first.as_ref()),
-        canonical(second.as_ref()),
+        canonical(first.as_ref()).nquads(),
+        canonical(second.as_ref()).nquads(),
         "re-serialization must round-trip {text:?}"
     );
     assert_eq!(
@@ -845,8 +849,8 @@ fn rdfxml_escapes_an_ncname_illegal_blank_label() {
     );
     let after = parse(&bytes, NativeRdfFormat::RdfXml);
     assert_eq!(
-        canonical(&flat(dataset.as_ref())),
-        canonical(after.as_ref()),
+        canonical(&flat(dataset.as_ref())).nquads(),
+        canonical(after.as_ref()).nquads(),
         "the escaped document is isomorphic to the input: {text}"
     );
 }

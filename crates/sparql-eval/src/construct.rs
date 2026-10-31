@@ -1603,7 +1603,15 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         let out = eval_construct(&related_template(), &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n"
         );
@@ -1623,7 +1631,15 @@ mod tests {
         )
         .expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n"
         );
@@ -1643,7 +1659,15 @@ mod tests {
         let template = scoped(&related_template(), Some(&graph_var("o")));
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://ex/c> .\n"
         );
@@ -1666,7 +1690,15 @@ mod tests {
         ];
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/h> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n\
@@ -1690,7 +1722,15 @@ mod tests {
         ];
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n\
@@ -1783,7 +1823,15 @@ mod tests {
         ];
         let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n"
         );
@@ -1818,8 +1866,24 @@ mod tests {
             eval_quad_construct(&with_skipped, &where_knows(), &mut ctx).expect("construct");
 
         assert_eq!(
-            purrdf_core::try_canonicalize(&alone).unwrap().nquads,
-            purrdf_core::try_canonicalize(&beside).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &alone,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            purrdf_core::try_canonicalize(
+                &beside,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "a skipped graph slot must consume no blank-node counter values"
         );
     }
@@ -1992,8 +2056,24 @@ mod tests {
         let mut ctx2 = EvalCtx::new(&ds2);
         let out2 = eval_construct(&template, &where_pat, &mut ctx2).expect("construct");
         assert_eq!(
-            purrdf_core::try_canonicalize(&out1).unwrap().nquads,
-            purrdf_core::try_canonicalize(&out2).unwrap().nquads,
+            purrdf_core::try_canonicalize(
+                &out1,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            purrdf_core::try_canonicalize(
+                &out2,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "the remint is a pure function of the result"
         );
     }
@@ -2685,8 +2765,24 @@ mod tests {
         let direct_out = b.freeze().expect("freeze direct");
 
         assert_eq!(
-            try_canonicalize(&construct_out).unwrap().nquads,
-            try_canonicalize(&direct_out).unwrap().nquads,
+            try_canonicalize(
+                &construct_out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &direct_out,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "CONSTRUCT output must be isomorphic to direct push_reifier ingest"
         );
     }
@@ -2722,8 +2818,24 @@ mod tests {
 
         // Identical canonical N-Quads across two runs.
         assert_eq!(
-            try_canonicalize(&out1).unwrap().nquads,
-            try_canonicalize(&out2).unwrap().nquads,
+            try_canonicalize(
+                &out1,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &out2,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "loss declaration is deterministic across runs"
         );
 

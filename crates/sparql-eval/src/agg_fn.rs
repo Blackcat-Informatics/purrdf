@@ -1143,7 +1143,7 @@ impl AggregateRegistry {
     ///             base_iri: None,
     ///             substitutions: &[],
     ///         },
-    ///         QueryOptions::new().with_env(
+    ///         &QueryOptions::new().with_env(
     ///             &ExtensionEnv::over_aggregates(registry)
     ///                 .expect("a registered aggregate declares cleanly"),
     ///         ),

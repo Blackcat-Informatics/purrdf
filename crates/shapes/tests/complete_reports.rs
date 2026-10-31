@@ -654,12 +654,31 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
         _:r0 sh:select "SELECT $this WHERE {}" .
         "#,
     ));
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let restored = ShapesProduct::open(&bytes)
         .unwrap()
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
         .unwrap();
-    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    assert_eq!(
+        restored
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        bytes
+    );
     let data = turtle::data(PREFIXES, "");
     let original = prepared
         .bind_complete_shared_dataset(Arc::clone(&data))
@@ -685,9 +704,31 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
             report.results().next().unwrap().source_constraint(),
             Some(&Term::BlankNode("r0".to_owned()))
         );
-        assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+        assert_eq!(
+            restored
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
+            bytes
+        );
     }
-    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    assert_eq!(
+        restored
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        bytes
+    );
 }
 
 #[test]

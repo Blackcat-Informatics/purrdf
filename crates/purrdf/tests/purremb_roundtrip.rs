@@ -69,7 +69,11 @@ fn build_fixture(reverse_input: bool) -> Fixture {
     let object = rdf.intern_iri("https://example.org/rdf/object").unwrap();
     rdf.push_quad(subject, predicate, object, None).unwrap();
     let rdf = rdf.freeze().expect("valid RDF 1.2 dataset");
-    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(&rdf).expect("source pack");
+    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
+        &rdf,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let pack = PackView::from_bytes(&source_bytes).expect("source pack view");
     let subject_ordinal = pack
@@ -196,9 +200,12 @@ fn typed_round_trip_verifies_source_and_matryoshka_views() {
 
     let report = verify_embedding(&mut view).expect("full verification");
     assert_eq!(report.scalar_count(), 12);
-    let source_report =
-        verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
-            .expect("certified source verification");
+    let source_report = verify_embedding_source(
+        &view,
+        EmbeddingSource::Purrpck(&fixture.source_bytes),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("certified source verification");
     assert_eq!(source_report.ordinals_checked(), 1);
 
     let matrix = view.matrices().next().expect("one matrix");

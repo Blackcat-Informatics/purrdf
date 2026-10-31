@@ -36,7 +36,7 @@ where
         )
         .expect("query prepares");
     match engine
-        .query_prepared_view(view, &plan, &[], QueryOptions::EMPTY)
+        .query_prepared_view(view, &plan, &[], &QueryOptions::EMPTY)
         .expect("query evaluates")
     {
         SparqlResult::Solutions { rows, .. } => rows.len(),
@@ -55,7 +55,7 @@ where
         .prepare_query("SELECT ?g WHERE { GRAPH ?g {} } ORDER BY ?g", None)
         .expect("query prepares");
     match engine
-        .query_prepared_view(view, &plan, &[], QueryOptions::EMPTY)
+        .query_prepared_view(view, &plan, &[], &QueryOptions::EMPTY)
         .expect("query evaluates")
     {
         SparqlResult::Solutions { rows, .. } => rows

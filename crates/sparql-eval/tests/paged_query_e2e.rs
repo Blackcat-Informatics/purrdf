@@ -137,12 +137,12 @@ fn paged_query_parity_is_byte_identical_to_single_dataset() {
 
     let (single_vars, single_rows) = solutions(
         engine
-            .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&single, &prepared, &[], &QueryOptions::EMPTY)
             .expect("single query"),
     );
     let (paged_vars, paged_rows) = solutions(
         engine
-            .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
             .expect("paged query"),
     );
 
@@ -335,7 +335,7 @@ fn query_materializes_only_the_pages_the_plan_needs() {
     // Run the bound-subject query through the PUBLIC generic entry point.
     let (_vars, rows) = solutions(
         engine
-            .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
             .expect("paged query"),
     );
     // Correctness: the query is genuinely served — `:alice :knows :bob`.
@@ -352,7 +352,7 @@ fn query_materializes_only_the_pages_the_plan_needs() {
 
     // A second identical run hits the per-page OnceLock cache — no further pulls.
     let _ = engine
-        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
         .expect("paged query (rerun)");
     assert_eq!(
         provider.hits() - hits_after_seal,
@@ -387,12 +387,12 @@ fn assert_paged_matches_single(
 
     let (single_vars, single_rows) = solutions(
         engine
-            .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&single, &prepared, &[], &QueryOptions::EMPTY)
             .expect("single query"),
     );
     let (paged_vars, paged_rows) = solutions(
         engine
-            .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
             .expect("paged query"),
     );
 
@@ -551,7 +551,7 @@ fn compare_annotation_range_reads(page_count: usize, claims_per_page: usize) {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap();
         let elapsed = began.elapsed();
@@ -639,7 +639,7 @@ fn annotation_ranges_keep_unknown_values_and_exact_exclusive_bounds() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .unwrap()
                 .result,
@@ -686,7 +686,7 @@ fn annotation_validity_ranges_use_supplied_now_and_independent_variables() {
         engine.query_fallible_view(&view, SparqlRequest {
             query: "SELECT ?claim WHERE { ?claim <urn:range:from> ?from ; <urn:range:until> ?until FILTER(?from <= NOW() && ?until > NOW()) }",
             base_iri: None, substitutions: &[],
-        }, QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0)).unwrap().result
+        }, &QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0)).unwrap().result
     };
     assert_eq!(
         solutions(result).1,
@@ -720,7 +720,7 @@ fn annotation_range_endpoint_parsing_uses_the_original_scratch_ceiling() {
         .query_governed_view(
             &tiny,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -731,12 +731,12 @@ fn annotation_range_endpoint_parsing_uses_the_original_scratch_ceiling() {
     let governors = QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit);
     assert!(matches!(
         engine
-            .query_governed_view(&tiny, request, QueryOptions::EMPTY, &governors)
+            .query_governed_view(&tiny, request, &QueryOptions::EMPTY, &governors)
             .unwrap(),
         GovernedOutcome::Complete { .. }
     ));
     let stopped = engine
-        .query_governed_view(&wide, request, QueryOptions::EMPTY, &governors)
+        .query_governed_view(&wide, request, &QueryOptions::EMPTY, &governors)
         .unwrap();
     let GovernedOutcome::BudgetExhausted(exhausted) = stopped else {
         panic!("wide range endpoint must refuse its actual scratch allocation")

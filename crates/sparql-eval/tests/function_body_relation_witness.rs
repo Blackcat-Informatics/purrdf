@@ -130,7 +130,7 @@ fn run(predicate: &str) -> (GovernedOutcome, Arc<AtomicU64>) {
                 base_iri: None,
                 substitutions: &[],
             },
-            options,
+            &options,
             &state,
         )
         .expect("a governed run of a valid query is an outcome, never an error");
@@ -267,7 +267,7 @@ fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new()
+                &QueryOptions::new()
                     .with_functions(&bound)
                     .with_env(&nested_env),
                 &state,
@@ -296,7 +296,7 @@ fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new()
+            &QueryOptions::new()
                 .with_functions(&bound)
                 .with_env(&env)
                 .with_focus_graph(Some(&dataset)),
@@ -349,7 +349,7 @@ fn an_expression_body_that_invokes_no_relation_attests_nothing() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new()
+            &QueryOptions::new()
                 .with_functions(&bound)
                 .with_env(&env)
                 .with_focus_graph(Some(&dataset)),

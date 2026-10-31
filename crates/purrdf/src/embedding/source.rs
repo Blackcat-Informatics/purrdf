@@ -15,7 +15,6 @@ use purrdf_core::{
     Canonicalized, ContentDigest, DatasetView, PackId, PackView, QuadIds, RdfDataset, TermId,
     TermRef, dataset_from_view, try_canonicalize, verify_pack_bytes,
 };
-use std::collections::BTreeMap;
 
 /// Actual untrusted bytes supplied for one of the two closed native carriers.
 #[derive(Clone, Copy)]
@@ -75,6 +74,7 @@ impl SourceVerificationReport {
 pub fn verify_embedding_source(
     embedding: &EmbeddingView<'_>,
     input: EmbeddingSource<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<SourceVerificationReport, SourceAttachmentError> {
     let source_format = input.source_format();
     let expected = embedding.source().source_format();
@@ -87,10 +87,10 @@ pub fn verify_embedding_source(
     let (exact_digest, certified_rdf_digest, ordinals_checked) = match input {
         EmbeddingSource::Purrpck(bytes) => {
             let exact = verify_exact_source(embedding, bytes)?;
-            let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::source_pack)?;
+            let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::source_pack)?;
             let rdf = RdfcDigest::from_raw(*proof.rdf_digest().as_bytes());
             verify_rdf_source(embedding, rdf)?;
-            let checked = verify_pack_ordinals(embedding, bytes)?;
+            let checked = verify_pack_ordinals(embedding, bytes, control)?;
             (exact, rdf, checked)
         }
         EmbeddingSource::Columnar(files) => {
@@ -108,14 +108,14 @@ pub fn verify_embedding_source(
             // only requested original row evidence bound to its actual dataset.
             let read = purrdf_columnar::read_with_ordinals(files, &requested)?;
             let dataset = &read.read().dataset;
-            let (rdf, canonical) = canonical_source(dataset)?;
+            let (rdf, canonical) = canonical_source(dataset, control)?;
             verify_rdf_source(embedding, rdf)?;
             let checked = verify_ordinals(embedding, |target, ordinal| {
                 columnar_target_id(
                     target,
                     ordinal,
                     &read,
-                    &canonical.labels,
+                    &canonical,
                     embedding.source().dataset_target_id(),
                 )
             })?;
@@ -161,15 +161,21 @@ fn verify_rdf_source(
 
 pub(super) fn canonical_source(
     dataset: &RdfDataset,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(RdfcDigest, Canonicalized), SourceAttachmentError> {
-    let canonical = try_canonicalize(dataset)?;
-    let digest = RdfcDigest::from_raw(*ContentDigest::of(canonical.nquads.as_bytes()).as_bytes());
+    let (canonical, digest) = purrdf_core::try_canonicalize_sha256_view(
+        dataset,
+        purrdf_core::CanonHash::Sha256,
+        control,
+    )?;
+    let digest = RdfcDigest::from_raw(*digest.as_bytes());
     Ok((digest, canonical))
 }
 
 fn verify_pack_ordinals(
     embedding: &EmbeddingView<'_>,
     bytes: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<u64, EmbeddingError> {
     if embedding
         .targets()
@@ -179,14 +185,14 @@ fn verify_pack_ordinals(
     }
     let pack = PackView::from_bytes(bytes).map_err(EmbeddingError::source_pack)?;
     let dataset = dataset_from_view(&pack).map_err(EmbeddingError::source_pack)?;
-    let canonical = try_canonicalize(&dataset).map_err(EmbeddingError::source_pack)?;
+    let canonical = try_canonicalize(&dataset, control).map_err(EmbeddingError::source_pack)?;
     verify_ordinals(embedding, |target, ordinal| {
         pack_target_id(
             target,
             ordinal,
             &pack,
             &dataset,
-            &canonical.labels,
+            &canonical,
             embedding.source().dataset_target_id(),
         )
     })
@@ -236,7 +242,7 @@ fn columnar_target_id(
     target: TargetView<'_>,
     ordinal: u64,
     read: &ColumnarOrdinalRead,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     let dataset = &read.read().dataset;
@@ -244,18 +250,23 @@ fn columnar_target_id(
         .get(columnar_ordinal(target, ordinal)?)
         .ok_or(EmbeddingError::MissingReference("captured source ordinal"))?;
     match value {
-        ColumnarOrdinalValue::Term(id) => term_target_id(id, dataset, labels, dataset_target),
+        ColumnarOrdinalValue::Term(id) => term_target_id(id, dataset, canonical, dataset_target),
         ColumnarOrdinalValue::Quad(quad) => {
-            statement_target_id(quad, dataset, labels, dataset_target)
+            statement_target_id(quad, dataset, canonical, dataset_target)
         }
         ColumnarOrdinalValue::Reifier {
             reifier,
             triple,
             graph,
-        } => reifier_target_id(reifier, triple, graph, dataset, labels, dataset_target),
-        ColumnarOrdinalValue::Annotation(quad) => {
-            annotation_target_id(quad, dataset, labels, dataset_target, target.id(), ordinal)
-        }
+        } => reifier_target_id(reifier, triple, graph, dataset, canonical, dataset_target),
+        ColumnarOrdinalValue::Annotation(quad) => annotation_target_id(
+            quad,
+            dataset,
+            canonical,
+            dataset_target,
+            target.id(),
+            ordinal,
+        ),
     }
 }
 
@@ -264,7 +275,7 @@ fn pack_target_id(
     ordinal: u64,
     pack: &PackView<'_>,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     let kind = target.kind()?;
@@ -282,7 +293,7 @@ fn pack_target_id(
             term_value_target_id(
                 &pack.dict().term_value(ordinal),
                 dataset,
-                labels,
+                canonical,
                 dataset_target,
             )
         }
@@ -292,7 +303,7 @@ fn pack_target_id(
             statement_target_id(
                 pack_quad(pack, quad, dataset)?,
                 dataset,
-                labels,
+                canonical,
                 dataset_target,
             )
         }
@@ -304,7 +315,7 @@ fn pack_target_id(
                 pack_term(pack, quad.o, dataset)?,
                 quad.g.map(|id| pack_term(pack, id, dataset)).transpose()?,
                 dataset,
-                labels,
+                canonical,
                 dataset_target,
             )
         }
@@ -314,7 +325,7 @@ fn pack_target_id(
             annotation_target_id(
                 pack_quad(pack, quad, dataset)?,
                 dataset,
-                labels,
+                canonical,
                 dataset_target,
                 target.id(),
                 ordinal,
@@ -352,20 +363,20 @@ fn pack_quad(
 fn term_target_id(
     id: TermId,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
-    term_value_target_id(&dataset.term_value(id), dataset, labels, dataset_target)
+    term_value_target_id(&dataset.term_value(id), dataset, canonical, dataset_target)
 }
 
 fn graph_target_id(
     graph: Option<TermId>,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     let graph_name = graph
-        .map(|id| term_target_id(id, dataset, labels, dataset_target))
+        .map(|id| term_target_id(id, dataset, canonical, dataset_target))
         .transpose()?;
     Ok(RdfGraphTarget {
         dataset_id: dataset_target,
@@ -378,14 +389,14 @@ fn graph_target_id(
 fn statement_target_id(
     quad: QuadIds<TermId>,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     Ok(RdfStatementTarget {
-        graph: graph_target_id(quad.g, dataset, labels, dataset_target)?,
-        subject: term_target_id(quad.s, dataset, labels, dataset_target)?,
-        predicate: term_target_id(quad.p, dataset, labels, dataset_target)?,
-        object: term_target_id(quad.o, dataset, labels, dataset_target)?,
+        graph: graph_target_id(quad.g, dataset, canonical, dataset_target)?,
+        subject: term_target_id(quad.s, dataset, canonical, dataset_target)?,
+        predicate: term_target_id(quad.p, dataset, canonical, dataset_target)?,
+        object: term_target_id(quad.o, dataset, canonical, dataset_target)?,
     }
     .into_target(false, None)?
     .id)
@@ -396,7 +407,7 @@ fn reifier_target_id(
     triple: TermId,
     graph: Option<TermId>,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     let TermRef::Triple { s, p, o } = dataset.resolve(triple) else {
@@ -405,14 +416,14 @@ fn reifier_target_id(
         ));
     };
     Ok(RdfReifierTarget {
-        graph: graph_target_id(graph, dataset, labels, dataset_target)?,
+        graph: graph_target_id(graph, dataset, canonical, dataset_target)?,
         statement: statement_target_id(
             QuadIds { s, p, o, g: graph },
             dataset,
-            labels,
+            canonical,
             dataset_target,
         )?,
-        reifier: term_target_id(reifier, dataset, labels, dataset_target)?,
+        reifier: term_target_id(reifier, dataset, canonical, dataset_target)?,
     }
     .into_target(false, None)?
     .id)
@@ -421,7 +432,7 @@ fn reifier_target_id(
 fn annotation_target_id(
     quad: QuadIds<TermId>,
     dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    canonical: &Canonicalized,
     dataset_target: TargetId,
     expected: TargetId,
     ordinal: u64,
@@ -438,9 +449,9 @@ fn annotation_target_id(
             "annotation reifier binding",
         ));
     }
-    let graph = graph_target_id(quad.g, dataset, labels, dataset_target)?;
-    let predicate = term_target_id(quad.p, dataset, labels, dataset_target)?;
-    let object = term_target_id(quad.o, dataset, labels, dataset_target)?;
+    let graph = graph_target_id(quad.g, dataset, canonical, dataset_target)?;
+    let predicate = term_target_id(quad.p, dataset, canonical, dataset_target)?;
+    let object = term_target_id(quad.o, dataset, canonical, dataset_target)?;
     for binding in bindings {
         let target = RdfAnnotationTarget {
             graph,
@@ -449,7 +460,7 @@ fn annotation_target_id(
                 binding.o,
                 binding.g,
                 dataset,
-                labels,
+                canonical,
                 dataset_target,
             )?,
             predicate,
@@ -471,8 +482,9 @@ pub fn bind_external_pack(
     scope: ExternalScope,
     bytes: &[u8],
     contract: &ExternalBindingContract,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<ExternalBinding, EmbeddingError> {
-    let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::external_pack)?;
+    let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::external_pack)?;
     ExternalBinding::from_verified_pack(scope, proof, contract)
 }
 
@@ -480,12 +492,13 @@ pub fn bind_external_pack(
 pub fn verify_external_pack(
     binding: ExternalBindingView<'_>,
     bytes: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<RdfcDigest, EmbeddingError> {
     verify_external_artifact(binding, bytes)?;
     let expected = binding
         .certified_rdf_digest()
         .ok_or(EmbeddingError::Missing("external certified RDF digest"))?;
-    let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::external_pack)?;
+    let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::external_pack)?;
     let certified = proof.rdf_digest();
     DigestKind::CertifiedRdf.verify(&expected, certified.as_bytes())?;
     Ok(RdfcDigest::from_raw(*certified.as_bytes()))

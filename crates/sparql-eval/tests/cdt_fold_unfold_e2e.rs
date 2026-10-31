@@ -93,7 +93,7 @@ fn evaluate(dataset: &Arc<RdfDataset>, query: &str) -> SparqlResult {
         .query_with_options_view(
             dataset.as_ref(),
             request(&format!("{PFX}{query}")),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|error| panic!("evaluate `{query}`: {error:?}"))
 }
@@ -104,7 +104,7 @@ fn evaluate_err(dataset: &Arc<RdfDataset>, query: &str) -> String {
         .query_with_options_view(
             dataset.as_ref(),
             request(&format!("{PFX}{query}")),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect_err("expected a hard failure");
     format!("{error:?}")

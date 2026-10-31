@@ -26,7 +26,7 @@
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
 //!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.16.0 (beta)**; the minor
+//!   no-backwards-compat exception. The current ABI is **0.17.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
 //!   Pre-1.0, an incompatible change rides a MINOR bump — see
 //!   [`version::PURRDF_ABI_MAJOR`] for the rule and
@@ -86,7 +86,29 @@ macro_rules! ffi_guard {
     }};
 }
 
+/// Execute one explicit canonical-search request after checking every output slot.
+macro_rules! ffi_canonical_try {
+    ($err_out:expr, $policy:expr, $cancel:expr, $evidence:expr,
+     [$($output:expr),* $(,)?], $control:ident, $body:block) => {{
+        ffi_try!($err_out, {
+            $crate::canonical::check_outputs(&[
+                $evidence as usize,
+                $($output as usize,)*
+            ], $err_out as usize)?;
+            let (status, receipts) = $crate::canonical::run(
+                $policy, $cancel, ::core::convert::identity,
+                |$control| -> Result<$crate::status::PurrdfStatus, $crate::error::PurrdfError> { $body },
+            )?;
+            *$evidence = $crate::handles::into_handle(
+                $crate::buffer::PurrdfBuffer::from(receipts.into_bytes()),
+            );
+            Ok(status)
+        })
+    }};
+}
+
 pub mod buffer;
+mod canonical;
 pub mod cursor;
 pub mod entail;
 pub mod error;

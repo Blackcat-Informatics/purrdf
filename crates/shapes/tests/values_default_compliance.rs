@@ -74,13 +74,17 @@ fn results(report: &ValidationReport) -> Vec<(String, String, String)> {
 
 /// The RDFC-1.0 canonical N-Quads of `entail_dataset(data, shapes)`.
 #[track_caller]
-fn entail(shapes_ttl: &str, data_ttl: &str) -> String {
+fn entail(shapes_ttl: &str, data_ttl: &str) -> purrdf_core::Canonicalized {
     let entailed = entail_dataset(
         turtle::data(PREFIXES, data_ttl).as_ref(),
         &turtle::loads(PREFIXES, shapes_ttl),
     )
     .expect("rules run");
-    try_canonicalize(entailed.as_ref()).unwrap().nquads
+    try_canonicalize(
+        entailed.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
 }
 
 fn ex(local: &str) -> String {
@@ -297,8 +301,9 @@ fn expected_predicate_makes_the_derived_triples_visible_to_the_rule() {
     let with = entail(
         &rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1"),
         RECTANGLES,
-    );
-    let without = entail(&rectangle_shapes("", "; sh:defaultValue 1"), RECTANGLES);
+    )
+    .nquads();
+    let without = entail(&rectangle_shapes("", "; sh:defaultValue 1"), RECTANGLES).nquads();
     assert!(with.contains(&is_small("Small")), "{with}");
     assert!(with.contains(&is_small("Incomplete")), "{with}");
     assert!(!with.contains(&is_small("Large")), "{with}");
@@ -320,8 +325,10 @@ fn default_value_is_a_derived_value_for_the_rules() {
     let with = entail(
         &rectangle_shapes(expected, "; sh:defaultValue 1"),
         RECTANGLES,
-    );
-    let without = entail(&rectangle_shapes(expected, ""), RECTANGLES);
+    )
+    .nquads();
+    let without_owner = entail(&rectangle_shapes(expected, ""), RECTANGLES);
+    let without = without_owner.nquads();
     assert!(with.contains(&is_small("Incomplete")), "{with}");
     assert!(!without.contains(&is_small("Incomplete")), "{without}");
     assert!(without.contains(&is_small("Small")), "{without}");
@@ -342,11 +349,13 @@ fn a_derived_triple_a_rule_also_infers_is_kept() {
                           WHERE {{ $this <http://example.org/ns#area> ?a }}\"\"\" .",
         rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1")
     );
-    let kept = entail(&copying, RECTANGLES);
+    let kept_owner = entail(&copying, RECTANGLES);
+    let kept = kept_owner.nquads();
     let dropped = entail(
         &rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1"),
         RECTANGLES,
-    );
+    )
+    .nquads();
     let small_area = "<http://example.org/ns#Small> <http://example.org/ns#area> \"20\"^^<http://www.w3.org/2001/XMLSchema#integer> .";
     assert!(kept.contains(small_area), "{kept}");
     assert!(!dropped.contains(small_area), "{dropped}");
@@ -393,7 +402,8 @@ fn a_deleted_derived_triple_takes_its_reifier_with_it() {
              WHERE {{ $this <http://example.org/ns#area> ?a }}\"\"\" .",
         rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1")
     );
-    let entailed = entail(&reifying, RECTANGLES);
+    let entailed_owner = entail(&reifying, RECTANGLES);
+    let entailed = entailed_owner.nquads();
     assert!(
         entailed.contains(&format!(
             "{} <http://example.org/ns#measured> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .",
@@ -411,7 +421,7 @@ fn a_deleted_derived_triple_takes_its_reifier_with_it() {
            sh:construct \"\"\"CONSTRUCT {{ $this <http://example.org/ns#area> ?a }}
                           WHERE {{ $this <http://example.org/ns#area> ?a }}\"\"\" ."
     );
-    assert!(entail(&kept, RECTANGLES).contains("#area"));
+    assert!(entail(&kept, RECTANGLES).nquads().contains("#area"));
     assert_eq!(reification(&kept, RECTANGLES), (3, 3));
 }
 
@@ -574,7 +584,13 @@ fn a_prepared_product_carries_computed_values() {
     );
     let fresh = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, &shapes_ttl)));
     let bytes = fresh
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the shapes graph packs");
     let restored = ShapesProduct::open(&bytes)
         .expect("the product opens")
@@ -603,13 +619,17 @@ fn a_prepared_product_carries_computed_values() {
             )
             .expect("rules run")
             .as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap()
-        .nquads
     };
-    let entailed = entail_with(&fresh);
+    let entailed_owner = entail_with(&fresh);
+    let entailed = entailed_owner.nquads();
     assert!(entailed.contains(&is_small("Incomplete")), "{entailed}");
-    assert_eq!(entailed, entail_with(&restored));
+    assert_eq!(entailed, entail_with(&restored).nquads());
 }
 
 // ── sh:deactivated as a node expression (rules) ───────────────────────────────
@@ -632,11 +652,11 @@ fn a_property_shape_deactivated_by_an_expression_derives_nothing_at_that_focus_n
             &format!("a sh:PropertyShape ; {deactivated}"),
         )
     };
-    let skipping = entail(&shapes("sh:deactivated [ sh:path ex:skip ] ;"), rectangles);
+    let skipping = entail(&shapes("sh:deactivated [ sh:path ex:skip ] ;"), rectangles).nquads();
     assert!(skipping.contains(&is_small("Incomplete")), "{skipping}");
     assert!(!skipping.contains(&is_small("Small")), "{skipping}");
     assert!(!skipping.contains(&is_small("Large")), "{skipping}");
-    let control = entail(&shapes("sh:deactivated false ;"), rectangles);
+    let control = entail(&shapes("sh:deactivated false ;"), rectangles).nquads();
     assert!(control.contains(&is_small("Incomplete")), "{control}");
     assert!(control.contains(&is_small("Small")), "{control}");
 }
@@ -664,13 +684,16 @@ fn a_rule_runs_at_the_focus_nodes_where_its_shape_is_not_deactivated_by_an_expre
             ex(local)
         )
     };
-    let skipping = entail(&shapes("[ sh:path ex:skip ]"), data);
+    let skipping_owner = entail(&shapes("[ sh:path ex:skip ]"), data);
+    let skipping = skipping_owner.nquads();
     assert!(skipping.contains(&seen("b")), "{skipping}");
     assert!(!skipping.contains(&seen("a")), "{skipping}");
-    let off = entail(&shapes("true"), data);
+    let off_owner = entail(&shapes("true"), data);
+    let off = off_owner.nquads();
     assert!(!off.contains("seen"), "{off}");
-    let on = entail(&shapes("false"), data);
-    assert!(on.contains(&seen("a")) && on.contains(&seen("b")), "{on}");
+    let on_owner = entail(&shapes("false"), data);
+    let on = on_owner.nquads();
+    assert!(on.contains(&seen("a")) & on.contains(&seen("b")), "{on}");
 }
 
 /// SHACL 1.2 Inference Rules, "Deactivated Rules": "The values of `sh:deactivated` are
@@ -701,12 +724,18 @@ fn a_rule_s_own_sh_deactivated_is_a_boolean() {
     };
     let error = run("[ sh:path ex:skip ]").expect_err("a node expression is no boolean literal");
     assert!(error.contains("Inference Rules"), "{error}");
-    let off = try_canonicalize(run("true").expect("a boolean loads").as_ref())
-        .unwrap()
-        .nquads;
+    let off_owner = try_canonicalize(
+        run("true").expect("a boolean loads").as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let off = off_owner.nquads();
     assert!(!off.contains("seen"), "{off}");
-    let on = try_canonicalize(run("false").expect("a boolean loads").as_ref())
-        .unwrap()
-        .nquads;
+    let on_owner = try_canonicalize(
+        run("false").expect("a boolean loads").as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let on = on_owner.nquads();
     assert!(on.contains("seen"), "{on}");
 }

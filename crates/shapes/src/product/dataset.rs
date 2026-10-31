@@ -207,7 +207,12 @@ fn refuse(error: &PackError) -> ShapesProductError {
         ),
     };
 
-    ShapesProductError::new(dimension, format!("{fix} (container reported: {error})"))
+    let refusal =
+        ShapesProductError::new(dimension, format!("{fix} (container reported: {error})"));
+    match error {
+        PackError::CanonRefused(cause) => refusal.with_canonical_refusal(cause.clone()),
+        _ => refusal,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +232,11 @@ fn refuse(error: &PackError) -> ShapesProductError {
 /// graph, or an IRI in the canonicalization profile's reserved namespace), so the
 /// section's identity claim cannot be established. Every other container failure
 /// is mapped by [`refuse`].
-pub(crate) fn encode_dataset(dataset: &Arc<RdfDataset>) -> Result<Vec<u8>, ShapesProductError> {
-    PackBuilder::build_bytes(dataset.as_ref()).map_err(|error| refuse(&error))
+pub(crate) fn encode_dataset(
+    dataset: &Arc<RdfDataset>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Vec<u8>, ShapesProductError> {
+    PackBuilder::build_bytes(dataset.as_ref(), control).map_err(|error| refuse(&error))
 }
 
 /// Restore the shapes dataset from the product's dataset section — the COMMON
@@ -277,8 +285,11 @@ pub(crate) fn open_dataset(bytes: &[u8]) -> Result<Arc<RdfDataset>, ShapesProduc
 /// Everything [`open_dataset`] can return, plus
 /// [`ProductDimension::DatasetIdentity`] when canonicalization refuses the
 /// reconstruction or when the recomputed digest disagrees with the stored one.
-pub(crate) fn certify_dataset(bytes: &[u8]) -> Result<PackDigest, ShapesProductError> {
-    verify_pack(bytes).map_err(|error| refuse(&error))
+pub(crate) fn certify_dataset(
+    bytes: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<PackDigest, ShapesProductError> {
+    verify_pack(bytes, control).map_err(|error| refuse(&error))
 }
 
 // ---------------------------------------------------------------------------
@@ -423,10 +434,15 @@ mod tests {
 
     /// The canonical N-Quads of a dataset — the value-level witness of equality
     /// the RDF types themselves do not provide.
-    fn canonical(dataset: &RdfDataset) -> String {
-        try_canonicalize(dataset)
-            .expect("fixture datasets canonicalize")
-            .nquads
+    fn canonical(dataset: &RdfDataset) -> purrdf_core::Canonicalized {
+        try_canonicalize(
+            dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture datasets canonicalize")
     }
 
     // ── Round trip ──────────────────────────────────────────────────────────────
@@ -434,7 +450,14 @@ mod tests {
     #[test]
     fn dataset_section_round_trips() {
         let source = dataset_of(PLAIN_SHAPES);
-        let bytes = encode_dataset(&source).expect("encode");
+        let bytes = encode_dataset(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode");
         let restored = open_dataset(&bytes).expect("open");
 
         assert_eq!(
@@ -443,8 +466,8 @@ mod tests {
             "the section must restore every quad it carried",
         );
         assert_eq!(
-            canonical(restored.as_ref()),
-            canonical(source.as_ref()),
+            canonical(restored.as_ref()).nquads(),
+            canonical(source.as_ref()).nquads(),
             "the restored dataset must be the same RDF value as the source",
         );
 
@@ -452,12 +475,26 @@ mod tests {
         // dataset writes them too.
         assert_eq!(
             bytes,
-            encode_dataset(&source).expect("re-encode"),
+            encode_dataset(
+                &source,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("re-encode"),
             "the section must be byte-deterministic",
         );
         assert_eq!(
             bytes,
-            encode_dataset(&restored).expect("encode the restored dataset"),
+            encode_dataset(
+                &restored,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("encode the restored dataset"),
             "re-encoding the restored dataset must reproduce the section bytes",
         );
     }
@@ -468,12 +505,29 @@ mod tests {
         // refusal: a shapes graph with no statements at all is still a section
         // this codec must accept, not an edge the decoder may refuse.
         let source = Shapes::default().dataset().clone();
-        let bytes = encode_dataset(&source).expect("encode the empty dataset");
+        let bytes = encode_dataset(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode the empty dataset");
         let restored = open_dataset(&bytes).expect("open the empty dataset");
 
         assert_eq!(restored.quad_count(), 0);
-        assert_eq!(canonical(restored.as_ref()), canonical(source.as_ref()));
-        certify_dataset(&bytes).expect("an empty section certifies");
+        assert_eq!(
+            canonical(restored.as_ref()).nquads(),
+            canonical(source.as_ref()).nquads()
+        );
+        certify_dataset(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("an empty section certifies");
     }
 
     // ── Certification ───────────────────────────────────────────────────────────
@@ -481,9 +535,23 @@ mod tests {
     #[test]
     fn certify_returns_pack_digest_equal_to_source() {
         let source = dataset_of(PLAIN_SHAPES);
-        let bytes = encode_dataset(&source).expect("encode");
+        let bytes = encode_dataset(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode");
 
-        let certified = certify_dataset(&bytes).expect("certify");
+        let certified = certify_dataset(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("certify");
         let stored = pack_digest(&bytes).expect("read the stored identity");
         assert_eq!(
             certified.as_bytes(),
@@ -494,8 +562,22 @@ mod tests {
         // The identity is a function of the dataset's VALUE, so it survives a
         // round trip: re-encoding the restored dataset certifies to the same digest.
         let restored = open_dataset(&bytes).expect("open");
-        let reencoded = encode_dataset(&restored).expect("re-encode");
-        let recertified = certify_dataset(&reencoded).expect("re-certify");
+        let reencoded = encode_dataset(
+            &restored,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("re-encode");
+        let recertified = certify_dataset(
+            &reencoded,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("re-certify");
         assert_eq!(
             certified.as_bytes(),
             recertified.as_bytes(),
@@ -504,12 +586,25 @@ mod tests {
 
         // A DIFFERENT shapes graph must certify to a different identity — without
         // this the assertion above would hold for a constant.
-        let other = encode_dataset(&dataset_of(RDF12_SHAPES)).expect("encode the other fixture");
+        let other = encode_dataset(
+            &dataset_of(RDF12_SHAPES),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode the other fixture");
         assert_ne!(
             certified.as_bytes(),
-            certify_dataset(&other)
-                .expect("certify the other fixture")
-                .as_bytes(),
+            certify_dataset(
+                &other,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("certify the other fixture")
+            .as_bytes(),
             "distinct shapes graphs must not share one certified identity",
         );
     }
@@ -519,7 +614,14 @@ mod tests {
     #[test]
     fn open_does_not_certify() {
         let source = dataset_of(PLAIN_SHAPES);
-        let bytes = encode_dataset(&source).expect("encode");
+        let bytes = encode_dataset(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode");
 
         // The tamper target really is the stored canonical identity. If the
         // container's layout moves, this assertion fails rather than the test
@@ -538,13 +640,20 @@ mod tests {
         // every section's SHA-256 coverage, so nothing the cheap tier checks moved.
         let restored = open_dataset(&tampered).expect("a tampered identity must still OPEN");
         assert_eq!(
-            canonical(restored.as_ref()),
-            canonical(source.as_ref()),
+            canonical(restored.as_ref()).nquads(),
+            canonical(source.as_ref()).nquads(),
             "the tamper touched an identity claim, not the RDF",
         );
 
         // TIER 2 — certification refuses, because only it recomputes.
-        let refusal = certify_dataset(&tampered).expect_err("a tampered identity must NOT certify");
+        let refusal = certify_dataset(
+            &tampered,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("a tampered identity must NOT certify");
         assert_eq!(
             refusal.dimension(),
             ProductDimension::DatasetIdentity,
@@ -554,14 +663,28 @@ mod tests {
         // The neighbouring valid case: the untampered section certifies. Without
         // it, a `certify_dataset` that refused everything would pass the assertion
         // above — over-refusal is the mirror of a silent drop and hides just as well.
-        certify_dataset(&bytes).expect("the untampered section must certify");
+        certify_dataset(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the untampered section must certify");
     }
 
     // ── Refusals, each with its neighbouring valid case ──────────────────────────
 
     #[test]
     fn refusals_name_their_dimension_and_neighbours_still_open() {
-        let bytes = encode_dataset(&dataset_of(PLAIN_SHAPES)).expect("encode");
+        let bytes = encode_dataset(
+            &dataset_of(PLAIN_SHAPES),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode");
 
         // Not this format at all.
         let mut bad_magic = bytes.clone();
@@ -593,7 +716,14 @@ mod tests {
         // certify. Each refusal above is one byte away from this.
         let restored = open_dataset(&bytes).expect("the untouched section must open");
         assert!(restored.quad_count() > 0);
-        certify_dataset(&bytes).expect("the untouched section must certify");
+        certify_dataset(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the untouched section must certify");
 
         // Every refusal renders its own dimension label, so a caller branching on
         // the dimension is branching on a discriminant rather than on prose.
@@ -630,7 +760,14 @@ mod tests {
             let direct_bytes =
                 encode_ast_derived(&direct).expect("encode the directly parsed shapes");
 
-            let section = encode_dataset(direct.dataset()).expect("encode the dataset section");
+            let section = encode_dataset(
+                direct.dataset(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("encode the dataset section");
             let restored = open_dataset(&section).expect("open the dataset section");
             let reparsed = shapes_from(&restored, ttl);
             let reparsed_bytes =
@@ -655,7 +792,8 @@ mod tests {
         // case-normalized to lowercase when a term is interned (BCP 47 tags are
         // case-insensitive), so the SUBTAG SEQUENCE is what this checks, not the
         // authored casing.
-        let source_nquads = canonical(source.as_ref());
+        let source_nquads_owner = canonical(source.as_ref());
+        let source_nquads = source_nquads_owner.nquads();
         for needle in [
             "\"direction\"@ar--ltr",
             "\"direction\"@ar--rtl",
@@ -670,11 +808,18 @@ mod tests {
             );
         }
 
-        let bytes = encode_dataset(&source).expect("encode");
+        let bytes = encode_dataset(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode");
         let restored = open_dataset(&bytes).expect("open");
 
         assert_eq!(
-            canonical(restored.as_ref()),
+            canonical(restored.as_ref()).nquads(),
             source_nquads,
             "every RDF 1.2 term kind must survive the section unchanged",
         );
@@ -684,7 +829,8 @@ mod tests {
         // language would merge them into one and lose a direction silently, so the
         // two spellings are asserted independently rather than trusted to the
         // whole-dataset comparison above.
-        let restored_nquads = canonical(restored.as_ref());
+        let restored_nquads_owner = canonical(restored.as_ref());
+        let restored_nquads = restored_nquads_owner.nquads();
         assert!(restored_nquads.contains("\"direction\"@ar--ltr"));
         assert!(restored_nquads.contains("\"direction\"@ar--rtl"));
 
@@ -733,7 +879,14 @@ mod tests {
         )
         .expect("parse the shapes");
 
-        let bytes = encode_dataset(&source).expect("encode");
+        let bytes = encode_dataset(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode");
         let restored = open_dataset(&bytes).expect("open");
         let after = crate::shapes::from_dataset_with_config_and_graph(
             &restored,

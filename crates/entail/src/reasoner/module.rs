@@ -228,7 +228,7 @@ impl ModuleExtraction {
 /// [`EntailError::Build`] if the extracted module cannot be frozen into a dataset.
 ///
 /// ```
-/// use purrdf_core::{RdfDatasetBuilder, TermValue};
+/// use purrdf_core::{CanonicalizationControl, RdfDatasetBuilder, SearchPolicy, TermValue};
 /// use purrdf_entail::reasoner::{ModuleMethod, extract_module};
 ///
 /// let mut b = RdfDatasetBuilder::new();
@@ -244,7 +244,8 @@ impl ModuleExtraction {
 ///
 /// // The ⊥-module for {Cat} follows the chain UP and leaves the sibling behind.
 /// let seed = [TermValue::iri("http://example.org/Cat")];
-/// let extracted = extract_module(&dataset, &seed, ModuleMethod::Bot).expect("extract");
+/// let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1_000_000), None);
+/// let extracted = extract_module(&dataset, &seed, ModuleMethod::Bot, &mut control).expect("extract");
 /// assert_eq!(extracted.axioms(), 2);
 /// assert!(extracted.conservative_keeps().is_empty());
 /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
@@ -253,8 +254,9 @@ pub fn extract_module(
     ds: &RdfDataset,
     signature: &[TermValue],
     method: ModuleMethod,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<ModuleExtraction, EntailError> {
-    extract(ds, signature, method, false)
+    extract(ds, signature, method, false, control)
 }
 
 /// The same extraction, carrying a PROOF TERM bound to its question.
@@ -273,7 +275,7 @@ pub fn extract_module(
 /// [`EntailError::Build`] if the extracted module cannot be frozen into a dataset.
 ///
 /// ```
-/// use purrdf_core::{RdfDatasetBuilder, TermValue};
+/// use purrdf_core::{CanonicalizationControl, RdfDatasetBuilder, SearchPolicy, TermValue};
 /// use purrdf_entail::reasoner::{ModuleMethod, extract_module, extract_module_with_proofs};
 ///
 /// let mut b = RdfDatasetBuilder::new();
@@ -285,11 +287,12 @@ pub fn extract_module(
 /// let seed = [TermValue::iri("http://example.org/Cat")];
 ///
 /// // A ZERO-run proof: a real measurement saying there was no search to check.
-/// let proved = extract_module_with_proofs(&dataset, &seed, ModuleMethod::Bot).expect("extract");
+/// let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1_000_000), None);
+/// let proved = extract_module_with_proofs(&dataset, &seed, ModuleMethod::Bot, &mut control).expect("extract");
 /// assert!(proved.proof().expect("recorded").runs().is_empty());
 ///
 /// // …which is a different thing from having recorded nothing.
-/// let plain = extract_module(&dataset, &seed, ModuleMethod::Bot).expect("extract");
+/// let plain = extract_module(&dataset, &seed, ModuleMethod::Bot, &mut control).expect("extract");
 /// assert!(plain.proof().is_none());
 /// assert_eq!(plain.axioms(), proved.axioms(), "the module is the same either way");
 /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
@@ -298,8 +301,9 @@ pub fn extract_module_with_proofs(
     ds: &RdfDataset,
     signature: &[TermValue],
     method: ModuleMethod,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<ModuleExtraction, EntailError> {
-    extract(ds, signature, method, true)
+    extract(ds, signature, method, true, control)
 }
 
 /// The shared body of the two entry points; `proofs` is whether to record a proof term.
@@ -308,6 +312,7 @@ fn extract(
     signature: &[TermValue],
     method: ModuleMethod,
     proofs: bool,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<ModuleExtraction, EntailError> {
     let mut interner = Interner::default();
     let v = Vocab::intern(&mut interner);
@@ -410,8 +415,9 @@ fn extract(
     // of `ds`), so `try_ontology_identity` retains the original refusal.
     let proof = if proofs {
         let module_digest =
-            try_ontology_identity(&module).map_err(EntailError::Canonicalization)?;
-        let ds_digest = try_ontology_identity(ds).map_err(EntailError::Canonicalization)?;
+            try_ontology_identity(&module, control).map_err(EntailError::Canonicalization)?;
+        let ds_digest =
+            try_ontology_identity(ds, control).map_err(EntailError::Canonicalization)?;
         let claim = Claim::new(
             ClaimSubject::Module {
                 digest: module_digest,

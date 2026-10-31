@@ -1197,7 +1197,20 @@ fn bench_canonicalize(c: &mut Bench) {
 
     let mut group = c.benchmark_group("ir_canonicalize");
     group.bench_function("blank_chains_and_ring", |b| {
-        b.iter(|| std::hint::black_box(purrdf_core::try_canonicalize(&ds).unwrap().nquads.len()));
+        b.iter(|| {
+            std::hint::black_box(
+                purrdf_core::try_canonicalize(
+                    &ds,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                .nquads()
+                .len(),
+            )
+        });
     });
     group.finish();
 }

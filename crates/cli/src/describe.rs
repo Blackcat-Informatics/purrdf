@@ -148,6 +148,7 @@ impl ViewOp for DescribeOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError> {
         let describer = Describer::try_new(view)
             .map_err(|error| CliError::Runtime(format!("dataset source read failed: {error}")))?;
@@ -209,6 +210,7 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 pub(crate) fn run(
     options: &DescribeOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     // Resolve BOTH formats before touching the source (mirroring `convert`/`reason`), so an
     // unresolvable OUT fails fast rather than after the description has been extracted.
@@ -233,6 +235,7 @@ pub(crate) fn run(
         source_format,
         options.base,
         DescribeOp { iris: &iris },
+        canonical,
     )?;
     refuse_uncarriable_named_graphs(&*description, target_format)?;
 
@@ -243,6 +246,7 @@ pub(crate) fn run(
         options.base,
         source_format.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }

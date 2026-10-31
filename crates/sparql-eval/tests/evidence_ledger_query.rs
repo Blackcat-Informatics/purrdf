@@ -210,7 +210,7 @@ fn assert_queries_and_private_projection<D: FallibleDatasetView + Sync>(
            ?reason <https://example.org/cause> ?cause
          } GROUP BY ?cause",
             ),
-            QueryOptions::default(),
+            &QueryOptions::default(),
         )
         .expect("complete group query");
     let (variables, grouped) = grouped
@@ -238,7 +238,7 @@ fn assert_queries_and_private_projection<D: FallibleDatasetView + Sync>(
            ?reason <https://example.org/cause> ?cause
          }",
             ),
-            QueryOptions::default(),
+            &QueryOptions::default(),
         )
         .expect("complete private projection");
     let graph = projected.result.graph().expect("native CONSTRUCT graph");
@@ -334,7 +334,7 @@ fn composite_literal_blanks_have_native_ids_without_changing_literal_bytes() {
         .query_fallible_view(
             &ledger,
             request("SELECT ?cause WHERE { ?reason <https://example.org/cause> ?cause }"),
-            QueryOptions::default(),
+            &QueryOptions::default(),
         )
         .expect("native composite literal result");
     let (_, rows) = result.result.solutions().expect("native solution");
@@ -385,7 +385,7 @@ fn native_ledger_refusal_is_an_operational_error_without_partial_answers() {
         .query_fallible_view(
             &ledger,
             request("SELECT ?row WHERE { ?row <https://example.org/reason> ?reason }"),
-            QueryOptions::default(),
+            &QueryOptions::default(),
         )
         .expect_err("reporting/operator growth exceeds original grant");
     assert!(matches!(

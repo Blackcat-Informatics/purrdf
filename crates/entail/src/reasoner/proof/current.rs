@@ -276,7 +276,14 @@ mod tests {
     #[test]
     fn a_fresh_class_refutation_cannot_be_relabelled_as_an_ontology_contradiction() {
         let dataset = shared_schema(1, 0, true);
-        let mut producer = Reasoner::with_proofs(&dataset).unwrap();
+        let mut producer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.class_satisfiability(&term("A")).unwrap();
         let mut forged = answer.proof().unwrap().clone();
         forged.service = Service::Consistency;
@@ -290,13 +297,28 @@ mod tests {
             ClaimSubject::Consistent,
             ClaimBasis::ClosedRefutation { runs: vec![index] },
         )];
-        let context = Reasoner::with_proofs(&dataset)
-            .unwrap()
-            .proof_context()
-            .unwrap();
+        let context = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .proof_context()
+        .unwrap();
         assert!(
             forged
-                .verify(&dataset, &Question::Consistency, None, &context)
+                .verify(
+                    &dataset,
+                    &Question::Consistency,
+                    None,
+                    &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .is_err()
         );
     }
@@ -308,7 +330,14 @@ mod tests {
             left: term("A"),
             right: term("F"),
         };
-        let mut producer = Reasoner::with_proofs(&dataset).unwrap();
+        let mut producer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.entails(&axiom).unwrap();
         assert_eq!(*answer.answer(), Verdict::False);
         let mut forged = answer.proof().unwrap().clone();
@@ -335,11 +364,27 @@ mod tests {
                 runs: vec![index, index],
             },
         )];
-        let mut checker = Reasoner::with_proofs(&dataset).unwrap();
+        let mut checker = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         checker.prepare(&question).expect("query preparation");
         assert!(
             forged
-                .verify(&dataset, &question, None, &checker.proof_context().unwrap())
+                .verify(
+                    &dataset,
+                    &question,
+                    None,
+                    &checker.proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .is_err()
         );
     }

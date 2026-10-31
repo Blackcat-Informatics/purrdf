@@ -195,7 +195,9 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-pub(super) fn check() -> Result<(), String> {
+pub(super) fn check(
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), crate::canonical::CanonicalServiceError> {
     let committed = super::dl_proof_golden_vectors()?;
     for case in cases() {
         let vector = committed
@@ -215,7 +217,8 @@ pub(super) fn check() -> Result<(), String> {
             return Err(format!(
                 "schema vector {} no longer carries the actual authored control",
                 case.name
-            ));
+            )
+            .into());
         }
     }
     if committed
@@ -224,12 +227,16 @@ pub(super) fn check() -> Result<(), String> {
         .count()
         != cases().len()
     {
-        return Err("schema preparation vector inventory mismatch".to_owned());
+        return Err("schema preparation vector inventory mismatch"
+            .to_owned()
+            .into());
     }
-    controls()
+    controls(control)
 }
 
-fn controls() -> Result<(), String> {
+fn controls(
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), crate::canonical::CanonicalServiceError> {
     let too_large = cases()
         .into_iter()
         .find(|case| case.name == "schema-preparation-largest-count")
@@ -239,14 +246,16 @@ fn controls() -> Result<(), String> {
     let refused_count = purrdf_rdf::parse_dataset(too_large.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|error| error.to_string())?;
     if !matches!(
-        Reasoner::with_proofs(&refused_count),
+        Reasoner::with_proofs(&refused_count, control),
         Err(purrdf_entail::EntailError::OwlSyntax(error))
             if matches!(error.as_ref(), purrdf_entail::OwlSyntaxError::CardinalityRange {
                 value: u32::MAX, maximum, ..
             } if *maximum == u32::MAX - 1)
     ) {
         return Err(
-            "portable boundary did not preserve the typed unrepresentable-count refusal".to_owned(),
+            "portable boundary did not preserve the typed unrepresentable-count refusal"
+                .to_owned()
+                .into(),
         );
     }
     let document = cases()
@@ -266,28 +275,36 @@ fn controls() -> Result<(), String> {
             bytes: Some(0),
         },
     ] {
-        let mut owner = Reasoner::with_proofs_and_preparation_budget(&dataset, budget)
-            .map_err(|error| error.to_string())?;
+        let mut owner = Reasoner::with_proofs_and_preparation_budget(&dataset, budget, control)
+            .map_err(|error| {
+                crate::canonical::CanonicalServiceError::entail("schema vector owner", error)
+            })?;
         let refused = owner.consistency();
         if *refused.answer() != Verdict::Unknown
             || refused.certificate().schema_obstruction().is_none()
         {
-            return Err("native schema refusal was reported as a decided answer".to_owned());
+            return Err("native schema refusal was reported as a decided answer"
+                .to_owned()
+                .into());
         }
         let proof = refused
             .proof()
-            .ok_or("refused recorded service has no receipt")?;
+            .ok_or_else(|| "refused recorded service has no receipt".to_owned())?;
         let decoded = ServiceProof::decode(&proof.encode()).map_err(|error| error.to_string())?;
         if decoded.receipt() != proof.receipt() {
-            return Err("typed portable refusal receipt changed".to_owned());
+            return Err("typed portable refusal receipt changed".to_owned().into());
         }
         let rendered = super::render_dl_certificate("consistency", refused.certificate());
         let read = super::parse_dl_certificate(&rendered)?;
         if &read != refused.certificate() {
-            return Err("portable certificate lost its preparation obstruction".to_owned());
+            return Err("portable certificate lost its preparation obstruction"
+                .to_owned()
+                .into());
         }
-        let checker = Reasoner::with_proofs_and_preparation_budget(&dataset, budget)
-            .map_err(|error| error.to_string())?;
+        let checker = Reasoner::with_proofs_and_preparation_budget(&dataset, budget, control)
+            .map_err(|error| {
+                crate::canonical::CanonicalServiceError::entail("schema vector checker", error)
+            })?;
         let context = checker.proof_context().map_err(|error| error.to_string())?;
         decoded
             .verify(
@@ -295,6 +312,7 @@ fn controls() -> Result<(), String> {
                 &purrdf_entail::Question::Consistency,
                 Some(&read),
                 &context,
+                control,
             )
             .map_err(|error| {
                 format!("typed portable refusal receipt failed independent replay: {error}")
@@ -307,16 +325,21 @@ fn controls() -> Result<(), String> {
                     purrdf_entail::reasoner::SchemaObstruction::Allocation,
                 )),
                 &context,
+                control,
             )
             .is_ok()
         {
-            return Err("portable refusal accepted a different original cause".to_owned());
+            return Err("portable refusal accepted a different original cause"
+                .to_owned()
+                .into());
         }
         owner
             .retry_schema_preparation(SchemaPreparationBudget::default())
             .map_err(|error| error.to_string())?;
         if *owner.consistency().answer() != Verdict::False {
-            return Err("sufficient native retry did not complete the same source".to_owned());
+            return Err("sufficient native retry did not complete the same source"
+                .to_owned()
+                .into());
         }
     }
     #[derive(Debug)]
@@ -330,7 +353,9 @@ fn controls() -> Result<(), String> {
         Reasoner::with_stop(&dataset, Arc::new(Stop)),
         Err(purrdf_entail::EntailError::Stopped)
     ) {
-        return Err("native schema construction ignored a latched stop".to_owned());
+        return Err("native schema construction ignored a latched stop"
+            .to_owned()
+            .into());
     }
     Ok(())
 }

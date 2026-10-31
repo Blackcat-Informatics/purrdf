@@ -994,7 +994,17 @@ mod tests {
         let (dataset, blobs) = fixture();
         let encoded = write(&*dataset, &blobs, Compression::Zstd).unwrap();
         let decoded = read(&encoded.files).unwrap();
-        assert!(datasets_isomorphic(&dataset, &decoded.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &decoded.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert_eq!(decoded.blobs, blobs);
         assert!(encoded.losses.is_empty());
         assert!(decoded.losses.is_empty());

@@ -382,19 +382,44 @@ fn generated_chronological_publications_match_eager_typed_seals() {
                         .collect::<Vec<_>>()
                 );
             }
-            let sparse_fold = canonical_paged_seal(&query, page_rows).unwrap();
+            let sparse_fold = canonical_paged_seal(
+                &query,
+                page_rows,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
             query.check_ready().unwrap();
             let eager_fold = paged
                 .snapshot()
                 .unwrap()
-                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    page_rows,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
                 .unwrap();
-            let sparse_bytes =
-                PackBuilder::build_view_bytes(&sparse_fold.query_view(PagedQueryLimits::UNBOUNDED))
-                    .unwrap();
-            let eager_bytes =
-                PackBuilder::build_view_bytes(&eager_fold.query_view(PagedQueryLimits::UNBOUNDED))
-                    .unwrap();
+            let sparse_bytes = PackBuilder::build_view_bytes(
+                &sparse_fold.query_view(PagedQueryLimits::UNBOUNDED),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+            let eager_bytes = PackBuilder::build_view_bytes(
+                &eager_fold.query_view(PagedQueryLimits::UNBOUNDED),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
             assert_eq!(
                 sparse_bytes, eager_bytes,
                 "seed={seed}, generation={generation}"

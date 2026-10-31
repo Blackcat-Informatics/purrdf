@@ -247,7 +247,7 @@ pub unsafe extern "C" fn purrdf_dataset_division_policy(
                 ));
             }
             let text = PurrdfDataset::division(dataset).to_string();
-            *out_buffer = into_handle(PurrdfBuffer(text.into_bytes()));
+            *out_buffer = into_handle(PurrdfBuffer::from(text.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -280,13 +280,13 @@ unsafe fn run_query(
         ));
         let engine = sparql_engine(regex);
         let result = engine
-            .prepare_query_with_options(query, base_iri, options)
+            .prepare_query_with_options(query, base_iri, &options)
             .and_then(|prepared| {
                 engine.query_prepared_view(
                     PurrdfDataset::handle(dataset).as_ref(),
                     &prepared,
                     &[],
-                    options,
+                    &options,
                 )
             })
             .map_err(|diagnostic| query_error(&diagnostic));
@@ -309,7 +309,7 @@ pub(crate) unsafe fn store_execution_receipt(
     coordinates: &purrdf_sparql_eval::QueryCoordinates,
 ) {
     unsafe {
-        *out = into_handle(PurrdfBuffer(
+        *out = into_handle(PurrdfBuffer::from(
             purrdf_validate::query::execution_receipt_json(coordinates).into_bytes(),
         ));
     }
@@ -867,7 +867,7 @@ unsafe fn query_json_entry(
                 )
                 .with_execution_receipt(&purrdf_validate::query::execution_receipt_json(&receipt))
             })?;
-        *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+        *out_buffer = into_handle(PurrdfBuffer::from(outcome.bytes));
         store_execution_receipt(out_receipt, &receipt);
         Ok(PurrdfStatus::Ok)
     }
@@ -1069,7 +1069,7 @@ unsafe fn query_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                coordinates.apply(query_options(
+                &coordinates.apply(query_options(
                     QueryOptions::new()
                         .with_coordinate_observer(&capture)
                         .with_geo(geo)
@@ -1391,7 +1391,7 @@ unsafe fn query_entailment_governed_entry(
                 substitutions: &[],
             },
             &EntailmentClosure::new(plan.entailment(), &imports).with_limits(limits.eval_options()),
-            coordinates.apply(query_options(
+            &coordinates.apply(query_options(
                 QueryOptions::new()
                     .with_coordinate_observer(&capture)
                     .with_geo(geo)
@@ -1446,7 +1446,7 @@ unsafe fn query_entailment_governed_entry(
                     query: query_evidence,
                     closure_trip: PurrdfGovernorTrip::NONE,
                 };
-                *out_report = into_handle(PurrdfBuffer(
+                *out_report = into_handle(PurrdfBuffer::from(
                     purrdf_validate::render_reasoning_report(&report).into_bytes(),
                 ));
                 store_execution_receipt(out_receipt, &receipt);
@@ -1651,7 +1651,7 @@ unsafe fn update_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                coordinates.apply(query_options(
+                &coordinates.apply(query_options(
                     QueryOptions::new()
                         .with_coordinate_observer(&capture)
                         .with_geo(geo)
@@ -2913,7 +2913,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("check query evaluates");
         let SparqlResult::Solutions { rows, .. } = check else {

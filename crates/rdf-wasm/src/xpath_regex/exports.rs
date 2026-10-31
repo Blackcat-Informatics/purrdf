@@ -144,6 +144,8 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
                     None,
                     None,
                     None,
+                    None,
+                    None,
                     owned(law),
                     None,
                     None,
@@ -164,6 +166,8 @@ fn every_ask_entry_evaluates_under_the_selected_law() {
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -342,6 +346,8 @@ fn both_update_entries_apply_under_the_selected_law() {
                 None,
                 None,
                 None,
+                None,
+                None,
                 owned(law),
                 None,
                 None,
@@ -485,7 +491,15 @@ fn product_validations(
     data: &str,
     law: Option<&str>,
 ) -> [Result<String, crate::shacl::ShaclProductRefusal>; 4] {
-    let product = crate::shacl::pack_product_impl(shapes, None, &[], &[], None).expect("packed");
+    let product = crate::shacl::pack_product_impl(
+        shapes,
+        None,
+        &[],
+        &[],
+        None,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("packed");
     let identity = crate::shacl::product_explain_impl(&product)
         .expect("explained")
         .lines()
@@ -785,6 +799,10 @@ fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [ToolVerdict;
             None,
             owned(law),
             purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .map(|entailment| entailment.ntriples().contains(hit))
         .map_err(message),

@@ -63,7 +63,7 @@ fn evaluate_over(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
 }
 

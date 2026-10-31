@@ -122,7 +122,7 @@
 //! ## Termination (poison guard)
 //!
 //! The n-degree search is NP-hard in the worst case (pathologically symmetric
-//! blank graphs). The fixed [`RDFC_CALL_LIMIT`] bounds the search. Exhaustion is
+//! blank graphs). The caller explicitly selects finite or unlimited search through [`CanonicalizationControl`]. Exhaustion is
 //! returned as [`CanonError::BudgetExceeded`]; no partial identity is published.
 //!
 //! ## This is NOT RDFC-1.0
@@ -145,10 +145,21 @@ use std::convert::Infallible;
 
 mod state;
 pub use state::{DatasetStateDigest, DatasetStateError};
+mod ownership;
 mod refusal;
 pub use refusal::ReservedVocabulary;
+mod result;
+pub use result::Canonicalized;
+mod rendering;
 
+use purrdf_lex::allocation::{Admission, Memory};
 use purrdf_lex::walk::WorkList;
+mod control;
+use control::SearchRun;
+pub use control::{
+    CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
+    SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
+};
 use sha2::{Digest, Sha256, Sha384};
 
 use super::dataset::{QuadIds, RdfDataset, TermRef};
@@ -197,15 +208,10 @@ use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 const CANON_PREFIX: &str = "c14n";
 /// The temporary-issuer prefix used inside the n-degree search (RDFC-1.0 §4.5/4.8).
 const TEMP_PREFIX: &str = "b";
-/// The fixed recursion/permutation call budget for the n-degree search.
-/// Exhaustion returns [`CanonError::BudgetExceeded`] without publishing a
-/// canonical result or digest.
-///
-/// Public because it is part of the profile's CONTRACT, not an implementation
-/// detail: a consumer pinning [`CANON_PROFILE_ID`] is pinning the bound at which
-/// canonicalization refuses, and a bound stated only in prose is one the consumer
-/// cannot check against the code it actually linked.
-pub const RDFC_CALL_LIMIT: u64 = 1_000_000;
+/// The historical version-two finite ceiling, retained as an explicit opt-in value.
+/// No entry point applies it automatically; callers may select
+/// `RDFC_V2_CORPUS_POLICY`, including for the frozen corpus.
+pub const RDFC_V2_CORPUS_POLICY: SearchPolicy = SearchPolicy::Finite(1_000_000);
 
 /// The identifier of the canonicalization profile this module implements.
 ///
@@ -252,7 +258,11 @@ pub const CANON_CORPUS_DIGEST: &str =
 /// exactly as in v1, and no input that v1 admitted changed bytes; the increment is
 /// owed because two inputs v1 refused now canonicalize, and a refusal is part of the
 /// contract a consumer pinned.
-pub const CANON_PROFILE_VERSION: u32 = 2;
+///
+/// **v2 → v3**: caller-selected finite or unlimited search replaces the fixed
+/// ceiling. Typed execution receipts bind the effective configuration and actual
+/// charged events; successful canonical bytes are unchanged.
+pub const CANON_PROFILE_VERSION: u32 = 3;
 
 /// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
 /// (reifiers, annotations) rendered through this profile's reserved sentinel IRIs
@@ -406,55 +416,6 @@ fn hash_lines(
     Ok(result)
 }
 
-/// The result of canonicalizing a dataset or a view of one.
-///
-/// Generic over the id type `Id` — the [`Id`](DatasetView::Id) of the view
-/// that produced it — and **defaulted to [`TermId`]**, so the bare spelling
-/// `Canonicalized` continues to name the `&RdfDataset` result everywhere.
-#[derive(Clone, Debug)]
-pub struct Canonicalized<Id = TermId> {
-    /// The canonical N-Quads document: every line `'\n'`-terminated, the set of
-    /// lines sorted bytewise ascending and deduplicated. Blanks render as their
-    /// canonical `_:c14nN` label.
-    ///
-    /// What a reifier or annotation row renders AS depends on
-    /// [`Self::presentation`], reported alongside this field rather than left
-    /// implicit: under [`CanonPresentation::Overlay`] such a row renders through
-    /// the profile's reserved `urn:purrdf:rdfc:` sentinels; under
-    /// [`CanonPresentation::FlatAssertion`] no sentinel is ever minted — the same
-    /// row renders as an ordinary quad carrying its own real predicate. A document
-    /// produced by one of this module's four flat entry points therefore NEVER
-    /// contains a sentinel, and this field's bytes alone cannot tell a reader which
-    /// presentation produced them — read [`Self::presentation`] for that.
-    ///
-    /// This field carries NO view-local ids, which is what makes it comparable
-    /// across view kinds: the canonical bytes of a composite view and of the flat
-    /// dataset holding the same content are equal.
-    pub nquads: String,
-    /// Each blank id mapped to its canonical label (`"c14n0"`, …) WITHOUT
-    /// the leading `_:`. The ids are those of the view that was canonicalized and
-    /// are meaningful only within it.
-    ///
-    /// This map is the PRINCIPLED blank-label assignment: the labels are issued
-    /// purely from graph structure, so they are isomorphism-invariant (two
-    /// isomorphic datasets assign corresponding blanks the same label), and their
-    /// alphabet is ASCII alphanumerics only — legal under every constrained
-    /// egress alphabet (`BLANK_NODE_LABEL`, XML `NCName`; see
-    /// [`crate::blank_label`]). [`canonical_relabel`] applies it as a dataset
-    /// rewrite.
-    pub labels: BTreeMap<Id, Box<str>>,
-    /// Which [`CanonPresentation`] produced [`Self::nquads`] — the fourth of the
-    /// consumer pin's four coordinates `(profile, version, presentation, hash)`
-    /// (`docs/RDF12-CANON-PROFILE.md` §9), now readable off the result itself
-    /// rather than only inferable from which entry point the caller happened to
-    /// call. [`try_canonicalize`], [`try_canonicalize_view`],
-    /// [`try_canonicalize_graph_view`] and their kin always report
-    /// [`CanonPresentation::Overlay`]; [`try_canonicalize_flat_view`],
-    /// [`try_canonicalize_flat_graph_view`] and the empty-selection cases of both
-    /// families always report the presentation of the family that produced them.
-    pub presentation: CanonPresentation,
-}
-
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`], returning a typed
 /// [`CanonError`] on refusal.
 ///
@@ -468,9 +429,12 @@ pub struct Canonicalized<Id = TermId> {
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term is an IRI in
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
-/// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
-pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, CanonError> {
-    try_canonicalize_with(ds, CanonHash::Sha256)
+/// caller-selected call/permutation budget is exhausted first.
+pub fn try_canonicalize(
+    ds: &RdfDataset,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<Canonicalized, CanonError> {
+    try_canonicalize_with(ds, CanonHash::Sha256, control)
 }
 
 /// Explicit-hash-algorithm form of [`try_canonicalize`].
@@ -478,12 +442,13 @@ pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, CanonError> {
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term is an IRI in
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
-/// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
+/// caller-selected call/permutation budget is exhausted first.
 pub fn try_canonicalize_with(
     ds: &RdfDataset,
     hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized, CanonError> {
-    try_canonicalize_view(ds, hash)
+    try_canonicalize_view(ds, hash, control)
 }
 
 /// Canonicalize any [`DatasetView`] under profile [`CANON_PROFILE_ID`] with an
@@ -505,47 +470,151 @@ pub fn try_canonicalize_with(
 /// # Errors
 /// [`CanonError::ReservedVocabulary`] if any term of `view` is an IRI in
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
-/// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
+/// caller-selected call/permutation budget is exhausted first.
 /// [`CanonError::Read`] retains the original [`DatasetView::ReadError`] if either
 /// readiness check fails; no canonical result is published or cause formatted.
 pub fn try_canonicalize_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
-    view.checked_read(|view| {
-        CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
-    })
-    .map_err(CanonError::Read)?
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::Overlay,
+            None,
+            CanonOutput::Document,
+        ),
+        |run| {
+            view.checked_read(|view| {
+                CanonState::new(
+                    view,
+                    CanonScope::Dataset,
+                    CanonPresentation::Overlay,
+                    hash,
+                    run,
+                )
+                .run_fallible()
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
 }
 
-/// Canonicalize a view with a caller-owned stop signal throughout preparation,
-/// label search and output construction. No canonical result is returned after
-/// an observed stop; a non-stopped operation produces the same bytes and labels
-/// as [`try_canonicalize_view`]. The view is read in place.
+/// BLAKE3 over the overlay canonical document, with one measured run covering
+/// source checks, label search, serialization and interruptible digest output.
+/// The digest's content bytes are independent of the selected search ceiling.
 ///
 /// # Errors
-/// The source/profile failures of [`try_canonicalize_view`], or
-/// [`CanonError::Stopped`] when the caller signal is observed.
-pub fn try_canonicalize_view_with_stop<D: DatasetView>(
+/// The original source/profile/control refusals of [`try_canonicalize_view`].
+pub fn try_canonical_blake3_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
-    stop: &dyn crate::StopSignal,
-) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
-    check_stop(Some(stop)).map_err(CanonError::with_read_error)?;
-    view.checked_read(|view| {
-        CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash)
-            .with_stop(stop)
-            .run_fallible()
-    })
-    .map_err(CanonError::Read)?
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<[u8; 32], CanonError<D::ReadError>> {
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::Overlay,
+            None,
+            CanonOutput::Blake3Digest,
+        ),
+        |run| {
+            view.checked_read(|view| {
+                let canonical = CanonState::new(
+                    view,
+                    CanonScope::Dataset,
+                    CanonPresentation::Overlay,
+                    hash,
+                    run,
+                )
+                .run_fallible()?;
+                let mut digest = purrdf_hash::blake3::Hasher::new();
+                for chunk in canonical.nquads().as_bytes().chunks(64 * 1024) {
+                    run.check_stop().map_err(|_| CanonError::Stopped)?;
+                    digest.update(chunk);
+                }
+                run.check_stop().map_err(|_| CanonError::Stopped)?;
+                Ok(*digest.finalize().as_bytes())
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
 }
 
-fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), CanonError> {
+/// SHA-256 over the overlay canonical document, with digest output inside the
+/// same measured source-checkpoint boundary as canonical labeling.
+///
+/// # Errors
+/// The original source/profile/control refusals of [`try_canonicalize_view`].
+pub fn try_canonical_sha256_view<D: DatasetView>(
+    view: &D,
+    hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<ContentDigest, CanonError<D::ReadError>> {
+    canonical_sha256_view(view, hash, control, CanonOutput::Sha256Digest).map(|(_, digest)| digest)
+}
+
+/// The document and digest produced within one canonical search boundary.
+type CanonicalDigestResult<I, E> = Result<(Canonicalized<I>, ContentDigest), CanonError<E>>;
+
+/// Return the overlay canonical document and its SHA-256 identity from one search.
+/// Both outputs are completed within the original source checkpoint and stop boundary.
+///
+/// # Errors
+/// The original source/profile/control refusals of [`try_canonicalize_view`].
+pub fn try_canonicalize_sha256_view<D: DatasetView>(
+    view: &D,
+    hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
+) -> CanonicalDigestResult<D::Id, D::ReadError> {
+    canonical_sha256_view(view, hash, control, CanonOutput::DocumentSha256Digest)
+}
+
+fn canonical_sha256_view<D: DatasetView>(
+    view: &D,
+    hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
+    output: CanonOutput,
+) -> CanonicalDigestResult<D::Id, D::ReadError> {
+    control.run(
+        SearchConfiguration::rdfc(hash, CanonPresentation::Overlay, None, output),
+        |run| {
+            view.checked_read(|view| {
+                let canonical = CanonState::new(
+                    view,
+                    CanonScope::Dataset,
+                    CanonPresentation::Overlay,
+                    hash,
+                    run,
+                )
+                .run_fallible()?;
+                let digest = digest_document(canonical.nquads(), run)
+                    .map_err(CanonError::with_read_error)?;
+                Ok((canonical, digest))
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
+}
+
+pub(super) fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), CanonError> {
     if crate::governor::is_stopped(stop) {
         Err(CanonError::Stopped)
     } else {
         Ok(())
     }
+}
+
+pub(super) fn comparison_preparation<T>(
+    control: &mut CanonicalizationControl<'_>,
+    operation: impl FnOnce(Option<&dyn crate::StopSignal>) -> Result<T, CanonError>,
+) -> Result<T, CanonError> {
+    control.run(SearchConfiguration::ComparisonPreparation, |run| {
+        let result = operation(run.stop())?;
+        run.check_stop().map_err(|_| CanonError::Stopped)?;
+        Ok(result)
+    })
 }
 
 /// Canonicalize the subgraph of `view` asserted in the named graph `graph` (an IRI),
@@ -581,14 +650,32 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
     view: &D,
     graph: &str,
     hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
-    view.checked_read(|view| match graph_scope(view, graph) {
-        Some(scope) => {
-            CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
-        }
-        None => Ok(empty_canonicalized(CanonPresentation::Overlay)),
-    })
-    .map_err(CanonError::Read)?
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::Overlay,
+            Some(graph),
+            CanonOutput::Document,
+        ),
+        |run| {
+            view.checked_read(|view| {
+                run.check_stop().map_err(|_| CanonError::Stopped)?;
+                match graph_scope(view, graph) {
+                    Some(scope) => {
+                        CanonState::new(view, scope, CanonPresentation::Overlay, hash, run)
+                            .run_fallible()
+                    }
+                    None => {
+                        run.phase(CanonPhase::Output);
+                        empty_canonicalized(view, CanonPresentation::Overlay, run.stop())
+                    }
+                }
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
 }
 
 /// The SHA-256 [`ContentDigest`] of one named graph's canonical form, returning a
@@ -599,12 +686,45 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
 pub fn try_graph_digest_view<D: DatasetView>(
     view: &D,
     graph: &str,
+    control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, CanonError<D::ReadError>> {
-    Ok(ContentDigest::of(
-        try_canonicalize_graph_view(view, graph, CanonHash::Sha256)?
-            .nquads
-            .as_bytes(),
-    ))
+    control.run(
+        SearchConfiguration::rdfc(
+            CanonHash::Sha256,
+            CanonPresentation::Overlay,
+            Some(graph),
+            CanonOutput::Sha256Digest,
+        ),
+        |run| {
+            view.checked_read(|view| {
+                run.check_stop().map_err(|_| CanonError::Stopped)?;
+                let canonical = match graph_scope(view, graph) {
+                    Some(scope) => CanonState::new(
+                        view,
+                        scope,
+                        CanonPresentation::Overlay,
+                        CanonHash::Sha256,
+                        run,
+                    )
+                    .run_fallible()?,
+                    None => empty_canonicalized(view, CanonPresentation::Overlay, run.stop())?,
+                };
+                digest_document(canonical.nquads(), run).map_err(CanonError::with_read_error)
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
+}
+
+fn digest_document(document: &str, run: &SearchRun<'_>) -> Result<ContentDigest, CanonError> {
+    run.phase(CanonPhase::Output);
+    let mut digest = Sha256::new();
+    for chunk in document.as_bytes().chunks(64 * 1024) {
+        run.check_stop().map_err(|_| CanonError::Stopped)?;
+        digest.update(chunk);
+    }
+    run.check_stop().map_err(|_| CanonError::Stopped)?;
+    Ok(ContentDigest::from_raw(digest.finalize().into()))
 }
 
 // -----------------------------------------------------------------------------
@@ -674,25 +794,35 @@ type FlatViewResult<D> = Result<
 /// [`ViewCanonError::Refused`] wrapping [`CanonError::ReservedVocabulary`] if any
 /// term of `view` is an IRI in [`RESERVED_NAMESPACE`]; wrapping
 /// [`CanonError::BudgetExceeded`] if the n-degree search's call/permutation budget
-/// ([`RDFC_CALL_LIMIT`]) is exhausted first. [`ViewCanonError::NotReady`] if either
+/// is exhausted first. [`ViewCanonError::NotReady`] if either
 /// checkpoint observes the view's backing data at fault.
 pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
     view: &D,
     hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
-    match checkpointed_drain(view, |v| {
-        CanonState::new(
-            v,
-            CanonScope::Dataset,
-            CanonPresentation::FlatAssertion,
+    control.run(
+        SearchConfiguration::rdfc(
             hash,
-        )
-        .run_fallible()
-    }) {
-        Ok(Ok(canonicalized)) => Ok(canonicalized),
-        Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
-        Err(failure) => Err(failure.into()),
-    }
+            CanonPresentation::FlatAssertion,
+            None,
+            CanonOutput::Document,
+        ),
+        |run| match checkpointed_drain(view, |v| {
+            CanonState::new(
+                v,
+                CanonScope::Dataset,
+                CanonPresentation::FlatAssertion,
+                hash,
+                run,
+            )
+            .run_fallible()
+        }) {
+            Ok(Ok(canonicalized)) => Ok(canonicalized),
+            Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
+            Err(failure) => Err(failure.into()),
+        },
+    )
 }
 
 /// Canonicalize one named graph of any [`FallibleDatasetView`] in the
@@ -713,17 +843,33 @@ pub fn try_canonicalize_flat_graph_view<D: FallibleDatasetView>(
     view: &D,
     graph: &str,
     hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
-    match checkpointed_drain(view, |v| match graph_scope(v, graph) {
-        Some(scope) => {
-            CanonState::new(v, scope, CanonPresentation::FlatAssertion, hash).run_fallible()
-        }
-        None => Ok(empty_canonicalized(CanonPresentation::FlatAssertion)),
-    }) {
-        Ok(Ok(canonicalized)) => Ok(canonicalized),
-        Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
-        Err(failure) => Err(failure.into()),
-    }
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::FlatAssertion,
+            Some(graph),
+            CanonOutput::Document,
+        ),
+        |run| match checkpointed_drain(view, |v| {
+            run.check_stop().map_err(|_| CanonError::Stopped)?;
+            match graph_scope(v, graph) {
+                Some(scope) => {
+                    CanonState::new(v, scope, CanonPresentation::FlatAssertion, hash, run)
+                        .run_fallible()
+                }
+                None => {
+                    run.phase(CanonPhase::Output);
+                    empty_canonicalized(v, CanonPresentation::FlatAssertion, run.stop())
+                }
+            }
+        }) {
+            Ok(Ok(canonicalized)) => Ok(canonicalized),
+            Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
+            Err(failure) => Err(failure.into()),
+        },
+    )
 }
 
 /// Whether any [`FallibleDatasetView`] is admissible to canonicalization under
@@ -772,10 +918,30 @@ pub fn check_admissible_flat_view<D: FallibleDatasetView>(
 pub fn try_flat_digest_view<D: FallibleDatasetView>(
     view: &D,
     hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
-    Ok(ContentDigest::of(
-        try_canonicalize_flat_view(view, hash)?.nquads.as_bytes(),
-    ))
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::FlatAssertion,
+            None,
+            CanonOutput::Sha256Digest,
+        ),
+        |run| match checkpointed_drain(view, |view| {
+            let canonical = CanonState::new(
+                view,
+                CanonScope::Dataset,
+                CanonPresentation::FlatAssertion,
+                hash,
+                run,
+            )
+            .run_fallible()?;
+            digest_document(canonical.nquads(), run).map_err(CanonError::with_read_error)
+        }) {
+            Ok(result) => result.map_err(ViewCanonError::Refused),
+            Err(failure) => Err(failure.into()),
+        },
+    )
 }
 
 /// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
@@ -789,12 +955,12 @@ fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id
 /// The canonical form of an empty selection: the empty document, no labels, under
 /// the caller-stated `presentation` (an empty document is the same bytes under
 /// either presentation, but the caller's own family is still the one reported).
-fn empty_canonicalized<Id>(presentation: CanonPresentation) -> Canonicalized<Id> {
-    Canonicalized {
-        nquads: String::new(),
-        labels: BTreeMap::new(),
-        presentation,
-    }
+fn empty_canonicalized<D: DatasetView>(
+    view: &D,
+    presentation: CanonPresentation,
+    stop: Option<&dyn crate::StopSignal>,
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
+    result::ResultBuilder::new(view, presentation)?.finish(stop)
 }
 
 /// Relabel every blank node of `ds` to its canonical `c14n{n}` label at
@@ -837,8 +1003,19 @@ fn empty_canonicalized<Id>(presentation: CanonPresentation) -> Canonicalized<Id>
 /// [`CanonError::ReservedVocabulary`] if any term is an IRI in
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] on a pathologically
 /// symmetric blank graph (adversarial input never panics here).
-pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
-    relabel_recording(ds, |_, _| {})
+pub fn canonical_relabel(
+    ds: &RdfDataset,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<RdfDataset, CanonError> {
+    control.run(
+        SearchConfiguration::rdfc(
+            CanonHash::Sha256,
+            CanonPresentation::Overlay,
+            None,
+            CanonOutput::RelabeledDataset,
+        ),
+        |run| relabel_recording(ds, |_, _| {}, run),
+    )
 }
 
 /// A native canonical relabeling paired with the term mapping established by
@@ -897,23 +1074,41 @@ impl CanonicalRelabeling {
 ///
 /// # Errors
 /// Returns exactly [`canonical_relabel`]'s admission and search-budget refusals.
-pub fn canonical_relabel_with_mapping(ds: &RdfDataset) -> Result<CanonicalRelabeling, CanonError> {
-    let mut terms = vec![None; ds.term_count()].into_boxed_slice();
-    let dataset = relabel_recording(ds, |source, target| {
-        let source = match source {
-            RelabelSource::Term(id) => Some(id),
-            RelabelSource::IndirectIri(iri) => ds.term_id_by_iri(iri),
-        };
-        if let Some(source) = source {
-            let slot = &mut terms[source.index()];
-            assert!(
-                slot.is_none_or(|previous| previous == target),
-                "a canonical term rewrite must agree across occurrences"
-            );
-            *slot = Some(target);
-        }
-    })?;
-    Ok(CanonicalRelabeling { dataset, terms })
+pub fn canonical_relabel_with_mapping(
+    ds: &RdfDataset,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<CanonicalRelabeling, CanonError> {
+    control.run(
+        SearchConfiguration::rdfc(
+            CanonHash::Sha256,
+            CanonPresentation::Overlay,
+            None,
+            CanonOutput::RelabeledMapping,
+        ),
+        |run| {
+            run.check_stop().map_err(|_| CanonError::Stopped)?;
+            let mut terms = vec![None; ds.term_count()].into_boxed_slice();
+            let dataset = relabel_recording(
+                ds,
+                |source, target| {
+                    let source = match source {
+                        RelabelSource::Term(id) => Some(id),
+                        RelabelSource::IndirectIri(iri) => ds.term_id_by_iri(iri),
+                    };
+                    if let Some(source) = source {
+                        let slot = &mut terms[source.index()];
+                        assert!(
+                            slot.is_none_or(|previous| previous == target),
+                            "a canonical term rewrite must agree across occurrences"
+                        );
+                        *slot = Some(target);
+                    }
+                },
+                run,
+            )?;
+            Ok(CanonicalRelabeling { dataset, terms })
+        },
+    )
 }
 
 /// A source term reached either directly or inside a composite literal.
@@ -929,6 +1124,7 @@ enum RelabelSource<'a> {
 fn relabel_recording(
     ds: &RdfDataset,
     record: impl FnMut(RelabelSource<'_>, TermId),
+    run: &SearchRun<'_>,
 ) -> Result<RdfDataset, CanonError> {
     // The typed consumer needs the issued labels, not a serialized document.
     // Keep the exact admission/search algorithm shared with text canonicalization
@@ -938,6 +1134,7 @@ fn relabel_recording(
         CanonScope::Dataset,
         CanonPresentation::Overlay,
         CanonHash::Sha256,
+        run,
     )
     .issue_labels()?
     .canonical
@@ -962,19 +1159,24 @@ fn relabel_recording(
             (id, label.into_boxed_str())
         })
         .collect();
-    rebuild_dataset(
+    run.phase(CanonPhase::Output);
+    let result = rebuild_dataset(
         ds,
         &mut CanonicalRelabeler {
             labels: &labels,
             extra,
             record,
+            stop: run.stop(),
         },
-    )
+    )?;
+    run.check_stop().map_err(|_| CanonError::Stopped)?;
+    Ok(result)
 }
 
 /// The [`canonical_relabel`] mapper: blanks take their issued `c14n{n}` label
 /// at [`BlankScope::DEFAULT`]; every other term passes through unchanged.
 struct CanonicalRelabeler<'a, R> {
+    stop: Option<&'a dyn crate::StopSignal>,
     /// The canonicalization's issued labels ([`Canonicalized::labels`]).
     labels: &'a BTreeMap<TermId, Box<str>>,
     /// Continuation labels for declaration-only blank graphs.
@@ -993,6 +1195,7 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
         _label: &str,
         _scope: BlankScope,
     ) -> Result<TermId, CanonError> {
+        check_stop(self.stop)?;
         let label = self
             .labels
             .get(&id)
@@ -1007,6 +1210,7 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
         iri: &str,
         _iri_only: bool,
     ) -> Result<TermId, CanonError> {
+        check_stop(self.stop)?;
         Ok(builder.intern_iri(iri)?)
     }
 
@@ -1088,26 +1292,29 @@ pub fn blank_count_view<D: DatasetView<ReadError = Infallible>>(view: &D) -> usi
 /// Returns backing-store failure and discards the partial count.
 pub fn try_blank_count_view<D: DatasetView>(view: &D) -> Result<u64, D::ReadError> {
     view.checked_read(|view| {
-        u64::try_from(blank_count_unchecked(view)).expect("local blank set count fits u64")
+        let count =
+            blank_count_with_stop(view, None).expect("an uncontrolled component walk cannot stop");
+        u64::try_from(count).expect("local blank set count fits u64")
     })
 }
 
-fn blank_count_unchecked<D: DatasetView>(view: &D) -> usize {
+pub(super) fn blank_count_with_stop<D: DatasetView>(
+    view: &D,
+    stop: Option<&dyn crate::StopSignal>,
+) -> Result<usize, CanonError> {
     let mut set: BTreeSet<D::Id> = BTreeSet::new();
     collect_components::<_, Infallible>(
         view,
         CanonScope::Dataset,
         CanonPresentation::Overlay,
-        None,
+        stop,
         &mut |comp| {
-            comp.for_each_blank(view, &mut |b| {
+            comp.try_for_each_blank(view, stop, &mut |b| {
                 set.insert(b);
-            });
-            Ok(())
+            })
         },
-    )
-    .expect("an uncontrolled component walk cannot stop");
-    set.len()
+    )?;
+    Ok(set.len())
 }
 
 /// Which statements of a view canonicalization admits.
@@ -1270,12 +1477,6 @@ impl<Id: ViewTermId> Component<Id> {
                 g.map(Slot::Term),
             ),
         }
-    }
-
-    /// Invoke `f` for every blank id appearing anywhere in this component
-    /// (recursing into triple terms).
-    fn for_each_blank<D: DatasetView<Id = Id>>(self, ds: &D, f: &mut impl FnMut(Id)) {
-        let _ = self.try_for_each_blank(ds, None, f);
     }
 
     fn try_for_each_blank<D: DatasetView<Id = Id>>(
@@ -1931,20 +2132,20 @@ struct CanonState<'a, D: DatasetView> {
     canonical: IdIssuer<D::Id>,
     /// The hash algorithm for this run (RDFC-1.0 §3).
     hash: CanonHash,
-    /// Remaining recursion/permutation budget (poison guard).
-    budget: u64,
+    /// The caller-owned run's exact policy and measured charges.
+    run: &'a SearchRun<'a>,
     /// One caller signal shared with the operation using this identity.
     stop: Option<&'a dyn crate::StopSignal>,
 }
 
-/// The n-degree search's call/permutation budget (`RDFC_CALL_LIMIT`) was
-/// exhausted before the dataset canonicalized — a pathologically symmetric
-/// blank graph (adversarial input, not a legitimate large dataset: a
-/// non-symmetric graph of any size stays well under budget). Returned by
-/// [`try_canonicalize`]/[`try_canonicalize_with`] without publishing a partial
-/// canonical identity.
+/// A caller-selected finite search ceiling was reached before canonicalization
+/// completed. The rejected event is excluded from the actual charged work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BudgetExceeded {
+    /// The caller-selected finite ceiling for this run.
+    pub limit: u64,
+    /// Actual charged work before refusal; the rejected event is excluded.
+    pub work: SearchWork,
     /// The number of distinct blank nodes in the input that triggered
     /// exhaustion (diagnostic only).
     pub blank_count: usize,
@@ -1952,8 +2153,10 @@ pub struct BudgetExceeded {
 
 impl purrdf_hash::error::StructuredError for BudgetExceeded {
     purrdf_hash::error_visit! {
-        @record self { blank_count } => "canonical-budget-exceeded" {
+        @record self { blank_count, limit, work } => "canonical-budget-exceeded" {
             "blank_count" => Unsigned(self.blank_count as u128),
+            "limit" => Unsigned(u128::from(self.limit)),
+            "charged_work" => Unsigned(u128::from(self.work.total())),
         }
     }
 }
@@ -1962,9 +2165,9 @@ impl std::fmt::Display for BudgetExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RDFC-1.0 canonicalization exceeded its call budget ({RDFC_CALL_LIMIT}) on a \
-             pathologically symmetric blank graph ({} blanks); the input is adversarial and \
-             cannot be canonicalized deterministically within bounds",
+            "canonicalization reached the caller's finite search limit {} after {} charged events ({} blanks)",
+            self.limit,
+            self.work.total(),
             self.blank_count
         )
     }
@@ -2012,8 +2215,8 @@ impl std::fmt::Display for TermPosition {
 
 /// Why canonicalization refused.
 ///
-/// Both variants are refusals of ADVERSARIAL input, and they are separate variants
-/// rather than one opaque error because they oblige a caller differently: a
+/// Search-budget exhaustion and reserved-vocabulary conflicts are separate
+/// variants because they oblige a caller differently: a
 /// [`BudgetExceeded`] dataset is well-formed and merely uncanonicalizable within
 /// bounds, while a [`ReservedVocabulary`] dataset is one whose acceptance would have
 /// been an identity collision. A consumer auditing a rejection needs to tell those
@@ -2032,13 +2235,16 @@ pub enum CanonError<E = Infallible> {
     BudgetExceeded(BudgetExceeded),
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
-    /// The backing dataset could not be read completely. No canonical result is returned.
+    /// The backing dataset refused a read or scoped scratch admission.
+    /// No canonical result is returned.
     Read(E),
     /// Original refusal from the source's owned payload admission capability.
     OwnedAdmission(E),
     /// The caller stopped canonicalization. No canonical identity was published.
     Stopped,
-    /// The source cannot retain an owned reserved-vocabulary refusal.
+    /// Exact charged-work counters cannot represent another event.
+    CounterCapacity,
+    /// The source cannot retain an owned canonical result or refusal.
     OwnedWorkspaceUnavailable,
 }
 
@@ -2051,6 +2257,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Read(cause) => "canonical-read" { "cause" => Cause(cause) },
         OwnedAdmission(cause) => "canonical-owned-admission" { "cause" => Cause(cause) },
         Stopped => "canonical-stopped" {},
+        CounterCapacity => "canonical-counter-capacity" {},
         OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
     }
 }
@@ -2064,12 +2271,15 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::ReservedVocabulary(err) => err.fmt(f),
             Self::Read(error) => write!(f, "dataset read failed: {error}"),
             Self::OwnedAdmission(error) => {
-                write!(f, "canonical reserved-vocabulary admission failed: {error}")
+                write!(f, "canonical payload admission failed: {error}")
             }
             Self::Stopped => f.write_str("canonicalization was stopped by the caller"),
-            Self::OwnedWorkspaceUnavailable => f.write_str(
-                "canonical reserved-vocabulary refusal requires source-owned workspace admission",
-            ),
+            Self::CounterCapacity => {
+                f.write_str("canonicalization charged-work counter cannot represent another event")
+            }
+            Self::OwnedWorkspaceUnavailable => {
+                f.write_str("canonical payload requires source-owned workspace admission")
+            }
         }
     }
 }
@@ -2082,7 +2292,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
-            Self::Stopped | Self::OwnedWorkspaceUnavailable => None,
+            Self::Stopped | Self::CounterCapacity | Self::OwnedWorkspaceUnavailable => None,
         }
     }
 }
@@ -2106,6 +2316,7 @@ impl CanonError {
             Self::ReservedVocabulary(error) => CanonError::ReservedVocabulary(error),
             Self::Read(error) | Self::OwnedAdmission(error) => match error {},
             Self::Stopped => CanonError::Stopped,
+            Self::CounterCapacity => CanonError::CounterCapacity,
             Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
         }
     }
@@ -2306,6 +2517,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         scope: CanonScope<D::Id>,
         presentation: CanonPresentation,
         hash: CanonHash,
+        run: &'a SearchRun<'a>,
     ) -> Self {
         Self {
             ds,
@@ -2316,14 +2528,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             first_degree: BTreeMap::new(),
             canonical: IdIssuer::new(CANON_PREFIX),
             hash,
-            budget: RDFC_CALL_LIMIT,
-            stop: None,
+            run,
+            stop: run.stop(),
         }
-    }
-
-    fn with_stop(mut self, stop: &'a dyn crate::StopSignal) -> Self {
-        self.stop = Some(stop);
-        self
     }
 
     fn collect_incidence(&mut self) -> Result<(), CanonError> {
@@ -2350,18 +2557,24 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     fn check_stop(&self) -> Result<(), CanonError> {
-        check_stop(self.stop)
+        self.run.check_stop().map_err(|_| CanonError::Stopped)
     }
 
-    fn charge_search(&mut self) -> Result<(), CanonError> {
-        self.check_stop()?;
-        self.budget = self
-            .budget
-            .checked_sub(1)
-            .ok_or(CanonError::BudgetExceeded(BudgetExceeded {
-                blank_count: self.blanks.len(),
-            }))?;
-        Ok(())
+    fn charge_search(&self, event: SearchEvent) -> Result<(), CanonError> {
+        self.run.charge(event).map_err(|failure| match failure {
+            SearchRefusal::Stopped => CanonError::Stopped,
+            SearchRefusal::CounterCapacity => CanonError::CounterCapacity,
+            SearchRefusal::Limit => {
+                let SearchPolicy::Finite(limit) = self.run.policy() else {
+                    unreachable!("only a finite policy can refuse its logical ceiling")
+                };
+                CanonError::BudgetExceeded(BudgetExceeded {
+                    blank_count: self.blanks.len(),
+                    limit,
+                    work: self.run.work(),
+                })
+            }
+        })
     }
 
     /// Run the full algorithm, returning the original [`CanonError`] on refusal.
@@ -2372,15 +2585,45 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// must be refused without spending the poison budget deciding so.
     fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
         let canonical = self.issue_labels()?;
-        let nquads = canonical
-            .serialize_canonical()
-            .map_err(CanonError::with_read_error)?;
-        let presentation = canonical.presentation;
-        let labels = canonical.canonical.issued;
-        Ok(Canonicalized {
-            nquads,
-            labels,
-            presentation,
+        canonical.run.phase(CanonPhase::Output);
+        let mut result = result::ResultBuilder::new(canonical.ds, canonical.presentation)?;
+        let reservation = canonical
+            .ds
+            .reserve_workspace(0)
+            .map_err(CanonError::Read)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            let mut lines = canonical.canonical_lines(memory)?;
+            let bytes = lines
+                .iter()
+                .try_fold(0usize, |bytes, line| bytes.checked_add(line.len()))
+                .ok_or(CanonError::Storage(
+                    purrdf_lex::allocation::StorageError::SizeOverflow,
+                ))?;
+            canonical
+                .check_stop()
+                .map_err(CanonError::with_read_error)?;
+            result.reserve_text(bytes)?;
+            for line in &mut lines {
+                canonical
+                    .check_stop()
+                    .map_err(CanonError::with_read_error)?;
+                result.append(line)?;
+                memory.release_string(std::mem::take(line))?;
+            }
+            memory.release_vec(lines)?;
+            result.reserve_labels(canonical.canonical.issued.len())?;
+            for (id, label) in canonical.canonical.issued {
+                canonical
+                    .run
+                    .check_stop()
+                    .map_err(|_| CanonError::Stopped)?;
+                result.label(id, &label)?;
+            }
+            canonical
+                .run
+                .check_stop()
+                .map_err(|_| CanonError::Stopped)?;
+            result.finish(canonical.stop)
         })
     }
 
@@ -2394,15 +2637,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
         self.collect_incidence()
             .map_err(CanonError::with_read_error)?;
-        self.run_inner().map_err(CanonError::with_read_error)?;
+        self.run.phase(CanonPhase::Search);
+        self.run_inner()?;
         Ok(self)
     }
 
-    fn run_inner(&mut self) -> Result<(), CanonError> {
+    fn run_inner(&mut self) -> Result<(), CanonError<D::ReadError>> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash.
         let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         for &b in &self.blanks {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             let h = self.hash_first_degree(b)?;
             self.first_degree.insert(b, h);
             by_hash.entry(h).or_default().push(b);
@@ -2412,7 +2656,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         // Defer hash-colliding groups to the n-degree pass.
         let mut ambiguous: Vec<HashHex> = Vec::new();
         for (h, group) in &by_hash {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             if group.len() == 1 {
                 self.canonical.issue(group[0]);
             } else {
@@ -2422,7 +2666,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
         // §4.4 step 5: resolve each ambiguous group via the n-degree search.
         for h in ambiguous {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             // `by_hash` is a local, not part of `self`, so the group can be walked
             // by reference across the `&mut self` calls below (no `Vec` clone).
             let group = by_hash.get(&h).expect("ambiguous hash present");
@@ -2430,13 +2674,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             // fresh temporary issuer seeded with that blank.
             let mut hash_paths: Vec<(HashHex, IdIssuer<D::Id>)> = Vec::new();
             for &b in group {
-                self.check_stop()?;
+                self.check_stop().map_err(CanonError::with_read_error)?;
                 if self.canonical.has(b) {
                     continue;
                 }
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
                 temp.issue(b);
-                let (result_hash, result_issuer) = self.hash_n_degree(b, temp)?;
+                let (result_hash, result_issuer) = self
+                    .hash_n_degree(b, temp)
+                    .map_err(CanonError::with_read_error)?;
                 hash_paths.push((result_hash, result_issuer));
             }
             // 5.5: promote the temp issuers' bindings into the canonical issuer, the
@@ -2445,31 +2691,37 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             hash_paths.sort_by_key(|(h, _)| *h);
             for (_h, issuer) in hash_paths {
                 for &b in issuer.order() {
-                    self.check_stop()?;
+                    self.check_stop().map_err(CanonError::with_read_error)?;
                     self.canonical.issue(b);
                 }
             }
         }
-        self.check_stop()
+        self.check_stop().map_err(CanonError::with_read_error)
     }
 
     /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`.
-    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError> {
+    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError<D::ReadError>> {
         let render = BlankRender::FirstDegree { focus: b };
-        let mut lines = Vec::new();
-        for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
-            self.check_stop()?;
-            let mut line = String::new();
-            self.write_component(*comp, render, &mut line)?;
-            lines.push(line);
-        }
-        lines.sort_unstable();
-        hash_lines(self.hash, &lines, self.stop)
+        let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            let mut lines = Vec::new();
+            for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
+                self.check_stop().map_err(CanonError::with_read_error)?;
+                let mut line = String::new();
+                self.write_component(*comp, render, &mut line, memory)?;
+                memory.push(&mut lines, line)?;
+            }
+            lines.sort_unstable();
+            let hash =
+                hash_lines(self.hash, &lines, self.stop).map_err(CanonError::with_read_error)?;
+            rendering::release_lines(lines, memory)?;
+            Ok(hash)
+        })
     }
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
     fn hash_n_degree(
-        &mut self,
+        &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
     ) -> Result<(HashHex, IdIssuer<D::Id>), CanonError> {
@@ -2502,7 +2754,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
                 if let Some(perm) = group.permutations.next() {
                     // Charge after obtaining each permutation, including pruned ones.
-                    self.charge_search()?;
+                    self.charge_search(SearchEvent::RdfcPermutation)?;
                     let mut issuer = frame.issuer.clone();
                     let mut path = String::new();
                     let mut recursion = Vec::new();
@@ -2592,11 +2844,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     /// Enter §4.8 once. Work and stop checks have the same order at every depth.
     fn n_degree_frame(
-        &mut self,
+        &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
     ) -> Result<NDegreeFrame<D::Id>, CanonError> {
-        self.charge_search()?;
+        self.charge_search(SearchEvent::RdfcFrame)?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
         let mut hn: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
@@ -2758,78 +3010,74 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// §4.4 step 7: serialize every component with canonical labels, sorted + deduped.
-    fn serialize_canonical(&self) -> Result<String, CanonError> {
+    fn canonical_lines<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<String>, CanonError<D::ReadError>> {
         let render = BlankRender::Canonical {
             issuer: &self.canonical,
         };
-        let mut lines: BTreeSet<String> = BTreeSet::new();
-        collect_components::<_, Infallible>(
+        let mut lines = Vec::new();
+        collect_components::<_, D::ReadError>(
             self.ds,
             self.scope,
             self.presentation,
             self.stop,
             &mut |comp| {
                 let mut s = String::new();
-                self.write_component(comp, render, &mut s)?;
-                lines.insert(s);
+                self.write_component(comp, render, &mut s, memory)?;
+                memory.push(&mut lines, s)?;
                 Ok(())
             },
         )?;
-        // CONSUMED rather than borrowed. Iterating by reference held every line
-        // alongside the concatenation that was being built from it, so the peak was
-        // the document twice over plus one allocation per line. Taking the set by
-        // value frees each line as it is appended, so the two halves trade off
-        // instead of stacking.
-        let mut out = String::with_capacity(lines.iter().map(String::len).sum());
-        for line in lines {
-            self.check_stop()?;
-            out.push_str(&line);
-        }
-        self.check_stop()?;
-        Ok(out)
+        rendering::sort_unique(&mut lines, memory)?;
+        self.check_stop().map_err(CanonError::with_read_error)?;
+        Ok(lines)
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
-    fn write_component(
+    fn write_component<S: Admission + ?Sized>(
         &self,
         comp: Component<D::Id>,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) -> Result<(), CanonError> {
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         let (s, p, o, g) = comp.slots();
-        self.write_slot(s, render, out)?;
-        out.push(' ');
-        self.write_slot(p, render, out)?;
-        out.push(' ');
-        self.write_slot(o, render, out)?;
+        self.write_slot(s, render, out, memory)?;
+        memory.push_char(out, ' ')?;
+        self.write_slot(p, render, out, memory)?;
+        memory.push_char(out, ' ')?;
+        self.write_slot(o, render, out, memory)?;
         if let Some(g) = g {
-            out.push(' ');
-            self.write_slot(g, render, out)?;
+            memory.push_char(out, ' ')?;
+            self.write_slot(g, render, out, memory)?;
         }
-        out.push_str(" .\n");
+        memory.push_str(out, " .\n")?;
         Ok(())
     }
 
-    fn write_slot(
+    fn write_slot<S: Admission + ?Sized>(
         &self,
         slot: Slot<D::Id>,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) -> Result<(), CanonError> {
-        self.check_stop()?;
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        self.check_stop().map_err(CanonError::with_read_error)?;
         match slot {
-            Slot::Sentinel(iri) => write_iri(iri, out),
-            Slot::Term(id) => self.write_term(id, render, out)?,
+            Slot::Sentinel(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
+            Slot::Term(id) => self.write_term(id, render, out, memory)?,
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
                 // form. `Some(g)`: sentinel then the graph term, so a named-graph
                 // annotation stays lossless and never collides with a genuine quad
                 // (which never carries two graph tokens). Not re-parsed — this string
                 // is only hashed / byte-compared as the canonical oracle.
-                write_iri(SENTINEL_ANNOTATION_GRAPH, out);
+                memory.append_text(out, |out| write_iri(SENTINEL_ANNOTATION_GRAPH, out))?;
                 if let Some(g) = g {
-                    out.push(' ');
-                    self.write_term(g, render, out)?;
+                    memory.push_char(out, ' ')?;
+                    self.write_term(g, render, out, memory)?;
                 }
             }
         }
@@ -2851,101 +3099,137 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// its subject next, with the separators, the predicate, the object and the
     /// closing ` )>>` held back in that order until the subject's whole nesting is
     /// written. A term that is not a triple term pushes nothing.
-    fn write_term(
+    fn write_term<S: Admission + ?Sized>(
         &self,
         id: D::Id,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) -> Result<(), CanonError> {
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         enum Step<Id> {
             Term(Id),
             Text(&'static str),
         }
-        let mut held: Vec<Step<D::Id>> = Vec::new();
+        let mut held: WorkList<Step<D::Id>, 8> = WorkList::new();
         let mut next = Some(Step::Term(id));
         while let Some(step) = next.take().or_else(|| held.pop()) {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             let id = match step {
                 Step::Text(text) => {
-                    out.push_str(text);
+                    memory.push_str(out, text)?;
                     continue;
                 }
                 Step::Term(id) => id,
             };
             let Some(guard) = self.ds.resolve_if_ready(id) else {
+                held.release_admitted(memory)?;
                 return Ok(());
             };
             match guard.term() {
-                TermRef::Iri(iri) => write_iri(iri, out),
-                TermRef::Blank { .. } => write_blank(render.label(id), out),
+                TermRef::Iri(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
+                TermRef::Blank { .. } => {
+                    memory.append_text(out, |out| write_blank(render.label(id), out))?;
+                }
                 TermRef::Literal {
                     lexical,
                     datatype,
                     language,
                     direction,
                 } => {
-                    let rendered = self.render_composite_lexical(lexical, datatype, render);
-                    self.check_stop()?;
+                    let rendered =
+                        self.render_composite_lexical(lexical, datatype, render, memory)?;
+                    self.check_stop().map_err(CanonError::with_read_error)?;
                     let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
+                        if let Cow::Owned(rendered) = rendered {
+                            memory.release_string(rendered)?;
+                        }
+                        held.release_admitted(memory)?;
                         return Ok(());
                     };
                     let TermRef::Iri(dt) = datatype_guard.term() else {
                         unreachable!("literal datatype must be an IRI")
                     };
-                    write_literal(
-                        &rendered,
-                        dt,
-                        language,
-                        direction.map(crate::RdfTextDirection::as_str),
-                        out,
-                    );
+                    memory.append_text(out, |out| {
+                        write_literal(
+                            &rendered,
+                            dt,
+                            language,
+                            direction.map(crate::RdfTextDirection::as_str),
+                            out,
+                        );
+                    })?;
+                    if let Cow::Owned(rendered) = rendered {
+                        memory.release_string(rendered)?;
+                    }
                 }
                 TermRef::Triple { s, p, o } => {
                     // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
                     // N-Quads form).
-                    out.push_str(TRIPLE_TERM_OPEN);
-                    out.push(' ');
-                    held.extend([
+                    memory.push_str(out, TRIPLE_TERM_OPEN)?;
+                    memory.push_char(out, ' ')?;
+                    for step in [
                         Step::Text(TRIPLE_TERM_CLOSE),
                         Step::Text(" "),
                         Step::Term(o),
                         Step::Text(" "),
                         Step::Term(p),
                         Step::Text(" "),
-                    ]);
+                    ] {
+                        held.try_push_admitted(step, memory)?;
+                    }
                     next = Some(Step::Term(s));
                 }
             }
         }
+        held.release_admitted(memory)?;
         Ok(())
     }
 
     /// A composite literal's lexical form with every embedded blank label
     /// replaced by the label `render` issues for that node; any other lexical
     /// form, borrowed unchanged.
-    fn render_composite_lexical<'l>(
+    fn render_composite_lexical<'l, S: Admission + ?Sized>(
         &self,
         lexical: &'l str,
         datatype: D::Id,
         render: BlankRender<'_, D::Id>,
-    ) -> Cow<'l, str> {
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Cow<'l, str>, CanonError<D::ReadError>> {
         let Some(guard) = self.ds.resolve_if_ready(datatype) else {
-            return Cow::Borrowed(lexical);
+            return Ok(Cow::Borrowed(lexical));
         };
         let TermRef::Iri(iri) = guard.term() else {
-            return Cow::Borrowed(lexical);
+            return Ok(Cow::Borrowed(lexical));
         };
-        crate::cdt_blank::rewrite_cdt_blank_terms(lexical, iri, &mut |label| {
-            let (label, scope) = crate::blank_label::decode_blank_label(
-                label,
-                crate::blank_label::LabelAlphabet::BlankNodeLabel,
-            );
-            let id = self.ds.term_id_if_ready(&TermValue::Blank {
-                label: label.into_owned(),
-                scope,
-            })?;
-            Some(format!("_:{}", render.label(id)))
-        })
+        Ok(crate::cdt_blank::rewrite_cdt_blank_terms_with_memory(
+            lexical,
+            iri,
+            &mut |label, memory| {
+                let (label, scope) = crate::blank_label::decode_blank_label_with_memory(
+                    label,
+                    crate::blank_label::LabelAlphabet::BlankNodeLabel,
+                    memory,
+                )?;
+                let label = match label {
+                    Cow::Borrowed(label) => memory.string(label)?,
+                    Cow::Owned(label) => label,
+                };
+                let lookup = TermValue::Blank { label, scope };
+                let id = self.ds.term_id_if_ready(&lookup);
+                let TermValue::Blank { label, .. } = lookup else {
+                    unreachable!("the blank lookup was constructed above")
+                };
+                memory.release_string(label)?;
+                let Some(id) = id else {
+                    return Ok(None);
+                };
+                let mut replacement = String::new();
+                memory.push_str(&mut replacement, "_:")?;
+                memory.push_str(&mut replacement, render.label(id))?;
+                Ok(Some(replacement))
+            },
+            memory,
+        )?)
     }
 }
 
@@ -3024,8 +3308,12 @@ mod tests {
         b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
-    fn canon(ds: &RdfDataset) -> String {
-        try_canonicalize(ds).unwrap().nquads
+    fn canon(ds: &RdfDataset) -> Canonicalized {
+        try_canonicalize(
+            ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -3041,12 +3329,18 @@ mod tests {
         b.push_quad(s, p, o1, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(
-            canon(&ds),
+            canon(&ds).nquads(),
             "<http://example.org/s> <http://example.org/p> <http://example.org/o1> .\n\
              <http://example.org/s> <http://example.org/p> <http://example.org/o2> .\n"
         );
         assert!(
-            try_canonicalize(&ds).unwrap().labels.is_empty(),
+            try_canonicalize(
+                &ds,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .label_count()
+                == 0,
             "no blanks → no labels"
         );
     }
@@ -3085,7 +3379,8 @@ mod tests {
         let triple = b.intern_triple(s, pred, o).unwrap();
         b.push_reifier(r, triple).unwrap();
         let genuine = b.freeze().expect("valid");
-        let lowered = canon(&genuine);
+        let lowered_owner = canon(&genuine);
+        let lowered = lowered_owner.nquads();
         assert!(
             lowered.contains("<urn:purrdf:rdfc:reifies>"),
             "the fixture must actually exercise the lowering: {lowered}"
@@ -3105,9 +3400,14 @@ mod tests {
             "B must carry no statement layer of its own — the quad IS the input"
         );
 
-        let folded = try_canonicalize(&spelled).expect("the emitted shape must fold, not refuse");
+        let folded = try_canonicalize(
+            &spelled,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("the emitted shape must fold, not refuse");
         assert_eq!(
-            folded.nquads, lowered,
+            folded.nquads(),
+            lowered,
             "the spelled row and the row it spells must canonicalize to the same bytes"
         );
 
@@ -3127,9 +3427,12 @@ mod tests {
         b.push_quad(r, sentinel, triple, None).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
-            try_canonicalize(&both)
-                .expect("a row spelled both ways must fold, not refuse")
-                .nquads,
+            try_canonicalize(
+                &both,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .expect("a row spelled both ways must fold, not refuse")
+            .nquads(),
             lowered,
             "spelling one row twice must not change the canonical form"
         );
@@ -3149,7 +3452,10 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
-                try_canonicalize(&ds),
+                try_canonicalize(
+                    &ds,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ),
             "an unminted name in the reserved namespace must still be refused"
@@ -3195,7 +3501,10 @@ mod tests {
             }
             let _ = g;
             let ds = b.freeze().expect("valid");
-            match try_canonicalize(&ds) {
+            match try_canonicalize(
+                &ds,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            ) {
                 Err(CanonError::ReservedVocabulary(err)) => {
                     assert_eq!(
                         err.position(),
@@ -3215,7 +3524,10 @@ mod tests {
         let quoted = b.intern_triple(s, bad, o).unwrap();
         b.push_quad(s, pred, quoted, None).unwrap();
         let ds = b.freeze().expect("valid");
-        match try_canonicalize(&ds) {
+        match try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(CanonError::ReservedVocabulary(err)) => {
                 assert_eq!(err.position(), TermPosition::Object);
                 assert_eq!(err.iri(), sentinel);
@@ -3234,7 +3546,10 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
-                try_canonicalize(&ds),
+                try_canonicalize(
+                    &ds,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ),
             "a reserved IRI in a datatype slot must be refused"
@@ -3261,8 +3576,16 @@ mod tests {
             b.freeze().expect("valid")
         };
 
-        let forward = try_canonicalize(&build(false)).expect_err("refused");
-        let reversed = try_canonicalize(&build(true)).expect_err("refused");
+        let forward = try_canonicalize(
+            &build(false),
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect_err("refused");
+        let reversed = try_canonicalize(
+            &build(true),
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect_err("refused");
         assert_eq!(
             forward, reversed,
             "the named violation must not depend on statement order"
@@ -3301,7 +3624,10 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
-                try_canonicalize(&ds),
+                try_canonicalize(
+                    &ds,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ),
             "the inadmissibility must be reported, not masked by budget exhaustion"
@@ -3317,7 +3643,13 @@ mod tests {
         b.push_quad(s, pred, o, None).unwrap();
         let clean = b.freeze().expect("valid");
         assert!(check_admissible(&clean).is_ok());
-        assert!(try_canonicalize(&clean).is_ok());
+        assert!(
+            try_canonicalize(
+                &clean,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .is_ok()
+        );
 
         let mut b = RdfDatasetBuilder::new();
         let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
@@ -3325,7 +3657,10 @@ mod tests {
         b.push_quad(s, bad, o, None).unwrap();
         let dirty = b.freeze().expect("valid");
         let screened = check_admissible(&dirty).expect_err("inadmissible");
-        match try_canonicalize(&dirty) {
+        match try_canonicalize(
+            &dirty,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(CanonError::ReservedVocabulary(err)) => assert_eq!(
                 CanonError::ReservedVocabulary(err),
                 screened,
@@ -3347,25 +3682,45 @@ mod tests {
         b.push_quad(s, bad, o, Some(graph)).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
-            try_canonicalize(&ds),
+            try_canonicalize(
+                &ds,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(CanonError::ReservedVocabulary(_))
         ));
         for hash in [CanonHash::Sha256, CanonHash::Sha384] {
             assert!(matches!(
-                try_canonicalize_with(&ds, hash),
+                try_canonicalize_with(
+                    &ds,
+                    hash,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ));
             assert!(matches!(
-                try_canonicalize_view(&*ds, hash),
+                try_canonicalize_view(
+                    &*ds,
+                    hash,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ));
             assert!(matches!(
-                try_canonicalize_graph_view(&*ds, "http://example.org/g", hash),
+                try_canonicalize_graph_view(
+                    &*ds,
+                    "http://example.org/g",
+                    hash,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ));
         }
         assert!(matches!(
-            try_graph_digest_view(&*ds, "http://example.org/g"),
+            try_graph_digest_view(
+                &*ds,
+                "http://example.org/g",
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(CanonError::ReservedVocabulary(_))
         ));
     }
@@ -3386,9 +3741,13 @@ mod tests {
         b.push_reifier(r, triple).unwrap();
         b.push_annotation(r, pred, o).unwrap();
         let ds = b.freeze().expect("valid");
-        let out = try_canonicalize(&ds).expect("a genuine overlay must canonicalize");
-        assert!(out.nquads.contains("<urn:purrdf:rdfc:reifies>"));
-        assert!(out.nquads.contains("<urn:purrdf:rdfc:annotation>"));
+        let out = try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("a genuine overlay must canonicalize");
+        assert!(out.nquads().contains("<urn:purrdf:rdfc:reifies>"));
+        assert!(out.nquads().contains("<urn:purrdf:rdfc:annotation>"));
     }
 
     // -----------------------------------------------------------------------
@@ -3464,13 +3823,17 @@ mod tests {
         let native = statement_layer_fixture(Spelling::Native);
         let reread = statement_layer_fixture(Spelling::Lowered);
 
-        let first = try_canonicalize(&native).unwrap();
+        let first = try_canonicalize(
+            &native,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
         assert!(
-            first.nquads.contains("<urn:purrdf:rdfc:reifies>")
-                && first.nquads.contains("<urn:purrdf:rdfc:annotation>")
-                && first.nquads.contains("_:c14n"),
+            first.nquads().contains("<urn:purrdf:rdfc:reifies>")
+                & first.nquads().contains("<urn:purrdf:rdfc:annotation>")
+                & first.nquads().contains("_:c14n"),
             "the fixture must reach both sentinels and the labeler: {}",
-            first.nquads
+            first.nquads()
         );
 
         // The stand-in really is the document: no statement layer of its own, and one
@@ -3479,23 +3842,36 @@ mod tests {
         assert_eq!(reread.annotation_quads().count(), 0);
         assert_eq!(
             reread.quads().count(),
-            first.nquads.lines().count(),
+            first.nquads().lines().count(),
             "the re-read dataset must hold exactly the canonical document's rows"
         );
 
-        let second = try_canonicalize(&reread).expect("the canonical document must be admissible");
+        let second = try_canonicalize(
+            &reread,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("the canonical document must be admissible");
         assert_eq!(
-            second.nquads, first.nquads,
+            second.nquads(),
+            first.nquads(),
             "canonicalizing the canonical document must reproduce it byte for byte"
         );
         assert_eq!(
-            ContentDigest::of(second.nquads.as_bytes()),
-            ContentDigest::of(first.nquads.as_bytes()),
+            ContentDigest::of(second.nquads().as_bytes()),
+            ContentDigest::of(first.nquads().as_bytes()),
             "equal bytes must mint equal identity"
         );
 
         // And a THIRD pass changes nothing either — idempotence, not a one-off.
-        assert_eq!(try_canonicalize(&reread).unwrap().nquads, second.nquads);
+        assert_eq!(
+            try_canonicalize(
+                &reread,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            second.nquads()
+        );
     }
 
     /// The same property through the graph-scoped entry point.
@@ -3520,14 +3896,18 @@ mod tests {
         b.push_quad(o, p, o, None).unwrap();
         let native = b.freeze().expect("valid");
 
-        let scoped =
-            try_canonicalize_graph_view(&*native, "http://example.org/g", CanonHash::Sha256)
-                .unwrap();
+        let scoped = try_canonicalize_graph_view(
+            &*native,
+            "http://example.org/g",
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
         assert!(
-            scoped.nquads.contains("<urn:purrdf:rdfc:reifies>")
-                && scoped.nquads.contains("<urn:purrdf:rdfc:annotation> ."),
+            scoped.nquads().contains("<urn:purrdf:rdfc:reifies>")
+                & scoped.nquads().contains("<urn:purrdf:rdfc:annotation> ."),
             "the per-graph document must carry both lowered rows, graph-erased: {}",
-            scoped.nquads
+            scoped.nquads()
         );
 
         // The document, read back: every row in the default graph, the statement
@@ -3545,24 +3925,35 @@ mod tests {
         let reread = b.freeze().expect("valid");
         assert_eq!(
             reread.quads().count(),
-            scoped.nquads.lines().count(),
+            scoped.nquads().lines().count(),
             "the re-read dataset must hold exactly the per-graph document's rows"
         );
 
         assert_eq!(
-            try_canonicalize(&reread)
-                .expect("a per-graph canonical document must be admissible")
-                .nquads,
-            scoped.nquads,
+            try_canonicalize(
+                &reread,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .expect("a per-graph canonical document must be admissible")
+            .nquads(),
+            scoped.nquads(),
             "re-canonicalizing a per-graph document must reproduce it byte for byte"
         );
         assert_eq!(
-            try_graph_digest_view(&*native, "http://example.org/g").unwrap(),
+            try_graph_digest_view(
+                &*native,
+                "http://example.org/g",
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap(),
             ContentDigest::of(
-                try_canonicalize(&reread)
-                    .expect("admissible")
-                    .nquads
-                    .as_bytes()
+                try_canonicalize(
+                    &reread,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                )
+                .expect("admissible")
+                .nquads()
+                .as_bytes()
             ),
             "the per-graph digest must be re-derivable from the document it covers"
         );
@@ -3577,25 +3968,51 @@ mod tests {
         let spelled = statement_layer_fixture(Spelling::Lowered);
 
         assert_eq!(
-            try_canonicalize(&native).unwrap().nquads,
-            try_canonicalize(&spelled).unwrap().nquads
+            try_canonicalize(
+                &native,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &spelled,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads()
         );
         assert_eq!(
-            try_canonicalize_with(&native, CanonHash::Sha384)
-                .unwrap()
-                .nquads,
-            try_canonicalize_with(&spelled, CanonHash::Sha384)
-                .unwrap()
-                .nquads,
+            try_canonicalize_with(
+                &native,
+                CanonHash::Sha384,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize_with(
+                &spelled,
+                CanonHash::Sha384,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             "the fold is in the ingestion seam, so it is hash-algorithm-independent"
         );
         assert_eq!(
-            try_canonicalize_view(&*native, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
-            try_canonicalize_view(&*spelled, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
+            try_canonicalize_view(
+                &*native,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize_view(
+                &*spelled,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             "the view-generic entry point folds too — one seam, not two"
         );
         assert_eq!(
@@ -3615,8 +4032,23 @@ mod tests {
 
     /// Whether two datasets mint the same identity under this profile.
     fn datasets_are_byte_equal(a: &RdfDataset, b: &RdfDataset) -> bool {
-        ContentDigest::of(try_canonicalize(a).unwrap().nquads.as_bytes())
-            == ContentDigest::of(try_canonicalize(b).unwrap().nquads.as_bytes())
+        ContentDigest::of(
+            try_canonicalize(
+                a,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap()
+            .nquads()
+            .as_bytes(),
+        ) == ContentDigest::of(
+            try_canonicalize(
+                b,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap()
+            .nquads()
+            .as_bytes(),
+        )
     }
 
     /// The fold is SHAPE-EXACT, and these are its near misses: each differs from an
@@ -3635,7 +4067,10 @@ mod tests {
         let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
         b.push_quad(r, reifies, o, None).unwrap();
         let ds = b.freeze().expect("valid");
-        match try_canonicalize(&ds) {
+        match try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(CanonError::ReservedVocabulary(err)) => {
                 assert_eq!(err.iri(), SENTINEL_REIFIES);
                 assert_eq!(err.position(), TermPosition::Predicate);
@@ -3653,7 +4088,10 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
-                try_canonicalize(&ds),
+                try_canonicalize(
+                    &ds,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ),
             "only the sentinel spelling folds, not a neighbour in the namespace"
@@ -3665,7 +4103,10 @@ mod tests {
         let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
         b.push_quad(r, p, reifies, None).unwrap();
         let ds = b.freeze().expect("valid");
-        match try_canonicalize(&ds) {
+        match try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(CanonError::ReservedVocabulary(err)) => {
                 assert_eq!(err.position(), TermPosition::Object);
             }
@@ -3680,7 +4121,10 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
-                try_canonicalize(&ds),
+                try_canonicalize(
+                    &ds,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ),
             "the annotation sentinel is a graph marker, never a predicate"
@@ -3695,7 +4139,10 @@ mod tests {
         let triple = b.intern_triple(r, p, hidden).unwrap();
         b.push_quad(r, reifies, triple, None).unwrap();
         let ds = b.freeze().expect("valid");
-        match try_canonicalize(&ds) {
+        match try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(CanonError::ReservedVocabulary(err)) => {
                 assert_eq!(err.iri(), "urn:purrdf:rdfc:hidden");
                 assert_eq!(err.position(), TermPosition::Object);
@@ -3710,7 +4157,10 @@ mod tests {
         let hidden = b.intern_iri("urn:purrdf:rdfc:hidden").unwrap();
         b.push_quad(r, hidden, r, Some(annotation)).unwrap();
         let ds = b.freeze().expect("valid");
-        match try_canonicalize(&ds) {
+        match try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(CanonError::ReservedVocabulary(err)) => {
                 assert_eq!(err.iri(), "urn:purrdf:rdfc:hidden");
                 assert_eq!(err.position(), TermPosition::Predicate);
@@ -3721,7 +4171,11 @@ mod tests {
         // The neighbouring VALID case, so the refusals above are not passing by
         // refusing everything: the emitted shapes themselves still fold.
         assert!(
-            try_canonicalize(&statement_layer_fixture(Spelling::Lowered)).is_ok(),
+            try_canonicalize(
+                &statement_layer_fixture(Spelling::Lowered),
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .is_ok(),
             "the exact emitted shapes must remain admissible"
         );
     }
@@ -3732,7 +4186,7 @@ mod tests {
     #[test]
     fn the_profile_identity_and_the_reserved_namespace_are_consistent() {
         assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-        assert_eq!(CANON_PROFILE_VERSION, 2);
+        assert_eq!(CANON_PROFILE_VERSION, 3);
         assert!(SENTINEL_REIFIES.starts_with(RESERVED_NAMESPACE));
         assert!(SENTINEL_ANNOTATION_GRAPH.starts_with(RESERVED_NAMESPACE));
     }
@@ -3740,7 +4194,7 @@ mod tests {
     #[test]
     fn empty_dataset_canonicalizes_to_empty() {
         let ds = RdfDatasetBuilder::new().freeze().expect("valid");
-        assert_eq!(canon(&ds), "");
+        assert_eq!(canon(&ds).nquads(), "");
     }
 
     #[test]
@@ -3757,9 +4211,11 @@ mod tests {
         b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
-            canon(&ds).contains("\"0.70\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
-            "lexical form preserved: {}",
             canon(&ds)
+                .nquads()
+                .contains("\"0.70\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
+            "lexical form preserved: {}",
+            canon(&ds).nquads()
         );
     }
 
@@ -3778,7 +4234,8 @@ mod tests {
             .unwrap();
         b.push_quad(s, p, plain, None).unwrap();
         b.push_quad(s, q, rtl, None).unwrap();
-        let out = canon(&ds_of(b));
+        let out_owner = canon(&ds_of(b));
+        let out = out_owner.nquads();
         assert!(out.contains("\"hi\" ."), "xsd:string bare: {out}");
         assert!(
             out.contains("\"مرحبا\"@ar--rtl ."),
@@ -3804,8 +4261,8 @@ mod tests {
         let a = build("x", 0);
         let c = build("totally-different", 9);
         assert_eq!(
-            canon(&a),
-            canon(&c),
+            canon(&a).nquads(),
+            canon(&c).nquads(),
             "blank label/scope must not affect canon"
         );
     }
@@ -3826,14 +4283,15 @@ mod tests {
         };
         let a = build("x", "y");
         let c = build("m", "n");
-        let ca = canon(&a);
+        let ca_owner = canon(&a);
+        let ca = ca_owner.nquads();
         assert_eq!(
             ca,
-            canon(&c),
+            canon(&c).nquads(),
             "relabeled ring must canonicalize identically"
         );
         assert!(
-            ca.contains("_:c14n0") && ca.contains("_:c14n1"),
+            ca.contains("_:c14n0") & ca.contains("_:c14n1"),
             "stable labels: {ca}"
         );
     }
@@ -3846,7 +4304,10 @@ mod tests {
         let x = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
         b.push_quad(x, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
-        assert_eq!(canon(&ds), "_:c14n0 <http://example.org/p> _:c14n0 .\n");
+        assert_eq!(
+            canon(&ds).nquads(),
+            "_:c14n0 <http://example.org/p> _:c14n0 .\n"
+        );
     }
 
     /// Differently-wired blank graphs must NOT be byte-equal.
@@ -3862,7 +4323,7 @@ mod tests {
             b.push_quad(blank, link, nb, None).unwrap();
             b.freeze().expect("valid")
         };
-        assert_ne!(canon(&build("o1")), canon(&build("o2")));
+        assert_ne!(canon(&build("o1")).nquads(), canon(&build("o2")).nquads());
     }
 
     /// Reifier COUNT is observable in the canonical form (the headline gate).
@@ -3879,8 +4340,10 @@ mod tests {
             }
             b.freeze().expect("valid")
         };
-        let one = canon(&build(&["r1"]));
-        let two = canon(&build(&["r1", "r2"]));
+        let one_owner = canon(&build(&["r1"]));
+        let one = one_owner.nquads();
+        let two_owner = canon(&build(&["r1", "r2"]));
+        let two = two_owner.nquads();
         assert_ne!(one, two, "two reifiers must differ from one");
         assert!(
             one.contains("<urn:purrdf:rdfc:reifies> <<( "),
@@ -3910,8 +4373,10 @@ mod tests {
             }
             b.freeze().expect("valid")
         };
-        let with = canon(&build(true));
-        let without = canon(&build(false));
+        let with_owner = canon(&build(true));
+        let with = with_owner.nquads();
+        let without_owner = canon(&build(false));
+        let without = without_owner.nquads();
         assert_ne!(with, without);
         assert!(
             with.contains("<urn:purrdf:rdfc:annotation> ."),
@@ -3965,14 +4430,15 @@ mod tests {
             b.push_quad(base, refp, t2, None).unwrap();
             b.freeze().expect("valid")
         };
-        let ca = canon(&build("x", "y"));
+        let ca_owner = canon(&build("x", "y"));
+        let ca = ca_owner.nquads();
         assert_eq!(
             ca,
-            canon(&build("m", "n")),
+            canon(&build("m", "n")).nquads(),
             "nested-triple-term automorphism must canonicalize identically regardless of input labels"
         );
         assert!(
-            ca.contains("_:c14n0") && ca.contains("_:c14n1"),
+            ca.contains("_:c14n0") & ca.contains("_:c14n1"),
             "two stable nested blank labels: {ca}"
         );
         assert!(ca.contains("<<("), "triple terms rendered: {ca}");
@@ -3999,7 +4465,7 @@ mod tests {
         };
         assert_ne!(
             ca,
-            canon(&asym),
+            canon(&asym).nquads(),
             "an asymmetric nested-triple graph must not canonicalize to the symmetric one"
         );
     }
@@ -4050,12 +4516,19 @@ mod tests {
     fn canonical_relabel_output_labels_are_exactly_the_c14n_set() {
         use crate::blank_label::{LabelAlphabet, escape_label, is_valid_label};
         let ds = hostile_blank_dataset();
-        let canonical = try_canonicalize(&ds).unwrap();
-        let out = canonical_relabel(&ds).expect("relabel");
+        let canonical = try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
+        let out = canonical_relabel(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel");
         let expected: BTreeSet<(String, BlankScope)> = canonical
-            .labels
-            .values()
-            .map(|l| (l.to_string(), BlankScope::DEFAULT))
+            .labels()
+            .map(|(_, label)| (label.to_string(), BlankScope::DEFAULT))
             .collect();
         let got = output_blanks(&out);
         assert_eq!(got, expected, "output blanks must be exactly the c14n set");
@@ -4087,16 +4560,44 @@ mod tests {
     #[test]
     fn canonical_relabel_is_idempotent_and_isomorphism_preserving() {
         let ds = hostile_blank_dataset();
-        let once = canonical_relabel(&ds).expect("relabel once");
-        let twice = canonical_relabel(&once).expect("relabel twice");
+        let once = canonical_relabel(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel once");
+        let twice = canonical_relabel(
+            &once,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel twice");
         assert_eq!(
-            try_canonicalize(&once).unwrap().nquads,
-            try_canonicalize(&ds).unwrap().nquads,
+            try_canonicalize(
+                &once,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &ds,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             "relabeling must preserve the isomorphism class"
         );
         assert_eq!(
-            try_canonicalize(&twice).unwrap().nquads,
-            try_canonicalize(&once).unwrap().nquads,
+            try_canonicalize(
+                &twice,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &once,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             "relabeling a relabeled dataset must change nothing (canonical bytes)"
         );
         assert_eq!(
@@ -4119,7 +4620,11 @@ mod tests {
         let empty_graph = b.intern_blank("empty graph blank", BlankScope(4)).unwrap();
         b.declare_named_graph(empty_graph).unwrap();
         let ds = b.freeze().expect("valid");
-        let out = canonical_relabel(&ds).expect("relabel");
+        let out = canonical_relabel(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel");
         let got = output_blanks(&out);
         assert_eq!(got.len(), 2, "both blanks survive: {got:?}");
         for (label, scope) in &got {
@@ -4172,29 +4677,47 @@ mod tests {
     #[test]
     fn the_flat_entry_points_are_the_view_core_at_rdfdataset() {
         let ds = seam_dataset();
-        let flat = try_canonicalize_with(&ds, CanonHash::Sha256).unwrap();
-        let view = try_canonicalize_view(&*ds, CanonHash::Sha256).unwrap();
-        assert_eq!(flat.nquads, view.nquads);
-        assert_eq!(flat.labels, view.labels);
+        let flat = try_canonicalize_with(
+            &ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
+        let view = try_canonicalize_view(
+            &*ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
+        assert_eq!(flat.nquads(), view.nquads());
+        assert!(flat.labels().eq(view.labels()));
         assert!(
-            flat.nquads.contains("<urn:purrdf:rdfc:reifies>")
-                && flat.nquads.contains("<urn:purrdf:rdfc:annotation>")
-                && flat.nquads.contains("_:c14n"),
+            flat.nquads().contains("<urn:purrdf:rdfc:reifies>")
+                & flat.nquads().contains("<urn:purrdf:rdfc:annotation>")
+                & flat.nquads().contains("_:c14n"),
             "the fixture must reach the overlay and the labeler: {}",
-            flat.nquads
+            flat.nquads()
         );
         // The defaulted type parameter: `Canonicalized` still names the `TermId`
         // instantiation, so existing call sites keep their key type unchanged.
         let flat: Canonicalized = flat;
-        let _: &BTreeMap<TermId, Box<str>> = &flat.labels;
+        let _: Canonicalized<TermId> = flat;
         // SHA-384 travels the same seam.
         assert_eq!(
-            try_canonicalize_with(&ds, CanonHash::Sha384)
-                .unwrap()
-                .nquads,
-            try_canonicalize_view(&*ds, CanonHash::Sha384)
-                .unwrap()
-                .nquads
+            try_canonicalize_with(
+                &ds,
+                CanonHash::Sha384,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize_view(
+                &*ds,
+                CanonHash::Sha384,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads()
         );
         // And so do the screening surfaces.
         assert_eq!(blank_count(&ds), blank_count_view(&*ds));
@@ -4210,19 +4733,31 @@ mod tests {
     fn graph_scoped_canonicalization_matches_the_named_graph_projection() {
         let ds = seam_dataset();
         let graph = "http://example.org/g";
-        let projected =
-            try_canonicalize(&ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap())
-                .unwrap()
-                .nquads;
+        let projected_owner = try_canonicalize(
+            &ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap(),
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
+        let projected = projected_owner.nquads();
         assert!(!projected.is_empty(), "the graph must hold content");
         assert_eq!(
-            try_canonicalize_graph_view(&*ds, graph, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
+            try_canonicalize_graph_view(
+                &*ds,
+                graph,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             projected
         );
         assert_eq!(
-            try_graph_digest_view(&*ds, graph).unwrap(),
+            try_graph_digest_view(
+                &*ds,
+                graph,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap(),
             ContentDigest::of(projected.as_bytes())
         );
         // The default graph's reifier over the same triple term belongs to the
@@ -4237,16 +4772,22 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &ds.project_graph(Some(&crate::RdfTerm::iri(absent)))
-                    .unwrap()
+                    .unwrap(),
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ""
         );
         assert_eq!(
-            try_canonicalize_graph_view(&*ds, absent, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
+            try_canonicalize_graph_view(
+                &*ds,
+                absent,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             ""
         );
     }
@@ -4265,24 +4806,38 @@ mod tests {
         b.push_quad(o, p, o, Some(clean)).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
-            try_canonicalize_graph_view(&*ds, "http://example.org/dirty", CanonHash::Sha256),
+            try_canonicalize_graph_view(
+                &*ds,
+                "http://example.org/dirty",
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(CanonError::ReservedVocabulary(_))
         ));
-        let neighbour =
-            try_canonicalize_graph_view(&*ds, "http://example.org/clean", CanonHash::Sha256)
-                .expect("a clean graph must still canonicalize");
+        let neighbour = try_canonicalize_graph_view(
+            &*ds,
+            "http://example.org/clean",
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("a clean graph must still canonicalize");
         assert_eq!(
-            neighbour.nquads,
+            neighbour.nquads(),
             try_canonicalize(
                 &ds.project_graph(Some(&crate::RdfTerm::iri("http://example.org/clean")))
-                    .unwrap()
+                    .unwrap(),
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         // The whole dataset IS refused, because the offending row is in it.
         assert!(matches!(
-            try_canonicalize_view(&*ds, CanonHash::Sha256),
+            try_canonicalize_view(
+                &*ds,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(CanonError::ReservedVocabulary(_))
         ));
     }
@@ -4296,7 +4851,10 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
-                canonical_relabel(&ds),
+                canonical_relabel(
+                    &ds,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                ),
                 Err(CanonError::ReservedVocabulary(_))
             ),
             "the relabel recourse must refuse exactly what canonicalization refuses"
@@ -4342,15 +4900,19 @@ mod tests {
     #[test]
     fn the_overlay_presentation_is_byte_identical_to_its_pre_axis_output() {
         let ds = presentation_fixture();
-        let canonicalized = try_canonicalize(&ds).unwrap();
+        let canonicalized = try_canonicalize(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap();
         assert_eq!(
-            canonicalized.nquads,
+            canonicalized.nquads(),
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
              _:c14n0 <http://example.org/confidence> \"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal> <urn:purrdf:rdfc:annotation> .\n\
              _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
         );
         assert_eq!(
-            canonicalized.presentation,
+            canonicalized.presentation(),
             CanonPresentation::Overlay,
             "an overlay-producing entry point must report the Overlay presentation on its result"
         );
@@ -4364,27 +4926,29 @@ mod tests {
     #[test]
     fn the_flat_presentation_lowers_the_statement_layer_to_ordinary_quads() {
         let ds = presentation_fixture();
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat = CanonState::new(
             &ds,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
+            &run,
         )
         .run_fallible()
         .unwrap();
         assert_eq!(
-            flat.nquads,
+            flat.nquads(),
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
              _:c14n0 <http://example.org/confidence> \"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal> .\n\
              _:c14n0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
         );
         assert!(
-            !flat.nquads.contains(RESERVED_NAMESPACE),
+            !flat.nquads().contains(RESERVED_NAMESPACE),
             "no reserved-namespace IRI may appear in the flat presentation's output: {}",
-            flat.nquads
+            flat.nquads()
         );
         assert_eq!(
-            flat.presentation,
+            flat.presentation(),
             CanonPresentation::FlatAssertion,
             "a flat-producing entry point must report the FlatAssertion presentation on its result"
         );
@@ -4458,24 +5022,29 @@ mod tests {
             "a row spelled twice must contribute exactly the components a row spelled \
              once contributes — no duplicate may reach the incident map"
         );
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat_once = CanonState::new(
             &once,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
+            &run,
         )
         .run_fallible()
         .unwrap();
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat_twice = CanonState::new(
             &twice,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
+            &run,
         )
         .run_fallible()
         .unwrap();
         assert_eq!(
-            flat_twice.nquads, flat_once.nquads,
+            flat_twice.nquads(),
+            flat_once.nquads(),
             "spelling one default-graph row twice must not change the flat canonical form"
         );
 
@@ -4512,24 +5081,29 @@ mod tests {
             component_count(&once_g),
             "the same dedup law must hold when the doubly-spelled row is in a named graph"
         );
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat_once_g = CanonState::new(
             &once_g,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
+            &run,
         )
         .run_fallible()
         .unwrap();
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat_twice_g = CanonState::new(
             &twice_g,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
+            &run,
         )
         .run_fallible()
         .unwrap();
         assert_eq!(
-            flat_twice_g.nquads, flat_once_g.nquads,
+            flat_twice_g.nquads(),
+            flat_once_g.nquads(),
             "spelling one named-graph row twice must not change the flat canonical form"
         );
     }
@@ -4543,10 +5117,13 @@ mod tests {
 
     /// The flat canonical bytes of `ds`, panicking on refusal (test convenience,
     /// mirroring [`canon`] for the flat presentation).
-    fn flat_canon(ds: &RdfDataset) -> String {
-        try_canonicalize_flat_view(ds, CanonHash::Sha256)
-            .expect("admissible")
-            .nquads
+    fn flat_canon(ds: &RdfDataset) -> Canonicalized {
+        try_canonicalize_flat_view(
+            ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible")
     }
 
     /// The flat counterpart of
@@ -4570,7 +5147,8 @@ mod tests {
         let triple = b.intern_triple(s, pred, o).unwrap();
         b.push_reifier(r, triple).unwrap();
         let genuine = b.freeze().expect("valid");
-        let lowered = flat_canon(&genuine);
+        let lowered_owner = flat_canon(&genuine);
+        let lowered = lowered_owner.nquads();
         assert!(
             lowered.contains(RDF_REIFIES),
             "the fixture must actually exercise the real-predicate lowering: {lowered}"
@@ -4595,7 +5173,8 @@ mod tests {
             "B must carry no statement layer of its own — the quad IS the input"
         );
 
-        let folded = flat_canon(&spelled);
+        let folded_owner = flat_canon(&spelled);
+        let folded = folded_owner.nquads();
         assert_eq!(
             folded, lowered,
             "the sentinel-spelled row and the native reifier it denotes must produce \
@@ -4622,7 +5201,7 @@ mod tests {
         b.push_quad(r, sentinel, triple, None).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
-            flat_canon(&both),
+            flat_canon(&both).nquads(),
             lowered,
             "spelling one row twice (native + sentinel-spelled) must not change the \
              flat canonical form"
@@ -4642,7 +5221,8 @@ mod tests {
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
         b.push_annotation(r, pred, o).unwrap();
         let genuine = b.freeze().expect("valid");
-        let lowered = flat_canon(&genuine);
+        let lowered_owner = flat_canon(&genuine);
+        let lowered = lowered_owner.nquads();
         assert_eq!(
             lowered, "<http://example.org/r> <http://example.org/p> <http://example.org/o> .\n",
             "the fixture must actually exercise the annotation lowering"
@@ -4663,7 +5243,8 @@ mod tests {
             "B must carry no statement layer of its own — the quad IS the input"
         );
 
-        let folded = flat_canon(&spelled);
+        let folded_owner = flat_canon(&spelled);
+        let folded = folded_owner.nquads();
         assert_eq!(
             folded, lowered,
             "the sentinel-spelled row and the native annotation it denotes must \
@@ -4680,7 +5261,7 @@ mod tests {
         b.push_quad(r, pred, o, Some(sentinel)).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
-            flat_canon(&both),
+            flat_canon(&both).nquads(),
             lowered,
             "spelling one annotation row twice must not change the flat canonical form"
         );
@@ -4710,11 +5291,13 @@ mod tests {
         let real_reifies = b.intern_iri(RDF_REIFIES).unwrap();
         let ds = b.freeze().expect("valid");
 
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let state = CanonState::new(
             &*ds,
             CanonScope::Dataset,
             CanonPresentation::FlatAssertion,
             CanonHash::Sha256,
+            &run,
         );
         let render = BlankRender::Canonical {
             issuer: &state.canonical,
@@ -4731,6 +5314,7 @@ mod tests {
                 },
                 render,
                 &mut via_id,
+                &mut Memory::new(&mut purrdf_lex::allocation::Resident),
             )
             .unwrap();
 
@@ -4744,6 +5328,7 @@ mod tests {
                 },
                 render,
                 &mut via_literal,
+                &mut Memory::new(&mut purrdf_lex::allocation::Resident),
             )
             .unwrap();
 
@@ -4780,7 +5365,8 @@ mod tests {
             "no native row in this fixture"
         );
 
-        let bytes = flat_canon(&ds);
+        let bytes_owner = flat_canon(&ds);
+        let bytes = bytes_owner.nquads();
         let line_count = bytes.lines().filter(|l| !l.is_empty()).count();
         assert_eq!(
             line_count, 1,
@@ -4803,7 +5389,8 @@ mod tests {
             "no native row in this fixture"
         );
 
-        let bytes = flat_canon(&ds);
+        let bytes_owner = flat_canon(&ds);
+        let bytes = bytes_owner.nquads();
         let line_count = bytes.lines().filter(|l| !l.is_empty()).count();
         assert_eq!(
             line_count, 1,
@@ -4835,20 +5422,25 @@ mod tests {
         b.push_quad(r, real, triple, Some(g)).unwrap();
         let ds = b.freeze().expect("valid");
 
-        let scoped =
-            try_canonicalize_flat_graph_view(&*ds, "http://example.org/g", CanonHash::Sha256)
-                .expect("admissible");
-        let line_count = scoped.nquads.lines().filter(|l| !l.is_empty()).count();
+        let scoped = try_canonicalize_flat_graph_view(
+            &*ds,
+            "http://example.org/g",
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible");
+        let line_count = scoped.nquads().lines().filter(|l| !l.is_empty()).count();
         assert_eq!(
-            line_count, 1,
+            line_count,
+            1,
             "the same dedup law must hold when both spellings live in a named graph: {}",
-            scoped.nquads
+            scoped.nquads()
         );
-        assert!(scoped.nquads.contains(RDF_REIFIES));
-        assert!(!scoped.nquads.contains(RESERVED_NAMESPACE));
+        assert!(scoped.nquads().contains(RDF_REIFIES));
+        assert!(!scoped.nquads().contains(RESERVED_NAMESPACE));
         // Graph-erasing emission: the per-graph document carries no graph token.
         assert_eq!(
-            scoped.nquads,
+            scoped.nquads(),
             format!(
                 "<http://example.org/r> <{RDF_REIFIES}> <<( <http://example.org/s> \
                  <http://example.org/p> <http://example.org/o> )>> .\n"
@@ -4893,8 +5485,8 @@ mod tests {
         let solo = solo.freeze().expect("valid");
 
         assert_eq!(
-            flat_canon(&all_three),
-            flat_canon(&solo),
+            flat_canon(&all_three).nquads(),
+            flat_canon(&solo).nquads(),
             "native + sentinel-spelled + real-predicate must still yield exactly one row"
         );
 
@@ -4943,8 +5535,8 @@ mod tests {
         let solo_ann = solo_ann.freeze().expect("valid");
 
         assert_eq!(
-            flat_canon(&all_three_ann),
-            flat_canon(&solo_ann),
+            flat_canon(&all_three_ann).nquads(),
+            flat_canon(&solo_ann).nquads(),
             "annotation: native + sentinel-spelled + real-quad must still yield \
              exactly one row"
         );
@@ -4964,11 +5556,18 @@ mod tests {
         b.push_quad(r, reifies, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
-            try_canonicalize(&ds),
+            try_canonicalize(
+                &ds,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(CanonError::ReservedVocabulary(_))
         ));
         assert!(matches!(
-            try_canonicalize_flat_view(&*ds, CanonHash::Sha256),
+            try_canonicalize_flat_view(
+                &*ds,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            ),
             Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(_)))
         ));
 
@@ -4985,10 +5584,14 @@ mod tests {
         let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
         b.push_quad(r, reifies, triple, None).unwrap();
         let ds = b.freeze().expect("valid");
-        let flat = try_canonicalize_flat_view(&*ds, CanonHash::Sha256)
-            .expect("the exact folded shape must be admitted under flat, too");
-        assert!(flat.nquads.contains(RDF_REIFIES));
-        assert!(!flat.nquads.contains(RESERVED_NAMESPACE));
+        let flat = try_canonicalize_flat_view(
+            &*ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("the exact folded shape must be admitted under flat, too");
+        assert!(flat.nquads().contains(RDF_REIFIES));
+        assert!(!flat.nquads().contains(RESERVED_NAMESPACE));
     }
 
     // -----------------------------------------------------------------------
@@ -5011,7 +5614,11 @@ mod tests {
         b.push_quad(r, bad, o, None).unwrap();
         let ds = b.freeze().expect("valid");
 
-        match try_canonicalize_flat_view(&*ds, CanonHash::Sha256) {
+        match try_canonicalize_flat_view(
+            &*ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
                 assert_eq!(err.iri(), SENTINEL_REIFIES);
             }
@@ -5033,12 +5640,16 @@ mod tests {
         b.push_quad(s, p, o, Some(neighbour_graph)).unwrap();
         let ds = b.freeze().expect("valid");
 
-        let admitted = try_canonicalize_flat_view(&*ds, CanonHash::Sha256)
-            .expect("an IRI outside the reserved namespace must be admitted");
+        let admitted = try_canonicalize_flat_view(
+            &*ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("an IRI outside the reserved namespace must be admitted");
         assert!(
-            admitted.nquads.contains("<urn:purrdf:other:annotation>"),
+            admitted.nquads().contains("<urn:purrdf:other:annotation>"),
             "the neighbouring graph name must appear in the output: {}",
-            admitted.nquads
+            admitted.nquads()
         );
         assert!(check_admissible_flat_view(&*ds).is_ok());
     }
@@ -5048,7 +5659,7 @@ mod tests {
     /// linked by the same predicate — a complete symmetric digraph. `n = 10` is the
     /// documented minimal shape (see `crates/rdf/tests/gts_certify.rs`'s
     /// `poison_symmetric_source`, and `crates/rdf/tests/rdfc_w3c.rs`'s heavy-offgate
-    /// `test074`) that exceeds [`RDFC_CALL_LIMIT`] (a single ambiguous hash group of
+    /// `test074`) that exceeds [`RDFC_V2_CORPUS_POLICY`] (a single ambiguous hash group of
     /// 10 mutually-symmetric blanks contributes up to `10! = 3,628,800` permutations
     /// to one `hash_n_degree` call) while its blank COUNT stays nowhere near any
     /// count-based pre-reject a caller might apply upstream of this module.
@@ -5075,7 +5686,7 @@ mod tests {
     /// while remaining internally ambiguous — RDFC-1.0's simplest automorphism
     /// shape (see [`symmetric_ring_resolves_deterministically`]). Each pair's
     /// n-degree resolution is O(1), so the total search stays far under
-    /// [`RDFC_CALL_LIMIT`] regardless of `pairs`: a graph that merely LOOKS
+    /// [`RDFC_V2_CORPUS_POLICY`] regardless of `pairs`: a graph that merely LOOKS
     /// expensive (many blanks) must not be refused for the reason the genuinely
     /// poisoned shape above is — the over-refusal mirror of the poison case.
     fn large_non_symmetric_dataset(pairs: u32) -> Arc<RdfDataset> {
@@ -5104,7 +5715,11 @@ mod tests {
     #[test]
     fn try_canonicalize_flat_view_refuses_budget_exhaustion_and_a_large_neighbour_stays_green() {
         let poison = poison_symmetric_dataset(10);
-        match try_canonicalize_flat_view(&*poison, CanonHash::Sha256) {
+        match try_canonicalize_flat_view(
+            &*poison,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(ViewCanonError::Refused(CanonError::BudgetExceeded(err))) => {
                 assert_eq!(err.blank_count, 10);
             }
@@ -5112,11 +5727,15 @@ mod tests {
         }
 
         let large = large_non_symmetric_dataset(200);
-        let admitted = try_canonicalize_flat_view(&*large, CanonHash::Sha256)
-            .expect("a large non-symmetric graph must not be refused for budget reasons");
-        assert_ne!(admitted.nquads, "");
+        let admitted = try_canonicalize_flat_view(
+            &*large,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("a large non-symmetric graph must not be refused for budget reasons");
+        assert_ne!(admitted.nquads(), "");
         assert_eq!(
-            admitted.labels.len(),
+            admitted.label_count(),
             400,
             "every pair's two blanks get a label"
         );
@@ -5131,11 +5750,19 @@ mod tests {
         let arc_ds = presentation_fixture();
         let owned_ds = Arc::try_unwrap(presentation_fixture())
             .expect("a freshly built, singly-owned dataset must unwrap");
-        let via_arc =
-            try_canonicalize_flat_view(&arc_ds, CanonHash::Sha256).expect("admissible fixture");
-        let via_owned =
-            try_canonicalize_flat_view(&owned_ds, CanonHash::Sha256).expect("admissible fixture");
-        assert_eq!(via_arc.nquads, via_owned.nquads);
+        let via_arc = try_canonicalize_flat_view(
+            &arc_ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible fixture");
+        let via_owned = try_canonicalize_flat_view(
+            &owned_ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible fixture");
+        assert_eq!(via_arc.nquads(), via_owned.nquads());
     }
 
     /// A two-graph fixture: graph `gA` carries a reifier, an annotation on it, and
@@ -5176,15 +5803,24 @@ mod tests {
         let ds = two_graph_flat_fixture();
         let graph = "http://example.org/gA";
         let projected = ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap();
-        let via_projection =
-            try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
-        let via_graph_scope =
-            try_canonicalize_flat_graph_view(&*ds, graph, CanonHash::Sha256).expect("admissible");
-        assert_eq!(via_graph_scope.nquads, via_projection.nquads);
+        let via_projection = try_canonicalize_flat_view(
+            &projected,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible");
+        let via_graph_scope = try_canonicalize_flat_graph_view(
+            &*ds,
+            graph,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible");
+        assert_eq!(via_graph_scope.nquads(), via_projection.nquads());
         assert!(
-            !via_graph_scope.nquads.contains("<http://example.org/bs>"),
+            !via_graph_scope.nquads().contains("<http://example.org/bs>"),
             "graph B's content must not leak into graph A's scope: {}",
-            via_graph_scope.nquads
+            via_graph_scope.nquads()
         );
     }
 
@@ -5195,19 +5831,38 @@ mod tests {
     #[test]
     fn try_flat_digest_view_hashes_the_flat_canonical_document() {
         let ds = presentation_fixture();
-        let flat = try_canonicalize_flat_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
-        let digest = try_flat_digest_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
-        assert_eq!(digest, ContentDigest::of(flat.nquads.as_bytes()));
+        let flat = try_canonicalize_flat_view(
+            &*ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible fixture");
+        let digest = try_flat_digest_view(
+            &*ds,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible fixture");
+        assert_eq!(digest, ContentDigest::of(flat.nquads().as_bytes()));
 
         // SHA-384 travels the same seam — and selects ONLY the label-issuance
         // algorithm: the digest over the resulting document is still the
         // unconditional SHA-256 `ContentDigest`, so a Sha384-labelled run's
         // digest length and value are those of `ContentDigest::of`, never a
         // SHA-384 of anything.
-        let flat384 =
-            try_canonicalize_flat_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
-        let digest384 = try_flat_digest_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
-        assert_eq!(digest384, ContentDigest::of(flat384.nquads.as_bytes()));
+        let flat384 = try_canonicalize_flat_view(
+            &*ds,
+            CanonHash::Sha384,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible fixture");
+        let digest384 = try_flat_digest_view(
+            &*ds,
+            CanonHash::Sha384,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("admissible fixture");
+        assert_eq!(digest384, ContentDigest::of(flat384.nquads().as_bytes()));
     }
 
     // -----------------------------------------------------------------------
@@ -5407,7 +6062,12 @@ mod tests {
         let mut view = FlatProbeView::faults_on_first_read(presentation_fixture());
         view.unlatched_resolution = true;
         assert!(
-            try_canonicalize_view(&view, CanonHash::Sha256).is_err(),
+            try_canonicalize_view(
+                &view,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .is_err(),
             "a failed source must never publish a canonical result"
         );
     }
@@ -5417,7 +6077,11 @@ mod tests {
     #[test]
     fn try_canonicalize_flat_view_refuses_a_view_already_failed_before_the_drain() {
         let view = FlatProbeView::already_failed(presentation_fixture());
-        match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+        match try_canonicalize_flat_view(
+            &view,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(ViewCanonError::NotReady {
                 checkpoint,
                 error,
@@ -5437,7 +6101,11 @@ mod tests {
     #[test]
     fn try_canonicalize_flat_view_refuses_a_view_that_faults_mid_run_and_publishes_nothing() {
         let view = FlatProbeView::faults_on_first_read(presentation_fixture());
-        match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+        match try_canonicalize_flat_view(
+            &view,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        ) {
             Err(ViewCanonError::NotReady {
                 checkpoint,
                 error,
@@ -5486,13 +6154,174 @@ mod tests {
         }
     }
 
+    #[test]
+    fn caller_policy_reports_exact_search_boundaries_and_independent_runs() {
+        let dataset = poison_symmetric_dataset(3);
+        let mut unlimited = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+        let expected = try_canonicalize(&dataset, &mut unlimited).unwrap();
+        let work = unlimited.receipts()[0].work;
+        assert!(work.count(SearchEvent::RdfcFrame) > 0);
+        assert!(work.count(SearchEvent::RdfcPermutation) > 0);
+        for limit in [0, work.total() - 1, work.total()] {
+            let mut control = CanonicalizationControl::new(SearchPolicy::Finite(limit), None);
+            // The same finite policy is fresh on each invocation, not an aggregate.
+            for _ in 0..2 {
+                let result = try_canonicalize(&dataset, &mut control);
+                let receipt = control.receipts().last().unwrap();
+                assert_eq!(receipt.policy, SearchPolicy::Finite(limit));
+                if limit == work.total() {
+                    assert_eq!(result.unwrap().nquads(), expected.nquads());
+                    assert_eq!(receipt.work, work);
+                    assert!(receipt.completed);
+                    assert_eq!(receipt.phase, CanonPhase::Output);
+                } else {
+                    assert!(
+                        matches!(result, Err(CanonError::BudgetExceeded(error)) if error.limit == limit && error.work.total() == limit)
+                    );
+                    assert!(!receipt.completed);
+                    assert_eq!(receipt.observed_refusal, Some(SearchRefusal::Limit));
+                }
+            }
+            assert_eq!(control.receipts().len(), 2);
+        }
+    }
+
+    #[test]
+    fn unlimited_search_stops_with_actual_charged_work() {
+        let dataset = poison_symmetric_dataset(7);
+        let signal = CanonStopAfter::new(10_000);
+        let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&signal));
+        assert!(matches!(
+            try_canonicalize(&dataset, &mut control),
+            Err(CanonError::Stopped)
+        ));
+        let receipt = &control.receipts()[0];
+        assert!(!receipt.completed);
+        assert_eq!(receipt.phase, CanonPhase::Search);
+        assert_eq!(receipt.observed_refusal, Some(SearchRefusal::Stopped));
+        assert!(receipt.work.count(SearchEvent::RdfcPermutation) > 0);
+    }
+
+    #[test]
+    fn canonical_digest_stop_and_empty_shortcuts_keep_truthful_output_receipts() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let dataset = statement_layer_fixture(Spelling::Native);
+        let quiet = CanonStopAfter::new(usize::MAX);
+        let mut complete = CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&quiet));
+        let digest =
+            try_canonical_blake3_view(&*dataset, CanonHash::Sha256, &mut complete).unwrap();
+        let polls = usize::MAX - quiet.0.load(Relaxed);
+        let stop = CanonStopAfter::new(polls - 2);
+        let mut stopped = CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&stop));
+        assert!(matches!(
+            try_canonical_blake3_view(&*dataset, CanonHash::Sha256, &mut stopped),
+            Err(CanonError::Stopped)
+        ));
+        assert_eq!(stopped.receipts()[0].phase, CanonPhase::Output);
+        assert!(!stopped.receipts()[0].completed);
+        assert_eq!(stopped.receipts()[0].work, complete.receipts()[0].work);
+        assert_eq!(
+            stopped.receipts()[0].observed_refusal,
+            Some(SearchRefusal::Stopped)
+        );
+        assert!(matches!(
+            complete.receipts()[0].configuration,
+            SearchConfiguration::Rdfc {
+                output: CanonOutput::Blake3Digest,
+                profile_version: 3,
+                ..
+            }
+        ));
+        let document = try_canonicalize(
+            &dataset,
+            &mut CanonicalizationControl::new(SearchPolicy::Unlimited, None),
+        )
+        .unwrap();
+        assert_eq!(
+            digest,
+            *purrdf_hash::blake3::hash(document.nquads().as_bytes()).as_bytes()
+        );
+        let quiet = CanonStopAfter::new(usize::MAX);
+        let mut dual_control = CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&quiet));
+        let (dual_document, sha256) =
+            try_canonicalize_sha256_view(&*dataset, CanonHash::Sha256, &mut dual_control).unwrap();
+        assert_eq!(dual_document.nquads(), document.nquads());
+        assert!(dual_document.labels().eq(document.labels()));
+        assert_eq!(sha256, ContentDigest::of(document.nquads().as_bytes()));
+        assert_eq!(dual_control.receipts().len(), 1);
+        assert!(matches!(
+            dual_control.receipts()[0].configuration,
+            SearchConfiguration::Rdfc {
+                output: CanonOutput::DocumentSha256Digest,
+                ..
+            }
+        ));
+        let stop = CanonStopAfter::new(usize::MAX - quiet.0.load(Relaxed) - 2);
+        let mut stopped = CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&stop));
+        assert!(matches!(
+            try_canonicalize_sha256_view(&*dataset, CanonHash::Sha256, &mut stopped),
+            Err(CanonError::Stopped)
+        ));
+        assert_eq!(stopped.receipts()[0].phase, CanonPhase::Output);
+        assert!(!stopped.receipts()[0].completed);
+        let mut zero = CanonicalizationControl::new(SearchPolicy::Finite(0), None);
+        let empty = try_canonicalize_graph_view(
+            &*dataset,
+            "http://example.org/absent",
+            CanonHash::Sha384,
+            &mut zero,
+        )
+        .unwrap();
+        assert_eq!(empty.nquads(), "");
+        assert_eq!(zero.receipts()[0].phase, CanonPhase::Output);
+        assert_eq!(zero.receipts()[0].work.total(), 0);
+        let no_rows = RdfDatasetBuilder::new().freeze().unwrap();
+        assert!(!crate::datasets_isomorphic(&*dataset, &*no_rows, &mut zero).unwrap());
+        assert_eq!(
+            zero.receipts()[1].configuration,
+            SearchConfiguration::ComparisonPreparation
+        );
+        assert_eq!(zero.receipts()[1].phase, CanonPhase::Preparation);
+        assert_eq!(zero.receipts()[1].work.total(), 0);
+
+        // A comparison must observe cancellation during its count/blank scans,
+        // before it can publish either an unequal shortcut or canonical equality.
+        for after_checks in [0, 2] {
+            for diff in [false, true] {
+                let signal = CanonStopAfter::new(after_checks);
+                let mut control =
+                    CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&signal));
+                let result = if diff {
+                    crate::dataset_diff(&*dataset, &*dataset, &mut control)
+                        .map(|diff| diff.isomorphic)
+                } else {
+                    crate::datasets_isomorphic(&*dataset, &*dataset, &mut control)
+                };
+                assert!(matches!(result, Err(CanonError::Stopped)));
+                assert_eq!(control.receipts().len(), 1);
+                let receipt = &control.receipts()[0];
+                assert_eq!(
+                    receipt.configuration,
+                    SearchConfiguration::ComparisonPreparation
+                );
+                assert_eq!(receipt.phase, CanonPhase::Preparation);
+                assert_eq!(receipt.work.total(), 0);
+                assert_eq!(receipt.observed_refusal, Some(SearchRefusal::Stopped));
+                assert!(!receipt.completed);
+            }
+        }
+    }
+
     /// A stop is operational refusal even for an empty or malformed source.
     #[test]
     fn controlled_canonicalization_stops_before_source_admission() {
         let empty = RdfDatasetBuilder::new().freeze().unwrap();
-        let error =
-            try_canonicalize_view_with_stop(&*empty, CanonHash::Sha256, &CanonStopAfter::new(0))
-                .unwrap_err();
+        let error = try_canonicalize_view(
+            &*empty,
+            CanonHash::Sha256,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&CanonStopAfter::new(0))),
+        )
+        .unwrap_err();
         assert!(matches!(error, CanonError::Stopped));
         let capture = purrdf_testkit::error_capture::Capture::read(&error);
         assert_eq!(capture.code, "canonical-stopped");
@@ -5507,18 +6336,24 @@ mod tests {
         builder.push_quad(bad, p, p, None).unwrap();
         let malformed = builder.freeze().unwrap();
         assert!(matches!(
-            try_canonicalize_view_with_stop(
+            try_canonicalize_view(
                 &*malformed,
                 CanonHash::Sha256,
-                &CanonStopAfter::new(0)
+                &mut CanonicalizationControl::new(
+                    RDFC_V2_CORPUS_POLICY,
+                    Some(&CanonStopAfter::new(0))
+                )
             ),
             Err(CanonError::Stopped)
         ));
         assert!(matches!(
-            try_canonicalize_view_with_stop(
+            try_canonicalize_view(
                 &*malformed,
                 CanonHash::Sha256,
-                &CanonStopAfter::new(usize::MAX)
+                &mut CanonicalizationControl::new(
+                    RDFC_V2_CORPUS_POLICY,
+                    Some(&CanonStopAfter::new(usize::MAX))
+                )
             ),
             Err(CanonError::ReservedVocabulary(_))
         ));
@@ -5530,16 +6365,24 @@ mod tests {
         for spelling in [Spelling::Native, Spelling::Lowered] {
             let dataset = statement_layer_fixture(spelling);
             for hash in [CanonHash::Sha256, CanonHash::Sha384] {
-                let expected = try_canonicalize_view(&*dataset, hash).unwrap();
-                let actual = try_canonicalize_view_with_stop(
+                let expected = try_canonicalize_view(
                     &*dataset,
                     hash,
-                    &CanonStopAfter::new(usize::MAX),
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
                 )
                 .unwrap();
-                assert_eq!(actual.nquads, expected.nquads);
-                assert_eq!(actual.labels, expected.labels);
-                assert_eq!(actual.presentation, expected.presentation);
+                let actual = try_canonicalize_view(
+                    &*dataset,
+                    hash,
+                    &mut CanonicalizationControl::new(
+                        RDFC_V2_CORPUS_POLICY,
+                        Some(&CanonStopAfter::new(usize::MAX)),
+                    ),
+                )
+                .unwrap();
+                assert_eq!(actual.nquads(), expected.nquads());
+                assert!(actual.labels().eq(expected.labels()));
+                assert_eq!(actual.presentation(), expected.presentation());
             }
         }
     }
@@ -5549,13 +6392,14 @@ mod tests {
     fn controlled_canonicalization_unwinds_during_component_collection() {
         let dataset = poison_symmetric_dataset(6);
         let signal = CanonStopAfter::new(12);
+        let run = SearchRun::new(SearchPolicy::Unlimited, Some(&signal));
         let mut state = CanonState::new(
             &*dataset,
             CanonScope::Dataset,
             CanonPresentation::Overlay,
             CanonHash::Sha256,
-        )
-        .with_stop(&signal);
+            &run,
+        );
         assert!(matches!(
             state.collect_incidence(),
             Err(CanonError::Stopped)
@@ -5585,11 +6429,13 @@ mod tests {
                     .unwrap();
             }
             let dataset = builder.freeze().unwrap();
+            let run = SearchRun::new(SearchPolicy::Unlimited, None);
             let mut state = CanonState::new(
                 &*dataset,
                 CanonScope::Dataset,
                 CanonPresentation::Overlay,
                 CanonHash::Sha256,
+                &run,
             );
             state.collect_incidence().unwrap();
             for &blank in &state.blanks {
@@ -5602,7 +6448,7 @@ mod tests {
             assert_eq!(issuer.order(), blanks);
             // One entry per blank, plus one permutation at each endpoint
             // and two at each internal node: COUNT + 2 * (COUNT - 1).
-            assert_eq!(state.budget, RDFC_CALL_LIMIT - (3 * COUNT as u64 - 2));
+            assert_eq!(state.run.work().total(), 3 * COUNT as u64 - 2);
         })
         .unwrap();
     }
@@ -5611,19 +6457,21 @@ mod tests {
     #[test]
     fn controlled_canonicalization_unwinds_inside_permutation_search() {
         let dataset = poison_symmetric_dataset(7);
+        let signal = CanonStopAfter::new(usize::MAX);
+        let run = SearchRun::new(SearchPolicy::Unlimited, Some(&signal));
         let mut state = CanonState::new(
             &*dataset,
             CanonScope::Dataset,
             CanonPresentation::Overlay,
             CanonHash::Sha256,
+            &run,
         );
         state.collect_incidence().unwrap();
         for &blank in &state.blanks {
             let hash = state.hash_first_degree(blank).unwrap();
             state.first_degree.insert(blank, hash);
         }
-        let signal = CanonStopAfter::new(1000);
-        state.stop = Some(&signal);
+        signal.0.store(1000, std::sync::atomic::Ordering::Relaxed);
         let blank = state.blanks[0];
         let mut issuer = IdIssuer::new(TEMP_PREFIX);
         issuer.issue(blank);
@@ -5632,7 +6480,7 @@ mod tests {
             Err(CanonError::Stopped)
         ));
         assert!(
-            state.budget < RDFC_CALL_LIMIT - 1,
+            state.run.work().total() > 1,
             "the search reached permutation work"
         );
     }
@@ -5641,18 +6489,20 @@ mod tests {
     #[test]
     fn controlled_canonicalization_unwinds_during_rdf12_output() {
         let dataset = statement_layer_fixture(Spelling::Native);
-        let mut state = CanonState::new(
+        let signal = CanonStopAfter::new(usize::MAX);
+        let run = SearchRun::new(SearchPolicy::Unlimited, Some(&signal));
+        let state = CanonState::new(
             &*dataset,
             CanonScope::Dataset,
             CanonPresentation::Overlay,
             CanonHash::Sha256,
+            &run,
         )
         .issue_labels()
         .unwrap();
-        let signal = CanonStopAfter::new(8);
-        state.stop = Some(&signal);
+        signal.0.store(8, std::sync::atomic::Ordering::Relaxed);
         assert!(matches!(
-            state.serialize_canonical(),
+            state.canonical_lines(&mut Memory::new(&mut purrdf_lex::allocation::Resident)),
             Err(CanonError::Stopped)
         ));
     }
@@ -5673,7 +6523,11 @@ mod tests {
                 "pack-after-rows",
             ),
         ] {
-            let error = PackBuilder::build_view_bytes(&view).unwrap_err();
+            let error = PackBuilder::build_view_bytes(
+                &view,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap_err();
             drop(view);
             let captured = Capture::read(&error);
             assert_eq!(captured.code, "pack-view-not-ready");
@@ -5693,8 +6547,16 @@ mod tests {
             assert_eq!(native.0, "the flat probe view faulted");
         }
         assert_eq!(
-            PackBuilder::build_view_bytes(&*source).unwrap(),
-            PackBuilder::build_bytes(&source).unwrap()
+            PackBuilder::build_view_bytes(
+                &*source,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap(),
+            PackBuilder::build_bytes(
+                &source,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
         );
     }
 
@@ -5702,10 +6564,13 @@ mod tests {
     #[test]
     fn controlled_canonicalization_preserves_read_failures() {
         let view = FlatProbeView::faults_on_first_read(presentation_fixture());
-        let error = try_canonicalize_view_with_stop(
+        let error = try_canonicalize_view(
             &view,
             CanonHash::Sha256,
-            &CanonStopAfter::new(usize::MAX),
+            &mut CanonicalizationControl::new(
+                RDFC_V2_CORPUS_POLICY,
+                Some(&CanonStopAfter::new(usize::MAX)),
+            ),
         )
         .unwrap_err();
         let CanonError::Read(cause) = &error else {

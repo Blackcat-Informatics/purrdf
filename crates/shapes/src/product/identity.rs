@@ -1207,8 +1207,22 @@ mod tests {
     /// identity component 0, taken through the real section codec rather than
     /// fabricated.
     fn digest_of(shapes: &Shapes) -> PackDigest {
-        let bytes = encode_dataset(shapes.dataset()).expect("encode the dataset section");
-        certify_dataset(&bytes).expect("certify the dataset section")
+        let bytes = encode_dataset(
+            shapes.dataset(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("encode the dataset section");
+        certify_dataset(
+            &bytes,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("certify the dataset section")
     }
 
     /// The class catalog a preparation derives from `shapes` — identity component

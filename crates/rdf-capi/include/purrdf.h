@@ -333,8 +333,24 @@
  * `out_receipt` buffer slot after the seed input. Release it with
  * `purrdf_buffer_free`. Failed executions expose their receipt through
  * `purrdf_error_execution_receipt_json` on the original error handle.
+ *
+ * # `0.16.0` → `0.17.0`: explicit canonical-search policy and evidence
+ *
+ * Canonicalizing entailment, session, SHACL materialization and product exports
+ * require `canonical_search`, optional `cancellation`, and an independent
+ * `out_canonicalization_json` slot before `out_error`. The policy is `unlimited`
+ * or a canonical decimal `u64`. Every run reports its own effective policy and
+ * charged work. Errors retain original native causes and receipts until freed.
+ * All output slots must be distinct; rebuild affected callers against this header.
+ *
+ * # `0.17.0` → `0.18.0`: caller-selected logical UDF depth
+ *
+ * `PurrdfQueryGovernors` gains `max_udf_depth` before `deadline_millis`.
+ * MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
+ * the default depth limit of 32. The two flag bits conflict. Rebuild callers
+ * against the new structure layout and regenerate any copied declarations.
  */
-#define PURRDF_ABI_MINOR 16
+#define PURRDF_ABI_MINOR 18
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -434,6 +450,11 @@ enum PurrdfStatus
      * Logical capacity or physical storage refused; the diagnostic retains its cause.
      */
     PURRDF_STATUS_STORAGE_ERROR = 15,
+    /**
+     * Canonicalization was refused by its profile or explicit search control.
+     * The error retains exact native cause and per-run execution receipt JSON.
+     */
+    PURRDF_STATUS_CANONICALIZATION_ERROR = 16,
     /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
@@ -619,6 +640,14 @@ enum PurrdfGovernorFlag
      * Poll `cancellation`.
      */
     PURRDF_GOVERNOR_FLAG_CANCELLATION = (1 << 6),
+    /**
+     * Enforce the inclusive logical depth in `max_udf_depth`.
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_UDF_DEPTH = (1 << 7),
+    /**
+     * Remove the default logical user-function depth ceiling.
+     */
+    PURRDF_GOVERNOR_FLAG_UNLIMITED_UDF_DEPTH = (1 << 8),
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
@@ -1161,7 +1190,9 @@ typedef struct {
  * Set the corresponding [`PurrdfGovernorFlag`] bit in `enabled` for every field that is
  * meaningful. Zero is a valid inclusive ceiling. Unset numeric fields are ignored, and
  * every governed call still meters them at the native `METERED` ceiling so its evidence
- * is useful. `reserved` must be zero. `cancellation`, when enabled, must remain a live
+ * is useful. Logical UDF depth defaults to 32. Enable MaxUdfDepth for an inclusive
+ * finite depth or UnlimitedUdfDepth to remove it; enabling both is an error.
+ * `reserved` must be zero. `cancellation`, when enabled, must remain a live
  * handle until the synchronous call returns.
  */
 typedef struct {
@@ -1193,6 +1224,11 @@ typedef struct {
      * Inclusive remote-request ceiling.
      */
     uint64_t max_remote_requests;
+    /**
+     * Inclusive logical depth when MaxUdfDepth is enabled.
+     * MaxUdfDepth and UnlimitedUdfDepth are mutually exclusive.
+     */
+    uint64_t max_udf_depth;
     /**
      * Relative wall-clock budget in milliseconds.
      */
@@ -1546,6 +1582,9 @@ int32_t purrdf_entail_materialize_to_nquads(const char *document,
                                             const uint64_t *max_term_arena_bytes,
                                             PurrdfBuffer **out_nquads,
                                             PurrdfBuffer **out_report,
+                                            const char *canonical_search,
+                                            const PurrdfCancellation *cancellation,
+                                            PurrdfBuffer **out_canonicalization_json,
                                             PurrdfError **out_error);
 
 /**
@@ -1651,6 +1690,9 @@ int32_t purrdf_entail_consistency(const char *document,
                                   uint32_t work_cap,
                                   PurrdfBuffer **out_answer,
                                   PurrdfBuffer **out_certificate,
+                                  const char *canonical_search,
+                                  const PurrdfCancellation *cancellation,
+                                  PurrdfBuffer **out_canonicalization_json,
                                   PurrdfError **out_error);
 
 /**
@@ -1674,6 +1716,9 @@ int32_t purrdf_entail_classify(const char *document,
                                uint32_t work_cap,
                                PurrdfBuffer **out_answer,
                                PurrdfBuffer **out_certificate,
+                               const char *canonical_search,
+                               const PurrdfCancellation *cancellation,
+                               PurrdfBuffer **out_canonicalization_json,
                                PurrdfError **out_error);
 
 /**
@@ -1696,6 +1741,9 @@ int32_t purrdf_entail_realize(const char *document,
                               uint32_t work_cap,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
+                              const char *canonical_search,
+                              const PurrdfCancellation *cancellation,
+                              PurrdfBuffer **out_canonicalization_json,
                               PurrdfError **out_error);
 
 /**
@@ -1720,6 +1768,9 @@ int32_t purrdf_entail_instances(const char *document,
                                 uint32_t work_cap,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -1748,6 +1799,9 @@ int32_t purrdf_entail_entails(const char *document,
                               uint32_t work_cap,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
+                              const char *canonical_search,
+                              const PurrdfCancellation *cancellation,
+                              PurrdfBuffer **out_canonicalization_json,
                               PurrdfError **out_error);
 
 /**
@@ -1800,6 +1854,9 @@ int32_t purrdf_entail_extract_module(const char *document,
                                      const char *method,
                                      PurrdfBuffer **out_answer,
                                      PurrdfBuffer **out_certificate,
+                                     const char *canonical_search,
+                                     const PurrdfCancellation *cancellation,
+                                     PurrdfBuffer **out_canonicalization_json,
                                      PurrdfError **out_error);
 
 /**
@@ -1834,6 +1891,9 @@ int32_t purrdf_entail_justify(const char *document,
                               const char *axiom,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
+                              const char *canonical_search,
+                              const PurrdfCancellation *cancellation,
+                              PurrdfBuffer **out_canonicalization_json,
                               PurrdfError **out_error);
 
 /**
@@ -2119,6 +2179,9 @@ int32_t purrdf_entail_prove(const char *document,
                             PurrdfBuffer **out_answer,
                             PurrdfBuffer **out_certificate,
                             PurrdfBuffer **out_proof,
+                            const char *canonical_search,
+                            const PurrdfCancellation *cancellation,
+                            PurrdfBuffer **out_canonicalization_json,
                             PurrdfError **out_error);
 
 /**
@@ -2158,6 +2221,9 @@ int32_t purrdf_entail_check_proof(const char *document,
                                   const char *certificate,
                                   const char *proof,
                                   PurrdfBuffer **out_report,
+                                  const char *canonical_search,
+                                  const PurrdfCancellation *cancellation,
+                                  PurrdfBuffer **out_canonicalization_json,
                                   PurrdfError **out_error);
 
 /**
@@ -2208,6 +2274,9 @@ void purrdf_reasoner_free(PurrdfReasoner *reasoner);
 int32_t purrdf_reasoner_consistency(PurrdfReasoner *reasoner,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
+                                    const char *canonical_search,
+                                    const PurrdfCancellation *cancellation,
+                                    PurrdfBuffer **out_canonicalization_json,
                                     PurrdfError **out_error);
 
 /**
@@ -2223,6 +2292,9 @@ int32_t purrdf_reasoner_consistency(PurrdfReasoner *reasoner,
 int32_t purrdf_reasoner_classify(PurrdfReasoner *reasoner,
                                  PurrdfBuffer **out_answer,
                                  PurrdfBuffer **out_certificate,
+                                 const char *canonical_search,
+                                 const PurrdfCancellation *cancellation,
+                                 PurrdfBuffer **out_canonicalization_json,
                                  PurrdfError **out_error);
 
 /**
@@ -2238,6 +2310,9 @@ int32_t purrdf_reasoner_classify(PurrdfReasoner *reasoner,
 int32_t purrdf_reasoner_realize(PurrdfReasoner *reasoner,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -2255,6 +2330,9 @@ int32_t purrdf_reasoner_instances(PurrdfReasoner *reasoner,
                                   const char *class_,
                                   PurrdfBuffer **out_answer,
                                   PurrdfBuffer **out_certificate,
+                                  const char *canonical_search,
+                                  const PurrdfCancellation *cancellation,
+                                  PurrdfBuffer **out_canonicalization_json,
                                   PurrdfError **out_error);
 
 /**
@@ -2272,6 +2350,9 @@ int32_t purrdf_reasoner_entails(PurrdfReasoner *reasoner,
                                 const char *axiom,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -2289,6 +2370,9 @@ int32_t purrdf_reasoner_justify(PurrdfReasoner *reasoner,
                                 const char *axiom,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -2319,6 +2403,9 @@ int32_t purrdf_reasoner_extract_module(const PurrdfReasoner *reasoner,
                                        const char *method,
                                        PurrdfBuffer **out_answer,
                                        PurrdfBuffer **out_certificate,
+                                       const char *canonical_search,
+                                       const PurrdfCancellation *cancellation,
+                                       PurrdfBuffer **out_canonicalization_json,
                                        PurrdfError **out_error);
 
 /**
@@ -2344,6 +2431,23 @@ int32_t purrdf_reasoner_explain_conclusion(const PurrdfReasoner *reasoner,
  * `error` must be null or a live error handle; the returned text lives with it.
  */
 const char *purrdf_error_execution_receipt_json(const PurrdfError *error);
+
+/**
+ * Borrow this canonicalization request's receipt JSON, including `[]` if no run
+ * started. Null denotes an error from another kind of operation.
+ * # Safety
+ * `error` must be null or a live error handle. The text lives until that handle is freed.
+ */
+const char *purrdf_error_canonicalization_json(const PurrdfError *error);
+
+/**
+ * Borrow the original canonicalization cause's closed native fields as JSON.
+ * The original native cause and its admission grant remain owned until error_free.
+ * Null means this error has no native canonicalization cause.
+ * # Safety
+ * `error` must be null or a live error handle. The text lives until that handle is freed.
+ */
+const char *purrdf_error_native_cause_json(const PurrdfError *error);
 
 /**
  * Return the status code carried by an error, or `Panic` if `err` is null.
@@ -2456,7 +2560,8 @@ int32_t purrdf_geo_point_index_call(const PurrdfGeoPointIndex *index,
 void purrdf_geo_point_index_free(PurrdfGeoPointIndex *index);
 
 /**
- * Initialize `*out` as a metered governed call with no finite caller ceiling.
+ * Initialize `*out` as a metered governed call with the default UDF depth limit.
+ * Other resource dimensions have no finite caller ceiling.
  *
  * # Safety
  * `out` must be writable.
@@ -3948,6 +4053,9 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         PurrdfBuffer **out_receipt,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfBuffer **out_diagnostics,
+                                        const char *canonical_search,
+                                        const PurrdfCancellation *cancellation,
+                                        PurrdfBuffer **out_canonicalization_json,
                                         PurrdfError **out_error);
 
 /**
@@ -3984,6 +4092,9 @@ int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
                                                     PurrdfBuffer **out_receipt,
                                                     PurrdfBuffer **out_buffer,
                                                     PurrdfBuffer **out_diagnostics,
+                                                    const char *canonical_search,
+                                                    const PurrdfCancellation *cancellation,
+                                                    PurrdfBuffer **out_canonicalization_json,
                                                     PurrdfError **out_error);
 
 /**
@@ -4349,6 +4460,9 @@ int32_t purrdf_shapes_product_encode(const char *shapes_ttl,
                                      const char *const *import_documents,
                                      size_t import_count,
                                      PurrdfBuffer **out_buffer,
+                                     const char *canonical_search,
+                                     const PurrdfCancellation *cancellation,
+                                     PurrdfBuffer **out_canonicalization_json,
                                      PurrdfError **out_error);
 
 /**
@@ -4601,8 +4715,10 @@ int32_t purrdf_shapes_product_rebuild_expecting_xpath_regex(const uint8_t *produ
  * `purrdf_shapes_product_admit` already verifies every section digest and the whole
  * container.
  *
- * There is no out-buffer: the answer is the status. `PURRDF_STATUS_OK` means the product's
- * dataset canonicalizes to the digest it claims.
+ * The answer is the status: `PURRDF_STATUS_OK` means the product's dataset
+ * canonicalizes to the digest it claims. The separate required
+ * `out_canonicalization_json` buffer records the actual search and must be freed
+ * with `purrdf_buffer_free`.
  *
  * # Safety
  * `product` must be valid for reads of `product_len` bytes; `out_error` must be null
@@ -4610,6 +4726,9 @@ int32_t purrdf_shapes_product_rebuild_expecting_xpath_regex(const uint8_t *produ
  */
 int32_t purrdf_shapes_product_certify(const uint8_t *product,
                                       size_t product_len,
+                                      const char *canonical_search,
+                                      const PurrdfCancellation *cancellation,
+                                      PurrdfBuffer **out_canonicalization_json,
                                       PurrdfError **out_error);
 
 /**

@@ -15,7 +15,10 @@ use std::fmt;
 use purrdf_hash::{Domain, blake3, frame::frame_le, hex::Digest32};
 use purrdf_lex::walk::WorkList;
 
-use super::RDFC_CALL_LIMIT;
+use super::{
+    CanonPhase, CanonicalizationControl, SearchConfiguration, SearchEvent, SearchPolicy,
+    SearchRefusal, SearchRun, SearchWork,
+};
 use crate::dataset_view::{
     DrainFailure, FallibleDatasetView, TermGuard, WorkspaceReservation, checkpointed_drain,
 };
@@ -44,22 +47,35 @@ impl DatasetStateDigest {
     ///
     /// # Errors
     /// Returns typed source/admission failures, incoherent embedded identities,
-    /// unrepresentable workspace or fixed canonical-search exhaustion. No partial
-    /// state is certified. Search nodes, candidates and automorphism checks use
-    /// [`RDFC_CALL_LIMIT`]; each refinement has a checked input-derived round
-    /// bound. The existing RDFC algorithm and its identities do not change.
-    pub fn from_view<D: FallibleDatasetView>(view: &D) -> StateResult<D, Self> {
-        checkpointed_drain(view, |view| {
-            let mut reservation = view.reserve_workspace(0).map_err(DatasetStateError::Read)?;
-            let mut state = Captured::new(view, &mut reservation)?;
-            state.collect()?;
-            let bytes = state.canonical_bytes(RDFC_CALL_LIMIT)?;
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(STATE_DOMAIN.as_bytes());
-            hasher.update(&bytes);
-            Ok(Self(Digest32::new(*hasher.finalize().as_bytes())))
+    /// unrepresentable workspace, caller cancellation or exhaustion of the explicit
+    /// caller policy. No partial state is certified. Search nodes, candidates and
+    /// automorphism checks use the distinct dataset-state charging law recorded in
+    /// the supplied control; each refinement has a checked input-derived round
+    /// bound. The dataset-state content preimages and identities do not change.
+    pub fn from_view<D: FallibleDatasetView>(
+        view: &D,
+        control: &mut CanonicalizationControl<'_>,
+    ) -> StateResult<D, Self> {
+        control.run(SearchConfiguration::DatasetStateV1, |run| {
+            checkpointed_drain(view, |view| {
+                run.check_stop().map_err(DatasetStateError::SearchControl)?;
+                let mut reservation = view.reserve_workspace(0).map_err(DatasetStateError::Read)?;
+                let mut state = Captured::new(view, &mut reservation, run)?;
+                state.collect()?;
+                run.phase(CanonPhase::Search);
+                let bytes = state.canonical_bytes()?;
+                run.phase(CanonPhase::Output);
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(STATE_DOMAIN.as_bytes());
+                for chunk in bytes.chunks(64 * 1024) {
+                    run.check_stop().map_err(DatasetStateError::SearchControl)?;
+                    hasher.update(chunk);
+                }
+                run.check_stop().map_err(DatasetStateError::SearchControl)?;
+                Ok(Self(Digest32::new(*hasher.finalize().as_bytes())))
+            })
+            .map_err(DatasetStateError::Operation)?
         })
-        .map_err(DatasetStateError::Operation)?
     }
 
     /// The 32 identity bytes.
@@ -95,8 +111,17 @@ pub enum DatasetStateError<Error, Evidence> {
     InvalidTerm,
     /// The required byte or workspace size cannot be represented.
     Capacity,
-    /// Exact canonical search reached its fixed work limit.
-    SearchBudgetExceeded,
+    /// Exact canonical search reached the caller-selected finite event ceiling.
+    SearchBudgetExceeded {
+        /// The caller-selected finite ceiling.
+        limit: u64,
+        /// Actual charged events before the rejected event.
+        work: SearchWork,
+    },
+    /// Caller stop or exact counter representability refusal.
+    SearchControl(SearchRefusal),
+    /// Refinement violated its strictly increasing cell-count invariant.
+    RefinementInvariant,
 }
 
 impl<E: fmt::Display, V> fmt::Display for DatasetStateError<E, V> {
@@ -113,9 +138,17 @@ impl<E: fmt::Display, V> fmt::Display for DatasetStateError<E, V> {
             }
             Self::InvalidTerm => f.write_str("dataset-state literal datatype is not an IRI"),
             Self::Capacity => f.write_str("dataset-state workspace size is unrepresentable"),
-            Self::SearchBudgetExceeded => {
-                f.write_str("dataset-state exact canonical search exhausted its fixed work limit")
+            Self::SearchBudgetExceeded { limit, work } => write!(
+                f,
+                "dataset-state canonical search reached caller limit {limit} after {} charged events",
+                work.total()
+            ),
+            Self::SearchControl(refusal) => {
+                write!(f, "dataset-state search control refused: {refusal:?}")
             }
+            Self::RefinementInvariant => f.write_str(
+                "dataset-state refinement did not converge within its input-derived bound",
+            ),
         }
     }
 }
@@ -208,6 +241,7 @@ impl Labels<'_> {
 
 /// The arena is flat: folds, rendering, search and destruction do not recurse.
 struct Captured<'a, D: FallibleDatasetView, R> {
+    run: &'a SearchRun<'a>,
     view: &'a D,
     reservation: &'a mut R,
     retained: u64,
@@ -219,7 +253,7 @@ struct Captured<'a, D: FallibleDatasetView, R> {
 }
 
 impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Captured<'a, D, R> {
-    fn new(view: &'a D, reservation: &'a mut R) -> StateResult<D, Self> {
+    fn new(view: &'a D, reservation: &'a mut R, run: &'a SearchRun<'a>) -> StateResult<D, Self> {
         // A memoized term fold enters each id once. This also admits the shared
         // walk's pending frames/answers before a deep traversal allocates them.
         let retained = view
@@ -231,6 +265,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             .resize(retained)
             .map_err(DatasetStateError::Read)?;
         Ok(Self {
+            run,
             view,
             reservation,
             retained,
@@ -243,6 +278,9 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
     }
 
     fn admit(&mut self, bytes: u64) -> StateResult<D, ()> {
+        self.run
+            .check_stop()
+            .map_err(DatasetStateError::SearchControl)?;
         self.retained = self
             .retained
             .checked_add(bytes)
@@ -443,7 +481,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         let mut unique = BTreeMap::new();
         for &record in &self.records {
             unique
-                .entry(self.render(record, Labels::Ordinals(&identity)))
+                .entry(self.render(record, Labels::Ordinals(&identity))?)
                 .or_insert(record);
         }
         self.records = unique.into_values().collect();
@@ -471,9 +509,17 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         })
     }
 
-    fn render_term(&self, root: usize, labels: Labels<'_>, out: &mut Vec<u8>) {
+    fn render_term(
+        &self,
+        root: usize,
+        labels: Labels<'_>,
+        out: &mut Vec<u8>,
+    ) -> StateResult<D, ()> {
         let mut pending: WorkList<usize, 32> = WorkList::with(root);
         while let Some(index) = pending.pop() {
+            self.run
+                .check_stop()
+                .map_err(DatasetStateError::SearchControl)?;
             match &self.nodes[index].node {
                 Node::Iri(iri) => {
                     out.push(0);
@@ -518,47 +564,54 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
                 }
             }
         }
+        Ok(())
     }
 
-    fn render(&self, record: Record, labels: Labels<'_>) -> Vec<u8> {
+    fn render(&self, record: Record, labels: Labels<'_>) -> StateResult<D, Vec<u8>> {
         let mut out = Vec::new();
         match record {
             Record::Default => out.push(0),
             Record::Named(term) => {
                 out.push(1);
-                self.render_term(term, labels, &mut out);
+                self.render_term(term, labels, &mut out)?;
             }
             Record::Quad { role, terms, graph } => {
                 out.push(role);
                 for term in terms {
-                    self.render_term(term, labels, &mut out);
+                    self.render_term(term, labels, &mut out)?;
                 }
                 out.push(u8::from(graph.is_some()));
                 if let Some(graph) = graph {
-                    self.render_term(graph, labels, &mut out);
+                    self.render_term(graph, labels, &mut out)?;
                 }
             }
         }
-        out
+        self.run
+            .check_stop()
+            .map_err(DatasetStateError::SearchControl)?;
+        Ok(out)
     }
 
-    fn rendered_records(&self, labels: Labels<'_>) -> Vec<Vec<u8>> {
+    fn rendered_records(&self, labels: Labels<'_>) -> StateResult<D, Vec<Vec<u8>>> {
         let mut records: Vec<_> = self
             .records
             .iter()
             .map(|&record| self.render(record, labels))
-            .collect();
+            .collect::<StateResult<D, _>>()?;
         records.sort_unstable();
-        records
+        Ok(records)
     }
 
-    fn incidence(&self) -> Vec<Vec<usize>> {
+    fn incidence(&self) -> StateResult<D, Vec<Vec<usize>>> {
         let mut incidence = vec![Vec::new(); self.blank_count];
         for (index, &record) in self.records.iter().enumerate() {
             let mut found = BTreeSet::new();
             let mut pending: WorkList<usize, 32> = WorkList::default();
             pending.extend(record.terms());
             while let Some(term) = pending.pop() {
+                self.run
+                    .check_stop()
+                    .map_err(DatasetStateError::SearchControl)?;
                 match &self.nodes[term].node {
                     Node::Blank(blank) => {
                         found.insert(*blank);
@@ -577,7 +630,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
                 incidence[blank].push(index);
             }
         }
-        incidence
+        Ok(incidence)
     }
 
     fn color_buckets(colors: &[usize]) -> Vec<Vec<usize>> {
@@ -618,6 +671,9 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             .checked_add(1)
             .ok_or(DatasetStateError::Capacity)?;
         for _ in 0..rounds {
+            self.run
+                .check_stop()
+                .map_err(DatasetStateError::SearchControl)?;
             let buckets = Self::color_buckets(&colors);
             let cells = buckets.len();
             let mut next = vec![0; colors.len()];
@@ -638,7 +694,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
                                 },
                             )
                         })
-                        .collect();
+                        .collect::<StateResult<D, _>>()?;
                     records.sort_unstable();
                     let mut key = Vec::new();
                     key.extend_from_slice(&(color as u64).to_le_bytes());
@@ -660,15 +716,23 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             debug_assert!(count > cells && count <= colors.len());
             colors = next;
         }
-        Err(DatasetStateError::SearchBudgetExceeded)
+        Err(DatasetStateError::RefinementInvariant)
     }
 
-    fn tick(work: &mut u64, limit: u64) -> StateResult<D, ()> {
-        if *work == limit {
-            return Err(DatasetStateError::SearchBudgetExceeded);
-        }
-        *work += 1;
-        Ok(())
+    fn tick(&self, event: SearchEvent) -> StateResult<D, ()> {
+        self.run.charge(event).map_err(|refusal| {
+            if refusal == SearchRefusal::Limit {
+                let SearchPolicy::Finite(limit) = self.run.policy() else {
+                    unreachable!("only finite search policies can exhaust a logical limit")
+                };
+                DatasetStateError::SearchBudgetExceeded {
+                    limit,
+                    work: self.run.work(),
+                }
+            } else {
+                DatasetStateError::SearchControl(refusal)
+            }
+        })
     }
 
     fn automorphism(
@@ -677,7 +741,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         b: usize,
         incidence: &[Vec<usize>],
         identity: &mut [usize],
-    ) -> bool {
+    ) -> StateResult<D, bool> {
         let mut affected: Vec<_> = incidence[a].iter().chain(&incidence[b]).copied().collect();
         affected.sort_unstable();
         affected.dedup();
@@ -685,20 +749,20 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             let mut records: Vec<_> = affected
                 .iter()
                 .map(|&index| self.render(self.records[index], Labels::Ordinals(labels)))
-                .collect();
+                .collect::<StateResult<D, _>>()?;
             records.sort_unstable();
-            records
+            Ok(records)
         };
         // The fixed complement cancels from the full-state multiset comparison.
         // Incidence includes graph names, every role, nested terms and CDT blanks.
-        let original = records(identity);
+        let original = records(identity)?;
         identity.swap(a, b);
-        let same = records(identity) == original;
+        let compared = records(identity);
         identity.swap(a, b);
-        same
+        Ok(compared? == original)
     }
 
-    fn canonical_bytes(&mut self, limit: u64) -> StateResult<D, Vec<u8>> {
+    fn canonical_bytes(&mut self) -> StateResult<D, Vec<u8>> {
         let count = self.blank_count;
         let bound = self.record_bytes_bound()?;
         // Whole renderings and temporary record/term walks fit this aggregate
@@ -711,7 +775,7 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             .ok_or(DatasetStateError::Capacity)?;
         self.admit(scratch)?;
         usize::try_from(scratch).map_err(|_| DatasetStateError::Capacity)?;
-        let incidence = self.incidence();
+        let incidence = self.incidence()?;
         // Only incident records enter a blank's signature. Key growth and the
         // current temporary rendering are covered separately from the stored
         // record set; independent anchored records no longer get an n multiplier.
@@ -723,17 +787,16 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
         let mut identity: Vec<_> = (0..count).collect();
         let mut pending: WorkList<Vec<usize>, 8> = WorkList::with(vec![0; count]);
         let mut best: Option<Vec<u8>> = None;
-        let mut work = 0;
         let mut high_water = 1;
         while let Some(colors) = pending.pop() {
-            Self::tick(&mut work, limit)?;
+            self.tick(SearchEvent::StateNode)?;
             let colors = self.refine(colors, &incidence)?;
             let members = Self::color_buckets(&colors)
                 .into_iter()
                 .find(|cell| cell.len() > 1)
                 .unwrap_or_default();
             if members.is_empty() {
-                let records = self.rendered_records(Labels::Ordinals(&colors));
+                let records = self.rendered_records(Labels::Ordinals(&colors))?;
                 let mut bytes = Vec::new();
                 bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
                 for record in records {
@@ -747,11 +810,11 @@ impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Capt
             let cell = colors[members[0]];
             let mut representatives = Vec::new();
             for &candidate in &members {
-                Self::tick(&mut work, limit)?;
+                self.tick(SearchEvent::StateCandidate)?;
                 let mut equivalent = false;
                 for &representative in &representatives {
-                    Self::tick(&mut work, limit)?;
-                    if self.automorphism(candidate, representative, &incidence, &mut identity) {
+                    self.tick(SearchEvent::StateAutomorphism)?;
+                    if self.automorphism(candidate, representative, &incidence, &mut identity)? {
                         equivalent = true;
                         break;
                     }

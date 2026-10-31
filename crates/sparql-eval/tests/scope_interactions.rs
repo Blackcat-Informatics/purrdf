@@ -135,11 +135,11 @@ fn lost_connections_and_early_projection_have_independently_distinct_bags() {
         ]);
         expected.sort();
         let plan = engine
-            .prepare_algebra(query, QueryOptions::EMPTY)
+            .prepare_algebra(query, &QueryOptions::EMPTY)
             .expect("raw preparation");
         for result in [
             engine
-                .query_prepared(&dataset, &plan, &[], QueryOptions::EMPTY)
+                .query_prepared(&dataset, &plan, &[], &QueryOptions::EMPTY)
                 .expect("raw execution"),
             engine
                 .query(
@@ -215,14 +215,14 @@ fn copied_raw_blank_sites_keep_independent_graph_owners() {
         query.validate().expect("raw source-owner control");
         let carrier = try_pattern_to_select_query(query.pattern()).expect("owner-aware carrier");
         let source = format!("{PREFIX}SELECT ?s WHERE {{ {body} }}");
-        let raw = engine.prepare_algebra(query, QueryOptions::EMPTY).unwrap();
+        let raw = engine.prepare_algebra(query, &QueryOptions::EMPTY).unwrap();
         let prepared = engine.prepare_query(&source, None).unwrap();
         let carried = engine.prepare_query(&carrier, None).unwrap();
         let expected = vec![row(&[("s", "<http://example.org/s>")]); count];
         for _ in 0..3 {
             for plan in [&raw, &prepared, &carried] {
                 let result = engine
-                    .query_prepared(&dataset, plan, &[], QueryOptions::EMPTY)
+                    .query_prepared(&dataset, plan, &[], &QueryOptions::EMPTY)
                     .expect("source-owner execution");
                 assert_eq!(sorted_rows(&result, render_cell), expected);
                 assert_eq!(solutions(result).0, ["s"]);
@@ -273,7 +273,7 @@ fn property_functions_share_existentials_without_leaking_witness_columns() {
     ] {
         let text = format!("{PREFIX}SELECT * WHERE {{ {body} }}");
         let prepared = engine
-            .prepare_query_with_options(&text, None, options)
+            .prepare_query_with_options(&text, None, &options)
             .expect("registry-aware source admission");
         let raw_input = if raw_join {
             raw_relation_join()
@@ -293,7 +293,7 @@ fn property_functions_share_existentials_without_leaking_witness_columns() {
             );
         }
         let raw = engine
-            .prepare_algebra(raw_input, options)
+            .prepare_algebra(raw_input, &options)
             .expect("registry-aware raw admission");
         let expected = vec![row(&[("s", "<http://example.org/s>")]); count];
         for repetition in 0..3 {
@@ -306,14 +306,14 @@ fn property_functions_share_existentials_without_leaking_witness_columns() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        options,
+                        &options,
                     )
                     .expect("native relation query"),
                 engine
-                    .query_prepared(&dataset, &prepared, &[], options)
+                    .query_prepared(&dataset, &prepared, &[], &options)
                     .expect("prepared relation query"),
                 engine
-                    .query_prepared(&dataset, &raw, &[], options)
+                    .query_prepared(&dataset, &raw, &[], &options)
                     .expect("raw relation query"),
                 engine
                     .query_with_options_view(
@@ -323,7 +323,7 @@ fn property_functions_share_existentials_without_leaking_witness_columns() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        options,
+                        &options,
                     )
                     .expect("property-function carrier reparse"),
             ] {
@@ -410,11 +410,11 @@ fn concrete_blank_prebindings_preserve_scope_and_never_become_existentials() {
                             base_iri: None,
                             substitutions: &substitutions,
                         },
-                        options,
+                        &options,
                     )
                     .expect("concrete text prebinding"),
                 engine
-                    .query_prepared(&dataset, &plan, &substitutions, options)
+                    .query_prepared(&dataset, &plan, &substitutions, &options)
                     .expect("concrete prepared prebinding"),
             ] {
                 let (variables, rows) = solutions(result);
@@ -435,11 +435,11 @@ fn concrete_blank_prebindings_preserve_scope_and_never_become_existentials() {
             "an injection-only dataset blank cannot be carried as source VALUES syntax"
         );
         let injected = engine
-            .prepare_algebra(raw, QueryOptions::EMPTY)
+            .prepare_algebra(raw, &QueryOptions::EMPTY)
             .expect("injection admission");
         let (_, rows) = solutions(
             engine
-                .query_prepared(&dataset, &injected, &[], QueryOptions::EMPTY)
+                .query_prepared(&dataset, &injected, &[], &QueryOptions::EMPTY)
                 .expect("injection-only raw execution"),
         );
         assert_eq!(rows.len(), usize::from(object.is_some()));
@@ -499,7 +499,7 @@ fn federation_names_preserve_caller_lookalikes_and_zero_column_bags() {
         let prepared = engine.prepare_query(&text, None).expect("prepared SERVICE");
         let options = QueryOptions::EMPTY.with_remote(Some(&resolver));
         let raw = engine
-            .prepare_algebra(prepared.query().clone(), options)
+            .prepare_algebra(prepared.query().clone(), &options)
             .expect("raw SERVICE admission");
         for _ in 0..3 {
             for result in [
@@ -512,14 +512,14 @@ fn federation_names_preserve_caller_lookalikes_and_zero_column_bags() {
                             substitutions: &[],
                         },
                         &resolver,
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                     )
                     .expect("in-process SERVICE carrier"),
                 engine
-                    .query_prepared(&dataset, &prepared, &[], options)
+                    .query_prepared(&dataset, &prepared, &[], &options)
                     .expect("prepared SERVICE reuse"),
                 engine
-                    .query_prepared(&dataset, &raw, &[], options)
+                    .query_prepared(&dataset, &raw, &[], &options)
                     .expect("raw SERVICE reuse"),
             ] {
                 let (variables, rows) = solutions(result);
@@ -577,7 +577,7 @@ fn concrete_blank_identity_inside_rdf12_triple_terms_is_structural() {
                 )
                 .expect("triple-term text prebinding"),
             engine
-                .query_prepared(&dataset, &plan, &substitutions, QueryOptions::EMPTY)
+                .query_prepared(&dataset, &plan, &substitutions, &QueryOptions::EMPTY)
                 .expect("triple-term prepared prebinding"),
         ] {
             let (_, rows) = solutions(result);
@@ -599,11 +599,11 @@ fn concrete_blank_identity_inside_rdf12_triple_terms_is_structural() {
         .expect("existential inside/outside triple");
     let carrier = try_pattern_to_select_query(query.pattern()).expect("existential carrier");
     let raw = engine
-        .prepare_algebra(query, QueryOptions::EMPTY)
+        .prepare_algebra(query, &QueryOptions::EMPTY)
         .expect("raw quoted-pattern preparation");
     let (_, rows) = solutions(
         engine
-            .query_prepared(&dataset, &raw, &[], QueryOptions::EMPTY)
+            .query_prepared(&dataset, &raw, &[], &QueryOptions::EMPTY)
             .expect("raw shared quoted-pattern existential"),
     );
     assert_eq!(rows, [vec![Some(iri("a"))]]);
@@ -689,7 +689,7 @@ fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
                 )
                 .expect("native CONSTRUCT"),
             engine
-                .query_prepared(&dataset, &plan, &[], QueryOptions::EMPTY)
+                .query_prepared(&dataset, &plan, &[], &QueryOptions::EMPTY)
                 .expect("prepared CONSTRUCT reuse"),
         ] {
             let SparqlResult::Graph(graph) = result else {
@@ -725,7 +725,7 @@ fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
                 &*dataset,
                 &plan,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &mut accumulated,
             )
             .expect("repeated CONSTRUCT append");
@@ -745,7 +745,7 @@ fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("INSERT template applies atomically");
         let allocations = template_partition(&target, 3 * run, &format!("INSERT execution {run}"));
@@ -820,7 +820,7 @@ fn bnode_memo_and_prepared_reuse_preserve_scoped_identity_partitions() {
                         &dataset,
                         &prepared,
                         &[],
-                        QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
+                        &QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
                     )
                     .expect("scoped memo execution");
                 let (variables, rows) = solutions(result);
@@ -908,7 +908,7 @@ fn bnode_allocation_avoids_dataset_blanks_retained_only_inside_triple_terms() {
                         &dataset,
                         &prepared,
                         &[],
-                        QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
+                        &QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
                     )
                     .expect("quoted identity execution"),
             );
@@ -965,13 +965,13 @@ fn raw_late_values_cannot_capture_an_earlier_bnode_allocation() {
         let options = QueryOptions::EMPTY.with_bnode_mint_prefix(prefix);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
-            .prepare_algebra(query.clone(), options)
+            .prepare_algebra(query.clone(), &options)
             .expect("raw concrete input");
         for _ in 0..3 {
             assert_eq!(
                 solutions(
                     engine
-                        .query_prepared(&dataset, &prepared, &[], options)
+                        .query_prepared(&dataset, &prepared, &[], &options)
                         .expect("late VALUES execution")
                 )
                 .1
@@ -1058,7 +1058,7 @@ fn service_bnode_results_have_response_identity_separation() {
                 substitutions: &[],
             },
             &resolver,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("independent SERVICE BNODE result");
     assert_eq!(
@@ -1108,7 +1108,7 @@ fn update_allocations_avoid_reserved_namespaces_and_honor_caller_prefix() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
+                        &QueryOptions::EMPTY.with_bnode_mint_prefix(prefix),
                     )
                     .expect("fresh update publication");
                 let current = template_partition(&target, execution, body);
@@ -1160,7 +1160,7 @@ fn later_update_operations_avoid_blanks_retained_only_inside_new_terms() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("sequential operations preserve nested identities");
         assert_eq!(target.quad_count(), 3);
@@ -1247,7 +1247,7 @@ fn load_then_insert_preserves_a_nested_identity_without_advancing_the_mint_count
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY.with_load(Some(&document)),
+                &QueryOptions::EMPTY.with_load(Some(&document)),
             )
             .expect("LOAD and INSERT apply in request order");
         assert_eq!(target.quad_count(), 3);

@@ -861,8 +861,12 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
 
 /// `fixture`'s canonical N-Quads input — degenerate N-Triples, since every fixture lives
 /// entirely in the default graph.
-fn input_text(fixture: &Fixture) -> String {
-    try_canonicalize(&build(fixture)).unwrap().nquads
+fn input_text(fixture: &Fixture) -> purrdf_core::Canonicalized {
+    try_canonicalize(
+        &build(fixture),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
 }
 
 /// The committed corpus file's full text: an N-Triples `#`-comment header (the grammar
@@ -882,7 +886,7 @@ fn corpus_file_text(fixture: &Fixture) -> String {
          # canonical N-Triples input fed to the owlrl reference engine.\n\
          {}",
         fixture.name,
-        input_text(fixture)
+        input_text(fixture).nquads()
     )
 }
 
@@ -891,12 +895,15 @@ fn purrdf_closure_lines(fixture: &Fixture) -> BTreeSet<String> {
     let ds = build(fixture);
     let (closed, _report) = materialize(&ds, Materialization::OwlRl)
         .unwrap_or_else(|e| panic!("{}: OWL-RL materialization refused: {e}", fixture.name));
-    try_canonicalize(&closed)
-        .unwrap()
-        .nquads
-        .lines()
-        .map(ToOwned::to_owned)
-        .collect()
+    try_canonicalize(
+        &closed,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads()
+    .lines()
+    .map(ToOwned::to_owned)
+    .collect()
 }
 
 // ── Corpus paths ────────────────────────────────────────────────────────────────
@@ -1572,8 +1579,8 @@ fn fixture_exercise_lists_name_real_rules() {
 fn rendering_is_byte_stable_within_a_run() {
     for fixture in CORPUS {
         assert_eq!(
-            input_text(fixture),
-            input_text(fixture),
+            input_text(fixture).nquads(),
+            input_text(fixture).nquads(),
             "{}: input",
             fixture.name
         );

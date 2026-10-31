@@ -110,7 +110,11 @@ fn ingest_shapes() -> Vec<IngestShape> {
 
 /// The composed carrier both the `view` and the `flat` variants read: identical
 /// construction, so nothing but the surface chosen can explain a difference.
-fn composite_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<Stage> {
+fn composite_carrier(
+    shape: &IngestShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> PipelineViewBundle<Stage> {
     let (lookaside, blobs, provenance) = keystone_loadout();
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_dataset(
@@ -124,14 +128,18 @@ fn composite_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBun
     .expect("the base composes within the shape's ceilings");
     for (index, (graph, quads)) in shape.stages.iter().enumerate() {
         carrier
-            .accumulate_named_graph(graph.as_str(), quads, Stage(index))
+            .accumulate_named_graph(graph.as_str(), quads, Stage(index), control)
             .expect("a contained contribution appends to the composite carrier");
     }
     carrier
 }
 
 /// The same stage plan over a delta snapshot of the base.
-fn delta_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<Stage> {
+fn delta_carrier(
+    shape: &IngestShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> PipelineViewBundle<Stage> {
     let (lookaside, blobs, provenance) = keystone_loadout();
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_delta(
@@ -145,7 +153,7 @@ fn delta_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<
     .expect("the delta composes within the shape's ceilings");
     for (index, (graph, quads)) in shape.stages.iter().enumerate() {
         carrier
-            .accumulate_named_graph(graph.as_str(), quads, Stage(index))
+            .accumulate_named_graph(graph.as_str(), quads, Stage(index), control)
             .expect("a contained contribution appends to the delta carrier");
     }
     carrier
@@ -170,8 +178,12 @@ fn observation(
 
 /// `materialize()` then ingest the frozen result through the flat surface. The
 /// freeze is deliberately inside the measurement: it is the price of this choice.
-fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
-    let carrier = composite_carrier(shape, limits);
+fn run_flat(
+    shape: &IngestShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> (Observation, Vec<u8>) {
+    let carrier = composite_carrier(shape, limits, control);
     let frozen = carrier.materialize().expect("the carrier freezes");
     let mut builder = SnapshotBuilder::new();
     builder
@@ -187,8 +199,12 @@ fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
 }
 
 /// Ingest straight through the composite, freezing nothing.
-fn run_view(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
-    let carrier = composite_carrier(shape, limits);
+fn run_view(
+    shape: &IngestShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> (Observation, Vec<u8>) {
+    let carrier = composite_carrier(shape, limits, control);
     let mut builder = SnapshotBuilder::new();
     let _ = builder
         .add_view_scoped(carrier.view(), Some(SELECTED), Some("base"))
@@ -204,8 +220,12 @@ fn run_view(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
 }
 
 /// Ingest straight through the delta-rooted composite, compacting nothing.
-fn run_delta(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
-    let carrier = delta_carrier(shape, limits);
+fn run_delta(
+    shape: &IngestShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> (Observation, Vec<u8>) {
+    let carrier = delta_carrier(shape, limits, control);
     let mut builder = SnapshotBuilder::new();
     let _ = builder
         .add_view_scoped(carrier.view(), Some(SELECTED), Some("base"))
@@ -236,8 +256,16 @@ fn gts_ingest(c: &mut Bench) {
         issue.base.quads().count()
     );
     assert!(issue.base.reifier_quads().count() >= 8 && issue.base.named_graphs().count() >= 3);
-    let (_, flat_bytes) = run_flat(issue, limits);
-    let (_, view_bytes) = run_view(issue, limits);
+    let (_, flat_bytes) = run_flat(
+        issue,
+        limits,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
+    let (_, view_bytes) = run_view(
+        issue,
+        limits,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     assert_eq!(
         flat_bytes, view_bytes,
         "the view surface and the materialized flat surface must ship one container"
@@ -248,19 +276,40 @@ fn gts_ingest(c: &mut Bench) {
     // separate, plainly-measured record that always emits — `--test` included.
     for shape in &shapes {
         let start = Instant::now();
-        let (observed, bytes) = run_flat(shape, limits);
+        let (observed, bytes) = run_flat(
+            shape,
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} flat emitted no bytes", shape.name);
         observe(shape.name, "flat", elapsed, observed);
 
         let start = Instant::now();
-        let (observed, bytes) = run_view(shape, limits);
+        let (observed, bytes) = run_view(
+            shape,
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} view emitted no bytes", shape.name);
         observe(shape.name, "view", elapsed, observed);
 
         let start = Instant::now();
-        let (observed, bytes) = run_delta(shape, limits);
+        let (observed, bytes) = run_delta(
+            shape,
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} delta emitted no bytes", shape.name);
         observe(shape.name, "delta", elapsed, observed);
@@ -269,13 +318,40 @@ fn gts_ingest(c: &mut Bench) {
     let mut group = c.benchmark_group("gts_ingest");
     for shape in &shapes {
         group.bench_function(BenchmarkId::new("flat", shape.name), |b| {
-            b.iter(|| black_box(run_flat(shape, limits)));
+            b.iter(|| {
+                black_box(run_flat(
+                    shape,
+                    limits,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ))
+            });
         });
         group.bench_function(BenchmarkId::new("view", shape.name), |b| {
-            b.iter(|| black_box(run_view(shape, limits)));
+            b.iter(|| {
+                black_box(run_view(
+                    shape,
+                    limits,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ))
+            });
         });
         group.bench_function(BenchmarkId::new("delta", shape.name), |b| {
-            b.iter(|| black_box(run_delta(shape, limits)));
+            b.iter(|| {
+                black_box(run_delta(
+                    shape,
+                    limits,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ))
+            });
         });
     }
     group.finish();

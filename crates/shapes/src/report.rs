@@ -3057,10 +3057,24 @@ mod tests {
             "the direct dataset must carry exactly the quads the text does"
         );
         assert_eq!(
-            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
-            ::purrdf_rdf::try_canonicalize(&round_tripped)
-                .unwrap()
-                .nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &round_tripped,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "to_dataset() and parse(to_ntriples()) must be the same graph"
         );
     }
@@ -3121,10 +3135,24 @@ mod tests {
                 .expect("must parse");
 
         assert_eq!(
-            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
-            ::purrdf_rdf::try_canonicalize(&round_tripped)
-                .unwrap()
-                .nquads
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &round_tripped,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads()
         );
         assert_eq!(conforms_from_dataset(&direct), Some(true));
         assert!(tuples_from_dataset(&direct).is_empty());
@@ -3146,10 +3174,24 @@ mod tests {
 
         // Same graph up to blank labelling…
         assert_eq!(
-            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
-            ::purrdf_rdf::try_canonicalize(&round_tripped)
-                .unwrap()
-                .nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &round_tripped,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "escaping a blank label must not change the graph"
         );
         // …and the direct path still holds the caller's label unescaped.
@@ -3162,10 +3204,24 @@ mod tests {
         );
         // …and the public report graph is the same graph under the report's labels.
         assert_eq!(
-            ::purrdf_rdf::try_canonicalize(&direct).unwrap().nquads,
-            ::purrdf_rdf::try_canonicalize(&report.to_dataset().expect("authored report emits"))
-                .unwrap()
-                .nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &report.to_dataset().expect("authored report emits"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "relabelling must not change the graph"
         );
     }
@@ -3294,18 +3350,44 @@ mod tests {
         }
         // …and the graph is still the same one the text path produces.
         assert_eq!(
-            ::purrdf_rdf::try_canonicalize(&dataset).unwrap().nquads,
             ::purrdf_rdf::try_canonicalize(
-                &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse")
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             )
             .unwrap()
-            .nquads
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads()
         );
         assert_eq!(
-            ::purrdf_rdf::try_canonicalize(&dataset).unwrap().nquads,
-            ::purrdf_rdf::try_canonicalize(&report.to_dataset().expect("authored report emits"))
-                .unwrap()
-                .nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &report.to_dataset().expect("authored report emits"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "relabelling must not change the graph"
         );
     }

@@ -193,9 +193,15 @@ class CompiledJsonLdContext:
     def from_prefixes(prefixes: dict[str, str]) -> CompiledJsonLdContext: ...
     def canonical_context_json(self) -> str: ...
 
-class CanonicalizationAlgorithm:
-    RDFC_1_0: CanonicalizationAlgorithm
-    UNSTABLE: CanonicalizationAlgorithm
+class CanonicalCause:
+    @property
+    def json(self) -> str: ...
+
+class CanonicalResult:
+    @property
+    def value(self) -> Any: ...
+    @property
+    def canonicalization_json(self) -> str: ...
 
 # ── Term model ──────────────────────────────────────────────────────────────────
 
@@ -835,6 +841,8 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
@@ -882,6 +890,8 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> EntailmentQueryOutcome: ...
@@ -928,6 +938,8 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...
@@ -1119,7 +1131,9 @@ class MutableDataset(_QuadStore):
 class Dataset:
     def __init__(self, quads: object | None = ...) -> None: ...
     def add(self, quad: Quad) -> None: ...
-    def canonicalize(self, algorithm: CanonicalizationAlgorithm) -> None: ...
+    def canonicalize(
+        self, *, canonical_search: str, cancel: CancellationToken | None = None
+    ) -> CanonicalResult: ...
     def __iter__(self) -> QuadIter: ...
     def __len__(self) -> int: ...
 
@@ -1664,7 +1678,12 @@ class RdfDataset:
     # is a syntactic subset, so a default-graph-only dataset serializes to a valid
     # N-Triples document; one that names graphs keeps the graph term. There is
     # deliberately no `to_ntriples` alias: one serializer, one name.
-    def to_nquads(self) -> str: ...
+    def to_nquads(
+        self,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     def serialize_jsonld(
         self,
         output_format: str,
@@ -1886,7 +1905,12 @@ class _PreparedShapes:
     a prepared product."""
 
     # Byte-deterministic: equal preparations produce identical bytes.
-    def to_product(self) -> bytes: ...
+    def to_product(
+        self,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Where this preparation came from, as one deterministic token: `parsed`,
     # `restored-admitted <identity_digest>` or `restored-rebuilt <identity_digest>`.
     # Total — there is always an answer, and none of them means "unknown".
@@ -1997,7 +2021,12 @@ class _ShapesProduct:
         recursion_max_pairs: int | None = None,
         recursion_max_iterations: int | None = None,
     ) -> _PreparedShapes: ...
-    def certify(self) -> None: ...
+    def certify(
+        self,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
 
 class shapes:
     # Every re-export below is spelled with an explicit `TypeAlias` — as
@@ -2031,7 +2060,9 @@ class shapes:
         recursion: str | None = None,
         recursion_max_pairs: int | None = None,
         recursion_max_iterations: int | None = None,
-    ) -> bytes: ...
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
     # `shapes_base` is the base IRI the SHAPES document's relative IRI references
@@ -2145,7 +2176,9 @@ class shapes:
         xpath_regex: str | None = None,
         now: str | None = None,
         entropy_seed: int | None = None,
-    ) -> dict[str, builtins.object]: ...
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
     # canonical order, "proof": the proof text when explain=True, else None,
@@ -2364,7 +2397,9 @@ class entail:
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
         max_term_arena_bytes: int | None = None,
-    ) -> tuple[str, str]: ...
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The rule table the specification DEFINES the regime by, in table order
     # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`
     # and `rif` have no specification table of their own, so `[]`).
@@ -2429,29 +2464,41 @@ class entail:
         premise_iris: Sequence[str],
         step_cap: int = ...,
         work_cap: int = ...,
-    ) -> tuple[str, str]: ...
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The entailed subsumption hierarchy over the named classes: `equivalent`,
     # `subclass` (the full transitive closure), `direct` (its reduction) and
     # `unsatisfiable` lines, in that block order. Raises ValueError for an
     # ontology with no model, where every class subsumes every other.
     @staticmethod
     def classify(
-        data: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The entailed types of the named individuals (`type` lines) and the most
     # specific of them (`direct-type` lines).
     @staticmethod
     def realize(
-        data: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The named individuals entailed to be instances of `class_`, as
     # `instance <term>` lines. `class_` is ONE N-Triples term, angle brackets
     # included. A class the ontology never mentions yields an empty answer, which
     # is a real answer rather than an error.
     @staticmethod
     def instances(
-        data: str, class_: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, class_: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Does the ontology entail `axiom`? `axiom` is ONE triple of the OWL 2 RDF
     # mapping: rdfs:subClassOf, owl:equivalentClass, owl:disjointWith, rdf:type,
     # owl:sameAs, owl:differentFrom and rdfs:subPropertyOf select the seven named
@@ -2459,8 +2506,11 @@ class entail:
     # answer is `entails true|false|unknown` followed by the axiom AS READ.
     @staticmethod
     def entails(
-        data: str, axiom: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, axiom: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Which OWL 2 profiles the ontology is provably in (`certified <profile>`
     # lines, most restrictive first: EL, QL, RL, DL, Full) and what blocked the
     # others. Purely syntactic, so the certificate is an OWL profile certificate
@@ -2472,14 +2522,24 @@ class entail:
     # N-Quads; the certificate's `conservative` line says whether it is the
     # minimal module or a sound superset.
     @staticmethod
-    def extract_module(data: str, signature: str, method: str) -> tuple[str, str]: ...
+    def extract_module(
+        data: str, signature: str, method: str,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # WHY a DL axiom is entailed: a minimal subset of the ontology that still
     # entails it, as canonical N-Quads. A tableau performs no derivation steps, so
     # this is a JUSTIFICATION and deliberately not called a proof. The
     # certificate's `sufficient` and `minimal` lines are RE-DECIDED here, so they
     # check the answer rather than restate it.
     @staticmethod
-    def justify(data: str, axiom: str) -> tuple[str, str]: ...
+    def justify(
+        data: str, axiom: str,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # WHY one triple of a chase closure holds: which rules, from which premises.
     # `conclusion` is ONE N-Quads statement. The certificate's `derived-*` lines
     # are what the CHECKER re-derived from the proof term and the clause program,
@@ -2510,7 +2570,10 @@ class entail:
         argument: str = ...,
         step_cap: int = ...,
         work_cap: int = ...,
-    ) -> tuple[str, str, str]: ...
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # CHECK a proof against the CALLER's own ontology, question and answer.
     # Nothing in it trusts the producer: the ontology is parsed from `data`, the
     # question is re-derived from `service` and `argument`, the claims are read
@@ -2528,7 +2591,10 @@ class entail:
         answer: str,
         certificate: str,
         proof: str,
-    ) -> str: ...
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The seven services `prove` and `check_proof` accept, so a caller can
     # MEASURE the set rather than trust a docstring.
     @staticmethod
@@ -2666,15 +2732,55 @@ class entail:
         # Answer `service` about `argument`, with its proof — see
         # `purrdf.entail.prove`. Returns (answer, certificate, proof). Raises
         # ValueError on a session that records nothing.
-        def prove(self, service: str, argument: str = ...) -> tuple[str, str, str]: ...
-        def consistency(self) -> tuple[str, str]: ...
-        def classify(self) -> tuple[str, str]: ...
-        def realize(self) -> tuple[str, str]: ...
-        def instances(self, class_: str) -> tuple[str, str]: ...
-        def entails(self, axiom: str) -> tuple[str, str]: ...
+        def prove(
+            self, service: str, argument: str = ...,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def consistency(
+            self,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def classify(
+            self,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def realize(
+            self,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def instances(
+            self, class_: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def entails(
+            self, axiom: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
         def profile(self) -> tuple[str, str]: ...
-        def extract_module(self, signature: str, method: str) -> tuple[str, str]: ...
-        def justify(self, axiom: str) -> tuple[str, str]: ...
+        def extract_module(
+            self, signature: str, method: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def justify(
+            self, axiom: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
         def explain_conclusion(
             self, regime: RegimeLike, conclusion: str
         ) -> tuple[str, str]: ...
@@ -2811,8 +2917,15 @@ class _OwnershipReport:
     def ownership_errors(self) -> list[str]: ...
 
 class _SliceCatalog:
+    @property
+    def canonicalization_json(self) -> str: ...
     @staticmethod
-    def discover(root: str, namespace: str) -> _SliceCatalog: ...
+    def discover(
+        root: str, namespace: str,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> _SliceCatalog: ...
     @property
     def records(self) -> list[_SliceRecord]: ...
     @property

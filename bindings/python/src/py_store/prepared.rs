@@ -191,7 +191,7 @@ impl GraphDerivedRelations {
                 &self.query,
                 None,
                 &borrowed,
-                purrdf_sparql_eval::QueryOptions::new()
+                &purrdf_sparql_eval::QueryOptions::new()
                     .with_geo(geo)
                     .with_env(&env)
                     .with_division(self.division),
@@ -415,7 +415,7 @@ impl PyPreparedQuery {
                     .with_coordinate_observer(capture_ref),
             );
             engine
-                .execute(&mut self.execution, &*dataset, options, |outcome| {
+                .execute(&mut self.execution, &*dataset, &options, |outcome| {
                     materialize_interned(&outcome)
                 })
                 .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
@@ -518,7 +518,7 @@ pub(super) fn prepare(
             query,
             None,
             &borrowed,
-            purrdf_sparql_eval::QueryOptions::new()
+            &purrdf_sparql_eval::QueryOptions::new()
                 .with_geo(&geo)
                 .with_env(&env)
                 .with_division(division),

@@ -115,6 +115,7 @@ enum RuleSource<'a> {
 pub(crate) fn run_rules(
     options: &RulesOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let coordinates =
         purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
@@ -193,7 +194,7 @@ pub(crate) fn run_rules(
         }
     };
 
-    let data = source::load_dataset(options.input, data_format, options.base)?;
+    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
     let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
     let limits = purrdf::shapes::RuleLimits {
         max_term_generating_rounds: options.max_term_generating_rounds,
@@ -209,8 +210,8 @@ pub(crate) fn run_rules(
             base,
             shapes_graph,
         } => {
-            let root = read_shapes_document(path, *format, base.as_deref(), "--shapes")?;
-            let table = shapes_imports(&root, options.imports)?;
+            let root = read_shapes_document(path, *format, base.as_deref(), "--shapes", canonical)?;
+            let table = shapes_imports(&root, options.imports, canonical)?;
             let shapes = purrdf::shapes::shapes::from_dataset_with_base(
                 &root.dataset,
                 None,
@@ -261,6 +262,7 @@ pub(crate) fn run_rules(
         options.base,
         data_format.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     eprintln!("rules inferred {}", inference.inferred().len());
     // A shapes graph's mandatory diagnostics — every empty `sh:in` / `sh:xone` list — as
@@ -270,7 +272,7 @@ pub(crate) fn run_rules(
         eprintln!("shacl diagnostic {diagnostic}");
     }
     if options.explain.is_requested() {
-        report::surface_rendered(&options.explain, &inference.proof_text())?;
+        report::surface_rendered(&options.explain, &inference.proof_text(), canonical)?;
     }
     ledger::surface(ledger_target, &ledger)
 }
@@ -510,6 +512,7 @@ pub(crate) fn run_node_expr(
     options: &NodeExprOptions<'_>,
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     refuse_text_report_flags("node-expr", ledger_target, jsonld_options)?;
     refuse_shared_stdin(&[
@@ -568,9 +571,10 @@ pub(crate) fn run_node_expr(
         shapes_format,
         shapes_base.as_deref(),
         "--shapes",
+        canonical,
     )?;
-    let table = shapes_imports(&root_document, options.imports)?;
-    let data = source::load_dataset(options.input, data_format, options.base)?;
+    let table = shapes_imports(&root_document, options.imports, canonical)?;
+    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
     let selector = match (argv_selector, options.expr.expr_turtle_file) {
         (Some(selector), _) => selector,
         (None, Some(path)) => {
@@ -623,7 +627,7 @@ pub(crate) fn run_node_expr(
         text.push_str(&term.to_string());
         text.push('\n');
     }
-    sink::write_out(options.output, text.as_bytes())?;
+    sink::write_out_with_request(options.output, text.as_bytes(), canonical)?;
     eprintln!("node-expr outputs {}", evaluated.outputs.len());
     // The shapes graph's mandatory diagnostics, which every run reports: one `shacl
     // diagnostic RULE SHAPE` line each, exactly as `validate` and `rules` print them. They
@@ -658,6 +662,7 @@ pub(crate) fn run_lint(
     options: &LintOptions<'_>,
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     refuse_text_report_flags("shapes lint", ledger_target, jsonld_options)?;
     let format = format::resolve(options.from, options.input)?;
@@ -678,8 +683,14 @@ pub(crate) fn run_lint(
         },
     };
     let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
-    let root = read_shapes_document(options.input, format, base.as_deref(), "shapes lint")?;
-    let table = shapes_imports(&root, options.imports)?;
+    let root = read_shapes_document(
+        options.input,
+        format,
+        base.as_deref(),
+        "shapes lint",
+        canonical,
+    )?;
+    let table = shapes_imports(&root, options.imports, canonical)?;
     let report = lint::lint(
         &root.dataset,
         &root.prefixes,
@@ -690,7 +701,7 @@ pub(crate) fn run_lint(
         &table,
     )
     .map_err(|error| shapes_error(error, "shapes lint", &root, "--base"))?;
-    sink::write_out(options.output, report.render().as_bytes())?;
+    sink::write_out_with_request(options.output, report.render().as_bytes(), canonical)?;
     eprintln!("shapes lint clean {}", report.is_clean());
     eprintln!("shapes lint findings {}", report.findings());
     if report.is_clean() {

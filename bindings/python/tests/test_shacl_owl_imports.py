@@ -51,7 +51,7 @@ INFERRED = "<http://example.org/alice> <http://example.org/checked> <http://exam
 
 _ENTRY_POINTS = {
     "validate": lambda imports: purrdf.shapes.validate(IMPORTER, PERSON, imports=imports),
-    "entail": lambda imports: purrdf.shapes.entail(IMPORTER, PERSON, imports=imports),
+    "entail": lambda imports: purrdf.shapes.entail(IMPORTER, PERSON, imports=imports, canonical_search="1000000").value,
     "apply_rules": lambda imports: purrdf.shapes.apply_rules(
         PERSON, IMPORTER, imports=imports
     ),
@@ -64,7 +64,7 @@ _ENTRY_POINTS = {
         imports=imports,
     ),
     "lint_shapes": lambda imports: purrdf.shapes.lint_shapes(IMPORTER, imports=imports),
-    "pack_product": lambda imports: purrdf.shapes.pack_product(IMPORTER, imports=imports),
+    "pack_product": lambda imports: purrdf.shapes.pack_product(IMPORTER, imports=imports, canonical_search="1000000").value,
     "Shapes": lambda imports: purrdf.shapes.Shapes(IMPORTER, imports=imports),
 }
 
