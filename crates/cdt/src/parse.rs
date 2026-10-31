@@ -64,7 +64,7 @@ use purrdf_iri::{langtag, terminals};
 use crate::datatype::{CdtDatatype, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 use crate::error::CdtError;
 use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, try_list_extent, try_map_extent};
-use crate::memory::{CdtMemory, Memory, ReadError, Resident, Storage};
+use crate::memory::{CdtMemory, Memory, ReadError, Resident, Storage, StorageError};
 use crate::render::try_canonical_key_lexical;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
 use crate::value::CdtValue;
@@ -167,6 +167,7 @@ pub fn try_parse_cdt(
     datatype: CdtDatatype,
     storage: &mut impl Storage,
 ) -> Result<(CdtValue, usize), ReadError> {
+    storage.checkpoint(0)?;
     if lexical.len() > MAX_LEXICAL_BYTES {
         return Err(CdtError::InputTooLarge {
             offset: MAX_LEXICAL_BYTES,
@@ -176,7 +177,7 @@ pub fn try_parse_cdt(
     }
     let mut scanner = Scanner::new(lexical, storage);
     let value = scanner.parse_root(datatype)?;
-    scanner.skip_whitespace();
+    scanner.skip_whitespace()?;
     if scanner.position < scanner.bytes.len() {
         return Err(CdtError::TrailingText {
             offset: scanner.position,
@@ -198,6 +199,7 @@ pub fn try_parse_cdt(
         }
         .into());
     }
+    scanner.memory.admission_mut().checkpoint(0)?;
     Ok((value, scanner.memory.admitted_bytes()))
 }
 
@@ -314,10 +316,12 @@ impl<'a, 'm> Scanner<'a, 'm> {
         self.input[self.position..].starts_with(text)
     }
 
-    fn skip_whitespace(&mut self) {
+    fn skip_whitespace(&mut self) -> Result<(), ReadError> {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            self.memory.admission_mut().checkpoint(1)?;
             self.bump();
         }
+        Ok(())
     }
 
     /// Consume one byte, or report what the grammar admitted here.
@@ -368,7 +372,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
 
     /// The whole two-state machine. Returns the root composite.
     fn parse_root(&mut self, datatype: CdtDatatype) -> Result<CdtValue, ReadError> {
-        self.skip_whitespace();
+        self.skip_whitespace()?;
         self.expect(
             datatype.open(),
             match datatype {
@@ -383,9 +387,10 @@ impl<'a, 'm> Scanner<'a, 'm> {
         let mut step = Step::Item;
 
         loop {
+            self.memory.admission_mut().checkpoint(1)?;
             match step {
                 Step::Item => {
-                    self.skip_whitespace();
+                    self.skip_whitespace()?;
                     let top = stack.last().expect("the frame stack is never empty here");
                     // An empty composite closes immediately. A triple term has a
                     // fixed arity of three, so it is never closed while empty and the
@@ -405,7 +410,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
                     if matches!(top, Frame::Map { .. }) {
                         let key_offset = self.position;
                         let key = self.parse_key()?;
-                        self.skip_whitespace();
+                        self.skip_whitespace()?;
                         self.expect(b':', "`:` separating a map key from its value")?;
                         match stack
                             .last_mut()
@@ -417,7 +422,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
                             }
                         }
                     }
-                    self.skip_whitespace();
+                    self.skip_whitespace()?;
                     elements += 1;
                     if elements > MAX_ELEMENTS {
                         return Err(CdtError::TooManyElements {
@@ -449,7 +454,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
                     step = Step::Delim;
                 }
                 Step::Delim => {
-                    self.skip_whitespace();
+                    self.skip_whitespace()?;
                     let top = stack.last().expect("the frame stack is never empty here");
                     if let Frame::Triple(parts) = top {
                         if parts.len() < 3 {
@@ -591,6 +596,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
         self.expect(b'<', "`<` opening an IRI")?;
         let mut out = String::new();
         loop {
+            self.memory.admission_mut().checkpoint(1)?;
             match self.peek() {
                 None => {
                     return Err(CdtError::UnexpectedEnd {
@@ -620,7 +626,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             }
         }
         // CDT lexical forms carry no base, so only an absolute IRI is usable.
-        match purrdf_iri::absolute_verdict(&out) {
+        match purrdf_iri::absolute_verdict_with_memory(&out, &mut self.memory)? {
             Some(true) => Ok(out),
             Some(false) => Err(CdtError::NotAbsoluteIri {
                 offset: start,
@@ -688,7 +694,11 @@ impl<'a, 'm> Scanner<'a, 'm> {
                 .into());
             }
         }
-        while let Some(ch) = self.input[self.position..].chars().next() {
+        loop {
+            self.memory.admission_mut().checkpoint(4)?;
+            let Some(ch) = self.input[self.position..].chars().next() else {
+                break;
+            };
             if terminals::is_pn_chars(ch) || ch == '.' {
                 self.position += ch.len_utf8();
             } else {
@@ -703,7 +713,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             }
             .into());
         }
-        Ok(self.memory.string(label)?)
+        Ok(self.memory.string_with_progress(label)?)
     }
 
     /// `[128s] RDFLiteral ::= String (LANGTAG | '^^' IRIREF)?`
@@ -714,7 +724,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             let datatype = purrdf_iri::vocab::language_datatype_iri(direction.is_some());
             return Ok(CdtLiteral {
                 lexical,
-                datatype: self.memory.string(datatype)?,
+                datatype: self.memory.string_with_progress(datatype)?,
                 language: Some(language),
                 direction,
             });
@@ -731,7 +741,9 @@ impl<'a, 'm> Scanner<'a, 'm> {
         }
         Ok(CdtLiteral {
             lexical,
-            datatype: self.memory.string(crate::datatype::XSD_STRING)?,
+            datatype: self
+                .memory
+                .string_with_progress(crate::datatype::XSD_STRING)?,
             language: None,
             direction: None,
         })
@@ -762,6 +774,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
         self.position += if long { 3 } else { 1 };
         let mut out = String::new();
         loop {
+            self.memory.admission_mut().checkpoint(1)?;
             match self.peek() {
                 None => {
                     return Err(CdtError::UnexpectedEnd {
@@ -891,12 +904,18 @@ impl<'a, 'm> Scanner<'a, 'm> {
             Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-')
         ) && !self.starts_with("--")
         {
+            self.memory.admission_mut().checkpoint(1)?;
             self.bump();
         }
         let language_end = self.position;
         let direction = self.parse_direction_suffix(start)?;
         let language = &self.input[language_start..language_end];
-        if let Err(error) = langtag::parse_with(language, LANGTAG_PROFILE) {
+        if let Err(error) = langtag::parse_with_memory(language, LANGTAG_PROFILE, &mut self.memory)
+        {
+            let error = match error {
+                purrdf_lex::control::ControlledError::Control(cause) => return Err(cause.into()),
+                purrdf_lex::control::ControlledError::Native(cause) => cause,
+            };
             return Err(CdtError::BadLanguageTag {
                 offset: start,
                 reason: error.message(),
@@ -904,7 +923,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             }
             .into());
         }
-        Ok((self.memory.string(language)?, direction))
+        Ok((self.memory.string_with_progress(language)?, direction))
     }
 
     /// RDF 1.2's `'--' ('ltr' | 'rtl')` base-direction suffix, when one follows
@@ -924,6 +943,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
         self.position += 2;
         let token_start = self.position;
         while matches!(self.peek(), Some(b'a'..=b'z' | b'A'..=b'Z')) {
+            self.memory.admission_mut().checkpoint(1)?;
             self.bump();
         }
         let token = &self.input[token_start..self.position];
@@ -943,13 +963,13 @@ impl<'a, 'm> Scanner<'a, 'm> {
         if matches!(self.peek(), Some(b'+' | b'-')) {
             self.bump();
         }
-        let integer_digits = self.digit_run();
+        let integer_digits = self.digit_run()?;
         let mut fraction_digits = 0usize;
         let mut has_point = false;
         if self.peek() == Some(b'.') {
             has_point = true;
             self.bump();
-            fraction_digits = self.digit_run();
+            fraction_digits = self.digit_run()?;
         }
         let mut has_exponent = false;
         if matches!(self.peek(), Some(b'e' | b'E')) {
@@ -958,7 +978,7 @@ impl<'a, 'm> Scanner<'a, 'm> {
             if matches!(self.peek(), Some(b'+' | b'-')) {
                 self.bump();
             }
-            if self.digit_run() == 0 {
+            if self.digit_run()? == 0 {
                 return Err(CdtError::BadNumericLiteral {
                     offset: start,
                     reason: "an exponent needs at least one digit",
@@ -1003,19 +1023,22 @@ impl<'a, 'm> Scanner<'a, 'm> {
             XSD_INTEGER
         };
         Ok(CdtLiteral {
-            lexical: self.memory.string(&self.input[start..self.position])?,
-            datatype: self.memory.string(datatype)?,
+            lexical: self
+                .memory
+                .string_with_progress(&self.input[start..self.position])?,
+            datatype: self.memory.string_with_progress(datatype)?,
             language: None,
             direction: None,
         })
     }
 
-    fn digit_run(&mut self) -> usize {
+    fn digit_run(&mut self) -> Result<usize, ReadError> {
         let start = self.position;
         while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.memory.admission_mut().checkpoint(1)?;
             self.bump();
         }
-        self.position - start
+        Ok(self.position - start)
     }
 
     /// `BooleanLiteral ::= 'true' | 'false'`
@@ -1037,8 +1060,8 @@ impl<'a, 'm> Scanner<'a, 'm> {
 
     fn boolean_literal(&mut self, lexical: &str) -> Result<CdtLiteral, ReadError> {
         Ok(CdtLiteral {
-            lexical: self.memory.string(lexical)?,
-            datatype: self.memory.string(XSD_BOOLEAN)?,
+            lexical: self.memory.string_with_progress(lexical)?,
+            datatype: self.memory.string_with_progress(XSD_BOOLEAN)?,
             language: None,
             direction: None,
         })
@@ -1070,13 +1093,20 @@ fn finish_map(
     // Offsets strictly follow authoring order. This total tie-break reproduces
     // stable key sorting (including the exact first duplicate diagnostic) with
     // the native allocation-free unstable sorter and no hidden merge scratch.
-    entries.sort_unstable_by(|(lo, left), (ro, right)| {
-        crate::ops::total_key_cmp(&left.key, &right.key).then_with(|| lo.cmp(ro))
-    });
+    purrdf_lex::walk::try_sort_unstable_by(&mut entries, |(lo, left), (ro, right)| {
+        let order = crate::ops::total_key_cmp_with_control(&left.key, &right.key, &mut |units| {
+            memory.admission_mut().checkpoint(units)
+        })?;
+        Ok::<_, StorageError>(order.then_with(|| lo.cmp(ro)))
+    })?;
     for window in entries.windows(2) {
         let (left_offset, left) = &window[0];
         let (right_offset, right) = &window[1];
-        if left.key == right.key {
+        if crate::ops::total_key_cmp_with_control(&left.key, &right.key, &mut |units| {
+            memory.admission_mut().checkpoint(units)
+        })?
+        .is_eq()
+        {
             let key = try_canonical_key_lexical(&left.key, memory)?;
             return Err(CdtError::DuplicateMapKey {
                 offset: *left_offset.max(right_offset),
@@ -1086,13 +1116,14 @@ fn finish_map(
         }
     }
     let old_bytes = core::alloc::Layout::array::<(usize, CdtEntry)>(entries.capacity())
-        .map_err(|_| crate::memory::StorageError::SizeOverflow)?
+        .map_err(|_| StorageError::SizeOverflow)?
         .size();
     let mut output = Vec::new();
     memory.reserve(&mut output, entries.len())?;
     // Move entries while the old and destination arrays are both admitted.
     let mut source = entries.into_iter();
     for (_, entry) in source.by_ref() {
+        memory.admission_mut().checkpoint(1)?;
         output.push(entry);
     }
     drop(source);

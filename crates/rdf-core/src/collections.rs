@@ -343,6 +343,112 @@ where
     }
 }
 
+impl<Id, F, R> RdfListWalk<Id, F, R>
+where
+    Id: Copy + Eq,
+    F: FnMut(Id) -> SoleObject<Id>,
+    R: FnMut(Id) -> SoleObject<Id>,
+{
+    /// Advance the native strict walk after admitting each concrete edge lookup.
+    ///
+    /// The callback also runs inside cycle-entry recovery. A failed step terminates
+    /// this walk; no member from that step is published.
+    ///
+    /// # Errors
+    /// Returns the original callback error before the refused lookup or step.
+    pub fn try_next<E>(
+        &mut self,
+        progress: &mut impl FnMut(u64) -> Result<(), E>,
+    ) -> Result<Option<Result<Id, ListFault<Id>>>, E> {
+        let result = self.advance(progress);
+        if result.is_err() {
+            self.cell = None;
+            self.pending = None;
+        }
+        result
+    }
+
+    fn advance<E>(
+        &mut self,
+        progress: &mut impl FnMut(u64) -> Result<(), E>,
+    ) -> Result<Option<Result<Id, ListFault<Id>>>, E> {
+        progress(1)?;
+        if let Some(fault) = self.pending.take() {
+            return Ok(Some(Err(fault)));
+        }
+        let Some(cell) = self.cell else {
+            return Ok(None);
+        };
+        if Some(cell) == self.nil {
+            self.cell = None;
+            progress(1)?;
+            let first = (self.first)(cell);
+            let nonempty = if first == SoleObject::None {
+                progress(1)?;
+                (self.rest)(cell) != SoleObject::None
+            } else {
+                true
+            };
+            if nonempty {
+                return Ok(Some(Err(ListFault {
+                    kind: ListErrorKind::NonEmptyNil,
+                    node: cell,
+                    members: self.yielded,
+                })));
+            }
+            return Ok(None);
+        }
+        progress(1)?;
+        let member = match (self.first)(cell) {
+            SoleObject::None => {
+                return Ok(Some(Err(self.fault(
+                    ListErrorKind::MissingFirst,
+                    cell,
+                    self.yielded,
+                ))));
+            }
+            SoleObject::Many => {
+                return Ok(Some(Err(self.fault(
+                    ListErrorKind::MultipleFirst,
+                    cell,
+                    self.yielded,
+                ))));
+            }
+            SoleObject::One(member) => member,
+        };
+        self.yielded += 1;
+        progress(1)?;
+        let next = match (self.rest)(cell) {
+            SoleObject::None => {
+                self.pending = Some(self.fault(ListErrorKind::MissingRest, cell, self.yielded));
+                return Ok(Some(Ok(member)));
+            }
+            SoleObject::Many => {
+                self.pending = Some(self.fault(ListErrorKind::MultipleRest, cell, self.yielded));
+                return Ok(Some(Ok(member)));
+            }
+            SoleObject::One(next) => next,
+        };
+        self.steps += 1;
+        if next == self.saved {
+            // `steps` is now the cycle's length: find where it starts (two
+            // cursors `steps` apart meet at the first repeated cell) and count
+            // each distinct cell's member once.
+            let (prefix, entry) = cycle_start(self.head, self.steps, &mut self.rest, progress)?;
+            let distinct = prefix + self.steps;
+            self.pending = Some(self.fault(ListErrorKind::Cycle, entry, distinct));
+            return Ok(Some(Ok(member)));
+        }
+        if self.steps == self.power {
+            self.saved = next;
+            self.power *= 2;
+            self.steps = 0;
+        }
+        self.cell = Some(next);
+        Ok(Some(Ok(member)))
+    }
+}
+
 impl<Id, F, R> Iterator for RdfListWalk<Id, F, R>
 where
     Id: Copy + Eq,
@@ -352,67 +458,10 @@ where
     type Item = Result<Id, ListFault<Id>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(fault) = self.pending.take() {
-            return Some(Err(fault));
+        match self.try_next(&mut |_| Ok::<(), core::convert::Infallible>(())) {
+            Ok(item) => item,
+            Err(never) => match never {},
         }
-        let cell = self.cell?;
-        if Some(cell) == self.nil {
-            self.cell = None;
-            if (self.first)(cell) != SoleObject::None || (self.rest)(cell) != SoleObject::None {
-                return Some(Err(ListFault {
-                    kind: ListErrorKind::NonEmptyNil,
-                    node: cell,
-                    members: self.yielded,
-                }));
-            }
-            return None;
-        }
-        let member = match (self.first)(cell) {
-            SoleObject::None => {
-                return Some(Err(self.fault(
-                    ListErrorKind::MissingFirst,
-                    cell,
-                    self.yielded,
-                )));
-            }
-            SoleObject::Many => {
-                return Some(Err(self.fault(
-                    ListErrorKind::MultipleFirst,
-                    cell,
-                    self.yielded,
-                )));
-            }
-            SoleObject::One(member) => member,
-        };
-        self.yielded += 1;
-        let next = match (self.rest)(cell) {
-            SoleObject::None => {
-                self.pending = Some(self.fault(ListErrorKind::MissingRest, cell, self.yielded));
-                return Some(Ok(member));
-            }
-            SoleObject::Many => {
-                self.pending = Some(self.fault(ListErrorKind::MultipleRest, cell, self.yielded));
-                return Some(Ok(member));
-            }
-            SoleObject::One(next) => next,
-        };
-        self.steps += 1;
-        if next == self.saved {
-            // `steps` is now the cycle's length: find where it starts (two
-            // cursors `steps` apart meet at the first repeated cell) and count
-            // each distinct cell's member once.
-            let (prefix, entry) = cycle_start(self.head, self.steps, &mut self.rest);
-            let distinct = prefix + self.steps;
-            self.pending = Some(self.fault(ListErrorKind::Cycle, entry, distinct));
-            return Some(Ok(member));
-        }
-        if self.steps == self.power {
-            self.saved = next;
-            self.power *= 2;
-            self.steps = 0;
-        }
-        self.cell = Some(next);
-        Some(Ok(member))
     }
 }
 
@@ -452,49 +501,106 @@ pub fn walk_rdf_list_with_memory<Id: Copy + Eq, S: purrdf_lex::allocation::Admis
     rest: impl FnMut(Id) -> SoleObject<Id>,
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> Result<Result<Vec<Id>, ListError<Id>>, purrdf_lex::allocation::StorageError> {
-    let mut members = Vec::new();
-    for item in RdfListWalk::new(head, nil, first, rest) {
-        match item {
-            Ok(member) => memory.push(&mut members, member)?,
-            Err(fault) => {
-                members.truncate(fault.members);
-                return Ok(Err(ListError {
-                    kind: fault.kind,
-                    members,
-                    node: fault.node,
-                }));
+    match walk_rdf_list_with_control(head, nil, first, rest, memory, &mut |_| {
+        Ok::<(), core::convert::Infallible>(())
+    }) {
+        Ok(result) => Ok(result),
+        Err(purrdf_lex::control::ControlledError::Native(cause)) => Err(cause),
+        Err(purrdf_lex::control::ControlledError::Control(never)) => match never {},
+    }
+}
+
+/// Collect the native strict walk under original storage and work controls.
+///
+/// Checks the callback with zero units before any edge access, then admits each
+/// native step and edge lookup, including cycle-entry recovery, before execution.
+/// Returned members and malformed prefixes retain their original memory grant;
+/// the caller keeps that grant alive until those buffers are destroyed.
+///
+/// # Errors
+/// Returns physical refusal in `Native`, or the unchanged callback error in
+/// `Control`. Either destroys partial collection buffers before refunding them.
+/// Malformed RDF remains the inner native `ListError`, with its ordered prefix.
+///
+/// ```
+/// use purrdf_core::collections::{SoleObject, walk_rdf_list_with_control};
+/// use purrdf_lex::{allocation::{Memory, Resident}, control::ControlledError};
+/// let mut resident = Resident;
+/// let mut memory = Memory::new(&mut resident);
+/// let result = walk_rdf_list_with_control(0_u32, Some(1),
+///     |_| SoleObject::One(7), |_| SoleObject::One(1), &mut memory,
+///     &mut |_| Err("stopped"));
+/// assert!(matches!(result, Err(ControlledError::Control("stopped"))));
+/// ```
+pub fn walk_rdf_list_with_control<
+    Id: Copy + Eq,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E,
+>(
+    head: Id,
+    nil: Option<Id>,
+    first: impl FnMut(Id) -> SoleObject<Id>,
+    rest: impl FnMut(Id) -> SoleObject<Id>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    progress: &mut impl FnMut(u64) -> Result<(), E>,
+) -> Result<
+    Result<Vec<Id>, ListError<Id>>,
+    purrdf_lex::control::ControlledError<purrdf_lex::allocation::StorageError, E>,
+> {
+    use purrdf_lex::control::ControlledError;
+    progress(0).map_err(ControlledError::Control)?;
+    memory.try_scope(|memory| {
+        let mut members = Vec::new();
+        let mut walk = RdfListWalk::new(head, nil, first, rest);
+        while let Some(item) = walk.try_next(progress).map_err(ControlledError::Control)? {
+            match item {
+                Ok(member) => memory
+                    .push(&mut members, member)
+                    .map_err(ControlledError::Native)?,
+                Err(fault) => {
+                    members.truncate(fault.members);
+                    return Ok(Err(ListError {
+                        kind: fault.kind,
+                        members,
+                        node: fault.node,
+                    }));
+                }
             }
         }
-    }
-    Ok(Ok(members))
+        Ok(Ok(members))
+    })
 }
 
 /// Where a cycle of length `length` on the `rdf:rest` chain from `head`
 /// begins: the number of cells before it, and its first cell. Two cursors
 /// `length` cells apart meet exactly there. Every cell they visit was already
 /// validated by the walk that found the cycle, so each has one `rdf:rest`.
-fn cycle_start<Id: Copy + Eq>(
+fn cycle_start<Id: Copy + Eq, E>(
     head: Id,
     length: usize,
     rest: &mut impl FnMut(Id) -> SoleObject<Id>,
-) -> (usize, Id) {
-    let mut step = |cell: Id| match rest(cell) {
-        SoleObject::One(next) => next,
-        SoleObject::None | SoleObject::Many => {
-            unreachable!("the walk validated every cell on the cycle")
-        }
+    progress: &mut impl FnMut(u64) -> Result<(), E>,
+) -> Result<(usize, Id), E> {
+    let mut step = |cell: Id| -> Result<Id, E> {
+        progress(1)?;
+        Ok(match rest(cell) {
+            SoleObject::One(next) => next,
+            SoleObject::None | SoleObject::Many => {
+                unreachable!("the walk validated every cell on the cycle")
+            }
+        })
     };
     let mut ahead = head;
     for _ in 0..length {
-        ahead = step(ahead);
+        ahead = step(ahead)?;
     }
     let (mut behind, mut prefix) = (head, 0);
     while behind != ahead {
-        behind = step(behind);
-        ahead = step(ahead);
+        behind = step(behind)?;
+        ahead = step(ahead)?;
         prefix += 1;
     }
-    (prefix, behind)
+    Ok((prefix, behind))
 }
 
 /// The three terms an RDF Collection is written with, in a caller's term
@@ -1597,6 +1703,97 @@ mod tests {
         memory.release_vec(members).unwrap();
         assert_eq!(memory.admitted_bytes(), 0);
         assert_eq!(storage.live, 0);
+    }
+
+    #[test]
+    fn controlled_list_walk_stops_inside_cycle_entry_recovery() {
+        use core::cell::Cell;
+        use purrdf_lex::{
+            allocation::{Memory, Resident},
+            control::ControlledError,
+        };
+        #[derive(Debug, PartialEq, Eq)]
+        struct Stop(u32);
+        let first_calls = Cell::new(0_u32);
+        let rest_calls = Cell::new(0_u32);
+        let recovering = Cell::new(false);
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let original = memory.string("existing caller storage").unwrap();
+        let baseline = memory.admitted_bytes();
+        let result = walk_rdf_list_with_control(
+            0_u32,
+            None,
+            |cell| {
+                first_calls.set(first_calls.get() + 1);
+                SoleObject::One(cell + 100)
+            },
+            |cell| {
+                rest_calls.set(rest_calls.get() + 1);
+                recovering.set(rest_calls.get() > first_calls.get());
+                SoleObject::One(if cell == 6 { 3 } else { cell + 1 })
+            },
+            &mut memory,
+            &mut |_| {
+                if recovering.get() {
+                    Err(Stop(73))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(matches!(result, Err(ControlledError::Control(Stop(73)))));
+        assert!(
+            recovering.get(),
+            "refusal happened inside cycle-entry traversal"
+        );
+        assert_eq!(
+            rest_calls.get(),
+            first_calls.get() + 1,
+            "the refused recovery edge must never be read"
+        );
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(original).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
+    #[test]
+    fn controlled_list_collection_preserves_fault_prefixes_and_pretripped_source() {
+        use core::cell::Cell;
+        use purrdf_lex::{
+            allocation::{Memory, Resident},
+            control::ControlledError,
+        };
+        let first = |cell: u32| SoleObject::One(cell + 100);
+        let rest = |cell| SoleObject::One(if cell == 6 { 3 } else { cell + 1 });
+        let expected = walk_rdf_list(0_u32, None, first, rest);
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let actual = walk_rdf_list_with_control(0_u32, None, first, rest, &mut memory, &mut |_| {
+            Ok::<(), u32>(())
+        })
+        .unwrap();
+        assert_eq!(actual, expected);
+        let fault = actual.unwrap_err();
+        assert_eq!(fault.kind, ListErrorKind::Cycle);
+        assert_eq!(fault.node, 3);
+        assert_eq!(fault.members, (100..107).collect::<Vec<_>>());
+        memory.release_vec(fault.members).unwrap();
+        let reads = Cell::new(0);
+        let stopped = walk_rdf_list_with_control(
+            0_u32,
+            None,
+            |_| {
+                reads.set(reads.get() + 1);
+                SoleObject::One(100)
+            },
+            rest,
+            &mut memory,
+            &mut |_| Err(91_u32),
+        );
+        assert!(matches!(stopped, Err(ControlledError::Control(91))));
+        assert_eq!(reads.get(), 0);
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

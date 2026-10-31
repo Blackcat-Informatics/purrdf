@@ -3,7 +3,7 @@
 
 //! Original native data at the strict FnO read boundary.
 
-use super::{FnoAdmissionError, TermValue};
+use super::{FnoRejectedCatalog, TermValue};
 use crate::{ListError, QuadValues, TermLookupError};
 
 /// The required shape of one FnO field.
@@ -73,14 +73,52 @@ impl purrdf_hash::error::StructuredError for FnoStructureKind {
     }
 }
 
-/// A strict FnO read refuses without publishing a partial catalog.
+/// An independently owned provider failure needs no new reporting allocation.
+/// Native source and term-lookup context and the original provider value survive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FnoReadSourceError<E = core::convert::Infallible> {
+    /// Original failure while acquiring source rows or observing readiness.
+    Source(E),
+    /// Original native term resolver failure and its unchanged provider cause.
+    Term(TermLookupError<E>),
+}
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for FnoReadSourceError<E>
+{
+    purrdf_hash::error_visit! {
+        Source(cause)=>"fno-read-source" {"cause"=>Cause(cause)},
+        Term(cause)=>"fno-read-term" {"cause"=>Cause(cause)},
+    }
+}
+impl<E: core::fmt::Display> core::fmt::Display for FnoReadSourceError<E> {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Source(cause) => write!(out, "FnO source read: {cause}"),
+            Self::Term(cause) => write!(out, "FnO term read: {cause}"),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for FnoReadSourceError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Source(cause) => Some(cause),
+            Self::Term(cause) => Some(cause),
+        }
+    }
+}
+
+/// Complete native reader outcome: owned semantic operands, physical refusal,
+/// or an independently owned original provider failure requiring no allocation.
+pub type FnoReadFailure<E = core::convert::Infallible> = super::FnoConstructionFailure<
+    purrdf_lex::allocation::SharedOwned<FnoReadError>,
+    FnoReadSourceError<E>,
+>;
+
+/// Owned semantic operands of a strict read that published no partial catalog.
+/// Provider failures are carried separately by [`FnoReadSourceError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum FnoReadError<E = std::convert::Infallible> {
-    /// The original operational read failure, before or during the read.
-    Source(E),
-    /// The shared native term resolver refused an input identifier.
-    Term(TermLookupError<E>),
+pub enum FnoReadError {
     /// The explicit ontology selector has no unique document.
     Document {
         /// Original caller selector.
@@ -122,7 +160,7 @@ pub enum FnoReadError<E = std::convert::Infallible> {
     /// A complete original row cannot be represented by the writer.
     Statement {
         /// Original subject, predicate, object and graph.
-        row: Box<QuadValues>,
+        row: QuadValues,
         /// The structural boundary that refused it.
         reason: FnoStructureKind,
     },
@@ -132,15 +170,11 @@ pub enum FnoReadError<E = std::convert::Infallible> {
         graph: TermValue,
     },
     /// The shared catalog admission path refused reconstructed fields.
-    Admission(Box<FnoAdmissionError>),
+    Admission(FnoRejectedCatalog),
 }
 
-impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
-    for FnoReadError<E>
-{
+impl purrdf_hash::error::StructuredError for FnoReadError {
     purrdf_hash::error_visit! {
-        Source(cause) => "fno-read-source" { "cause" => Cause(cause) },
-        Term(cause) => "fno-read-term" { "cause" => Cause(cause) },
         Document { ontology_iri, candidates } => "fno-read-document" {
             "ontology_iri" => Iri(ontology_iri),
             "candidates" => List(candidates.iter().map(|value| purrdf_hash::error::ErrorValue::Term(value))),
@@ -158,18 +192,16 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
             "members" => List(members.iter().map(|value| purrdf_hash::error::ErrorValue::Term(value))),
         },
         Statement { row, reason } => "fno-read-statement" {
-            "row" => Record(&**row), "reason" => Record(reason),
+            "row" => Record(row), "reason" => Record(reason),
         },
         Graph { graph } => "fno-read-graph" { "graph" => Term(graph) },
-        Admission(cause) => "fno-read-admission" { "cause" => Cause(&**cause) },
+        Admission(cause) => "fno-read-admission" { "cause" => Cause(cause) },
     }
 }
 
-impl<E: std::fmt::Display> std::fmt::Display for FnoReadError<E> {
+impl std::fmt::Display for FnoReadError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Source(cause) => write!(out, "FnO source read: {cause}"),
-            Self::Term(cause) => write!(out, "FnO term read: {cause}"),
             Self::Document {
                 ontology_iri,
                 candidates,
@@ -206,13 +238,11 @@ impl<E: std::fmt::Display> std::fmt::Display for FnoReadError<E> {
     }
 }
 
-impl<E: std::error::Error + 'static> std::error::Error for FnoReadError<E> {
+impl std::error::Error for FnoReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Source(cause) => Some(cause),
-            Self::Term(cause) => Some(cause),
             Self::List { cause, .. } => Some(cause),
-            Self::Admission(cause) => Some(cause.as_ref()),
+            Self::Admission(cause) => Some(cause),
             _ => None,
         }
     }

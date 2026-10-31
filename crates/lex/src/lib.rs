@@ -141,6 +141,7 @@ pub mod allocation;
 pub mod assoc;
 pub mod cbor;
 pub mod constructors;
+pub mod control;
 pub mod crockford;
 pub mod diagnostic;
 /// Borrowed typed error inspection shared by all native producers.

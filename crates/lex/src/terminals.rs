@@ -866,12 +866,27 @@ terminal! {
 /// parser (including PurRDF's own) can read back.
 #[must_use]
 pub fn is_valid_blank_node_label(label: &str) -> bool {
+    match is_valid_blank_node_label_with_control(label, &mut crate::control::Unmetered) {
+        Ok(value) => value,
+        Err(cause) => match cause {},
+    }
+}
+
+/// The native blank-label production with interruption at each scalar.
+/// # Errors
+/// Returns the original progress refusal before the next scalar decision.
+pub fn is_valid_blank_node_label_with_control<C: crate::control::Progress + ?Sized>(
+    label: &str,
+    progress: &mut C,
+) -> Result<bool, C::Error> {
+    progress.charge(0)?;
     let mut chars = label.chars();
     let Some(first) = chars.next() else {
-        return false;
+        return Ok(false);
     };
+    progress.charge(1)?;
     if !is_blank_node_label_start(first) {
-        return false;
+        return Ok(false);
     }
     // The grammar is `(PN_CHARS | '.')* PN_CHARS` after the first character:
     // any run of PN_CHARS/'.' is legal mid-label, but the *final* character
@@ -879,15 +894,16 @@ pub fn is_valid_blank_node_label(label: &str) -> bool {
     // character was a '.' and reject at the end if so.
     let mut trailing_dot = false;
     for ch in chars {
+        progress.charge(1)?;
         if ch == '.' {
             trailing_dot = true;
         } else if is_pn_chars(ch) {
             trailing_dot = false;
         } else {
-            return false;
+            return Ok(false);
         }
     }
-    !trailing_dot
+    Ok(!trailing_dot)
 }
 
 terminal! {
@@ -1280,8 +1296,35 @@ pub const fn is_ncname_char(c: char) -> bool {
 /// ```
 #[must_use]
 pub fn is_ncname(text: &str) -> bool {
+    match is_ncname_with_control(text, &mut crate::control::Unmetered) {
+        Ok(value) => value,
+        Err(cause) => match cause {},
+    }
+}
+
+/// The native NCName production with interruption at each scalar.
+/// # Errors
+/// Returns the original progress refusal before the next scalar decision.
+pub fn is_ncname_with_control<C: crate::control::Progress + ?Sized>(
+    text: &str,
+    progress: &mut C,
+) -> Result<bool, C::Error> {
+    progress.charge(0)?;
     let mut chars = text.chars();
-    chars.next().is_some_and(is_ncname_start) && chars.all(is_ncname_char)
+    let Some(first) = chars.next() else {
+        return Ok(false);
+    };
+    progress.charge(1)?;
+    if !is_ncname_start(first) {
+        return Ok(false);
+    }
+    for ch in chars {
+        progress.charge(1)?;
+        if !is_ncname_char(ch) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The offset of the first byte at or after `at` that is not
@@ -1511,29 +1554,44 @@ pub fn expand_uchars_with_memory<'a, S: crate::allocation::Admission + ?Sized>(
     memory: &mut crate::allocation::Memory<'_, S>,
 ) -> Result<Cow<'a, str>, crate::allocation::StorageError> {
     let bytes = text.as_bytes();
-    let Some(first) = bytes.iter().position(|&b| b == b'\\') else {
+    memory.admission_mut().checkpoint(0)?;
+    let first = if memory.admission().progress_enabled() {
+        let mut first = None;
+        for (index, chunk) in bytes.chunks(256).enumerate() {
+            memory.admission_mut().checkpoint(chunk.len() as u64)?;
+            if let Some(offset) = chunk.iter().position(|&byte| byte == b'\\') {
+                first = Some(index * 256 + offset);
+                break;
+            }
+        }
+        first
+    } else {
+        bytes.iter().position(|&byte| byte == b'\\')
+    };
+    let Some(first) = first else {
         return Ok(Cow::Borrowed(text));
     };
-    let mut out = String::new();
-    memory.reserve_string(&mut out, text.len())?;
-    let mut copied = 0;
-    let mut at = first;
-    while at < bytes.len() {
-        if bytes[at] == b'\\'
-            && let Ok((decoded, width)) = decode_uchar(&bytes[at..])
-        {
-            out.push_str(&text[copied..at]);
-            out.push(decoded);
-            at += width;
-            copied = at;
-        } else {
-            at += 1;
+    memory.scope(|memory| {
+        let mut out = String::new();
+        memory.reserve_string(&mut out, text.len())?;
+        let mut copied = 0;
+        let mut at = first;
+        while at < bytes.len() {
+            memory.admission_mut().checkpoint(1)?;
+            if bytes[at] == b'\\'
+                && let Ok((decoded, width)) = decode_uchar(&bytes[at..])
+            {
+                memory.push_str_with_progress(&mut out, &text[copied..at])?;
+                out.push(decoded);
+                at += width;
+                copied = at;
+            } else {
+                at += 1;
+            }
         }
-    }
-    // Every stop is an ASCII backslash or the end of an ASCII escape, so each
-    // slice starts and ends on a char boundary. Decoding never expands bytes.
-    out.push_str(&text[copied..]);
-    Ok(Cow::Owned(out))
+        memory.push_str_with_progress(&mut out, &text[copied..])?;
+        Ok(Cow::Owned(out))
+    })
 }
 
 /// The scalar an XML character reference names, given its body — the text

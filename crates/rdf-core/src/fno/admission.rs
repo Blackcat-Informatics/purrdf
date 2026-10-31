@@ -3,22 +3,49 @@
 
 //! Borrowed admission followed by canonical ownership transfer.
 
+use super::construction::{Context, PhysicalResult, Result as ConstructionResult, RetainedFields};
 use super::{
     DCTERMS_IS_PART_OF, FNO, FNOM, FnFunction, FnImpl, FnMapping, FnOutput, FnParam,
     FnParamMapping, FnReturnMapping, FnoCatalogInput, OWL_ONTOLOGY, RDF_TYPE, RDFS_COMMENT,
     RDFS_LABEL, RDFS_SEE_ALSO, SKOS_DEFINITION,
 };
 use crate::TermValue;
-use std::collections::{BTreeMap, BTreeSet};
+use purrdf_lex::allocation::{Admission, OrderedTable};
+use purrdf_lex::control::Progress;
+type AdmitResult<T, E> = ConstructionResult<T, FnoAdmissionReason, E>;
 
 /// Original catalog data and the native reason admission refused it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnoAdmissionError {
     /// Original rejected records, strings, scopes and input ordering.
-    pub input: Box<FnoCatalogInput>,
+    pub input: FnoCatalogInput,
     /// Original semantic refusal and its location in the catalog.
-    pub reason: Box<FnoAdmissionReason>,
+    pub reason:
+        super::FnoConstructionFailure<purrdf_lex::allocation::SharedOwned<FnoAdmissionReason>>,
 }
+
+/// Original reconstructed fields and the native semantic refusal of a reader.
+/// The enclosing shared reader error retains one account for both inline values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnoRejectedCatalog {
+    /// Exact original reconstructed records and their ordering.
+    pub input: FnoCatalogInput,
+    /// Original semantic reason and operands.
+    pub reason: FnoAdmissionReason,
+}
+impl purrdf_hash::error::StructuredError for FnoRejectedCatalog {
+    purrdf_hash::error_visit! {
+        @record self {input,reason} => "fno-admission" {
+            "input"=>Record(&self.input),"reason"=>Cause(&self.reason),
+        }
+    }
+}
+impl core::fmt::Display for FnoRejectedCatalog {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.reason.fmt(out)
+    }
+}
+purrdf_lex::error_source!(FnoRejectedCatalog => {Self {reason,..}=>reason});
 
 /// A catalog cannot be represented reversibly by the FnO profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +118,11 @@ impl purrdf_hash::error::StructuredError for FnoAdmissionReason {
 impl purrdf_hash::error::StructuredError for FnoAdmissionError {
     purrdf_hash::error_visit! {
         @record self { input, reason } => "fno-admission" {
-            "input" => Record(&*self.input), "reason" => Cause(&*self.reason),
+            "input" => Record(&self.input), "reason" => Cause(match self.reason {
+                super::FnoConstructionFailure::Semantic(ref reason) => &**reason as &dyn purrdf_hash::error::StructuredError,
+                super::FnoConstructionFailure::Storage(ref cause) => cause,
+                super::FnoConstructionFailure::Source(never)=>match never {},
+            }),
         }
     }
 }
@@ -129,58 +160,89 @@ purrdf_lex::error_source!(FnoAdmissionReason => {
     Self::Iri { cause, .. } => cause,
     Self::Literal { cause, .. } => cause,
 });
-purrdf_lex::error_source!(FnoAdmissionError => { Self { reason, .. } => reason.as_ref() });
-
-fn iri(subject: &TermValue, predicate: &str, value: &str) -> Result<(), Box<FnoAdmissionReason>> {
-    crate::ir::absolute::check_absolute(value).map_err(|cause| {
-        Box::new(FnoAdmissionReason::Iri {
-            subject: subject.clone(),
-            predicate: predicate.to_owned(),
-            value: value.to_owned(),
-            cause,
-        })
-    })
+impl std::error::Error for FnoAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.reason)
+    }
 }
 
-fn text(
-    subject: &TermValue,
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn iri<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    subject: &Key<'_>,
+    predicate: &str,
+    value: &str,
+) -> AdmitResult<(), C::Error> {
+    if let Err(cause) = context.absolute(value)? {
+        let reason = FnoAdmissionReason::Iri {
+            subject: subject.term(context)?,
+            predicate: context.string(predicate)?,
+            value: context.string(value)?,
+            cause,
+        };
+        return context.refuse(reason);
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn text<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    subject: &Key<'_>,
     predicate: &str,
     value: &TermValue,
-) -> Result<(), Box<FnoAdmissionReason>> {
+) -> AdmitResult<(), C::Error> {
     if !matches!(value, TermValue::Literal { .. }) {
-        return Err(Box::new(FnoAdmissionReason::ExpectedLiteral {
-            subject: subject.clone(),
-            predicate: predicate.to_owned(),
-            value: value.clone(),
-        }));
+        let reason = FnoAdmissionReason::ExpectedLiteral {
+            subject: subject.term(context)?,
+            predicate: context.string(predicate)?,
+            value: context.term(value)?,
+        };
+        return context.refuse(reason);
     }
-    let record = crate::ir::mutable::RecordValues {
-        kind: crate::ir::mutable::RecordKind::Ordinary,
-        quad: crate::ir::mutable::QuadValues {
-            s: subject.clone(),
-            p: TermValue::iri(predicate),
-            o: value.clone(),
-            g: None,
-        },
-    };
-    crate::ir::validate::validate_record(&record).map_err(|cause| {
-        Box::new(FnoAdmissionReason::Literal {
-            subject: subject.clone(),
-            predicate: predicate.to_owned(),
+    if let Err(cause) = context.literal(value)? {
+        let reason = FnoAdmissionReason::Literal {
+            subject: subject.term(context)?,
+            predicate: context.string(predicate)?,
             cause,
-        })
-    })
+        };
+        return context.refuse(reason);
+    }
+    Ok(())
 }
 
-fn optional_text(
-    subject: &TermValue,
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn optional_text<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    subject: &Key<'_>,
     predicate: &str,
     value: Option<&TermValue>,
-) -> Result<(), Box<FnoAdmissionReason>> {
-    value.map_or(Ok(()), |value| text(subject, predicate, value))
+) -> AdmitResult<(), C::Error> {
+    if let Some(value) = value {
+        text(context, subject, predicate, value)?;
+    }
+    Ok(())
 }
 
-fn same_text(first: &TermValue, second: &TermValue) -> bool {
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn same_text<S: Admission, C: Progress>(
+    first: &TermValue,
+    second: &TermValue,
+    context: &mut Context<S, C>,
+) -> AdmitResult<bool, C::Error> {
+    context.check(1)?;
     match (first, second) {
         (
             TermValue::Literal {
@@ -196,13 +258,83 @@ fn same_text(first: &TermValue, second: &TermValue) -> bool {
                 direction: bx,
             },
         ) => {
-            a == b
-                && ad == bd
-                && ax == bx
-                && al.as_deref().map(purrdf_iri::langtag::identity_fold)
-                    == bl.as_deref().map(purrdf_iri::langtag::identity_fold)
+            if !context.compare(a, b)?.is_eq() {
+                return Ok(false);
+            }
+            if !context.compare(ad, bd)?.is_eq() {
+                return Ok(false);
+            }
+            context.check(1)?;
+            if ax != bx {
+                return Ok(false);
+            }
+            context.check(1)?;
+            match (al, bl) {
+                (None, None) => Ok(true),
+                (None, Some(_)) | (Some(_), None) => Ok(false),
+                (Some(a), Some(b)) => {
+                    // Identity folding is ASCII case only. Compare bounded native
+                    // chunks without allocating whole folded language strings.
+                    context.check(1)?;
+                    if a.len() != b.len() {
+                        return Ok(false);
+                    }
+                    for (a, b) in a.as_bytes().chunks(256).zip(b.as_bytes().chunks(256)) {
+                        context
+                            .check(u64::try_from(a.len()).expect("bounded language comparison"))?;
+                        if !a.eq_ignore_ascii_case(b) {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+            }
         }
-        _ => first == second,
+        _ => Ok(context.compare(first, second)?.is_eq()),
+    }
+}
+
+/// Borrowed native subjects remain tied to immutable original input while a
+/// separate admitted staging copy is canonicalized. Both variants preserve the
+/// native IRI-before-blank ordering and exact label/scope identity.
+#[derive(Clone, Copy)]
+pub(super) enum Key<'a> {
+    Iri(&'a str),
+    Blank(&'a super::FnBlank),
+}
+impl Key<'_> {
+    fn term<S: Admission, C: Progress, N>(
+        &self,
+        context: &mut Context<S, C>,
+    ) -> ConstructionResult<TermValue, N, C::Error> {
+        match self {
+            Self::Iri(value) => context.iri(value),
+            Self::Blank(value) => Ok(TermValue::Blank {
+                label: context.string(&value.label)?,
+                scope: value.scope,
+            }),
+        }
+    }
+}
+impl super::construction::CompareFields for Key<'_> {
+    fn compare_fields<S: Admission, C: Progress>(
+        &self,
+        other: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        progress: &mut C,
+    ) -> Result<
+        core::cmp::Ordering,
+        purrdf_lex::control::ControlledError<purrdf_lex::allocation::StorageError, C::Error>,
+    > {
+        progress
+            .charge(1)
+            .map_err(purrdf_lex::control::ControlledError::Control)?;
+        match (self, other) {
+            (Self::Iri(a), Self::Iri(b)) => a.compare_fields(b, memory, progress),
+            (Self::Blank(a), Self::Blank(b)) => a.compare_fields(b, memory, progress),
+            (Self::Iri(_), Self::Blank(_)) => Ok(core::cmp::Ordering::Less),
+            (Self::Blank(_), Self::Iri(_)) => Ok(core::cmp::Ordering::Greater),
+        }
     }
 }
 
@@ -218,7 +350,7 @@ enum Node<'a> {
     ReturnMapping(&'a FnReturnMapping),
 }
 
-type Nodes<'a> = BTreeMap<TermValue, crate::SmallVec<[Node<'a>; 1]>>;
+type Nodes<'a> = OrderedTable<Key<'a>, Vec<Node<'a>>>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Property {
@@ -250,13 +382,41 @@ enum Value<'a> {
 }
 
 impl Value<'_> {
-    fn same(self, other: Self) -> bool {
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
+    fn same<S: Admission, C: Progress>(
+        self,
+        other: Self,
+        context: &mut Context<S, C>,
+    ) -> AdmitResult<bool, C::Error> {
         match (self, other) {
-            (Self::Text(a), Self::Text(b)) => same_text(a, b),
-            (Self::Iri(a), Self::Iri(b)) | (Self::Plain(a), Self::Plain(b)) => a == b,
-            (Self::Boolean(a), Self::Boolean(b)) => a == b,
-            (Self::List(a), Self::List(b)) => a == b,
-            _ => false,
+            (Self::Text(a), Self::Text(b)) => same_text(a, b, context),
+            (Self::Iri(a), Self::Iri(b)) | (Self::Plain(a), Self::Plain(b)) => {
+                Ok(context.compare(a, b)?.is_eq())
+            }
+            (Self::Boolean(a), Self::Boolean(b)) => {
+                context.check(1)?;
+                Ok(a == b)
+            }
+            (Self::List(a), Self::List(b)) => {
+                context.check(1)?;
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (a, b) in a.iter().zip(b) {
+                    if !context.compare(a, b)?.is_eq() {
+                        return Ok(false);
+                    }
+                }
+                context.check(1)?;
+                Ok(a.len() == b.len())
+            }
+            _ => {
+                context.check(1)?;
+                Ok(false)
+            }
         }
     }
 }
@@ -354,329 +514,559 @@ impl<'a> Node<'a> {
     }
 }
 
-fn insert<'a>(
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn insert<'a, S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
     nodes: &mut Nodes<'a>,
-    subject: TermValue,
+    subject: Key<'a>,
     node: Node<'a>,
-) -> Result<(), Box<FnoAdmissionReason>> {
+) -> AdmitResult<(), C::Error> {
     let properties = node.properties();
-    if let Some(previous) = nodes.get(&subject) {
+    if let Some(previous) = context.lookup(nodes, &subject)? {
         for previous in previous {
-            if previous.properties().iter().any(|(property, value)| {
-                properties.iter().any(|(other_property, other_value)| {
-                    property == other_property && !value.same(*other_value)
-                })
-            }) {
-                return Err(Box::new(FnoAdmissionReason::ConflictingNode { subject }));
+            for (property, value) in previous.properties() {
+                for (other_property, other_value) in &properties {
+                    context.check(1)?;
+                    if property == *other_property && !value.same(*other_value, context)? {
+                        let subject = subject.term(context)?;
+                        return context.refuse(FnoAdmissionReason::ConflictingNode { subject });
+                    }
+                }
             }
         }
     }
-    nodes.entry(subject).or_default().push(node);
+    let mut items = context
+        .insert(nodes, subject, Vec::new())?
+        .unwrap_or_default();
+    context.push(&mut items, node)?;
+    context.insert(nodes, subject, items)?;
     Ok(())
 }
 
-fn reference(
-    subject: &TermValue,
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn reference<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    subject: &Key<'_>,
     predicate: &str,
     target: &str,
     valid: bool,
-) -> Result<(), Box<FnoAdmissionReason>> {
-    if valid {
-        Ok(())
-    } else {
-        Err(Box::new(FnoAdmissionReason::Reference {
-            subject: subject.clone(),
-            predicate: predicate.to_owned(),
-            target: target.to_owned(),
-        }))
+) -> AdmitResult<(), C::Error> {
+    context.check(1)?;
+    if !valid {
+        let reason = FnoAdmissionReason::Reference {
+            subject: subject.term(context)?,
+            predicate: context.string(predicate)?,
+            target: context.string(target)?,
+        };
+        return context.refuse(reason);
     }
+    Ok(())
 }
 
-pub(super) fn validate(
-    data: &FnoCatalogInput,
-) -> Result<BTreeMap<TermValue, Shared>, Box<FnoAdmissionReason>> {
-    let doc = TermValue::iri(&data.document_iri);
-    iri(&doc, RDF_TYPE, &data.document_iri)?;
-    iri(&doc, DCTERMS_IS_PART_OF, &data.ontology_iri)?;
-    text(&doc, RDFS_LABEL, &data.doc_label)?;
-    text(&doc, RDFS_COMMENT, &data.banner)?;
-    let mut nodes = BTreeMap::new();
-    insert(&mut nodes, doc, Node::Document(data))?;
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+pub(super) fn validate<'a, S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    data: &'a FnoCatalogInput,
+) -> AdmitResult<OrderedTable<Key<'a>, Shared>, C::Error> {
+    let doc = Key::Iri(&data.document_iri);
+    iri(context, &doc, RDF_TYPE, &data.document_iri)?;
+    iri(context, &doc, DCTERMS_IS_PART_OF, &data.ontology_iri)?;
+    text(context, &doc, RDFS_LABEL, &data.doc_label)?;
+    text(context, &doc, RDFS_COMMENT, &data.banner)?;
+    let mut nodes = OrderedTable::default();
+    insert(context, &mut nodes, doc, Node::Document(data))?;
     for function in &data.functions {
-        let subject = TermValue::iri(&function.iri);
-        iri(&subject, RDF_TYPE, &function.iri)?;
-        text(&subject, RDFS_LABEL, &function.label)?;
-        optional_text(&subject, SKOS_DEFINITION, function.description.as_ref())?;
+        context.check(1)?;
+        let subject = Key::Iri(&function.iri);
+        iri(context, &subject, RDF_TYPE, &function.iri)?;
+        text(context, &subject, RDFS_LABEL, &function.label)?;
+        optional_text(
+            context,
+            &subject,
+            SKOS_DEFINITION,
+            function.description.as_ref(),
+        )?;
         for kind in &function.kind_types {
-            iri(&subject, RDF_TYPE, kind)?;
+            iri(context, &subject, RDF_TYPE, kind)?;
         }
         if let Some(related) = &function.see_also {
-            iri(&subject, RDFS_SEE_ALSO, related)?;
+            iri(context, &subject, RDFS_SEE_ALSO, related)?;
         }
-        insert(&mut nodes, subject, Node::Function(function))?;
+        insert(context, &mut nodes, subject, Node::Function(function))?;
         let output = &function.output;
-        let subject = TermValue::iri(&output.iri);
-        iri(&subject, RDF_TYPE, &output.iri)?;
-        iri(&subject, &format!("{FNO}type"), &output.r#type)?;
+        let subject = Key::Iri(&output.iri);
+        iri(context, &subject, RDF_TYPE, &output.iri)?;
+        iri(context, &subject, fno!("type"), &output.r#type)?;
         if let Some(predicate) = &output.predicate {
-            iri(&subject, &format!("{FNO}predicate"), predicate)?;
+            iri(context, &subject, fno!("predicate"), predicate)?;
         }
-        optional_text(&subject, RDFS_LABEL, output.label.as_ref())?;
-        optional_text(&subject, SKOS_DEFINITION, output.description.as_ref())?;
-        insert(&mut nodes, subject, Node::Output(output))?;
+        optional_text(context, &subject, RDFS_LABEL, output.label.as_ref())?;
+        optional_text(
+            context,
+            &subject,
+            SKOS_DEFINITION,
+            output.description.as_ref(),
+        )?;
+        insert(context, &mut nodes, subject, Node::Output(output))?;
     }
     for param in &data.params {
-        let subject = TermValue::iri(&param.iri);
-        iri(&subject, RDF_TYPE, &param.iri)?;
-        iri(&subject, &format!("{FNO}type"), &param.r#type)?;
+        context.check(1)?;
+        let subject = Key::Iri(&param.iri);
+        iri(context, &subject, RDF_TYPE, &param.iri)?;
+        iri(context, &subject, fno!("type"), &param.r#type)?;
         if let Some(predicate) = &param.predicate {
-            iri(&subject, &format!("{FNO}predicate"), predicate)?;
+            iri(context, &subject, fno!("predicate"), predicate)?;
         }
-        optional_text(&subject, RDFS_LABEL, param.label.as_ref())?;
-        optional_text(&subject, SKOS_DEFINITION, param.description.as_ref())?;
-        insert(&mut nodes, subject, Node::Param(param))?;
+        optional_text(context, &subject, RDFS_LABEL, param.label.as_ref())?;
+        optional_text(
+            context,
+            &subject,
+            SKOS_DEFINITION,
+            param.description.as_ref(),
+        )?;
+        insert(context, &mut nodes, subject, Node::Param(param))?;
     }
     for implementation in &data.implementations {
-        let subject = TermValue::iri(&implementation.iri);
-        iri(&subject, RDF_TYPE, &implementation.iri)?;
-        iri(&subject, RDFS_SEE_ALSO, &implementation.see_also)?;
-        insert(&mut nodes, subject, Node::Implementation(implementation))?;
+        context.check(1)?;
+        let subject = Key::Iri(&implementation.iri);
+        iri(context, &subject, RDF_TYPE, &implementation.iri)?;
+        iri(context, &subject, RDFS_SEE_ALSO, &implementation.see_also)?;
+        insert(
+            context,
+            &mut nodes,
+            subject,
+            Node::Implementation(implementation),
+        )?;
     }
     for mapping in &data.mappings {
-        let subject = mapping.node.term_value();
-        text(&subject, RDFS_LABEL, &mapping.label)?;
-        insert(&mut nodes, subject, Node::Mapping(mapping))?;
+        context.check(1)?;
+        let subject = Key::Blank(&mapping.node);
+        text(context, &subject, RDFS_LABEL, &mapping.label)?;
+        insert(context, &mut nodes, subject, Node::Mapping(mapping))?;
         for item in &mapping.parameter_mappings {
-            let subject = item.node.term_value();
-            text(&subject, RDFS_LABEL, &item.label)?;
-            insert(&mut nodes, subject, Node::ParamMapping(item))?;
+            let subject = Key::Blank(&item.node);
+            text(context, &subject, RDFS_LABEL, &item.label)?;
+            insert(context, &mut nodes, subject, Node::ParamMapping(item))?;
         }
         for item in &mapping.return_mappings {
-            let subject = item.node.term_value();
-            text(&subject, RDFS_LABEL, &item.label)?;
-            insert(&mut nodes, subject, Node::ReturnMapping(item))?;
+            let subject = Key::Blank(&item.node);
+            text(context, &subject, RDFS_LABEL, &item.label)?;
+            insert(context, &mut nodes, subject, Node::ReturnMapping(item))?;
         }
     }
     for function in &data.functions {
-        let subject = TermValue::iri(&function.iri);
+        let subject = Key::Iri(&function.iri);
+        let roles = context
+            .lookup(&nodes, &subject)?
+            .expect("function was indexed");
         for kind in &function.kind_types {
-            if (kind.starts_with(FNO) || kind.starts_with(FNOM))
-                && !nodes[&subject].iter().any(|node| node.class() == kind)
-            {
-                return Err(Box::new(FnoAdmissionReason::ConflictingNode { subject }));
+            context.check(1)?;
+            if kind.starts_with(FNO) || kind.starts_with(FNOM) {
+                let mut found = false;
+                for node in roles {
+                    if context.compare(node.class(), kind.as_str())?.is_eq() {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    let subject = subject.term(context)?;
+                    return context.refuse(FnoAdmissionReason::ConflictingNode { subject });
+                }
             }
         }
         for target in &function.expects {
-            reference(
-                &TermValue::iri(&function.iri),
-                &format!("{FNO}expects"),
-                target,
-                nodes
-                    .get(&TermValue::iri(target))
-                    .is_some_and(|items| items.iter().any(|node| matches!(node, Node::Param(_)))),
-            )?;
+            let key = Key::Iri(target);
+            let mut valid = false;
+            if let Some(items) = context.lookup(&nodes, &key)? {
+                for node in items {
+                    context.check(1)?;
+                    if matches!(node, Node::Param(_)) {
+                        valid = true;
+                        break;
+                    }
+                }
+            }
+            reference(context, &subject, fno!("expects"), target, valid)?;
         }
     }
     for mapping in &data.mappings {
-        let subject = mapping.node.term_value();
-        let function = nodes
-            .get(&TermValue::iri(&mapping.function))
-            .and_then(|items| {
-                items.iter().find_map(|node| match node {
-                    Node::Function(function) => Some(*function),
-                    _ => None,
-                })
-            });
+        let subject = Key::Blank(&mapping.node);
+        let key = Key::Iri(&mapping.function);
+        let mut function = None;
+        if let Some(items) = context.lookup(&nodes, &key)? {
+            for node in items {
+                context.check(1)?;
+                if let Node::Function(value) = node {
+                    function = Some(*value);
+                    break;
+                }
+            }
+        }
         reference(
+            context,
             &subject,
-            &format!("{FNO}function"),
+            fno!("function"),
             &mapping.function,
             function.is_some(),
         )?;
+        let key = Key::Iri(&mapping.implementation);
+        let mut implementation = false;
+        if let Some(items) = context.lookup(&nodes, &key)? {
+            for node in items {
+                context.check(1)?;
+                if matches!(node, Node::Implementation(_)) {
+                    implementation = true;
+                    break;
+                }
+            }
+        }
         reference(
+            context,
             &subject,
-            &format!("{FNO}implementation"),
+            fno!("implementation"),
             &mapping.implementation,
-            nodes
-                .get(&TermValue::iri(&mapping.implementation))
-                .is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|node| matches!(node, Node::Implementation(_)))
-                }),
+            implementation,
         )?;
-        let Some(function) = function else {
-            unreachable!("reference was checked")
-        };
+        let function = function.expect("the reference was checked");
         for item in &mapping.parameter_mappings {
+            let mut valid = false;
+            for target in &function.expects {
+                if context.compare(target, &item.function_parameter)?.is_eq() {
+                    valid = true;
+                    break;
+                }
+            }
+            let node = Key::Blank(&item.node);
             reference(
-                &item.node.term_value(),
-                &format!("{FNOM}functionParameter"),
+                context,
+                &node,
+                fnom!("functionParameter"),
                 &item.function_parameter,
-                function.expects.contains(&item.function_parameter),
+                valid,
             )?;
         }
         for item in &mapping.return_mappings {
+            let valid = context
+                .compare(&function.output.iri, &item.function_output)?
+                .is_eq();
+            let node = Key::Blank(&item.node);
             reference(
-                &item.node.term_value(),
-                &format!("{FNOM}functionOutput"),
+                context,
+                &node,
+                fnom!("functionOutput"),
                 &item.function_output,
-                function.output.iri == item.function_output,
+                valid,
             )?;
         }
     }
-    Ok(shared_facts(&nodes))
+    let shared = shared_facts(context, &nodes)?;
+    context.release(nodes)?;
+    Ok(shared)
 }
 
-/// Only genuinely shared subjects need copied optional facts at canonicalization.
 #[derive(Default)]
 pub(super) struct Shared {
     label: Option<TermValue>,
     description: Option<TermValue>,
     predicate: Option<String>,
     see_also: Option<String>,
-    kinds: BTreeSet<String>,
-    classes: BTreeSet<&'static str>,
+    kinds: OrderedTable<String, ()>,
+    classes: OrderedTable<&'static str, ()>,
 }
 
-fn shared_facts(nodes: &Nodes<'_>) -> BTreeMap<TermValue, Shared> {
-    let mut shared = BTreeMap::new();
-    for (subject, nodes) in nodes.iter().filter(|(_, nodes)| nodes.len() > 1) {
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn shared_facts<'a, S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    nodes: &Nodes<'a>,
+) -> AdmitResult<OrderedTable<Key<'a>, Shared>, C::Error> {
+    let mut shared = OrderedTable::default();
+    for (subject, nodes) in nodes.ordered() {
+        context.check(1)?;
+        if nodes.len() <= 1 {
+            continue;
+        }
         let mut facts = Shared::default();
         for node in nodes {
-            facts.classes.insert(node.class());
+            context.insert(&mut facts.classes, node.class(), ())?;
             if let Node::Function(function) = node {
-                facts.kinds.extend(function.kind_types.iter().cloned());
+                for kind in &function.kind_types {
+                    let kind = context.string(kind)?;
+                    context.insert(&mut facts.kinds, kind, ())?;
+                }
             }
             for (property, value) in node.properties() {
+                context.check(1)?;
                 match (property, value) {
-                    (Property::Label, Value::Text(value)) => {
-                        facts.label.get_or_insert_with(|| value.clone());
+                    (Property::Label, Value::Text(value)) if facts.label.is_none() => {
+                        facts.label = Some(context.term(value)?);
                     }
-                    (Property::Description, Value::Text(value)) => {
-                        facts.description.get_or_insert_with(|| value.clone());
+                    (Property::Description, Value::Text(value)) if facts.description.is_none() => {
+                        facts.description = Some(context.term(value)?);
                     }
-                    (Property::Predicate, Value::Iri(value)) => {
-                        facts.predicate.get_or_insert_with(|| value.to_owned());
+                    (Property::Predicate, Value::Iri(value)) if facts.predicate.is_none() => {
+                        facts.predicate = Some(context.string(value)?);
                     }
-                    (Property::SeeAlso, Value::Iri(value)) => {
-                        facts.see_also.get_or_insert_with(|| value.to_owned());
+                    (Property::SeeAlso, Value::Iri(value)) if facts.see_also.is_none() => {
+                        facts.see_also = Some(context.string(value)?);
                     }
                     _ => {}
                 }
             }
         }
-        shared.insert(subject.clone(), facts);
+        context.insert(&mut shared, *subject, facts)?;
     }
-    shared
+    Ok(shared)
 }
 
-fn canonical_text(value: &mut TermValue) {
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn canonical_text<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    value: &mut TermValue,
+) -> AdmitResult<(), C::Error> {
     if let TermValue::Literal {
         language: Some(language),
         ..
     } = value
     {
-        *language = purrdf_iri::langtag::identity_fold(language);
+        context.check(u64::try_from(language.len()).map_err(|_| {
+            purrdf_lex::control::ControlledError::Native(
+                super::construction::FnoConstructionFailure::Storage(
+                    purrdf_lex::allocation::StorageError::SizeOverflow,
+                ),
+            )
+        })?)?;
+        language.make_ascii_lowercase();
     }
+    Ok(())
 }
 
-fn canonical_optional(value: Option<&mut TermValue>) {
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+fn canonical_optional<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    value: Option<&mut TermValue>,
+) -> AdmitResult<(), C::Error> {
     if let Some(value) = value {
-        canonical_text(value);
+        canonical_text(context, value)?;
     }
+    Ok(())
 }
 
-pub(super) fn canonicalize(data: &mut FnoCatalogInput, shared: &BTreeMap<TermValue, Shared>) {
-    canonical_text(&mut data.doc_label);
-    canonical_text(&mut data.banner);
+#[allow(
+    clippy::iter_with_drain,
+    reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+)]
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+pub(super) fn canonicalize<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    data: &mut FnoCatalogInput,
+    shared: &OrderedTable<Key<'_>, Shared>,
+) -> AdmitResult<(), C::Error> {
+    canonical_text(context, &mut data.doc_label)?;
+    canonical_text(context, &mut data.banner)?;
     for function in &mut data.functions {
-        if let Some(facts) = shared.get(&TermValue::iri(&function.iri)) {
+        context.check(1)?;
+        let key = Key::Iri(&function.iri);
+        let facts = context.lookup(shared, &key)?;
+        if let Some(facts) = facts {
             if function.description.is_none() {
-                function.description.clone_from(&facts.description);
+                function.description = context.copy(&facts.description)?;
             }
             if function.see_also.is_none() {
-                function.see_also.clone_from(&facts.see_also);
+                function.see_also = context.copy(&facts.see_also)?;
             }
-            function.kind_types.extend(
-                facts
-                    .kinds
-                    .iter()
-                    .filter(|kind| !facts.classes.contains(kind.as_str()))
-                    .cloned(),
-            );
+            for (kind, ()) in facts.kinds.ordered() {
+                let mut structural = false;
+                for (class, ()) in facts.classes.ordered() {
+                    if context.compare(kind.as_str(), *class)?.is_eq() {
+                        structural = true;
+                        break;
+                    }
+                }
+                if !structural {
+                    let kind = context.string(kind)?;
+                    context.push(&mut function.kind_types, kind)?;
+                }
+            }
         }
-        canonical_text(&mut function.label);
-        canonical_optional(function.description.as_mut());
-        function.kind_types.retain(|kind| {
-            !(kind.starts_with(FNO) || kind.starts_with(FNOM))
-                && shared
-                    .get(&TermValue::iri(&function.iri))
-                    .is_none_or(|facts| !facts.classes.contains(kind.as_str()))
-        });
-        function.kind_types.sort();
-        function.kind_types.dedup();
-        if let Some(facts) = shared.get(&TermValue::iri(&function.output.iri)) {
+        canonical_text(context, &mut function.label)?;
+        canonical_optional(context, function.description.as_mut())?;
+        let mut kept = Vec::new();
+        let mut original_kinds = core::mem::take(&mut function.kind_types);
+        for kind in original_kinds.drain(..) {
+            context.check(1)?;
+            let mut structural = kind.starts_with(FNO) || kind.starts_with(FNOM);
+            if let Some(facts) = facts {
+                for (class, ()) in facts.classes.ordered() {
+                    if context.compare(kind.as_str(), *class)?.is_eq() {
+                        structural = true;
+                        break;
+                    }
+                }
+            }
+            if !structural {
+                context.push(&mut kept, kind)?;
+            } else {
+                context.release(kind)?;
+            }
+        }
+        context.release(original_kinds)?;
+        function.kind_types = kept;
+        context.sort(&mut function.kind_types)?;
+        context.dedup(&mut function.kind_types)?;
+        let key = Key::Iri(&function.output.iri);
+        if let Some(facts) = context.lookup(shared, &key)? {
             if function.output.label.is_none() {
-                function.output.label.clone_from(&facts.label);
+                function.output.label = context.copy(&facts.label)?;
             }
             if function.output.description.is_none() {
-                function.output.description.clone_from(&facts.description);
+                function.output.description = context.copy(&facts.description)?;
             }
             if function.output.predicate.is_none() {
-                function.output.predicate.clone_from(&facts.predicate);
+                function.output.predicate = context.copy(&facts.predicate)?;
             }
         }
-        canonical_optional(function.output.label.as_mut());
-        canonical_optional(function.output.description.as_mut());
+        canonical_optional(context, function.output.label.as_mut())?;
+        canonical_optional(context, function.output.description.as_mut())?;
     }
     for param in &mut data.params {
-        if let Some(facts) = shared.get(&TermValue::iri(&param.iri)) {
+        let key = Key::Iri(&param.iri);
+        if let Some(facts) = context.lookup(shared, &key)? {
             if param.label.is_none() {
-                param.label.clone_from(&facts.label);
+                param.label = context.copy(&facts.label)?;
             }
             if param.description.is_none() {
-                param.description.clone_from(&facts.description);
+                param.description = context.copy(&facts.description)?;
             }
             if param.predicate.is_none() {
-                param.predicate.clone_from(&facts.predicate);
+                param.predicate = context.copy(&facts.predicate)?;
             }
         }
-        canonical_optional(param.label.as_mut());
-        canonical_optional(param.description.as_mut());
+        canonical_optional(context, param.label.as_mut())?;
+        canonical_optional(context, param.description.as_mut())?;
     }
     for mapping in &mut data.mappings {
-        canonical_text(&mut mapping.label);
+        canonical_text(context, &mut mapping.label)?;
         for item in &mut mapping.parameter_mappings {
-            canonical_text(&mut item.label);
+            canonical_text(context, &mut item.label)?;
         }
         for item in &mut mapping.return_mappings {
-            canonical_text(&mut item.label);
+            canonical_text(context, &mut item.label)?;
         }
-        mapping.parameter_mappings.sort();
-        mapping.parameter_mappings.dedup();
-        mapping.return_mappings.sort();
-        mapping.return_mappings.dedup();
+        context.sort(&mut mapping.parameter_mappings)?;
+        context.dedup(&mut mapping.parameter_mappings)?;
+        context.sort(&mut mapping.return_mappings)?;
+        context.dedup(&mut mapping.return_mappings)?;
     }
-    data.functions.sort();
-    data.functions.dedup();
-    data.params.sort();
-    data.params.dedup();
-    data.implementations.sort();
-    data.implementations.dedup();
-    data.mappings.sort();
-    data.mappings.dedup_by(|later, earlier| {
-        if later.node != earlier.node {
-            return false;
+    context.sort(&mut data.functions)?;
+    context.dedup(&mut data.functions)?;
+    context.sort(&mut data.params)?;
+    context.dedup(&mut data.params)?;
+    context.sort(&mut data.implementations)?;
+    context.dedup(&mut data.implementations)?;
+    context.sort(&mut data.mappings)?;
+    // Equal native mapping subjects union their child sets in sorted encounter
+    // order, exactly as the resident constructor did before publication.
+    let mut mappings: Vec<FnMapping> = Vec::new();
+    let mut original_mappings = core::mem::take(&mut data.mappings);
+    for mut mapping in original_mappings.drain(..) {
+        if let Some(previous) = mappings.last_mut()
+            && context.compare(&previous.node, &mapping.node)?.is_eq()
+        {
+            for item in mapping.parameter_mappings.drain(..) {
+                context.push(&mut previous.parameter_mappings, item)?;
+            }
+            for item in mapping.return_mappings.drain(..) {
+                context.push(&mut previous.return_mappings, item)?;
+            }
+            context.sort(&mut previous.parameter_mappings)?;
+            context.dedup(&mut previous.parameter_mappings)?;
+            context.sort(&mut previous.return_mappings)?;
+            context.dedup(&mut previous.return_mappings)?;
+            context.release(mapping)?;
+            continue;
         }
-        earlier
-            .parameter_mappings
-            .append(&mut later.parameter_mappings);
-        earlier.return_mappings.append(&mut later.return_mappings);
-        earlier.parameter_mappings.sort();
-        earlier.parameter_mappings.dedup();
-        earlier.return_mappings.sort();
-        earlier.return_mappings.dedup();
-        true
-    });
+        context.push(&mut mappings, mapping)?;
+    }
+    context.release(original_mappings)?;
+    data.mappings = mappings;
+    Ok(())
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
+pub(super) fn construct<S: Admission, C: Progress>(
+    context: &mut Context<S, C>,
+    original: &FnoCatalogInput,
+) -> AdmitResult<FnoCatalogInput, C::Error> {
+    let shared = validate(context, original)?;
+    let mut staged = context.copy(original)?;
+    canonicalize(context, &mut staged, &shared)?;
+    context.release(shared)?;
+    Ok(staged)
+}
+
+// Admission indexes borrow the original input. Their keys and node handles own
+// no heap payload; reuse the reference census and its single work checkpoint.
+macro_rules! borrowed_retained_fields {
+    ($($kind:ty),+ $(,)?) => {$(
+        impl RetainedFields for $kind {
+            fn retained_fields<S: Admission, C: Progress>(
+                &self,
+                memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+                progress: &mut C,
+            ) -> PhysicalResult<usize, C::Error> {
+                <&Self as RetainedFields>::retained_fields(&self, memory, progress)
+            }
+        }
+    )+};
+}
+borrowed_retained_fields!(Key<'_>, Node<'_>);
+impl RetainedFields for Shared {
+    fn retained_fields<S: Admission, C: Progress>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        progress: &mut C,
+    ) -> PhysicalResult<usize, C::Error> {
+        let mut bytes = 0usize;
+        for amount in [
+            self.label.retained_fields(memory, progress)?,
+            self.description.retained_fields(memory, progress)?,
+            self.predicate.retained_fields(memory, progress)?,
+            self.see_also.retained_fields(memory, progress)?,
+            self.kinds.retained_fields(memory, progress)?,
+            self.classes.retained_fields(memory, progress)?,
+        ] {
+            bytes =
+                bytes
+                    .checked_add(amount)
+                    .ok_or(purrdf_lex::control::ControlledError::Native(
+                        purrdf_lex::allocation::StorageError::SizeOverflow,
+                    ))?;
+        }
+        Ok(bytes)
+    }
 }

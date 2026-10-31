@@ -9,10 +9,33 @@
 //! assert *why* a string was rejected, not merely that it was.
 
 use core::fmt;
+use core::fmt::Write as _;
 
 use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 
 use crate::base::BaseInScope;
+
+/// The standard string Debug spelling, emitted one native Unicode scalar at a
+/// time so a fallible formatter can stop before scanning a remaining operand.
+/// Apostrophes stay literal in strings; every other escape decision belongs to
+/// char::escape_debug, using the same standard Unicode tables as str Debug.
+struct QuotedOperand<'a>(&'a str);
+
+impl fmt::Debug for QuotedOperand<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_char('"')?;
+        for scalar in self.0.chars() {
+            if scalar == '\'' {
+                f.write_char(scalar)?;
+            } else {
+                for escaped in scalar.escape_debug() {
+                    f.write_char(escaped)?;
+                }
+            }
+        }
+        f.write_char('"')
+    }
+}
 
 /// The remedy for [`IriError::NoBase`].
 ///
@@ -90,7 +113,11 @@ impl fmt::Display for AuthorityError {
                 "IPvFuture at byte {offset} needs a nonempty version and address"
             ),
             Self::InvalidIpv6 { offset, address } => {
-                write!(f, "invalid IPv6 address {address:?} at byte {offset}")
+                write!(
+                    f,
+                    "invalid IPv6 address {:?} at byte {offset}",
+                    QuotedOperand(address)
+                )
             }
         }
     }
@@ -353,7 +380,7 @@ impl IriError {
         match self {
             Self::Empty => f.write_str("empty IRI/URI string"),
             Self::MissingScheme => f.write_str("missing scheme"),
-            Self::BadScheme(s) => write!(f, "malformed scheme: {s:?}"),
+            Self::BadScheme(s) => write!(f, "malformed scheme: {:?}", QuotedOperand(s)),
             Self::BadPercentEncoding(at) => {
                 write!(f, "malformed percent-encoding at byte {at}")
             }
@@ -362,7 +389,11 @@ impl IriError {
             }
             Self::BadAuthority(why) => write!(f, "malformed authority: {why}"),
             Self::NonAbsoluteBase(b) => {
-                write!(f, "base IRI is not absolute (no scheme): {b:?}")
+                write!(
+                    f,
+                    "base IRI is not absolute (no scheme): {:?}",
+                    QuotedOperand(b)
+                )
             }
             // `NoBase` IS the empty-stack condition and is raised nowhere else, so the
             // base situation is carried by the variant itself rather than by a field
@@ -371,13 +402,15 @@ impl IriError {
             // word the same fact differently.
             Self::NoBase { reference } => write!(
                 f,
-                "relative IRI reference {reference:?} cannot be resolved: {}",
+                "relative IRI reference {:?} cannot be resolved: {}",
+                QuotedOperand(reference),
                 BaseInScope::Absent
             ),
             Self::NotAbsoluteByGrammar { reference, base } => {
                 write!(
                     f,
-                    "relative IRI reference {reference:?} is not permitted by this syntax ({base}"
+                    "relative IRI reference {:?} is not permitted by this syntax ({base}",
+                    QuotedOperand(reference)
                 )?;
                 // Naming the base in force is only half the answer; the other half is
                 // that it was deliberately not applied, which is the whole reason a
@@ -682,6 +715,33 @@ mod tests {
                     origin,
                 },
             });
+        }
+        for operand in [
+            "'slash/quote\"backslash\\",
+            "\0\n\r\t\u{7f}\u{85}",
+            "é\u{301}\u{200d}😀",
+        ] {
+            // Standard Debug is the byte oracle; the production adapter must
+            // change only when its writes can be interrupted, not its spelling.
+            assert_eq!(
+                format!("{:?}", QuotedOperand(operand)),
+                format!("{operand:?}")
+            );
+            all.extend([
+                IriError::BadScheme(operand.to_owned()),
+                IriError::NonAbsoluteBase(operand.to_owned()),
+                IriError::NoBase {
+                    reference: operand.to_owned(),
+                },
+                IriError::NotAbsoluteByGrammar {
+                    reference: operand.to_owned(),
+                    base: BaseInScope::Absent,
+                },
+                IriError::BadAuthority(AuthorityError::InvalidIpv6 {
+                    offset: 3,
+                    address: operand.to_owned(),
+                }),
+            ]);
         }
         for error in &all {
             let presentation = error.presentation();

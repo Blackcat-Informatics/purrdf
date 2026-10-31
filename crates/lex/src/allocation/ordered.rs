@@ -180,16 +180,53 @@ impl<K, V> OrderedTable<K, V> {
     }
 
     fn find(&self, mut compare: impl FnMut(&K) -> Ordering) -> Option<usize> {
+        match self.try_find(|key| Ok::<_, core::convert::Infallible>(compare(key))) {
+            Ok(found) => found,
+            Err(never) => match never {},
+        }
+    }
+
+    fn try_find<E>(
+        &self,
+        mut compare: impl FnMut(&K) -> Result<Ordering, E>,
+    ) -> Result<Option<usize>, E> {
         let mut at = self.root;
         while let Some(index) = at {
             let entry = self.entry(index);
-            at = match compare(&entry.key) {
+            at = match compare(&entry.key)? {
                 Ordering::Less => entry.left,
                 Ordering::Greater => entry.right,
-                Ordering::Equal => return Some(index),
+                Ordering::Equal => return Ok(Some(index)),
             };
         }
-        None
+        Ok(None)
+    }
+
+    /// Borrow a payload while admitting each comparison before execution.
+    /// The comparator returns query-versus-stored-key order and allocates no
+    /// private lookup storage. Refusal leaves every association unchanged.
+    ///
+    /// # Errors
+    /// Returns the original comparator error before any subsequent comparison.
+    ///
+    /// ```
+    /// use purrdf_lex::allocation::{Memory, OrderedTable, Resident};
+    /// let mut resident = Resident;
+    /// let mut memory = Memory::new(&mut resident);
+    /// let mut table = OrderedTable::default();
+    /// table.insert(3_u32, "value", &mut memory).unwrap();
+    /// assert_eq!(table.try_get_by(|key| Ok::<_, &str>(3_u32.cmp(key))).unwrap(),
+    ///     Some(&"value"));
+    /// assert_eq!(table.try_get_by(|_| Err("stopped")).unwrap_err(), "stopped");
+    /// table.release(&mut memory).unwrap();
+    /// ```
+    pub fn try_get_by<E>(
+        &self,
+        compare: impl FnMut(&K) -> Result<Ordering, E>,
+    ) -> Result<Option<&V>, E> {
+        Ok(self
+            .try_find(compare)?
+            .map(|index| &self.entry(index).value))
     }
 
     fn extreme(&self, mut index: usize, left: bool) -> usize {
@@ -456,13 +493,42 @@ impl<K, V> OrderedTable<K, V> {
         memory: &mut Memory<'_, S>,
         mut compare: impl FnMut(&K, &K) -> Result<Ordering, E>,
     ) -> Result<OrderedEntry<'_, K, V>, E> {
+        self.prepare_insert_with_memory(key, memory, |a, b, _| compare(a, b))
+    }
+
+    /// Prepare the same ordered placement while lending original memory to each
+    /// comparison. Nested native keys may admit their traversal workspace through
+    /// that same account before this table admits its next slot-array growth.
+    ///
+    /// # Errors
+    /// Preserves the first comparison or physical-storage refusal.
+    ///
+    /// ```
+    /// use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
+    /// let mut resident = Resident;
+    /// let mut memory = Memory::new(&mut resident);
+    /// let mut table = OrderedTable::default();
+    /// let entry = table.prepare_insert_with_memory(4_u32, &mut memory, |a, b, memory| {
+    ///     memory.admission_mut().checkpoint(1)?;
+    ///     Ok::<_, StorageError>(a.cmp(b))
+    /// }).unwrap();
+    /// entry.publish("value");
+    /// assert_eq!(table.get(&4), Some(&"value"));
+    /// table.release(&mut memory).unwrap();
+    /// ```
+    pub fn prepare_insert_with_memory<S: Admission + ?Sized, E: From<StorageError>>(
+        &mut self,
+        key: K,
+        memory: &mut Memory<'_, S>,
+        mut compare: impl FnMut(&K, &K, &mut Memory<'_, S>) -> Result<Ordering, E>,
+    ) -> Result<OrderedEntry<'_, K, V>, E> {
         let mut at = self.root;
         let mut parent = None;
         let mut left = false;
         while let Some(index) = at {
             let entry = self.entry(index);
             parent = Some(index);
-            at = match compare(&key, &entry.key)? {
+            at = match compare(&key, &entry.key, memory)? {
                 Ordering::Less => {
                     left = true;
                     entry.left

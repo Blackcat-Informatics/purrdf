@@ -359,6 +359,16 @@ impl std::fmt::Display for ProbeFault {
 
 impl std::error::Error for ProbeFault {}
 
+impl purrdf_hash::error::StructuredError for ProbeFault {
+    fn visit<'a>(&'a self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'a>) {
+        visitor.variant("probe-fault");
+        visitor.value(
+            Some("message"),
+            purrdf_hash::error::ErrorValue::Text(self.0),
+        );
+    }
+}
+
 /// The row budget of a view that faults the way a lazy operational backend does:
 /// once its rows are spent it STOPS YIELDING rather than erroring, so nothing in
 /// the row stream tells the truncation from an honest end, and only the

@@ -34,7 +34,7 @@
 //! ```
 
 use crate::error::{IriError, Result};
-use crate::parse::{Diagnostics, IriReadError, validate_component};
+use crate::parse::{Diagnostics, IriReadError, validate_component, validate_component_with};
 
 /// Which grammar a production is read under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,7 +225,7 @@ pub(crate) fn validate_host_with(
     }
     // IPv4address / reg-name. Every IPv4address is a reg-name spelling, so
     // the reg-name check decides the union exactly.
-    reg_name(s, base_off, mode).map_err(IriReadError::Lexical)
+    validate_component_with(s, base_off, 0, false, mode, diagnostics)
 }
 
 /// Validate an IP-literal's contents (`inner`, found at byte `base_off`)
@@ -238,7 +238,10 @@ fn validate_ip_literal_with(
     if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
         // IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" ).
         // ABNF string literals are case-insensitive.
-        let Some((version, address)) = inner[1..].split_once('.') else {
+        let Some(dot) = diagnostics.find(&inner.as_bytes()[1..], false, |bytes| {
+            bytes.iter().position(|&byte| byte == b'.')
+        })?
+        else {
             return Err(
                 IriError::BadAuthority(crate::AuthorityError::IpvFutureVersion {
                     offset: base_off,
@@ -246,6 +249,7 @@ fn validate_ip_literal_with(
                 .into(),
             );
         };
+        let (version, address) = (&inner[1..=dot], &inner[dot + 2..]);
         if version.is_empty() || address.is_empty() {
             return Err(
                 IriError::BadAuthority(crate::AuthorityError::IpvFutureEmpty { offset: base_off })
@@ -253,18 +257,23 @@ fn validate_ip_literal_with(
             );
         }
         for (at, ch) in version.char_indices() {
+            diagnostics.checkpoint(1)?;
             if !ch.is_ascii_hexdigit() {
                 return Err(IriError::DisallowedChar(ch, base_off + 1 + at).into());
             }
         }
         let address_off = base_off + version.len() + 2;
         for (at, ch) in address.char_indices() {
+            diagnostics.checkpoint(1)?;
             if !crate::terminals::is_ipvfuture_address_char(ch) {
                 return Err(IriError::DisallowedChar(ch, address_off + at).into());
             }
         }
         return Ok(());
     }
+    // The standard IPv6 parser has a fixed eight-group grammar, bounded
+    // digit runs and a four-octet tail; a single native decision is bounded.
+    diagnostics.checkpoint(1)?;
     if is_ipv6_address(inner) {
         Ok(())
     } else {
