@@ -303,6 +303,11 @@ impl ResolvedSink for SinkImporter<'_> {
         meta: Option<&Value>,
     ) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &self.blobs {
+            // Export consumes only the RDF dataset and admitted payloads. Avoid
+            // copying unrestricted blob metadata into an unused lookaside.
+            if blobs.is_inline_export() {
+                return Ok(());
+            }
             blobs.check_metadata_before_retention(digest, meta)?;
         }
         let metadata = match meta.map(metadata_value_from_cbor) {
@@ -371,6 +376,15 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn opaque(&mut self, _segment_index: u64, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
+        if self
+            .blobs
+            .as_ref()
+            .is_some_and(BlobCollector::is_inline_export)
+        {
+            // The export does not return an envelope; diagnostics still decide
+            // whether this frame loss is admissible immediately afterward.
+            return Ok(());
+        }
         self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
             id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
@@ -417,6 +431,9 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+        if let Some(purrdf_gts::model::DiagnosticCause::Storage(error)) = &diagnostic.cause {
+            return Err((*error).into());
+        }
         // A selected import's byte budget names what *this import will retain*,
         // not what the container is allowed to contain. A payload refused by that
         // budget is therefore not a fold failure: the archive is intact and its
@@ -431,7 +448,10 @@ impl ResolvedSink for SinkImporter<'_> {
         // authoritative importer would build, and returning Ok would hand back
         // a silently truncated graph. That falls through to the hard failure.
         if let Some(blobs) = &mut self.blobs
-            && is_blob_budget_refusal(diagnostic)
+            && (is_blob_budget_refusal(diagnostic)
+                || (blobs.expects_capability_refusal()
+                    && purrdf_gts::reader::blob_refusal_kind(diagnostic)
+                        == Some(purrdf_gts::reader::BlobRefusalKind::UnavailableCapability)))
         {
             return blobs.refusal_diagnostic(diagnostic);
         }
@@ -516,6 +536,8 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
 /// emitted only by the reader's own byte ceilings, which no input can spoof.
 fn is_blob_budget_refusal(diagnostic: &Diagnostic) -> bool {
     diagnostic.code == purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC
+        && purrdf_gts::reader::blob_refusal_kind(diagnostic)
+            == Some(purrdf_gts::reader::BlobRefusalKind::ByteBudget)
 }
 
 pub(crate) fn import_with_collector<'a>(

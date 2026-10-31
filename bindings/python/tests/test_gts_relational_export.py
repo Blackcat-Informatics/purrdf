@@ -73,7 +73,7 @@ def container() -> bytes:
 @pytest.fixture(scope="module")
 def rows(container: bytes) -> dict[str, Any]:
     """The native relational projection — the oracle every writer is checked against."""
-    return purrdf.gts_columnar_rows_from_bytes(container)
+    return purrdf.gts_columnar_rows_from_bytes(container, blob_limits="unbounded")[0]
 
 
 def test_the_projection_is_non_trivial(rows: dict[str, Any]) -> None:
@@ -90,7 +90,9 @@ def test_sqlite_export_round_trips_every_table(
     container: bytes, rows: dict[str, Any], tmp_path: Path
 ) -> None:
     target = tmp_path / "out.sqlite"
-    assert purrdf.gts_to_sqlite(container, str(target)) == str(target)
+    assert purrdf.gts_to_sqlite(
+        container, str(target), blob_limits="unbounded"
+    ).paths == (str(target),)
     assert target.exists()
 
     connection = sqlite3.connect(target)
@@ -116,8 +118,8 @@ def test_sqlite_export_replaces_rather_than_appends(
     # Exporting twice to one path must not double every row. `CREATE TABLE` alone
     # would leave the old rows in place and silently append a second copy.
     target = tmp_path / "twice.sqlite"
-    purrdf.gts_to_sqlite(container, str(target))
-    purrdf.gts_to_sqlite(container, str(target))
+    purrdf.gts_to_sqlite(container, str(target), blob_limits="unbounded")
+    purrdf.gts_to_sqlite(container, str(target), blob_limits="unbounded")
 
     connection = sqlite3.connect(target)
     try:
@@ -133,7 +135,9 @@ def test_duckdb_export_round_trips_every_table(
     duckdb = pytest.importorskip("duckdb", reason="the [duckdb] extra is not installed")
 
     target = tmp_path / "out.duckdb"
-    assert purrdf.gts_to_duckdb(container, str(target)) == str(target)
+    assert purrdf.gts_to_duckdb(
+        container, str(target), blob_limits="unbounded"
+    ).paths == (str(target),)
 
     connection = duckdb.connect(str(target))
     try:
@@ -154,7 +158,9 @@ def test_parquet_export_writes_one_file_per_table(
     )
 
     target = tmp_path / "parquet"
-    written = purrdf.gts_to_parquet(container, str(target))
+    written = purrdf.gts_to_parquet(
+        container, str(target), blob_limits="unbounded"
+    ).paths
 
     # Fixed table order, not directory order: a caller zipping this against a
     # schema list must not depend on the filesystem's enumeration.
@@ -183,7 +189,9 @@ def test_parquet_export_creates_a_missing_directory(
         "pyarrow.parquet", reason="the [parquet] extra is not installed"
     )
     target = tmp_path / "does" / "not" / "exist"
-    written = purrdf.gts_to_parquet(container, str(target))
+    written = purrdf.gts_to_parquet(
+        container, str(target), blob_limits="unbounded"
+    ).paths
     assert len(written) == len(TABLES)
     assert target.is_dir()
 
@@ -194,7 +202,7 @@ def test_an_empty_container_exports_empty_tables_not_a_failure(tmp_path: Path) -
     # schema, indistinguishable from a corrupt one — would refuse work that is fine.
     empty = purrdf.gts_from_quads(b"", format=RdfFormat.TURTLE)
     target = tmp_path / "empty.sqlite"
-    purrdf.gts_to_sqlite(empty, str(target))
+    purrdf.gts_to_sqlite(empty, str(target), blob_limits="unbounded")
 
     connection = sqlite3.connect(target)
     try:
@@ -209,7 +217,9 @@ def test_an_empty_container_exports_empty_tables_not_a_failure(tmp_path: Path) -
     pq = pytest.importorskip(
         "pyarrow.parquet", reason="the [parquet] extra is not installed"
     )
-    written = purrdf.gts_to_parquet(empty, str(tmp_path / "empty-parquet"))
+    written = purrdf.gts_to_parquet(
+        empty, str(tmp_path / "empty-parquet"), blob_limits="unbounded"
+    ).paths
     for table, path in zip(TABLES, written, strict=True):
         parquet_table = pq.read_table(path)
         assert parquet_table.num_rows == 0
@@ -230,21 +240,13 @@ def test_the_writers_are_reachable_under_every_documented_name(
 
     # And they no longer raise: the whole point of the change.
     target = tmp_path / "reachable.sqlite"
-    assert purrdf.gts_to_sqlite(container, str(target)) == str(target)
+    assert purrdf.gts_to_sqlite(
+        container, str(target), blob_limits="unbounded"
+    ).paths == (str(target),)
 
 
 def test_base_direction_survives_the_export(tmp_path: Path) -> None:
-    """RDF 1.2 literal base direction reaches the exported `direction` column.
-
-    The term model stores language and direction SEPARATELY — `lang` is bare
-    (`en`) and the two are recombined into `@en--ltr` only for display — so the
-    relational projection dropped direction entirely until it got a column of its
-    own. Nothing pinned it, which is how it went unnoticed.
-
-    This is a conflation, not a cosmetic loss: `@en--ltr` and `@en--rtl` are
-    different terms under the canonicalization profile, so two literals differing
-    only in direction exported as one indistinguishable pair of rows.
-    """
+    """RDF 1.2 literal base direction reaches the exported `direction` column."""
     source = (
         "@prefix ex: <http://example.org/> .\n"
         'ex:cat ex:label "Cat"@en--ltr .\n'
@@ -252,10 +254,10 @@ def test_base_direction_survives_the_export(tmp_path: Path) -> None:
         'ex:cat ex:plain "Cat"@en .\n'
     )
     container = purrdf.gts_from_quads(source.encode(), format=RdfFormat.TURTLE)
-    rows = purrdf.gts_columnar_rows_from_bytes(container)
+    rows = purrdf.gts_columnar_rows_from_bytes(container, blob_limits="unbounded")[0]
 
     target = tmp_path / "direction.sqlite"
-    purrdf.gts_to_sqlite(container, str(target))
+    purrdf.gts_to_sqlite(container, str(target), blob_limits="unbounded")
     connection = sqlite3.connect(target)
     try:
         stored = connection.execute(
@@ -277,25 +279,14 @@ def test_base_direction_survives_the_export(tmp_path: Path) -> None:
 
 
 def test_one_reifier_binding_two_triples_exports_both(tmp_path: Path) -> None:
-    """A multi-valued reifier must export every binding.
-
-    `rdf:reifies` is NOT a functional property: one reifier id may legitimately
-    bind several distinct triples, and the statement layer is multi-valued. An
-    export that keyed, joined or de-duplicated on `reifier_id` would keep one
-    binding and silently discard the rest — the exact defect the wire format's
-    self-describing triple terms exist to prevent.
-
-    Nothing here keys on `reifier_id`: rows are written positionally in the
-    projection's order and no table carries a PRIMARY KEY or UNIQUE constraint.
-    That is a deliberate property, so it is pinned rather than assumed.
-    """
+    """A multi-valued reifier must export every binding."""
     source = (
         "@prefix ex: <http://example.org/> .\n"
         'ex:cat ex:label "Cat"@en ~ ex:r1 .\n'
         'ex:cat ex:label "Chat"@fr ~ ex:r1 .\n'
     )
     container = purrdf.gts_from_quads(source.encode(), format=RdfFormat.TURTLE)
-    rows = purrdf.gts_columnar_rows_from_bytes(container)
+    rows = purrdf.gts_columnar_rows_from_bytes(container, blob_limits="unbounded")[0]
 
     assert len(rows["reifiers"]) == 2, (
         f"the projection itself must keep both bindings: {rows['reifiers']}"
@@ -304,7 +295,7 @@ def test_one_reifier_binding_two_triples_exports_both(tmp_path: Path) -> None:
     assert len(bound) == 1, f"both rows share one reifier id: {rows['reifiers']}"
 
     target = tmp_path / "multi.sqlite"
-    purrdf.gts_to_sqlite(container, str(target))
+    purrdf.gts_to_sqlite(container, str(target), blob_limits="unbounded")
     connection = sqlite3.connect(target)
     try:
         stored = connection.execute("SELECT reifier, s, p, o FROM reifiers").fetchall()
@@ -321,8 +312,12 @@ def test_native_parquet_matches_every_canonical_cell(
     container: bytes, rows: dict[str, Any], tmp_path: Path
 ) -> None:
     pq = pytest.importorskip("pyarrow.parquet")
-    files = purrdf.gts_to_parquet(container, str(tmp_path / "canonical"))
-    native = purrdf.gts_columnar_parquet_from_bytes(container)
+    files = purrdf.gts_to_parquet(
+        container, str(tmp_path / "canonical"), blob_limits="unbounded"
+    ).paths
+    native = purrdf.gts_columnar_parquet_from_bytes(container, blob_limits="unbounded")[
+        0
+    ]
     for table, path in zip(TABLES, files, strict=True):
         from pathlib import Path
 
@@ -341,14 +336,14 @@ def test_segment_blank_scopes_are_distinct_in_every_export(tmp_path: Path) -> No
     source = '_:same <http://example.org/p> "value" .'
     segment = purrdf.gts_from_quads(source.encode(), format=RdfFormat.N_TRIPLES)
     container = segment + segment
-    rows = purrdf.gts_columnar_rows_from_bytes(container)
+    rows = purrdf.gts_columnar_rows_from_bytes(container, blob_limits="unbounded")[0]
     blanks = [row for row in rows["terms"] if row[1] == 2]
     assert len(blanks) == 2
     assert {row[2] for row in blanks} == {"same"}
     assert len({row[6] for row in blanks}) == 2
     assert len(rows["quads"]) == 2
     target = tmp_path / "scoped.sqlite"
-    purrdf.gts_to_sqlite(container, str(target))
+    purrdf.gts_to_sqlite(container, str(target), blob_limits="unbounded")
     with sqlite3.connect(target) as db:
         assert (
             db.execute(
@@ -368,12 +363,14 @@ def test_canonical_export_ids_ignore_rdf_ingest_order() -> None:
     b = purrdf.gts_from_quads(
         (second + "\n" + first).encode(), format=RdfFormat.N_TRIPLES
     )
-    assert purrdf.gts_columnar_rows_from_bytes(
-        a
-    ) == purrdf.gts_columnar_rows_from_bytes(b)
-    assert purrdf.gts_columnar_parquet_from_bytes(
-        a
-    ) == purrdf.gts_columnar_parquet_from_bytes(b)
+    assert (
+        purrdf.gts_columnar_rows_from_bytes(a, blob_limits="unbounded")[0]
+        == purrdf.gts_columnar_rows_from_bytes(b, blob_limits="unbounded")[0]
+    )
+    assert (
+        purrdf.gts_columnar_parquet_from_bytes(a, blob_limits="unbounded")[0]
+        == purrdf.gts_columnar_parquet_from_bytes(b, blob_limits="unbounded")[0]
+    )
 
 
 @pytest.mark.parametrize(
@@ -391,7 +388,7 @@ def test_verified_inline_blob_payloads_survive_canonical_parquet(
     vectors = Path(__file__).resolve().parents[3] / "vectors"
     data = (vectors / f"{vector}.gts").read_bytes()
     manifest = json.loads((vectors / f"{vector}.expected.json").read_text())
-    rows = purrdf.gts_columnar_rows_from_bytes(data)
+    rows = purrdf.gts_columnar_rows_from_bytes(data, blob_limits="unbounded")[0]
     assert len(rows["blobs"]) == len(manifest["blobs"]) > 0
     for digest, payload in rows["blobs"]:
         assert hashlib.sha256(payload).hexdigest() == digest
@@ -400,8 +397,10 @@ def test_verified_inline_blob_payloads_survive_canonical_parquet(
     elif vector == "24-files-profile-dedup":
         assert rows["blobs"][0][1] == b"shared"
 
-    native = purrdf.gts_columnar_parquet_from_bytes(data)
-    files = purrdf.gts_to_parquet(data, str(tmp_path / vector))
+    native = purrdf.gts_columnar_parquet_from_bytes(data, blob_limits="unbounded")[0]
+    files = purrdf.gts_to_parquet(
+        data, str(tmp_path / vector), blob_limits="unbounded"
+    ).paths
     blob_path = Path(files[TABLES.index("blobs")])
     assert blob_path.read_bytes() == native["blobs.parquet"]
     decoded = pq.read_table(blob_path).to_pydict()

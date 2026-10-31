@@ -22,6 +22,8 @@ pub(super) enum PayloadCause {
     Codec(CodecError),
     MissingCatalog(Value),
     TransformedNotBytes,
+    BlobNotBytes,
+    BlobMissingIdentity,
     Cbor(DecodeError),
     EncodedBlobLimit { actual: usize, limit: usize },
     DecodedBlobLimit { actual: usize, limit: usize },
@@ -42,6 +44,19 @@ impl From<CodecError> for PayloadError {
 }
 
 impl PayloadError {
+    pub(super) fn blob_refusal_kind(&self) -> Option<super::BlobRefusalKind> {
+        match self {
+            Self::Budget(_) => Some(super::BlobRefusalKind::ByteBudget),
+            Self::Unavailable {
+                detail: PayloadCause::Codec(error),
+                ..
+            } if error.is_capability_unavailable() => {
+                Some(super::BlobRefusalKind::UnavailableCapability)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn opaque_reason(&self) -> &'static str {
         match self {
             Self::Unavailable { reason, .. } => reason,
@@ -93,6 +108,10 @@ impl fmt::Display for PayloadCause {
             Self::Codec(error) => error.fmt(f),
             Self::MissingCatalog(value) => write!(f, "codec id {value:?} not in catalog"),
             Self::TransformedNotBytes => f.write_str("transformed frame 'd' must be a byte string"),
+            Self::BlobNotBytes => f.write_str("blob frame 'd' must be a byte string"),
+            Self::BlobMissingIdentity => {
+                f.write_str("external blob frame must declare a valid public digest")
+            }
             Self::Cbor(error) => error.fmt(f),
             Self::EncodedBlobLimit { limit, .. } => write!(f, "encoded blob exceeds {limit} bytes"),
             Self::DecodedBlobLimit { limit, .. } => write!(f, "decoded blob exceeds {limit} bytes"),
@@ -120,6 +139,8 @@ impl purrdf_hash::error::StructuredError for PayloadCause {
         Codec(error) => "gts-payload-codec" { "cause" => Cause(error) },
         MissingCatalog(value) => "gts-payload-missing-catalog" { "id" => Record(value) },
         TransformedNotBytes => "gts-payload-transformed-not-bytes" {},
+        BlobNotBytes => "gts-payload-blob-not-bytes" {},
+        BlobMissingIdentity => "gts-payload-blob-missing-identity" {},
         Cbor(error) => "gts-payload-cbor" { "cause" => Cause(error) },
         EncodedBlobLimit { actual, limit } => "gts-payload-encoded-blob-limit" {
             "actual" => ByteCount(*actual as u128), "limit" => ByteCount(*limit as u128),

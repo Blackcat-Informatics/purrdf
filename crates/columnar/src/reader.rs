@@ -3,7 +3,7 @@
 
 //! Strict five-table columnar-to-RDF reconstruction.
 
-use purrdf_core::TermBox;
+use purrdf_core::{QuadIds, TermBox};
 use std::collections::BTreeMap;
 use std::str;
 use std::sync::Arc;
@@ -17,6 +17,7 @@ use purrdf_core::{
 use crate::column::Int64Column;
 use crate::error::{ColumnarError, ReaderReason};
 use crate::files::ParquetFiles;
+use crate::ordinal::{ColumnarOrdinal, ColumnarOrdinalRead, ColumnarOrdinalValue, OrdinalCapture};
 use crate::parquet::{ColumnValues, TableData, TableReader, bounded_row_capacity};
 use crate::schema::Table;
 
@@ -50,6 +51,22 @@ pub struct ColumnarRead {
 /// physical size exhaustion, invalid UTF-8 or RDF term records, non-canonical ordering,
 /// invalid references, blob digest mismatches, or RDF positional violations.
 pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
+    Ok(read_with_ordinals(files, &[])?.into_read())
+}
+
+/// Complete the same strict read while retaining only requested original rows.
+///
+/// Every file and row is validated even after all requests have been captured.
+/// Original table indices are translated through the actual dictionary-to-kernel
+/// map during reconstruction; reconstructed dataset iteration is never an ordinal.
+///
+/// # Errors
+/// Returns the original strict-read failure, or a typed out-of-range request.
+pub fn read_with_ordinals(
+    files: &ParquetFiles,
+    requested: &[ColumnarOrdinal],
+) -> Result<ColumnarOrdinalRead, ColumnarError> {
+    let mut capture = OrdinalCapture::new(requested);
     let dictionary = Dictionary::decode(TableReader::open(files.get(Table::Terms), Table::Terms)?)?;
     let mut builder = RdfDatasetBuilder::new();
     let ids = dictionary
@@ -57,19 +74,32 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
         .iter()
         .map(|value| builder.intern_value(value))
         .collect::<Result<Vec<_>, _>>()?;
+    for (index, &id) in ids.iter().enumerate() {
+        capture.capture(
+            ColumnarOrdinal::Term(index as u64),
+            ColumnarOrdinalValue::Term(id),
+        );
+    }
+    let mut row_counts = [dictionary.values.len(), 0, 0, 0];
     for (index, named) in dictionary.named_graphs.iter().enumerate() {
         if *named {
             builder.declare_named_graph(ids[index])?;
         }
     }
-    for table in [Table::Quads, Table::Reifiers, Table::Annotations] {
+    for (table_index, table) in [Table::Quads, Table::Reifiers, Table::Annotations]
+        .into_iter()
+        .enumerate()
+    {
         let mut reader = TableReader::open(files.get(table), table)?;
         let mut offset = 0;
         let mut previous_quad = None;
         let mut previous_reifier = None;
         while let Some(group) = reader.next_group()? {
             if table == Table::Reifiers {
-                for row in decode_reifier_rows(&group, &dictionary.named_graphs, offset)? {
+                for (index, row) in decode_reifier_rows(&group, &dictionary.named_graphs, offset)?
+                    .into_iter()
+                    .enumerate()
+                {
                     advance_order(&mut previous_reifier, row, "reifier row order")?;
                     let (reifier, s, p, o, g) = row;
                     let triple_value = TermValue::Triple {
@@ -83,6 +113,14 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
                             ReaderReason::MissingTriple,
                         )
                     })?;
+                    capture.capture(
+                        ColumnarOrdinal::Reifier((offset + index) as u64),
+                        ColumnarOrdinalValue::Reifier {
+                            reifier: ids[reifier],
+                            triple: ids[*triple],
+                            graph: g.map(|id| ids[id]),
+                        },
+                    );
                     builder.push_reifier_in_graph(
                         ids[reifier],
                         ids[*triple],
@@ -90,12 +128,29 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
                     )?;
                 }
             } else {
-                for row in decode_quad_rows(&group, &dictionary.named_graphs, offset)? {
+                for (index, row) in decode_quad_rows(&group, &dictionary.named_graphs, offset)?
+                    .into_iter()
+                    .enumerate()
+                {
                     advance_order(&mut previous_quad, row, "quad-like row order")?;
                     let (s, p, o, g) = row;
+                    let quad = QuadIds {
+                        s: ids[s],
+                        p: ids[p],
+                        o: ids[o],
+                        g: g.map(|id| ids[id]),
+                    };
                     if table == Table::Quads {
+                        capture.capture(
+                            ColumnarOrdinal::Quad((offset + index) as u64),
+                            ColumnarOrdinalValue::Quad(quad),
+                        );
                         builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]))?;
                     } else {
+                        capture.capture(
+                            ColumnarOrdinal::Annotation((offset + index) as u64),
+                            ColumnarOrdinalValue::Annotation(quad),
+                        );
                         builder.push_annotation_in_graph(
                             ids[s],
                             ids[p],
@@ -107,6 +162,7 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
             }
             offset += group.row_count;
         }
+        row_counts[table_index + 1] = offset;
     }
     let mut blobs = ContentStore::new();
     let mut reader = TableReader::open(files.get(Table::Blobs), Table::Blobs)?;
@@ -119,7 +175,8 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
         offset += rows;
     }
     let dataset = builder.freeze().map_err(ColumnarError::Reconstruction)?;
-    Ok(ColumnarRead {
+    capture.row_counts(row_counts);
+    capture.finish(ColumnarRead {
         dataset,
         blobs,
         losses: LossLedger::default(),
@@ -1052,8 +1109,16 @@ mod tests {
         };
         payloads[0].as_mut().unwrap().push(0xff);
         array[4] = write_table(&blob_table, Compression::Uncompressed).unwrap();
+        let files = ParquetFiles::from_array(array);
         assert!(matches!(
-            read(&ParquetFiles::from_array(array)),
+            read(&files),
+            Err(ColumnarError::BlobContent { row: 0, .. })
+        ));
+        assert!(matches!(
+            read_with_ordinals(
+                &files,
+                &[ColumnarOrdinal::Term(0), ColumnarOrdinal::Quad(0)]
+            ),
             Err(ColumnarError::BlobContent { row: 0, .. })
         ));
 

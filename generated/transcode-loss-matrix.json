@@ -301,6 +301,34 @@
     "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
+    "code": "blob-byte-budget",
+    "from": "gts",
+    "to": "columnar-v1",
+    "intentional": true,
+    "note": "An inline blob occurrence was not admitted under the caller's explicit byte ceilings; an unverified digest remains a container claim."
+  },
+  {
+    "code": "blob-capability-unavailable",
+    "from": "gts",
+    "to": "columnar-v1",
+    "intentional": true,
+    "note": "An inline blob occurrence could not be decoded because a recognized codec, key or decryptor capability is unavailable."
+  },
+  {
+    "code": "blob-inline-payload-unavailable",
+    "from": "gts",
+    "to": "columnar-v1",
+    "intentional": true,
+    "note": "A declared blob reference had no admitted inline payload at the end of the source."
+  },
+  {
+    "code": "blob-metadata-budget",
+    "from": "gts",
+    "to": "columnar-v1",
+    "intentional": true,
+    "note": "An inline blob occurrence was not admitted under the caller's explicit public-metadata ceiling."
+  },
+  {
     "code": "datalog-projection",
     "from": "gts",
     "to": "datalog",

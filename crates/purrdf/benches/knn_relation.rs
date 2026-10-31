@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
     PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfTermTarget, TargetSet, TermValue,
     VectorDtype,
@@ -77,7 +77,7 @@ const FX: Identities = Identities::at("https://example.org/");
 fn space(dims: usize, metric: DistanceMetric) -> EmbeddingSpace {
     let dimension = u32::try_from(dims).expect("a production width fits u32");
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
 
     let mut values = stream(ROWS * dims, SEED ^ dims as u64).into_iter();
     let mut targets = Vec::with_capacity(ROWS);

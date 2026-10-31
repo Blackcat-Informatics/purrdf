@@ -9,6 +9,36 @@ use super::identity::{
     VectorSpaceId,
 };
 use super::wire::{SECTION_CRITICAL, SECTION_DERIVED, SECTION_EXTENSION_MIN};
+/// The exact native carrier named by an embedding SOURCE record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum EmbeddingSourceFormat {
+    /// One exact `.purrpck` v1 file.
+    PurrpckV1 = 1,
+    /// The canonical manifest of the five Columnar schema v1 files.
+    ColumnarV1 = 2,
+}
+
+impl EmbeddingSourceFormat {
+    /// The normative wire discriminator.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        self as u32
+    }
+
+    /// Decode a supported source carrier.
+    pub fn from_code(value: u32) -> Result<Self, EmbeddingError> {
+        match value {
+            1 => Ok(Self::PurrpckV1),
+            2 => Ok(Self::ColumnarV1),
+            _ => Err(EmbeddingError::UnsupportedCode {
+                field: "SOURCE format",
+                value,
+            }),
+        }
+    }
+}
+
 /// One caller extension section retained byte-for-byte by the writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionSection {

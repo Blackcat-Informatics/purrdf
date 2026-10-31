@@ -13,19 +13,28 @@ native SHA-256 identity; their GTS BLAKE3 identity is recoverable from the bytes
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-__all__ = ["gts_to_duckdb", "gts_to_parquet", "gts_to_sqlite"]
+__all__ = ["GtsExportResult", "gts_to_duckdb", "gts_to_parquet", "gts_to_sqlite"]
 
 
-def _rows(data: bytes) -> dict[str, Any]:
+@dataclass(frozen=True)
+class GtsExportResult:
+    """Written paths and the always-present native admission report."""
+
+    paths: tuple[str, ...]
+    report: Any
+
+
+def _rows(data: bytes, blob_limits: Any) -> tuple[dict[str, Any], Any]:
     """Canonical native v1 rows and their Rust-owned schema."""
     from .purrdf_native import rdf as _native
 
-    return _native.gts_columnar_rows_from_bytes(data)
+    return _native.gts_columnar_rows_from_bytes(data, blob_limits=blob_limits)
 
 
 def _tables(rows: dict[str, Any]) -> Iterator[tuple[str, str, int]]:
@@ -39,13 +48,13 @@ def _tables(rows: dict[str, Any]) -> Iterator[tuple[str, str, int]]:
         yield table, f"CREATE TABLE {table} ({', '.join(definitions)})", len(columns)
 
 
-def gts_to_sqlite(data: bytes, path: str) -> str:
-    """Write canonical native v1 rows to SQLite; return ``path``.
+def gts_to_sqlite(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResult:
+    """Write canonical native v1 rows to SQLite; return paths and admission report.
 
     Existing projection tables are replaced in one transaction. SQLite is part
     of Python's standard library and needs no optional dependency.
     """
-    rows = _rows(data)
+    rows, report = _rows(data, blob_limits)
     connection = sqlite3.connect(path)
     try:
         with connection:
@@ -58,17 +67,17 @@ def gts_to_sqlite(data: bytes, path: str) -> str:
                 )
     finally:
         connection.close()
-    return path
+    return GtsExportResult((path,), report)
 
 
-def gts_to_duckdb(data: bytes, path: str) -> str:
-    """Write canonical native v1 rows to DuckDB; return ``path``.
+def gts_to_duckdb(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResult:
+    """Write canonical native v1 rows to DuckDB; return paths and admission report.
 
     Requires ``pip install 'purrdf[duckdb]'``. Existing tables are replaced
     together; a failed insertion rolls the transaction back.
     """
     duckdb = _require("duckdb", "duckdb")
-    rows = _rows(data)
+    rows, report = _rows(data, blob_limits)
     connection = duckdb.connect(path)
     try:
         connection.execute("BEGIN TRANSACTION")
@@ -87,19 +96,22 @@ def gts_to_duckdb(data: bytes, path: str) -> str:
             raise
     finally:
         connection.close()
-    return path
+    return GtsExportResult((path,), report)
 
 
-def gts_to_parquet(data: bytes, out_dir: str) -> list[str]:
+def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: Any) -> GtsExportResult:
     """Write first-party native v1 Parquet files in canonical table order.
 
     No optional encoder dependency is required. The output includes all five
     files even for an empty dataset, with complete schemas and native metadata.
     """
     from pathlib import Path
+
     from .purrdf_native import rdf as _native
 
-    files = _native.gts_columnar_parquet_from_bytes(data)
+    files, report = _native.gts_columnar_parquet_from_bytes(
+        data, blob_limits=blob_limits
+    )
     directory = Path(out_dir)
     directory.mkdir(parents=True, exist_ok=True)
     written = []
@@ -107,7 +119,7 @@ def gts_to_parquet(data: bytes, out_dir: str) -> list[str]:
         target = directory / name
         target.write_bytes(content)
         written.append(str(target))
-    return written
+    return GtsExportResult(tuple(written), report)
 
 
 def _require(module: str, extra: str) -> Any:

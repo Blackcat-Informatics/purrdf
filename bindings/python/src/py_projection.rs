@@ -496,6 +496,13 @@ fn loss_list(py: Python<'_>, losses: &[PyProjectionLoss]) -> PyResult<Vec<Py<PyP
         .collect()
 }
 
+pub(crate) fn ledger_losses(
+    py: Python<'_>,
+    ledger: &LossLedger,
+) -> PyResult<Vec<Py<PyProjectionLoss>>> {
+    loss_list(py, &losses(ledger))
+}
+
 fn losses(ledger: &LossLedger) -> Vec<PyProjectionLoss> {
     ledger.entries().iter().map(Into::into).collect()
 }

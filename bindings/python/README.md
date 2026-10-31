@@ -929,20 +929,46 @@ rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
 rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-`gts_relational_rows_from_bytes` returns a `GtsRelationalRows` dict of five row
-lists. `gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and
-`gts_to_parquet(data, out_dir)` write those five tables out — `terms`, `quads`,
-`reifiers`, `annotations`, `blobs` — in the projection's own row order, so
-exporting the same container twice produces the same content. `gts_to_parquet`
-writes one file per table and returns their paths in table order.
+`gts_relational_rows_from_bytes` is the folded inspection API. Canonical exports
+use `gts_columnar_rows_from_bytes(data, blob_limits=...)` and
+`gts_columnar_parquet_from_bytes(data, blob_limits=...)`, returning `(output, report)`.
+Every export requires `GtsBlobLimits` with all five keyword fields supplied, or
+the explicit string `"unbounded"`. Each limit accepts `None` for no ceiling.
 
-SQLite needs nothing beyond the standard library. The other two raise
-`ModuleNotFoundError` naming the extra when it is absent:
-
-```bash
-pip install 'purrdf[duckdb]'    # gts_to_duckdb
-pip install 'purrdf[parquet]'   # gts_to_parquet
+```python
+policy = purrdf.GtsBlobLimits(
+    max_encoded_bytes=16_000_000,
+    max_decoded_bytes=64_000_000,
+    max_total_decoded_bytes=256_000_000,
+    max_metadata_bytes=65_536,
+    max_frame_decoded_bytes=64_000_000,
+)
+result = purrdf.gts_to_parquet(gts_bytes, "tables", blob_limits=policy)
+print(result.paths, result.report.losses, result.report.omissions)
 ```
+
+`gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` return a frozen
+`GtsExportResult`: `paths` is a tuple in canonical table order and `report` is
+always present. Explicit blob ceilings, missing codec/key/decryptor capabilities,
+and final references without admitted inline bytes produce typed omissions and
+located `gts` to `columnar-v1` losses. Omission objects retain their original
+native causes as structured `kind`/`value` snapshots, plus source frame, digest
+proof, limits and usage. Opaque `pub` values follow the GTS `pub:any` envelope;
+recognized map fields are checked by their declared types. A present blob payload
+must be bytes; an external blob must declare a valid digest. Corruption,
+authentication failures, invalid recognized metadata fields,
+storage failures, RDF errors and non-blob frame refusals remain hard errors.
+
+This export is eager: admitted blobs, codec intermediates, relational rows and
+Parquet files still occupy memory. Logical usage counters describe admission
+charges, excluding dataset, frame, index and allocator ownership.
+`max_frame_decoded_bytes` bounds transformed frame decode buffers; raw/direct RDF
+rows and reader CBOR/frame working ownership are outside that charge. Bounded
+end-to-end streaming is unfinished; the policy is not a process-memory bound.
+
+SQLite uses the standard library. DuckDB requires `pip install 'purrdf[duckdb]'`.
+Parquet writing uses the native codec; `purrdf[parquet]` supplies PyArrow for
+reading the resulting files.
 
 The same entry points are grouped under `purrdf.gts` for discoverability.
 
