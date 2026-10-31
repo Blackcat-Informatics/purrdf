@@ -141,7 +141,7 @@ exactly once; missing, ignored, duplicate or skipped selections fail.
 | --- | --- | --- | --- |
 | `purrdf-gts` / `mmr_preimages` | scalar | `streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids` | Frozen native MMR root and proof bytes |
 | `purrdf-rdf` / `turtle_chains` | scalar | `blank_chains_at_one_hundred_thousand`, `blank_chains_at_one_million` | Frozen native packed/Turtle/TriG byte receipts |
-| `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar | `the_reassociated_path_is_the_one_this_build_was_made_for` | Actual WASM backend dispatch |
+| `purrdf` / `knn_wasm_reassociated` | scalar | `the_reassociated_path_is_the_one_this_build_was_made_for` | Actual WASM backend dispatch |
 | `purrdf-sparql-eval` / `stack_refusal` | scalar | `prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller` | Actual WASM shadow-stack floor |
 | `purrdf-core` / `model_traits` | scalar | `owned_term_walks_stay_inside_the_wasm_shadow_stack_floor` | Measured WASM shadow-stack floor and restoration |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar | `an_image_recorded_on_another_wasm_path_is_refused_by_name`, `the_image_records_the_path_and_shape_this_build_was_made_for` | Actual WASM arithmetic backend identity |
@@ -156,7 +156,7 @@ exactly once; missing, ignored, duplicate or skipped selections fail.
 | `purrdf-text` / `wasm_determinism` | scalar | `the_sentence_boundaries_are_reproduced_on_this_target` | Pinned native UTF-8 segment bytes and offsets |
 | `purrdf-shapes` / `rule_coordinates` | scalar | `shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes`, `parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal` | Sealed WASM host clock and entropy imports |
 | `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Pinned native MIME/transcoding byte transcript |
-| `purrdf-sparql-eval` / `knn_wasm_reassociated` | SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for`, `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Actual WASM dispatch and SIMD kernel |
+| `purrdf` / `knn_wasm_reassociated` | SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for`, `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Actual WASM dispatch and SIMD kernel |
 | `purrdf-hnsw` / `wasm_reassociated` | SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name`, `the_image_records_the_path_and_shape_this_build_was_made_for` | Actual WASM arithmetic backend identity |
 | `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Actual WASM SIMD hex kernel |
 | `purrdf-hash-conformance` / `blake3` | SIMD | `required_backends_are_available`, `official_modes_and_extended_output`, `xof_large_output_and_seek_boundaries`, `derived_context_trees_match_across_backends`, `random_inputs_cover_irregular_trees_and_alignment` | Actual WASM SIMD BLAKE3 kernels |

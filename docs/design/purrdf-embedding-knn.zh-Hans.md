@@ -48,7 +48,7 @@ kNN 内核完全不需要超越函数。欧氏距离平方只涉及减法、乘�
 
 算术契约跨目标架构适用。下述数值固定值在原生环境实际执行；`make wasm` 只检查发布 crate 能构建到 wasm32。编译成功本身不能证明第二种目标架构上的数值一致。
 
-`crates/sparql-eval/tests/knn_wasm_determinism.rs` 在原生 Rust 中固定精确数值预期。真实 SPARQL 查询读取分量无法由 binary64 精确表示的 PURREMB 工件，按顺序断言五个字面量 `xsd:double` 的词法形式。六维夹具触及顺序尾部；七十维夹具在余弦距离与欧氏距离平方下，覆盖全部十六通道、64 元素边界检查点及六元素尾部。`make wasm-test` 则选择实际 WASM 路径准入及 `knn_wasm_reassociated` 中的直接 simd128 内核比较；一般算术与查询语义的测试仍在原生环境运行。
+`crates/purrdf/tests/knn_wasm_determinism.rs` 在原生 Rust 中固定精确数值预期。真实 SPARQL 查询读取分量无法由 双精度 精确表示的 PURREMB 工件，按顺序断言五个字面量 `xsd:double` 的词法形式。六维夹具触及顺序尾部；七十维夹具在余弦距离与欧氏距离平方下，覆盖全部十六通道、64 元素边界检查点及六元素尾部。`make wasm-test` 则选择实际 WASM 路径准入及 `knn_wasm_reassociated` 中的直接 simd128 内核比较；一般算术与查询语义的测试仍在原生环境运行。
 
 ### 保证的边界
 

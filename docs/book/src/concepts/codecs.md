@@ -122,7 +122,8 @@ exact `.purrpck`. It does not modify the pack or RDF canonical identity. Its
 sorted section directory binds finite dense `f32` or `f64` matrices to the
 source pack's exact SHA-256, an independently verified RDFC digest, complete
 model and processing contracts, stable target sets, and per-section plus
-whole-artifact integrity evidence. `EmbeddingBuilder` accepts unordered rows;
+whole-artifact integrity evidence. The `purrdf::embedding` facade owns source
+certification and construction. `EmbeddingBuilder` accepts unordered rows;
 `EmbeddingStreamWriter` accepts canonical rows with bounded matrix working memory;
 both produce the same canonical bytes.
 
@@ -163,14 +164,15 @@ Large collections shard at artifact boundaries: each `.purremb` names its own
 exact source pack and local target set, while equal family contracts retain the
 same `FamilyId` and `VectorSpaceId`. Corpus manifests and
 `ExternalBinding::from_bytes` bind external text or other exact artifacts;
-`ExternalBinding::from_purrpck` adds independently certified RDF evidence.
+`bind_external_pack` adds independently certified RDF evidence through the
+facade. `ExternalBinding::from_verified_pack` accepts the native opaque pack proof.
 Bindings carry caller-supplied roles and media types. PurRDF does not invent a
 policy or ontology vocabulary for them.
 
 `EmbeddingView::from_bytes` borrows any stable byte slice, whether heap-owned,
 memory-mapped by the caller, or WebAssembly linear memory. Structural opening,
-full artifact verification, exact source verification, and certified source
-verification are explicit states of evidence rather than access gates. Callers
+full artifact verification, and full source attachment verification produce
+explicit evidence rather than access gates. Callers
 that mmap files must keep the backing bytes immutable while a view or resident
 verification certificate exists.
 

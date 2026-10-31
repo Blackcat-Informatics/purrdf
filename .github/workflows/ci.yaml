@@ -995,15 +995,15 @@ jobs:
           PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib knn
-          cargo test --locked -p purrdf-sparql-eval --test knn_wasm_determinism
-          cargo test --locked -p purrdf-sparql-eval --test knn_wasm_reassociated
+          cargo test --locked -p purrdf --test knn_wasm_determinism --test knn_contract
+          cargo test --locked -p purrdf --test knn_wasm_reassociated
 
       - name: Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
         env:
           PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: |
-          cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance \
-            --test wasm_reassociated
+          cargo test --locked -p purrdf-hnsw --lib --test determinism --test wasm_reassociated
+          cargo test --locked -p purrdf --test hnsw_conformance
 
       - name: Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
         # The hash crate's own path requirement: the Armv8 SHA1 and CRC32 kernels
@@ -1100,11 +1100,12 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
-          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
-            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf \
+            --test knn_wasm_determinism --test knn_wasm_reassociated --test knn_contract
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
-            --lib --test determinism --test conformance --test float_environment \
-            --test float_environment_rayon --test wasm_reassociated
+            --lib --test determinism --test wasm_reassociated
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf \
+            --test hnsw_conformance --test hnsw_float_environment --test hnsw_float_environment_rayon
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
             --test binary_arithmetic
 
@@ -1138,8 +1139,9 @@ jobs:
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval --lib bgp::tests
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval \
             --test binary_arithmetic
-          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
-            --test float_environment_x87 --test float_environment_x87_rayon
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf \
+            --test hnsw_float_environment_x87 --test hnsw_float_environment_x87_rayon
 
       - name: Replay certified geographic and cell laws on i586 x87
         env:
@@ -1238,10 +1240,10 @@ jobs:
             cargo test --locked --target "$target" -p purrdf-hash-conformance --test blake3
             cargo test --locked --target "$target" -p purrdf-core --lib distance
             cargo test --locked --target "$target" -p purrdf-sparql-eval --lib knn
-            cargo test --locked --target "$target" -p purrdf-sparql-eval \
-              --test knn_wasm_determinism --test knn_wasm_reassociated
-            cargo test --locked --target "$target" -p purrdf-hnsw \
-              --test conformance --test wasm_reassociated
+            cargo test --locked --target "$target" -p purrdf \
+              --test knn_wasm_determinism --test knn_wasm_reassociated --test knn_contract
+            cargo test --locked --target "$target" -p purrdf-hnsw --test wasm_reassociated
+            cargo test --locked --target "$target" -p purrdf --test hnsw_conformance
             skips=()
             for name in $DETERMINISM_SERIAL $DETERMINISM_ONE_WORKER $DETERMINISM_MORE_WORKERS; do
               skips+=(--skip "$name")
@@ -1292,8 +1294,9 @@ jobs:
         run: |
           cargo test --locked --no-run -p purrdf-hash-conformance --test blake3
           cargo test --locked --no-run -p purrdf-core --lib
-          cargo test --locked --no-run -p purrdf-sparql-eval --lib \
-            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --no-run -p purrdf-sparql-eval --lib
+          cargo test --locked --no-run -p purrdf \
+            --test knn_wasm_determinism --test knn_wasm_reassociated --test knn_contract
           cargo test --locked --no-run -p purrdf-hnsw --lib
 
       - name: Run them on an emulated AVX-512F processor, requiring every x86_64 path
@@ -1304,8 +1307,8 @@ jobs:
           cargo test --locked -p purrdf-hash-conformance --test blake3
           cargo test --locked -p purrdf-core --lib distance
           cargo test --locked -p purrdf-sparql-eval --lib knn
-          cargo test --locked -p purrdf-sparql-eval \
-            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked -p purrdf \
+            --test knn_wasm_determinism --test knn_wasm_reassociated --test knn_contract
           cargo test --locked -p purrdf-hnsw --lib
 
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above

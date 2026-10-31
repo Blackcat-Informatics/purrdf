@@ -666,7 +666,7 @@ entry point that computes a distance takes the resolved handle the check produce
 `VectorMatrix::distance`, `distance_from_query` and `distance_bounded` (a `Resolved<A>`)
 in `purrdf-hnsw`. There is no handle-free distance. A flushing thread is refused by name
 when it asks for the handle, so it never obtains one and no distance, per-pair or batch,
-is computed on it; `crates/hnsw/tests/float_environment.rs` executes that refusal and, as
+is computed on it; `crates/purrdf/tests/hnsw_float_environment.rs` executes that refusal and, as
 its valid neighbour, every pair entry point in the default environment agreeing bit for
 bit with the batch kernel on a pair whose distance is subnormal, so a flushing thread
 would have returned zero for it.
@@ -688,11 +688,11 @@ Every compute entry resolves on the thread that computes: HNSW search, `search_b
 `row_distance`, `verify_rebuild` and the kNN scan and membership lookup once per call,
 and `search_batch` and the build's parallel proposals once inside each rayon worker,
 per worker's share rather than per query or pair.
-`crates/hnsw/tests/float_environment.rs` builds every index and relation on the test
+`crates/purrdf/tests/hnsw_float_environment.rs` builds every index and relation on the test
 thread and executes the refusal from a worker thread that set flush-to-zero on itself
 (`search_batch` and `row_distance` on both indexes, the scan and the membership lookup
 on both kNN relations), with the same calls from a clean worker answering the test
-thread's bits as the valid neighbour; `crates/hnsw/tests/float_environment_rayon.rs`
+thread's bits as the valid neighbour; `crates/purrdf/tests/hnsw_float_environment_rayon.rs`
 makes rayon's global pool flush-to-zero and shows a batch called from a clean thread
 refused by its workers, while the same batch on a clean pool answers the single-thread
 bits.
@@ -712,7 +712,7 @@ folds stored bytes and no arithmetic, so it is written and verified on any threa
 same suite executes the norm refusal on a row whose norm is subnormal (`[3e-310,
 4e-310]`, which a flushing thread folds to `+0`) and, as the valid neighbour, every norm
 entry point returning the reference fold's nonzero bits once the register is restored;
-`crates/rdf-core/tests/purremb_float_environment.rs` does the same for the writer, the
+`crates/purrdf/tests/purremb_float_environment.rs` does the same for the writer, the
 verifier and the normalized row, with a raw artifact written and verified under the
 flushed register as the neighbour.
 
@@ -927,8 +927,8 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/gts/benches/rfc3339.rs` | xsd.rfc3339-lexical |
 | `crates/hash-conformance/benches/digests.rs` | blake3.hash-many-dispatch, blake3.single-block, hash.sha1-block, hash.crc32-update, hash.hex-encode, hash.hex-lower, hash.hex-decode, hash.digest-portable |
 | `crates/hash-conformance/benches/hasher.rs` | hash.fixed-compress, hash.fixed-terminal |
-| `crates/hnsw/benches/build.rs` | hnsw.search-build, distance.exact.sqeuclid, knn.norm, hnsw.distance-cache |
-| `crates/hnsw/benches/recall.rs` | hnsw.search-build, distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.sqeuclid, hnsw.distance-cache |
+| `crates/purrdf/benches/hnsw_build.rs` | hnsw.search-build, distance.exact.sqeuclid, knn.norm, hnsw.distance-cache |
+| `crates/purrdf/benches/hnsw_recall.rs` | hnsw.search-build, distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.sqeuclid, hnsw.distance-cache |
 | `crates/iri/benches/parse.rs` | iri.delimiter-scan, iri.validate-component, lex.terminals-in-ranges |
 | `crates/json/benches/ordered_json.rs` | json.parser-string, json.parser-whitespace |
 | `crates/json/benches/ordered_json_alloc.rs` | json.parser-string |
@@ -958,8 +958,8 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/rdf-core/benches/pack_index_compare.rs` | core.pack-triples-intersect |
 | `crates/rdf-core/benches/pack_query.rs` | deflate.match-length, core.pack-triples-intersect |
 | `crates/rdf-core/benches/pack_restore_alloc.rs` | cli.pack-input, core.pack-triples-intersect, core.pack-intvector-get |
-| `crates/rdf-core/benches/purremb.rs` | core.purremb-f32-decode, core.purremb-norm |
-| `crates/rdf-core/benches/purremb_alloc.rs` | core.purremb-f32-decode, core.purremb-norm |
+| `crates/purrdf/benches/purremb.rs` | core.purremb-f32-decode, core.purremb-norm |
+| `crates/purrdf/benches/purremb_alloc.rs` | core.purremb-f32-decode, core.purremb-norm |
 | `crates/rdf-core/benches/shared_homes.rs` | core.canon-escape, deflate.match-length |
 | `crates/rdf-core/benches/shared_views.rs` | core.dataset-scan-filter |
 | `crates/rdf-core/benches/small.rs` | shapes.path-eval |
@@ -967,7 +967,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/rdf-core/benches/xsd_regex.rs` | core.xsd-regex-scan |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | wasm.term-marshal, eval.bgp-join-probe |
 | `crates/retrieval/benches/fusion_frontier_alloc.rs` | retrieval.fusion-frontier, retrieval.rrf |
-| `crates/retrieval/benches/on_demand_read.rs` | retrieval.fusion-frontier, retrieval.rrf, distance.exact.dot, distance.exact.sqeuclid |
+| `crates/purrdf/benches/retrieval_on_demand_read.rs` | retrieval.fusion-frontier, retrieval.rrf, distance.exact.dot, distance.exact.sqeuclid |
 | `crates/shapes/benches/canonical_sort.rs` | shapes.finish-report |
 | `crates/shapes/benches/graph_membership.rs` | eval.bgp-join-probe, core.dataset-scan-filter |
 | `crates/shapes/benches/instance_projection.rs` | shapes.instance-projection |
@@ -993,7 +993,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/sparql-eval/benches/construct_builder.rs` | eval.bgp-join-probe |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | eval.bgp-cost-planner, eval.bgp-join-probe |
 | `crates/sparql-eval/benches/deep_nesting.rs` | sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, eval.bgp-join-probe, eval.solution-compatible |
-| `crates/sparql-eval/benches/knn_relation.rs` | distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.dot, distance.reassociated.sqeuclid |
+| `crates/purrdf/benches/knn_relation.rs` | distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.dot, distance.reassociated.sqeuclid |
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | eval.solution-compatible, eval.bgp-join-probe |
 | `crates/sparql-eval/benches/expr_vm.rs` | eval.bgp-join-probe, core.xsd-regex-scan, eval.regex-row-alloc |
 | `crates/sparql-eval/benches/flat_operator_chains.rs` | sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, eval.bgp-cost-planner, eval.bgp-join-probe, eval.solution-compatible |

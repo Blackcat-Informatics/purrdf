@@ -133,7 +133,15 @@
 )]
 #![forbid(unsafe_code)]
 
+pub use purrdf_core::{VerifiedPack, verify_pack_bytes};
 pub use purrdf_rdf::*;
+
+pub mod embedding;
+pub use embedding::{
+    CanonicalMetadataInput, CanonicalMetadataSections, CertifiedPurrpckSource, EmbeddingBuilder,
+    EmbeddingStreamWriter, EncodedArtifact, MatrixInput, MatrixRow, ProjectionSpec,
+    SourceVerificationReport, bind_external_pack, verify_embedding_source, verify_external_pack,
+};
 
 /// Borrowed typed error inspection, available without a sub-crate dependency.
 pub use purrdf_lex::error;

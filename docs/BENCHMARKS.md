@@ -65,10 +65,10 @@ simply not narrated here:
   recognition cost for ordinary vs. genuine content-id IRIs.
 - `crates/rdf-core/benches/pack_index_compare.rs` — the shipped pack codec's
   FoQ posting indexes vs. an internal bitmap wavelet-matrix candidate.
-- `crates/rdf-core/benches/purremb.rs` — `.purremb` validation, resident
+- `crates/purrdf/benches/purremb.rs` — `.purremb` validation, resident
   reopen, target and prefix access, exact/two-stage retrieval, streaming write,
   binary64 access, and a one-million-chunk catalog.
-- `crates/rdf-core/benches/purremb_alloc.rs` — one-shot allocation traffic and
+- `crates/purrdf/benches/purremb_alloc.rs` — one-shot allocation traffic and
   live-byte high-water probes over the same deterministic `.purremb` fixtures.
 - `crates/rdf-core/benches/csv.rs` — `purrdf_core::csv` read and write
   throughput over 1 MiB SSSOM-shaped TSV and CSVW-shaped CSV inputs, through
@@ -440,8 +440,8 @@ here.
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph; a mutable-layer declared graph drained row by row at 1k and 10k rows (`mut_declared_graph_removal`); empty graph creation, last-row removal, clearing and explicit withdrawal in implicit and remembered modes (`mut_graph_slots`); and snapshot publication of a delta of 1k, 20k and 200k added rows, retention check and freeze included (`snapshot_with_delta`). |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
-| `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
-| `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
+| `crates/purrdf/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 single-precision Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 double-precision matrix, and a one-million-chunk hierarchy. |
+| `crates/purrdf/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
 | `crates/rdf-core/benches/csv.rs` | `purrdf_core::csv` throughput over 1 MiB inputs: an SSSOM-shaped TSV body read and written under `Dialect::SSSOM_TSV`, and a CSVW-shaped CSV table (quoted cells with commas, doubled quotes and line breaks) read by `Reader` and by `read_table`, and written. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
@@ -473,7 +473,7 @@ here.
 
 ### PURREMB companion format
 
-The shared `crates/rdf-core/benches/support/purremb.rs` module constructs three
+The shared `crates/purrdf/benches/support/purremb.rs` module constructs three
 deterministic fixtures without RNG, wall-clock values, local paths, or
 process-specific canonical input. The timed and allocation processes consume
 the exact same builders:
@@ -523,13 +523,13 @@ Run the exact fixtures, a timed short sample, or a reduced-catalog smoke pass
 with:
 
 ```sh
-cargo bench -p purrdf-core --bench purremb --locked -- --test
-cargo bench -p purrdf-core --bench purremb --locked -- --quick
-cargo bench -p purrdf-core --bench purremb_alloc --locked
+cargo bench -p purrdf --bench purremb --locked -- --test
+cargo bench -p purrdf --bench purremb --locked -- --quick
+cargo bench -p purrdf --bench purremb_alloc --locked
 PURREMB_CATALOG_SUBJECTS=10000 \
-  cargo bench -p purrdf-core --bench purremb --locked -- --test
+  cargo bench -p purrdf --bench purremb --locked -- --test
 PURREMB_CATALOG_SUBJECTS=10000 \
-  cargo bench -p purrdf-core --bench purremb_alloc --locked
+  cargo bench -p purrdf --bench purremb_alloc --locked
 ```
 
 The environment override is for local smoke testing only. Reported results use

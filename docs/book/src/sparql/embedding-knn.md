@@ -18,10 +18,11 @@ itself (`EmbeddingBuilder` in memory, `EmbeddingStreamWriter` streaming — Rust
 only) and opens it fail-closed; the model that produced the vectors is the
 caller's.
 
-The PURREMB layer in `purrdf-core` (see
+The PURREMB models and readers in `purrdf-core`, with certified source construction
+in `purrdf::embedding` (see
 [Deterministic embedding companions](../concepts/codecs.md#deterministic-embedding-companions)
 and [`docs/PURREMB.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/PURREMB.md))
-stores RDF-1.2-addressable vectors, a declared distance metric, and
+store RDF-1.2-addressable vectors, a declared distance metric, and
 tamper-evident guards binding third-party index payloads to the exact matrix
 they were built over. It deliberately does not rank anything — ranking is a
 query operation and PURREMB is an artifact format. The `knn` module of

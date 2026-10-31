@@ -5,7 +5,7 @@
 
 use core::cmp::Ordering;
 
-use crate::{ContentDigest, PackBuilder, RdfDataset, verify_pack};
+use crate::ContentDigest;
 
 use super::contract::{
     ArtifactIdentity, ArtifactIdentityKind, EmbeddingFamily, EmbeddingFamilyContract, TlvWireType,
@@ -18,16 +18,13 @@ use super::identity::{
     VectorSpaceId, derive_external_binding_id, derive_external_contract_digest,
     derive_index_guard_digest, derive_index_id,
 };
+use super::model::{ExtensionSection, MatrixCommitment, ProjectionCommitment};
 use super::target::{
     EmbeddingTarget, RdfDatasetTarget, RelationKind, TargetKind, TargetRelation, TargetSet,
     TokenSpan,
 };
 use super::wire::{put_u32, put_u64};
-use super::writer::{
-    CanonicalMetadataSections, ExtensionSection, MatrixCommitment, ProjectionCommitment,
-};
 
-const SOURCE_LENGTH: usize = 128;
 const CONTRACTS_HEADER_LENGTH: u64 = 96;
 const FAMILY_RECORD_LENGTH: u64 = 96;
 const SPACE_RECORD_LENGTH: u64 = 80;
@@ -52,90 +49,34 @@ const RELATION_ROLE_BYTES_PRESENT: u32 = 1;
 const CERTIFIED_RDF_PRESENT: u32 = 1;
 const INDEX_REBUILDABLE: u32 = 1;
 
-/// Independently certified attachment to one exact `.purrpck` byte string.
-///
-/// The fields are private so the public construction path cannot turn an
-/// arbitrary digest claim into certified source metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CertifiedPurrpckSource {
-    source_length: u64,
-    source_exact_digest: ContentDigest,
-    certified_rdf_digest: RdfcDigest,
-    dataset_target_id: TargetId,
+/// Canonical source-free metadata sections, without a SOURCE assertion.
+/// This value carries no source certification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodedMetadataCatalog {
+    /// Canonical generation contracts.
+    pub contracts: Vec<u8>,
+    /// Canonical target records.
+    pub targets: Vec<u8>,
+    /// Canonical target sets.
+    pub target_sets: Vec<u8>,
+    /// Canonical structural relations.
+    pub relations: Vec<u8>,
+    /// Canonical token spans.
+    pub token_spans: Vec<u8>,
+    /// Canonical external bindings.
+    pub external_bindings: Vec<u8>,
+    /// Canonical derived-index guards.
+    pub index_guards: Vec<u8>,
+    /// Original inline index payloads.
+    pub inline_index_payloads: Vec<Vec<u8>>,
+    /// Original caller extensions.
+    pub extensions: Vec<ExtensionSection>,
 }
 
-impl CertifiedPurrpckSource {
-    /// Structurally opens and independently RDFC-certifies exact `.purrpck`
-    /// bytes, then derives their RDF-dataset target.
-    pub fn certify(source_bytes: &[u8]) -> Result<Self, EmbeddingError> {
-        let certified = verify_pack(source_bytes).map_err(EmbeddingError::source_pack)?;
-        let certified_rdf_digest = RdfcDigest::from_raw(*certified.as_bytes());
-        let dataset_target = RdfDatasetTarget {
-            rdfc_digest: *certified.as_bytes(),
-        }
-        .into_target(false)?;
-        Ok(Self {
-            source_length: u64::try_from(source_bytes.len())
-                .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?,
-            source_exact_digest: ContentDigest::of(source_bytes),
-            certified_rdf_digest,
-            dataset_target_id: dataset_target.id,
-        })
-    }
-
-    /// Builds and certifies a `.purrpck` directly from a frozen RDF dataset.
-    pub fn from_dataset(dataset: &RdfDataset) -> Result<(Self, Vec<u8>), EmbeddingError> {
-        let bytes = PackBuilder::build_bytes(dataset).map_err(EmbeddingError::source_pack)?;
-        let source = Self::certify(&bytes)?;
-        Ok((source, bytes))
-    }
-
-    /// Exact source SHA-256 duplicated into the PURREMB header.
-    #[must_use]
-    pub const fn source_exact_digest(self) -> ContentDigest {
-        self.source_exact_digest
-    }
-
-    /// Independently verified RDFC SHA-256.
-    #[must_use]
-    pub const fn certified_rdf_digest(self) -> RdfcDigest {
-        self.certified_rdf_digest
-    }
-
-    /// Canonical RDF-dataset target referenced by the `SOURCE` section.
-    #[must_use]
-    pub const fn dataset_target_id(self) -> TargetId {
-        self.dataset_target_id
-    }
-
-    /// Reconstructs the dataset target for insertion into the target catalog.
-    pub fn dataset_target(self, retain_identity: bool) -> Result<EmbeddingTarget, EmbeddingError> {
-        RdfDatasetTarget {
-            rdfc_digest: *self.certified_rdf_digest.as_bytes(),
-        }
-        .into_target(retain_identity)
-    }
-
-    /// Encodes the exact fixed-size `SOURCE` section.
-    #[must_use]
-    pub fn encode(self) -> [u8; SOURCE_LENGTH] {
-        let mut output = [0u8; SOURCE_LENGTH];
-        put_u32(&mut output, 0, 1);
-        put_u32(&mut output, 4, 1);
-        put_u64(&mut output, 8, self.source_length);
-        put_u32(&mut output, 16, 1);
-        output[24..56].copy_from_slice(self.source_exact_digest.as_bytes());
-        output[56..88].copy_from_slice(self.certified_rdf_digest.as_bytes());
-        output[88..120].copy_from_slice(self.dataset_target_id.as_bytes());
-        output
-    }
-}
-
-/// Complete typed input for the eight non-matrix PURREMB metadata sections.
+/// Source-free metadata records whose links can be checked against source identities.
+/// Identity operands are claims to check, not independently certified evidence.
 #[derive(Debug, Clone)]
-pub struct CanonicalMetadataInput {
-    /// Exact source attachment created through independent `.purrpck` certification.
-    pub source: CertifiedPurrpckSource,
+pub struct MetadataCatalogInput {
     /// Complete generation contracts; logical duplicates are collapsed.
     pub family_contracts: Vec<EmbeddingFamilyContract>,
     /// Canonical target records in arbitrary input order.
@@ -154,34 +95,22 @@ pub struct CanonicalMetadataInput {
     pub extensions: Vec<ExtensionSection>,
 }
 
-impl CanonicalMetadataInput {
-    /// Encodes metadata that carries no matrix- or index-dependent reference.
-    ///
-    /// Use [`Self::encode_for_matrices`] when indexes or external bindings name
-    /// a matrix, projection, or index.
-    pub fn encode(self) -> Result<CanonicalMetadataSections, EmbeddingError> {
-        self.encode_inner(None)
-    }
-
-    /// Encodes metadata and validates every matrix, projection, binding, and
-    /// index cross-reference against precommitted matrices.
-    pub fn encode_for_matrices(
+impl MetadataCatalogInput {
+    /// Encode and validate the catalog and all supplied matrix/index links.
+    /// This does not certify a source or emit a SOURCE section.
+    pub fn encode(
         self,
-        matrices: &[MatrixCommitment],
-    ) -> Result<CanonicalMetadataSections, EmbeddingError> {
-        self.encode_inner(Some(matrices))
-    }
-
-    fn encode_inner(
-        self,
+        source_exact_digest: ContentDigest,
+        certified_rdf_digest: RdfcDigest,
+        dataset_target_id: TargetId,
         matrices: Option<&[MatrixCommitment]>,
-    ) -> Result<CanonicalMetadataSections, EmbeddingError> {
+    ) -> Result<EncodedMetadataCatalog, EmbeddingError> {
         let EncodedContracts {
             bytes: contracts,
             families,
         } = encode_contracts(self.family_contracts)?;
         let canonical_targets = canonical_targets(self.targets)?;
-        validate_source_target(self.source, &canonical_targets)?;
+        validate_source_target(certified_rdf_digest, dataset_target_id, &canonical_targets)?;
         let targets = encode_targets_canonical(&canonical_targets)?;
         let canonical_sets = canonical_target_sets(self.target_sets)?;
         validate_target_set_references(&canonical_sets, &canonical_targets)?;
@@ -196,7 +125,7 @@ impl CanonicalMetadataInput {
         let canonical_bindings = canonical_external_bindings(self.external_bindings)?;
         let mut canonical_indexes = canonical_indexes(self.indexes)?;
         validate_matrix_and_index_references(
-            self.source,
+            source_exact_digest,
             TypedCatalog {
                 families: &families,
                 targets: &canonical_targets,
@@ -211,9 +140,7 @@ impl CanonicalMetadataInput {
         let (index_guards, inline_index_payloads) =
             encode_index_guards_canonical(&mut canonical_indexes)?;
 
-        Ok(CanonicalMetadataSections {
-            source_exact_digest: self.source.source_exact_digest(),
-            source: self.source.encode().to_vec(),
+        Ok(EncodedMetadataCatalog {
             contracts,
             targets,
             target_sets,
@@ -840,19 +767,17 @@ impl ExternalBinding {
         Self::from_parts(scope, artifact_sha256, artifact_length, None, contract)
     }
 
-    /// Independently verifies exact `.purrpck` v1 bytes and mints a binding
-    /// carrying `CERTIFIED_RDF_PRESENT`.
-    pub fn from_purrpck(
+    /// Bind a pack using native byte-bound verification evidence.
+    pub fn from_verified_pack(
         scope: ExternalScope,
-        artifact_bytes: &[u8],
+        proof: crate::VerifiedPack<'_>,
         contract: &ExternalBindingContract,
     ) -> Result<Self, EmbeddingError> {
-        let certified = verify_pack(artifact_bytes).map_err(EmbeddingError::external_pack)?;
         Self::from_parts(
             scope,
-            ContentDigest::of(artifact_bytes),
-            u64_len(artifact_bytes.len(), "external .purrpck length")?,
-            Some(RdfcDigest::from_raw(*certified.as_bytes())),
+            proof.exact_digest(),
+            u64_len(proof.bytes().len(), "external .purrpck length")?,
+            Some(RdfcDigest::from_raw(*proof.rdf_digest().as_bytes())),
             contract,
         )
     }
@@ -1555,16 +1480,20 @@ fn encode_index_guards_canonical(
 }
 
 fn validate_source_target(
-    source: CertifiedPurrpckSource,
+    source_rdf: RdfcDigest,
+    source_target: TargetId,
     targets: &[EmbeddingTarget],
 ) -> Result<(), EmbeddingError> {
-    let target = find_target(targets, source.dataset_target_id())?;
+    let target = find_target(targets, source_target)?;
     if target.kind != TargetKind::RdfDataset {
         return Err(EmbeddingError::Malformed(
             "SOURCE dataset target is not RDF_DATASET",
         ));
     }
-    let expected = source.dataset_target(target.canonical_identity.is_some())?;
+    let expected = RdfDatasetTarget {
+        rdfc_digest: *source_rdf.as_bytes(),
+    }
+    .into_target(target.canonical_identity.is_some())?;
     if target.id != expected.id || target.identity_digest != expected.identity_digest {
         return Err(EmbeddingError::DigestMismatch {
             kind: DigestKind::CertifiedRdf,
@@ -1973,7 +1902,7 @@ struct TypedCatalog<'a> {
 }
 
 fn validate_matrix_and_index_references(
-    source: CertifiedPurrpckSource,
+    source: ContentDigest,
     catalog: TypedCatalog<'_>,
     matrices: Option<&[MatrixCommitment]>,
 ) -> Result<(), EmbeddingError> {
@@ -2153,7 +2082,7 @@ fn family_stage_applied(
 
 fn validate_external_scope(
     scope: ExternalScope,
-    source: CertifiedPurrpckSource,
+    source: ContentDigest,
     families: &[EmbeddingFamily],
     targets: &[EmbeddingTarget],
     target_sets: &[TargetSet],
@@ -2161,10 +2090,10 @@ fn validate_external_scope(
     indexes: &[DerivedIndex],
 ) -> Result<(), EmbeddingError> {
     match scope {
-        ExternalScope::Source(digest) if digest == source.source_exact_digest() => Ok(()),
+        ExternalScope::Source(digest) if digest == source => Ok(()),
         ExternalScope::Source(_) => Err(EmbeddingError::DigestMismatch {
             kind: DigestKind::SourceExact,
-            expected: *source.source_exact_digest().as_bytes(),
+            expected: *source.as_bytes(),
             actual: scope.id(),
         }),
         ExternalScope::Target(id) => find_target(targets, id).map(|_| ()),
@@ -2178,17 +2107,17 @@ fn validate_external_scope(
 }
 
 fn validate_index_references(
-    source: CertifiedPurrpckSource,
+    source: ContentDigest,
     families: &[EmbeddingFamily],
     target_sets: &[TargetSet],
     matrices: &[MatrixCommitment],
     bindings: &[ExternalBinding],
     index: &DerivedIndex,
 ) -> Result<(), EmbeddingError> {
-    if index.coordinates.source_exact_digest != source.source_exact_digest() {
+    if index.coordinates.source_exact_digest != source {
         return Err(EmbeddingError::DigestMismatch {
             kind: DigestKind::SourceExact,
-            expected: *source.source_exact_digest().as_bytes(),
+            expected: *source.as_bytes(),
             actual: *index.coordinates.source_exact_digest.as_bytes(),
         });
     }
@@ -2238,11 +2167,11 @@ fn validate_index_references(
 
 fn scope_matches_index_metadata(
     scope: ExternalScope,
-    source: CertifiedPurrpckSource,
+    source: ContentDigest,
     index: &DerivedIndex,
 ) -> bool {
     match scope {
-        ExternalScope::Source(digest) => digest == source.source_exact_digest(),
+        ExternalScope::Source(digest) => digest == source,
         ExternalScope::Family(id) => id == index.coordinates.family_id,
         ExternalScope::VectorSpace(id) => id == index.coordinates.vector_space_id,
         ExternalScope::Matrix(id) => id == index.coordinates.matrix_id,
@@ -2500,10 +2429,15 @@ fn copy_at(output: &mut [u8], offset: u64, bytes: &[u8]) -> Result<(), Embedding
 
 #[cfg(test)]
 mod tests {
-    use crate::RdfDatasetBuilder;
+    use super::*;
+    use crate::embedding::RdfTermTarget;
+    use crate::{PackBuilder, RdfDatasetBuilder};
+    const FX: crate::purremb_fixture::Identities = crate::purremb_fixture::Identities {
+        artifact_media: "application/example",
+        stage_payload: &[1, 2, 3],
+        ..crate::purremb_fixture::Identities::at("")
+    };
 
-    /// An id-keyed table is read by binary search; an absent id is the dangling
-    /// reference the table names.
     #[test]
     fn find_sorted_answers_the_entry_or_names_the_missing_reference() {
         let table = [(1_u32, 'a'), (4, 'b'), (9, 'c')];
@@ -2520,95 +2454,6 @@ mod tests {
             );
         }
     }
-
-    use super::*;
-    use crate::ir::embedding::{AppliedStage, DimensionalityPolicy, DistanceMetric, RdfTermTarget};
-
-    const FX: crate::purremb_fixture::Identities = crate::purremb_fixture::Identities {
-        artifact_media: "application/example",
-        stage_payload: &[1, 2, 3],
-        ..crate::purremb_fixture::Identities::at("")
-    };
-
-    fn family_contract() -> EmbeddingFamilyContract {
-        EmbeddingFamilyContract {
-            model: FX.artifact("model"),
-            engine: FX.artifact("engine"),
-            tokenizer: FX.artifact("tokenizer"),
-            execution: FX.stage("execution"),
-            subject_projection: FX.stage("projection"),
-            preprocessing: AppliedStage::NotApplied,
-            chunking: AppliedStage::NotApplied,
-            pooling: FX.stage("pooling"),
-            normalization: AppliedStage::NotApplied,
-            truncation: AppliedStage::NotApplied,
-            dtype: super::super::contract::VectorDtype::F32,
-            metric: DistanceMetric::Cosine,
-            dimensionality: DimensionalityPolicy::fixed(
-                2,
-                super::super::contract::PrefixPostprocessing::None,
-            )
-            .unwrap(),
-            extensions: Vec::new(),
-        }
-    }
-
-    fn certified_empty_pack() -> (CertifiedPurrpckSource, Vec<u8>) {
-        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
-        CertifiedPurrpckSource::from_dataset(&dataset).unwrap()
-    }
-
-    #[test]
-    fn source_certification_is_exact_purrpck_only() {
-        let (source, bytes) = certified_empty_pack();
-        assert_eq!(source.source_exact_digest(), ContentDigest::of(&bytes));
-        let encoded = source.encode();
-        assert_eq!(u32::from_le_bytes(encoded[0..4].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(encoded[4..8].try_into().unwrap()), 1);
-        assert_eq!(
-            u64::from_le_bytes(encoded[8..16].try_into().unwrap()),
-            bytes.len() as u64
-        );
-        assert_eq!(&encoded[24..56], source.source_exact_digest().as_bytes());
-        assert!(matches!(
-            CertifiedPurrpckSource::certify(b"not a pack"),
-            Err(EmbeddingError::InvalidSourcePack(_))
-        ));
-    }
-
-    #[test]
-    fn typed_metadata_is_deterministic_and_deduplicates_logical_input() {
-        let (source, _) = certified_empty_pack();
-        let dataset_target = source.dataset_target(true).unwrap();
-        let set = TargetSet::new(vec![dataset_target.id]).unwrap();
-        let input = CanonicalMetadataInput {
-            source,
-            family_contracts: vec![family_contract(), family_contract()],
-            targets: vec![dataset_target.clone(), dataset_target],
-            target_sets: vec![set.clone(), set],
-            relations: Vec::new(),
-            token_spans: Vec::new(),
-            external_bindings: Vec::new(),
-            indexes: Vec::new(),
-            extensions: Vec::new(),
-        };
-        let first = input.clone().encode().unwrap();
-        let second = input.encode().unwrap();
-        assert_eq!(first, second);
-        assert_eq!(
-            u64::from_le_bytes(first.contracts[8..16].try_into().unwrap()),
-            1
-        );
-        assert_eq!(
-            u64::from_le_bytes(first.targets[8..16].try_into().unwrap()),
-            1
-        );
-        assert_eq!(
-            u64::from_le_bytes(first.target_sets[8..16].try_into().unwrap()),
-            1
-        );
-    }
-
     #[test]
     fn target_encoding_ignores_insertion_order() {
         let first = RdfTermTarget::Iri("https://example.org/a".into())
@@ -2621,7 +2466,6 @@ mod tests {
         let reverse = encode_targets(vec![second, first]).unwrap();
         assert_eq!(forward, reverse);
     }
-
     #[test]
     fn empty_relation_section_has_the_exact_canonical_header() {
         let actual = encode_relations(Vec::new()).unwrap();
@@ -2632,10 +2476,10 @@ mod tests {
         expected[32..40].copy_from_slice(&64u64.to_le_bytes());
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn only_verified_external_purrpck_mints_certified_rdf() {
-        let (_, pack) = certified_empty_pack();
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let pack = PackBuilder::build_bytes(&dataset).unwrap();
         let contract = ExternalBindingContract {
             role: "https://example.org/role/source".into(),
             media_type: "application/vnd.purrdf.pack".into(),
@@ -2646,14 +2490,18 @@ mod tests {
         let scope = ExternalScope::Source(ContentDigest::of(b"owner"));
         let exact = ExternalBinding::from_bytes(scope, b"ordinary bytes", &contract).unwrap();
         assert_eq!(exact.certified_rdf_digest(), None);
-        let certified = ExternalBinding::from_purrpck(scope, &pack, &contract).unwrap();
+        let certified = ExternalBinding::from_verified_pack(
+            scope,
+            crate::verify_pack_bytes(&pack).unwrap(),
+            &contract,
+        )
+        .unwrap();
         assert!(certified.certified_rdf_digest().is_some());
         assert!(matches!(
-            ExternalBinding::from_purrpck(scope, b"ordinary bytes", &contract),
-            Err(EmbeddingError::InvalidExternalPack(_))
+            crate::verify_pack_bytes(b"ordinary bytes"),
+            Err(crate::PackError::Truncated)
         ));
     }
-
     #[test]
     fn inline_indexes_assign_instances_in_canonical_id_order() {
         let coordinates = IndexCoordinates {

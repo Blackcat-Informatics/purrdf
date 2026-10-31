@@ -86,9 +86,6 @@ harness = false
 name = "wasm_determinism"
 harness = false
 
-[[test]]
-name = "real_producers"
-harness = false
 
 # Peak-allocation evidence for the fused frontier, in its own process so the
 # tracking allocator's atomics skew no timed measurement. Report-only: it prints
@@ -102,6 +99,3 @@ harness = false
 # The fused read taken on demand against the same read materialised, over the three
 # shapes that decide what reading a row per pull is worth. Report-only: the
 # deterministic counterparts are asserted in `tests/multimodal_read_bound.rs`.
-[[bench]]
-name = "on_demand_read"
-harness = false

@@ -354,7 +354,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run the purrdf_testkit::bench suites (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-geo-kernel -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
+	cargo bench -p purrdf -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-geo-kernel -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -754,7 +754,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				blank_chains_at_one_hundred_thousand \
 				blank_chains_at_one_million \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test stack_refusal -- --exact \
@@ -812,7 +812,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
 				the_reassociated_distance_is_within_the_error_bound_of_the_exact_one \
 		&& env -u RUSTFLAGS \

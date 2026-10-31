@@ -453,7 +453,7 @@ Four governed channels carry it:
    fabricated.
 3. **The cursor contract.** A result is an **offer of candidates**, never a
    certification of absence. The cursor can say "here are `k` candidates"; it
-   can never say "no row is nearer". `crates/hnsw/tests/oracle_contract.rs`
+   can never say "no row is nearer". `crates/purrdf/tests/hnsw_oracle_contract.rs`
    asserts that even when a query misses the exact oracle's nearest row, the
    empty and non-empty answers are ordinary cursor results and never a
    completeness claim.
