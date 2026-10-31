@@ -176,7 +176,7 @@ trait Encodable: Copy {
     fn enter_map(entries: Self::Entries, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError>;
 }
 
-fn owned_value(value: &Value) -> Result<&Value, DecodeError> {
+fn owned_child(value: &Value) -> Result<&Value, DecodeError> {
     Ok(value)
 }
 fn owned_entry(entry: &(Value, Value)) -> Result<(&Value, &Value), DecodeError> {
@@ -207,7 +207,7 @@ impl<'v> Encodable for &'v Value {
     }
     fn array(self) -> Result<Option<(usize, Self::Values)>, DecodeError> {
         Ok(match self {
-            Value::Array(items) => Some((items.len(), items.iter().map(owned_value))),
+            Value::Array(items) => Some((items.len(), items.iter().map(owned_child))),
             _ => None,
         })
     }
