@@ -4,9 +4,9 @@
 //! A projected citation with several anchors remains a certified embedding source.
 
 use purrdf::{
-    CanonicalMetadataInput, CertifiedPurrpckSource, EmbeddingBuilder, EmbeddingView, MatrixInput,
-    MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfTermTarget, TargetSet, TermValue,
-    verify_embedding, verify_embedding_source,
+    CanonicalMetadataInput, CertifiedEmbeddingSource, EmbeddingBuilder, EmbeddingSource,
+    EmbeddingView, MatrixInput, MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec,
+    RdfTermTarget, TargetSet, TermValue, verify_embedding, verify_embedding_source,
 };
 use purrdf_core::purremb_fixture::Identities;
 use purrdf_markdown::{Profile, SourceDocument, Vocabulary, slice_markdown};
@@ -45,7 +45,7 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
     };
 
     let (source, source_bytes) =
-        CertifiedPurrpckSource::from_dataset(&dataset).expect("certified source pack");
+        CertifiedEmbeddingSource::from_dataset(&dataset).expect("certified source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");
     let pack = PackView::from_bytes(&source_bytes).expect("source pack view");
     let ordinal = pack
@@ -84,7 +84,7 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
     let artifact = builder.build().expect("embedding artifact");
     let mut embedding = EmbeddingView::from_bytes(&artifact.bytes).expect("embedding view");
     verify_embedding(&mut embedding).expect("embedding integrity");
-    let report = verify_embedding_source(&embedding, &source_bytes)
+    let report = verify_embedding_source(&embedding, EmbeddingSource::Purrpck(&source_bytes))
         .expect("a multi-anchor citation is a valid certified RDF 1.2 source");
     assert_eq!(
         report.ordinals_checked(),

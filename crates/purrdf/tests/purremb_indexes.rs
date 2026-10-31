@@ -4,7 +4,7 @@
 //! Exact external bindings and opaque inline/detached index guards.
 
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, DerivedIndex,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, ContentDigest, DerivedIndex,
     DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
     EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget, ExternalBinding,
     ExternalBindingContract, ExternalScope, IndexBuildDeterminism, IndexCoordinates,
@@ -32,7 +32,7 @@ fn assert_reader_or_verifier_rejects(bytes: &[u8]) {
 
 #[derive(Clone)]
 struct Context {
-    source: CertifiedPurrpckSource,
+    source: CertifiedEmbeddingSource,
     source_bytes: Vec<u8>,
     contract: EmbeddingFamilyContract,
     family: EmbeddingFamily,
@@ -55,7 +55,7 @@ fn context() -> Context {
 fn context_with_metric(metric: DistanceMetric) -> Context {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, source_bytes) =
-        CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
     let target = source.dataset_target(true).expect("dataset target");
     let target_set = TargetSet::new(vec![target.id]).expect("target set");
     let contract = EmbeddingFamilyContract {

@@ -324,8 +324,13 @@ fn gts_relational_rows_from_bytes<'py>(
 ///
 /// The first pass discovers inline identities only. It is dropped before the
 /// scope-preserving importer verifies and retains their payloads. This eager
-/// convenience keeps the selected import's explicit 1024-blob/1-GiB bounds.
-fn canonical_gts_projection(data: &[u8]) -> PyResult<ColumnarProjection> {
+/// convenience retains fixed per-blob and total byte ceilings.
+fn canonical_gts_source(
+    data: &[u8],
+) -> PyResult<(
+    std::sync::Arc<purrdf_core::RdfDataset>,
+    purrdf_core::ContentStore,
+)> {
     let digests: Vec<_> = purrdf_gts::reader::read(data, true, None)
         .blobs
         .into_iter()
@@ -352,14 +357,17 @@ fn canonical_gts_projection(data: &[u8]) -> PyResult<ColumnarProjection> {
         // table uses SHA-256; both identities can be recomputed from these bytes.
         blobs.insert(blob.bytes.as_ref().to_vec());
     }
-    purrdf_columnar::project(imported.bundle.dataset.as_ref(), &blobs)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+    Ok((imported.bundle.dataset, blobs))
 }
 
 /// Native v1 schema and canonical rows, independent of folded GTS term ids.
 #[pyfunction]
 fn gts_columnar_rows_from_bytes<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyDict>> {
-    let projection = py.detach(|| canonical_gts_projection(data))?;
+    let projection = py.detach(|| {
+        let (dataset, blobs) = canonical_gts_source(data)?;
+        purrdf_columnar::project(dataset.as_ref(), &blobs)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    })?;
     columnar_rows_dict(py, &projection)
 }
 
@@ -418,9 +426,13 @@ fn gts_columnar_parquet_from_bytes<'py>(
     data: &[u8],
 ) -> PyResult<Bound<'py, PyDict>> {
     let encoded = py.detach(|| {
-        canonical_gts_projection(data)?
-            .to_parquet(purrdf_columnar::Compression::Uncompressed)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        let (dataset, blobs) = canonical_gts_source(data)?;
+        purrdf_columnar::write(
+            dataset.as_ref(),
+            &blobs,
+            purrdf_columnar::Compression::Uncompressed,
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))
     })?;
     columnar_parquet_dict(py, &encoded.files)
 }

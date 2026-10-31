@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: CC-BY-4.0
 -->
 
-# PURREMB v1: deterministic embedding companions for PurRDF packs
+# PURREMB v1: deterministic embedding companions for PurRDF datasets
 
 [简体中文读者指南](PURREMB.reader.zh-Hans.md) covers scope, design boundaries,
 reader access, errors and security. This English document specifies the full format.
@@ -12,10 +12,10 @@ reader access, errors and security. This English document specifies the full for
 
 PURREMB is the binary format carried by files whose conventional extension is
 `.purremb`. A PURREMB artifact is a deterministic, memory-map-friendly embedding
-projection over one exact `.purrpck` source artifact. It binds vector rows to stable
+projection over one exact `.purrpck` or five-file Columnar source. It binds vector rows to stable
 subjects, records the complete vector-generation contract, and carries integrity
 evidence without changing the source RDF dataset, its RDFC identity, or the
-`.purrpck` wire format.
+native source wire formats.
 
 The exact stored vector matrix is authoritative for the embedding projection.
 Approximate indexes are derived accelerators. Neither the matrix nor an index is
@@ -37,7 +37,7 @@ the caller. PurRDF supplies no ontology-specific identifier or default vocabular
 
 PURREMB v1 provides:
 
-- exact binding to all bytes of one `.purrpck` source and to its independently
+- exact binding to all bytes of one pack or Columnar source and to its independently
   certified RDFC digest;
 - corpus, document, and chunk subjects whose text remains external and
   content-addressed;
@@ -308,8 +308,8 @@ The `SOURCE` section is exactly 128 bytes:
 | ---: | ---: | --- | --- |
 | 0 | 4 | `schema_version` | `1` |
 | 4 | 4 | `flags` | bit 0 `RDFC_CERTIFIED`, no other bits |
-| 8 | 8 | `source_length` | exact `.purrpck` byte length |
-| 16 | 4 | `source_format` | `1` for `.purrpck` v1 |
+| 8 | 8 | `source_length` | exact source bytes or manifest byte length |
+| 16 | 4 | `source_format` | `1` for `.purrpck` v1; `2` for Columnar schema v1 |
 | 20 | 4 | `reserved` | zero |
 | 24 | 32 | `source_exact_digest` | `SHA256(all source bytes)` |
 | 56 | 32 | `certified_rdf_digest` | independently verified RDFC SHA-256 |
@@ -318,8 +318,16 @@ The `SOURCE` section is exactly 128 bytes:
 
 `RDFC_CERTIFIED` is always set in v1. The exact digest MUST equal the duplicate in
 the file header. The certified digest is obtained by independently reconstructing
-and canonicalizing the source pack, not merely by trusting its stored header
+and canonicalizing the actual source dataset, not merely by trusting a stored
 claim. The referenced dataset target MUST encode the same certified digest.
+
+For format `1`, source bytes are the complete pack. For format `2`, source bytes
+are the exact canonical five-file manifest defined in
+[COLUMNAR.md](COLUMNAR.md#exact-file-source-manifest). The manifest is derived
+from all five actual files, including valid zero-row Parquet files. Its length
+and SHA-256 bind the physical files; a complete strict Columnar read and native
+`purrdf-rdfc12` canonicalization independently certify RDF identity. A certificate
+MUST NOT accept caller-supplied manifest, digest or ordinal claims as evidence.
 
 The exact digest and the certified RDF digest answer different questions. Two
 byte-distinct source artifacts can claim the same RDF graph; only the exact digest
@@ -697,7 +705,7 @@ multiple families is valid only when each family derives the same
 ### 8.6 RDF dataset target
 
 An `RDF_DATASET` identity block contains exactly tag 1 `DIGEST32`, the certified
-RDFC digest from the `SOURCE` section. The exact source-pack digest is deliberately
+RDFC digest from the `SOURCE` section. The exact source digest is deliberately
 absent: RDF identity remains stable while byte-level source attachment remains
 strict.
 
@@ -789,18 +797,25 @@ target-set identity, matrix identity, or vector-space identity. Exact source
 verification MUST reject a recognized ordinal that resolves to a different
 canonical target.
 
-The recognized v1 ordinal spaces are:
+The recognized v1 ordinal spaces depend on the declared source format:
 
-| Target kind | Ordinal meaning |
-| --- | --- |
-| `RDF_TERM` | 1-based unified `PackId` in the exact source pack |
-| `RDF_STATEMENT` | zero-based row in `PackView::quads()` iteration |
-| `RDF_REIFIER` | zero-based row in `PackView::reifier_quads()` iteration |
-| `RDF_ANNOTATION` | zero-based row in `PackView::annotation_quads()` iteration |
+| Target kind | Format `1`: exact pack | Format `2`: original Columnar row |
+| --- | --- | --- |
+| `RDF_TERM` | One-based unified `PackId` | Zero-based `terms.parquet` row |
+| `RDF_STATEMENT` | Zero-based `PackView::quads()` row | Zero-based `quads.parquet` row |
+| `RDF_REIFIER` | Zero-based `PackView::reifier_quads()` row | Zero-based `reifiers.parquet` row |
+| `RDF_ANNOTATION` | Zero-based `PackView::annotation_quads()` row | Zero-based `annotations.parquet` row |
 
 An ordinal on another target kind is an error in v1. Verification resolves the
 row to values, reconstructs the canonical target identity, and compares its
 `TargetId`; it never trusts equality of an ordinal alone.
+
+Columnar provenance is captured through the strict reader's explicit mapping
+from original dictionary rows to kernel IDs during reconstruction. Kernel IDs,
+reconstructed row ordering, reprojection and pack serialization MUST NOT stand
+in for original source rows. Only requested evidence is retained, and the entire
+source is validated even after all requested rows have been captured. Blank-node
+labels come from canonicalization of that same reconstructed dataset.
 
 ## 9. Target sets and row ordering
 
@@ -1519,10 +1534,12 @@ hole-punching for the complete lifetime of every view and certificate.
 
 ### 18.3 Source attachment verification
 
-Source attachment verification takes the complete source byte slice and performs
-one full check: length and plain SHA-256, the declared `.purrpck` version,
-independent pack RDF verification, the certified RDFC digest, the dataset target,
-and every recognized source-local ordinal. An exact mismatch is reported without
+Source attachment verification takes the complete pack or actual closed five-file
+Columnar set and performs one full check: source or manifest length and plain
+SHA-256, the declared native format, independent native RDF verification, the
+certified RDF digest, the dataset target, and every recognized source-local
+ordinal. Columnar certification completes every strict reader check, including
+all blob payloads. An exact mismatch may stop verification before decoding and is reported without
 substituting an RDFC comparison. RDFC and ordinal mismatches have distinct errors.
 
 Source verification does not change matrix access or construct an access typestate.

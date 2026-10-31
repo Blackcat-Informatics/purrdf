@@ -3,53 +3,85 @@
 
 //! Typed canonical encoders for PURREMB metadata sections.
 
+use super::error::SourceAttachmentError;
+use super::source::{EmbeddingSource, canonical_source};
 use super::writer::CanonicalMetadataSections;
 use purrdf_core::embedding::{
-    DerivedIndex, EmbeddingError, EmbeddingFamilyContract, EmbeddingTarget, ExtensionSection,
-    ExternalBinding, MatrixCommitment, MetadataCatalogInput, RdfDatasetTarget, RdfcDigest,
-    TargetId, TargetRelation, TargetSet, TokenSpan,
+    DerivedIndex, EmbeddingError, EmbeddingFamilyContract, EmbeddingSourceFormat, EmbeddingTarget,
+    ExtensionSection, ExternalBinding, MatrixCommitment, MetadataCatalogInput, RdfDatasetTarget,
+    RdfcDigest, TargetId, TargetRelation, TargetSet, TokenSpan,
 };
 use purrdf_core::embedding::{put_u32, put_u64};
 use purrdf_core::{ContentDigest, PackBuilder, RdfDataset, verify_pack_bytes};
 
 const SOURCE_LENGTH: usize = 128;
 
-/// Independently certified attachment to one exact `.purrpck` byte string.
+/// Independently certified attachment to exact pack bytes or actual Columnar files.
 ///
 /// The fields are private so the public construction path cannot turn an
 /// arbitrary digest claim into certified source metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CertifiedPurrpckSource {
+pub struct CertifiedEmbeddingSource {
+    source_format: EmbeddingSourceFormat,
     source_length: u64,
     source_exact_digest: ContentDigest,
     certified_rdf_digest: RdfcDigest,
     dataset_target_id: TargetId,
 }
 
-impl CertifiedPurrpckSource {
-    /// Structurally opens and independently RDFC-certifies exact `.purrpck`
-    /// bytes, then derives their RDF-dataset target.
-    pub fn certify(source_bytes: &[u8]) -> Result<Self, EmbeddingError> {
-        let proof = verify_pack_bytes(source_bytes).map_err(EmbeddingError::source_pack)?;
-        let certified = proof.rdf_digest();
-        let certified_rdf_digest = RdfcDigest::from_raw(*certified.as_bytes());
+impl CertifiedEmbeddingSource {
+    /// Independently certify the actual native source; no digest claims are accepted.
+    pub fn certify(source: EmbeddingSource<'_>) -> Result<Self, SourceAttachmentError> {
+        let (source_format, source_length, source_exact_digest, certified_rdf_digest) = match source
+        {
+            EmbeddingSource::Purrpck(bytes) => {
+                let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::source_pack)?;
+                (
+                    EmbeddingSourceFormat::PurrpckV1,
+                    u64::try_from(bytes.len())
+                        .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?,
+                    proof.exact_digest(),
+                    RdfcDigest::from_raw(*proof.rdf_digest().as_bytes()),
+                )
+            }
+            EmbeddingSource::Columnar(files) => {
+                // A certificate is constructed only after every table and blob passed.
+                let read = purrdf_columnar::read(files)?;
+                let (rdf_digest, _) = canonical_source(&read.dataset)?;
+                let manifest = purrdf_columnar::source_manifest(files)?;
+                (
+                    EmbeddingSourceFormat::ColumnarV1,
+                    u64::try_from(manifest.len()).map_err(|_| {
+                        EmbeddingError::ArithmeticOverflow("source manifest length")
+                    })?,
+                    ContentDigest::of(&manifest),
+                    rdf_digest,
+                )
+            }
+        };
         let dataset_target = RdfDatasetTarget {
-            rdfc_digest: *certified.as_bytes(),
+            rdfc_digest: *certified_rdf_digest.as_bytes(),
         }
         .into_target(false)?;
         Ok(Self {
-            source_length: u64::try_from(source_bytes.len())
-                .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?,
-            source_exact_digest: proof.exact_digest(),
+            source_format,
+            source_length,
+            source_exact_digest,
             certified_rdf_digest,
             dataset_target_id: dataset_target.id,
         })
     }
 
+    /// The carrier that was independently certified.
+    #[must_use]
+    pub const fn source_format(self) -> EmbeddingSourceFormat {
+        self.source_format
+    }
+
     /// Builds and certifies a `.purrpck` directly from a frozen RDF dataset.
-    pub fn from_dataset(dataset: &RdfDataset) -> Result<(Self, Vec<u8>), EmbeddingError> {
+    pub fn from_dataset(dataset: &RdfDataset) -> Result<(Self, Vec<u8>), SourceAttachmentError> {
         let bytes = PackBuilder::build_bytes(dataset).map_err(EmbeddingError::source_pack)?;
-        let source = Self::certify(&bytes)?;
+        let source = Self::certify(EmbeddingSource::Purrpck(&bytes))?;
         Ok((source, bytes))
     }
 
@@ -86,7 +118,7 @@ impl CertifiedPurrpckSource {
         put_u32(&mut output, 0, 1);
         put_u32(&mut output, 4, 1);
         put_u64(&mut output, 8, self.source_length);
-        put_u32(&mut output, 16, 1);
+        put_u32(&mut output, 16, self.source_format.code());
         output[24..56].copy_from_slice(self.source_exact_digest.as_bytes());
         output[56..88].copy_from_slice(self.certified_rdf_digest.as_bytes());
         output[88..120].copy_from_slice(self.dataset_target_id.as_bytes());
@@ -97,8 +129,8 @@ impl CertifiedPurrpckSource {
 /// Complete typed source attachment and canonical metadata input.
 #[derive(Debug, Clone)]
 pub struct CanonicalMetadataInput {
-    /// Exact source attachment created through independent `.purrpck` certification.
-    pub source: CertifiedPurrpckSource,
+    /// Exact source attachment created through independent native certification.
+    pub source: CertifiedEmbeddingSource,
     /// Complete generation contracts; logical duplicates are collapsed.
     pub family_contracts: Vec<EmbeddingFamilyContract>,
     /// Canonical target records in arbitrary input order.
@@ -197,12 +229,12 @@ mod tests {
             extensions: Vec::new(),
         }
     }
-    fn certified_empty_pack() -> (CertifiedPurrpckSource, Vec<u8>) {
+    fn certified_empty_pack() -> (CertifiedEmbeddingSource, Vec<u8>) {
         let dataset = RdfDatasetBuilder::new().freeze().unwrap();
-        CertifiedPurrpckSource::from_dataset(&dataset).unwrap()
+        CertifiedEmbeddingSource::from_dataset(&dataset).unwrap()
     }
     #[test]
-    fn source_certification_is_exact_purrpck_only() {
+    fn pack_certification_checks_original_exact_bytes() {
         let (source, bytes) = certified_empty_pack();
         assert_eq!(source.source_exact_digest(), ContentDigest::of(&bytes));
         let encoded = source.encode();
@@ -214,8 +246,10 @@ mod tests {
         );
         assert_eq!(&encoded[24..56], source.source_exact_digest().as_bytes());
         assert!(matches!(
-            CertifiedPurrpckSource::certify(b"not a pack"),
-            Err(EmbeddingError::InvalidSourcePack(_))
+            CertifiedEmbeddingSource::certify(EmbeddingSource::Purrpck(b"not a pack")),
+            Err(SourceAttachmentError::Embedding(
+                EmbeddingError::InvalidSourcePack(_)
+            ))
         ));
     }
     #[test]

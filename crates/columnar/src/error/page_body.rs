@@ -9,6 +9,20 @@ use core::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PageBodyReason {
+    /// Known frame declarations do not sum to the Parquet value-body size.
+    FrameContentTotal {
+        /// Total bytes claimed by the native frame headers, without decoding.
+        declared: u64,
+        /// Original Parquet plain value-body size.
+        expected: u64,
+    },
+    /// A frame's declared output exceeds the remaining Parquet value body.
+    FrameContentSize {
+        /// Original full-width frame content size.
+        declared: u64,
+        /// Remaining bytes allowed by the original Parquet declaration.
+        remaining: u64,
+    },
     /// Definition-level presence disagrees with schema nullability.
     DefinitionPresence {
         /// Original definition-level byte count.
@@ -30,6 +44,17 @@ pub enum PageBodyReason {
         /// Declared plain value-body byte count.
         expected: usize,
     },
+    /// Declared PLAIN bytes cannot encode the page's present-value count.
+    Cardinality {
+        /// Original declared uncompressed value-body bytes.
+        declared: usize,
+        /// Bytes required by the physical value count.
+        required: usize,
+        /// Original physical value type.
+        physical_type: crate::PhysicalType,
+        /// Original number of present values.
+        present: usize,
+    },
     /// Successful decompression produced a different length from its declaration.
     DecodedSize {
         /// Original successful decoder output byte count.
@@ -48,6 +73,12 @@ pub enum PageBodyReason {
 
 impl purrdf_hash::error::StructuredError for PageBodyReason {
     purrdf_hash::error_visit! {
+        FrameContentTotal { declared, expected } => "columnar-frame-content-total" {
+            "declared" => ByteCount(u128::from(*declared)), "expected" => ByteCount(u128::from(*expected)),
+        },
+        FrameContentSize { declared, remaining } => "columnar-frame-content-size" {
+            "declared" => ByteCount(u128::from(*declared)), "remaining" => ByteCount(u128::from(*remaining)),
+        },
         DefinitionPresence { length, repetition } => "columnar-definition-presence" {
             "length" => ByteCount(*length as u128),
             "repetition" => Code(match repetition {
@@ -60,6 +91,9 @@ impl purrdf_hash::error::StructuredError for PageBodyReason {
         },
         PlainSize { actual, expected } => "columnar-plain-size" {
             "actual" => ByteCount(*actual as u128), "expected" => ByteCount(*expected as u128),
+        },
+        Cardinality { declared, required, physical_type, present } => "columnar-plain-cardinality" {
+            "declared" => ByteCount(*declared as u128), "required" => ByteCount(*required as u128), "physical_type" => Code(match physical_type { crate::PhysicalType::Int64 => "int64", crate::PhysicalType::ByteArray => "byte-array" }), "present" => Unsigned(*present as u128),
         },
         DecodedSize { actual, expected } => "columnar-decoded-size" {
             "actual" => ByteCount(*actual as u128), "expected" => ByteCount(*expected as u128),
@@ -74,6 +108,21 @@ impl fmt::Display for PageBodyReason {
     /// Render the established body diagnostic from its original scalar operands.
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FrameContentTotal { declared, expected } => {
+                write!(
+                    output,
+                    "frame headers declare {declared} bytes, Parquet declares {expected}"
+                )
+            }
+            Self::FrameContentSize {
+                declared,
+                remaining,
+            } => {
+                write!(
+                    output,
+                    "declares {declared} decoded bytes, only {remaining} remain in the Parquet value body"
+                )
+            }
             Self::DefinitionPresence { .. } => {
                 output.write_str("presence disagrees with schema nullability")
             }
@@ -82,6 +131,22 @@ impl fmt::Display for PageBodyReason {
             }
             Self::PlainSize { actual, expected } => {
                 write!(output, "has {actual} bytes, expected {expected}")
+            }
+            Self::Cardinality {
+                declared,
+                required,
+                physical_type,
+                present,
+            } => {
+                let relation = if *physical_type == crate::PhysicalType::Int64 || *present == 0 {
+                    "exactly"
+                } else {
+                    "at least"
+                };
+                write!(
+                    output,
+                    "declares {declared} value bytes, requires {relation} {required}"
+                )
             }
             Self::DecodedSize { actual, expected } => {
                 write!(output, "decoded {actual} bytes, expected {expected}")

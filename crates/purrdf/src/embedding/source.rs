@@ -1,27 +1,58 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Cryptographic, numerical, source-pack, and external-binding verification.
+//! Full native source attachments and external pack verification.
 
+use super::error::SourceAttachmentError;
+use purrdf_columnar::{ColumnarOrdinal, ColumnarOrdinalRead, ColumnarOrdinalValue, ParquetFiles};
 use purrdf_core::embedding::{
-    DigestKind, EmbeddingError, EmbeddingView, ExternalBinding, ExternalBindingContract,
-    ExternalBindingView, ExternalScope, RdfAnnotationTarget, RdfGraphTarget, RdfReifierTarget,
-    RdfStatementTarget, RdfcDigest, TargetId, TargetKind, TargetView, term_value_target_id,
-    verify_embedding_dataset_target, verify_external_artifact,
+    DigestKind, EmbeddingError, EmbeddingSourceFormat, EmbeddingView, ExternalBinding,
+    ExternalBindingContract, ExternalBindingView, ExternalScope, RdfAnnotationTarget,
+    RdfGraphTarget, RdfReifierTarget, RdfStatementTarget, RdfcDigest, TargetId, TargetKind,
+    TargetView, term_value_target_id, verify_embedding_dataset_target, verify_external_artifact,
 };
 use purrdf_core::{
-    ContentDigest, DatasetView, PackId, PackView, QuadIds, RdfDataset, TermId, TermRef,
-    dataset_from_view, try_canonicalize, verify_pack_bytes,
+    Canonicalized, ContentDigest, DatasetView, PackId, PackView, QuadIds, RdfDataset, TermId,
+    TermRef, dataset_from_view, try_canonicalize, verify_pack_bytes,
 };
 use std::collections::BTreeMap;
+
+/// Actual untrusted bytes supplied for one of the two closed native carriers.
+#[derive(Clone, Copy)]
+pub enum EmbeddingSource<'a> {
+    /// One complete exact native pack.
+    Purrpck(&'a [u8]),
+    /// All five actual Columnar files, including valid zero-row files.
+    Columnar(&'a ParquetFiles),
+}
+
+purrdf_hash::debug_non_exhaustive!(EmbeddingSource<'_> {});
+
+impl EmbeddingSource<'_> {
+    /// The actual supplied carrier.
+    #[must_use]
+    pub const fn source_format(self) -> EmbeddingSourceFormat {
+        match self {
+            Self::Purrpck(_) => EmbeddingSourceFormat::PurrpckV1,
+            Self::Columnar(_) => EmbeddingSourceFormat::ColumnarV1,
+        }
+    }
+}
+
 /// Evidence returned after complete exact-source, RDF and ordinal verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceVerificationReport {
+    source_format: EmbeddingSourceFormat,
     exact_digest: ContentDigest,
     certified_rdf_digest: RdfcDigest,
     ordinals_checked: u64,
 }
 impl SourceVerificationReport {
+    /// The independently verified native carrier.
+    #[must_use]
+    pub const fn source_format(self) -> EmbeddingSourceFormat {
+        self.source_format
+    }
     /// Independently computed exact source SHA-256.
     #[must_use]
     pub const fn exact_digest(self) -> ContentDigest {
@@ -38,43 +69,107 @@ impl SourceVerificationReport {
         self.ordinals_checked
     }
 }
-/// Verify the complete pack attachment, including independent RDF identity and all source-local ordinals.
+
+/// Verify exact native source bytes, independent RDF identity and every ordinal.
+/// Columnar manifests are derived from actual files; callers supply no claims.
 pub fn verify_embedding_source(
     embedding: &EmbeddingView<'_>,
-    source_bytes: &[u8],
-) -> Result<SourceVerificationReport, EmbeddingError> {
-    let source = embedding.source();
-    let actual_length = u64::try_from(source_bytes.len())
-        .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?;
-    if actual_length != source.source_length() {
-        return Err(EmbeddingError::SourceLengthMismatch {
-            expected: source.source_length(),
-            actual: actual_length,
+    input: EmbeddingSource<'_>,
+) -> Result<SourceVerificationReport, SourceAttachmentError> {
+    let source_format = input.source_format();
+    let expected = embedding.source().source_format();
+    if source_format != expected {
+        return Err(SourceAttachmentError::FormatMismatch {
+            expected,
+            actual: source_format,
         });
     }
-    let exact_digest = ContentDigest::of(source_bytes);
-    DigestKind::SourceExact.verify(
-        source.source_exact_digest().as_bytes(),
-        exact_digest.as_bytes(),
-    )?;
-
-    let pack = PackView::from_bytes(source_bytes).map_err(EmbeddingError::source_pack)?;
-
-    let proof = verify_pack_bytes(source_bytes).map_err(EmbeddingError::source_pack)?;
-    let certified = proof.rdf_digest();
-    DigestKind::CertifiedRdf.verify(&source.certified_rdf_digest(), certified.as_bytes())?;
-    verify_embedding_dataset_target(embedding)?;
-    let ordinals_checked = verify_source_ordinals(embedding, &pack)?;
+    let (exact_digest, certified_rdf_digest, ordinals_checked) = match input {
+        EmbeddingSource::Purrpck(bytes) => {
+            let exact = verify_exact_source(embedding, bytes)?;
+            let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::source_pack)?;
+            let rdf = RdfcDigest::from_raw(*proof.rdf_digest().as_bytes());
+            verify_rdf_source(embedding, rdf)?;
+            let checked = verify_pack_ordinals(embedding, bytes)?;
+            (exact, rdf, checked)
+        }
+        EmbeddingSource::Columnar(files) => {
+            let manifest = purrdf_columnar::source_manifest(files)?;
+            let exact = verify_exact_source(embedding, &manifest)?;
+            let requested = embedding
+                .targets()
+                .filter_map(|target| {
+                    target
+                        .source_local_ordinal()
+                        .map(|ordinal| columnar_ordinal(target, ordinal))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // This shared strict path validates every table and blob, retaining
+            // only requested original row evidence bound to its actual dataset.
+            let read = purrdf_columnar::read_with_ordinals(files, &requested)?;
+            let dataset = &read.read().dataset;
+            let (rdf, canonical) = canonical_source(dataset)?;
+            verify_rdf_source(embedding, rdf)?;
+            let checked = verify_ordinals(embedding, |target, ordinal| {
+                columnar_target_id(
+                    target,
+                    ordinal,
+                    &read,
+                    &canonical.labels,
+                    embedding.source().dataset_target_id(),
+                )
+            })?;
+            (exact, rdf, checked)
+        }
+    };
     Ok(SourceVerificationReport {
+        source_format,
         exact_digest,
-        certified_rdf_digest: RdfcDigest::from_raw(*certified.as_bytes()),
+        certified_rdf_digest,
         ordinals_checked,
     })
 }
 
-fn verify_source_ordinals(
+fn verify_exact_source(
     embedding: &EmbeddingView<'_>,
-    pack: &PackView<'_>,
+    bytes: &[u8],
+) -> Result<ContentDigest, EmbeddingError> {
+    let source = embedding.source();
+    let actual = u64::try_from(bytes.len())
+        .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?;
+    if actual != source.source_length() {
+        return Err(EmbeddingError::SourceLengthMismatch {
+            expected: source.source_length(),
+            actual,
+        });
+    }
+    let digest = ContentDigest::of(bytes);
+    DigestKind::SourceExact.verify(source.source_exact_digest().as_bytes(), digest.as_bytes())?;
+    Ok(digest)
+}
+
+fn verify_rdf_source(
+    embedding: &EmbeddingView<'_>,
+    digest: RdfcDigest,
+) -> Result<(), EmbeddingError> {
+    DigestKind::CertifiedRdf.verify(
+        &embedding.source().certified_rdf_digest(),
+        digest.as_bytes(),
+    )?;
+    verify_embedding_dataset_target(embedding)
+}
+
+pub(super) fn canonical_source(
+    dataset: &RdfDataset,
+) -> Result<(RdfcDigest, Canonicalized), SourceAttachmentError> {
+    let canonical = try_canonicalize(dataset)?;
+    let digest = RdfcDigest::from_raw(*ContentDigest::of(canonical.nquads.as_bytes()).as_bytes());
+    Ok((digest, canonical))
+}
+
+fn verify_pack_ordinals(
+    embedding: &EmbeddingView<'_>,
+    bytes: &[u8],
 ) -> Result<u64, EmbeddingError> {
     if embedding
         .targets()
@@ -82,28 +177,31 @@ fn verify_source_ordinals(
     {
         return Ok(0);
     }
-    let dataset = dataset_from_view(pack).map_err(EmbeddingError::source_pack)?;
-    // The refusal REASON is carried through rather than replaced by a fixed string:
-    // canonicalization now refuses for two different reasons, and a pack rejected for
-    // carrying reserved vocabulary must not be reported as one that merely ran out of
-    // budget — the first is an attempt to forge an identity, the second is not.
+    let pack = PackView::from_bytes(bytes).map_err(EmbeddingError::source_pack)?;
+    let dataset = dataset_from_view(&pack).map_err(EmbeddingError::source_pack)?;
     let canonical = try_canonicalize(&dataset).map_err(EmbeddingError::source_pack)?;
-    let dataset_target = embedding.source().dataset_target_id();
-    let mut checked = 0u64;
+    verify_ordinals(embedding, |target, ordinal| {
+        pack_target_id(
+            target,
+            ordinal,
+            &pack,
+            &dataset,
+            &canonical.labels,
+            embedding.source().dataset_target_id(),
+        )
+    })
+}
 
+fn verify_ordinals<'a>(
+    embedding: &EmbeddingView<'a>,
+    mut resolve: impl FnMut(TargetView<'a>, u64) -> Result<TargetId, EmbeddingError>,
+) -> Result<u64, EmbeddingError> {
+    let mut checked = 0_u64;
     for target in embedding.targets() {
         let Some(ordinal) = target.source_local_ordinal() else {
             continue;
         };
-        let expected = target_from_source_ordinal(
-            target,
-            ordinal,
-            pack,
-            &dataset,
-            &canonical.labels,
-            dataset_target,
-        )?;
-        if expected != target.id() {
+        if resolve(target, ordinal)? != target.id() {
             return Err(EmbeddingError::OrdinalMismatch {
                 target_kind: target.kind()?.code(),
                 ordinal,
@@ -116,7 +214,52 @@ fn verify_source_ordinals(
     Ok(checked)
 }
 
-fn target_from_source_ordinal(
+fn columnar_ordinal(
+    target: TargetView<'_>,
+    ordinal: u64,
+) -> Result<ColumnarOrdinal, EmbeddingError> {
+    Ok(match target.kind()? {
+        TargetKind::RdfTerm => ColumnarOrdinal::Term(ordinal),
+        TargetKind::RdfStatement => ColumnarOrdinal::Quad(ordinal),
+        TargetKind::RdfReifier => ColumnarOrdinal::Reifier(ordinal),
+        TargetKind::RdfAnnotation => ColumnarOrdinal::Annotation(ordinal),
+        kind => {
+            return Err(EmbeddingError::OrdinalMismatch {
+                target_kind: kind.code(),
+                ordinal,
+            });
+        }
+    })
+}
+
+fn columnar_target_id(
+    target: TargetView<'_>,
+    ordinal: u64,
+    read: &ColumnarOrdinalRead,
+    labels: &BTreeMap<TermId, Box<str>>,
+    dataset_target: TargetId,
+) -> Result<TargetId, EmbeddingError> {
+    let dataset = &read.read().dataset;
+    let value = read
+        .get(columnar_ordinal(target, ordinal)?)
+        .ok_or(EmbeddingError::MissingReference("captured source ordinal"))?;
+    match value {
+        ColumnarOrdinalValue::Term(id) => term_target_id(id, dataset, labels, dataset_target),
+        ColumnarOrdinalValue::Quad(quad) => {
+            statement_target_id(quad, dataset, labels, dataset_target)
+        }
+        ColumnarOrdinalValue::Reifier {
+            reifier,
+            triple,
+            graph,
+        } => reifier_target_id(reifier, triple, graph, dataset, labels, dataset_target),
+        ColumnarOrdinalValue::Annotation(quad) => {
+            annotation_target_id(quad, dataset, labels, dataset_target, target.id(), ordinal)
+        }
+    }
+}
+
+fn pack_target_id(
     target: TargetView<'_>,
     ordinal: u64,
     pack: &PackView<'_>,
@@ -134,55 +277,95 @@ fn target_from_source_ordinal(
             if ordinal == 0 || ordinal > pack.dict().n_terms() {
                 return Err(mismatch());
             }
-            term_target_id(pack, ordinal, dataset, labels, dataset_target)
+            // A pack dictionary may retain an unreferenced scalar term. Its
+            // original value is authoritative even when reconstruction omits it.
+            term_value_target_id(
+                &pack.dict().term_value(ordinal),
+                dataset,
+                labels,
+                dataset_target,
+            )
         }
         TargetKind::RdfStatement => {
-            let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
-            let quad = pack.quads().nth(index).ok_or_else(mismatch)?;
-            statement_target_id(pack, quad, dataset, labels, dataset_target)
+            let row = usize::try_from(ordinal).map_err(|_| mismatch())?;
+            let quad = pack.quads().nth(row).ok_or_else(mismatch)?;
+            statement_target_id(
+                pack_quad(pack, quad, dataset)?,
+                dataset,
+                labels,
+                dataset_target,
+            )
         }
         TargetKind::RdfReifier => {
-            let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
-            let quad = pack.reifier_quads().nth(index).ok_or_else(mismatch)?;
-            reifier_target_id(pack, quad, dataset, labels, dataset_target)
+            let row = usize::try_from(ordinal).map_err(|_| mismatch())?;
+            let quad = pack.reifier_quads().nth(row).ok_or_else(mismatch)?;
+            reifier_target_id(
+                pack_term(pack, quad.s, dataset)?,
+                pack_term(pack, quad.o, dataset)?,
+                quad.g.map(|id| pack_term(pack, id, dataset)).transpose()?,
+                dataset,
+                labels,
+                dataset_target,
+            )
         }
         TargetKind::RdfAnnotation => {
-            let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
-            let quad = pack.annotation_quads().nth(index).ok_or_else(mismatch)?;
-            if annotation_target_matches(pack, quad, dataset, labels, dataset_target, target.id())?
-            {
-                Ok(target.id())
-            } else {
-                Err(mismatch())
-            }
+            let row = usize::try_from(ordinal).map_err(|_| mismatch())?;
+            let quad = pack.annotation_quads().nth(row).ok_or_else(mismatch)?;
+            annotation_target_id(
+                pack_quad(pack, quad, dataset)?,
+                dataset,
+                labels,
+                dataset_target,
+                target.id(),
+                ordinal,
+            )
         }
         _ => Err(mismatch()),
     }
 }
 
-fn term_target_id(
+fn pack_term(
     pack: &PackView<'_>,
-    id: u64,
+    id: PackId,
+    dataset: &RdfDataset,
+) -> Result<TermId, EmbeddingError> {
+    dataset
+        .term_id_by_value(&pack.dict().term_value(id.get()))
+        .ok_or(EmbeddingError::MissingReference(
+            "reconstructed source term",
+        ))
+}
+
+fn pack_quad(
+    pack: &PackView<'_>,
+    quad: QuadIds<PackId>,
+    dataset: &RdfDataset,
+) -> Result<QuadIds<TermId>, EmbeddingError> {
+    Ok(QuadIds {
+        s: pack_term(pack, quad.s, dataset)?,
+        p: pack_term(pack, quad.p, dataset)?,
+        o: pack_term(pack, quad.o, dataset)?,
+        g: quad.g.map(|id| pack_term(pack, id, dataset)).transpose()?,
+    })
+}
+
+fn term_target_id(
+    id: TermId,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
-    if id == 0 || id > pack.dict().n_terms() {
-        return Err(EmbeddingError::MissingReference("source pack term ordinal"));
-    }
-    let value = pack.dict().term_value(id);
-    term_value_target_id(&value, dataset, labels, dataset_target)
+    term_value_target_id(&dataset.term_value(id), dataset, labels, dataset_target)
 }
 
 fn graph_target_id(
-    pack: &PackView<'_>,
-    graph: Option<PackId>,
+    graph: Option<TermId>,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     let graph_name = graph
-        .map(|id| term_target_id(pack, id.get(), dataset, labels, dataset_target))
+        .map(|id| term_target_id(id, dataset, labels, dataset_target))
         .transpose()?;
     Ok(RdfGraphTarget {
         dataset_id: dataset_target,
@@ -193,83 +376,60 @@ fn graph_target_id(
 }
 
 fn statement_target_id(
-    pack: &PackView<'_>,
-    quad: QuadIds<PackId>,
+    quad: QuadIds<TermId>,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     Ok(RdfStatementTarget {
-        graph: graph_target_id(pack, quad.g, dataset, labels, dataset_target)?,
-        subject: term_target_id(pack, quad.s.get(), dataset, labels, dataset_target)?,
-        predicate: term_target_id(pack, quad.p.get(), dataset, labels, dataset_target)?,
-        object: term_target_id(pack, quad.o.get(), dataset, labels, dataset_target)?,
+        graph: graph_target_id(quad.g, dataset, labels, dataset_target)?,
+        subject: term_target_id(quad.s, dataset, labels, dataset_target)?,
+        predicate: term_target_id(quad.p, dataset, labels, dataset_target)?,
+        object: term_target_id(quad.o, dataset, labels, dataset_target)?,
     }
     .into_target(false, None)?
     .id)
 }
 
-fn statement_from_triple_target_id(
-    pack: &PackView<'_>,
-    triple: PackId,
-    graph: Option<PackId>,
+fn reifier_target_id(
+    reifier: TermId,
+    triple: TermId,
+    graph: Option<TermId>,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
-    let guard = pack
-        .resolve(triple)
-        .expect("validated resident pack read is infallible");
-    let TermRef::Triple { s, p, o } = guard else {
+    let TermRef::Triple { s, p, o } = dataset.resolve(triple) else {
         return Err(EmbeddingError::Malformed(
             "source reifier does not reference a triple term",
         ));
     };
-    statement_target_id(
-        pack,
-        QuadIds { s, p, o, g: graph },
-        dataset,
-        labels,
-        dataset_target,
-    )
-}
-
-fn reifier_target_id(
-    pack: &PackView<'_>,
-    quad: QuadIds<PackId>,
-    dataset: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
-    dataset_target: TargetId,
-) -> Result<TargetId, EmbeddingError> {
     Ok(RdfReifierTarget {
-        graph: graph_target_id(pack, quad.g, dataset, labels, dataset_target)?,
-        statement: statement_from_triple_target_id(
-            pack,
-            quad.o,
-            quad.g,
+        graph: graph_target_id(graph, dataset, labels, dataset_target)?,
+        statement: statement_target_id(
+            QuadIds { s, p, o, g: graph },
             dataset,
             labels,
             dataset_target,
         )?,
-        reifier: term_target_id(pack, quad.s.get(), dataset, labels, dataset_target)?,
+        reifier: term_target_id(reifier, dataset, labels, dataset_target)?,
     }
     .into_target(false, None)?
     .id)
 }
 
-fn annotation_target_matches(
-    pack: &PackView<'_>,
-    quad: QuadIds<PackId>,
+fn annotation_target_id(
+    quad: QuadIds<TermId>,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
     expected: TargetId,
-) -> Result<bool, EmbeddingError> {
-    // rdf:reifies is not functional. One annotation row can describe several
-    // statement bindings; the target identity selects the binding it names.
-    // The pack brackets this subject's run by binary search, without a second
-    // lookup table or a scan over unrelated reifiers.
-    let mut bindings = pack
+    ordinal: u64,
+) -> Result<TargetId, EmbeddingError> {
+    // Bindings are semantic values in the same actual source dataset. Their
+    // iteration order supplies no source ordinal: the captured annotation row
+    // already selected the original resource, predicate, value and graph.
+    let mut bindings = dataset
         .reifier_quads_of(quad.s)
         .filter(|binding| binding.g == quad.g)
         .peekable();
@@ -278,22 +438,32 @@ fn annotation_target_matches(
             "annotation reifier binding",
         ));
     }
-    let graph = graph_target_id(pack, quad.g, dataset, labels, dataset_target)?;
-    let predicate = term_target_id(pack, quad.p.get(), dataset, labels, dataset_target)?;
-    let object = term_target_id(pack, quad.o.get(), dataset, labels, dataset_target)?;
+    let graph = graph_target_id(quad.g, dataset, labels, dataset_target)?;
+    let predicate = term_target_id(quad.p, dataset, labels, dataset_target)?;
+    let object = term_target_id(quad.o, dataset, labels, dataset_target)?;
     for binding in bindings {
         let target = RdfAnnotationTarget {
             graph,
-            reifier: reifier_target_id(pack, binding, dataset, labels, dataset_target)?,
+            reifier: reifier_target_id(
+                binding.s,
+                binding.o,
+                binding.g,
+                dataset,
+                labels,
+                dataset_target,
+            )?,
             predicate,
             object,
         }
         .into_target(false, None)?;
         if target.id == expected {
-            return Ok(true);
+            return Ok(expected);
         }
     }
-    Ok(false)
+    Err(EmbeddingError::OrdinalMismatch {
+        target_kind: TargetKind::RdfAnnotation.code(),
+        ordinal,
+    })
 }
 
 /// Independently certify one external pack and derive its exact binding.

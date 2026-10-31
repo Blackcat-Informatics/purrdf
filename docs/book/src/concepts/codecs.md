@@ -143,8 +143,11 @@ demand. Approximate indexes remain opaque, rebuildable derived artifacts bound
 to one exact prefix projection. They never replace the authoritative matrix.
 
 Construction follows one evidence path. First obtain a
-`CertifiedPurrpckSource` by building or independently verifying the exact source
-pack; arbitrary digest claims cannot construct this type. For a corpus, derive
+`CertifiedEmbeddingSource` by building or independently verifying an exact source
+pack, or by strictly reading all five actual Columnar files through
+`EmbeddingSource::Columnar`. The Columnar attachment binds the canonical
+exact-file manifest and independently certifies the reconstructed RDF dataset;
+arbitrary digest claims cannot construct this type. For a corpus, derive
 `CorpusTarget`, `DocumentTarget::from_content`, and
 `TextChunkTarget::from_document` records, add the required hierarchy relations,
 and add a `TokenSpan` for every document or chunk placed in a family matrix. For

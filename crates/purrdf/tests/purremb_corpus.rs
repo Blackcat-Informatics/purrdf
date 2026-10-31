@@ -4,7 +4,7 @@
 //! Sharded external corpora, overlapping chunks, and extension behavior.
 
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, ContentDigest, CorpusTarget,
     DimensionalityPolicy, DistanceMetric, DocumentTarget, EmbeddingBuilder,
     EmbeddingFamilyContract, EmbeddingView, ExtensionSection, MatrixInput, MatrixRow,
     PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RelationKind, SECTION_CRITICAL,
@@ -52,7 +52,7 @@ struct CorpusFixture {
 
 fn build_fixture(extension_flags: u32) -> CorpusFixture {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty RDF source");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");
 
     let corpus = CorpusTarget {

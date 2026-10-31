@@ -51,7 +51,7 @@ use purrdf::sparql::{
 };
 use purrdf::text::{SearchObservations, TextSearchRelation};
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
     PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfTermTarget, TargetSet,
     TermValue, VectorDtype,
@@ -126,7 +126,7 @@ fn knn_space() -> EmbeddingSpace {
     let rows = vectors();
     let dimension = u32::try_from(DIMS).expect("small");
     let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&empty).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(&empty).expect("source pack");
 
     let mut targets = Vec::with_capacity(CORPUS);
     let mut bindings = Vec::with_capacity(CORPUS);

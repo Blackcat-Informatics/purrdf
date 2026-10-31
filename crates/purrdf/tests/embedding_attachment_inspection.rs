@@ -12,11 +12,12 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 
 fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
     use purrdf::{
-        CertifiedPurrpckSource, ContentDigest, EmbeddingError, EmbeddingSourceError,
-        ExternalBindingContract, ExternalScope, PackError, RdfDatasetBuilder,
+        CertifiedEmbeddingSource, ContentDigest, EmbeddingError, EmbeddingSource,
+        EmbeddingSourceError, ExternalBindingContract, ExternalScope, PackError, RdfDatasetBuilder,
+        SourceAttachmentError,
     };
     let dataset = RdfDatasetBuilder::new().freeze().unwrap();
-    let (_, mut bytes) = CertifiedPurrpckSource::from_dataset(&dataset).unwrap();
+    let (_, mut bytes) = CertifiedEmbeddingSource::from_dataset(&dataset).unwrap();
     bytes[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
     let contract = ExternalBindingContract {
         role: "https://example.org/role/source".into(),
@@ -26,8 +27,10 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
         policy_reference: None,
     };
     let scope = ExternalScope::Source(ContentDigest::of(b"owner"));
-    let source = CertifiedPurrpckSource::certify(&bytes).unwrap_err();
-    let external = purrdf::bind_external_pack(scope, &bytes, &contract).unwrap_err();
+    let source = CertifiedEmbeddingSource::certify(EmbeddingSource::Purrpck(&bytes)).unwrap_err();
+    let external: SourceAttachmentError = purrdf::bind_external_pack(scope, &bytes, &contract)
+        .unwrap_err()
+        .into();
     drop(bytes);
     drop(dataset);
     drop(contract);
@@ -39,7 +42,10 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
         let retained = error.clone();
         assert_eq!(window.close().allocations, 0);
         drop(error);
-        let owner = match &retained {
+        let SourceAttachmentError::Embedding(embedded) = &retained else {
+            panic!("native pack error")
+        };
+        let owner = match embedded {
             EmbeddingError::InvalidSourcePack(cause)
             | EmbeddingError::InvalidExternalPack(cause) => cause,
             other => panic!("unexpected attachment refusal: {other:?}"),
@@ -48,8 +54,10 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
             owner.as_ref(),
             EmbeddingSourceError::Pack(PackError::UnsupportedVersion(u32::MAX))
         ));
-        let source = std::error::Error::source(&retained).unwrap();
-        let native = source.source().unwrap();
+        let mut native = std::error::Error::source(&retained).unwrap();
+        while let Some(source) = native.source() {
+            native = source;
+        }
         assert_eq!(
             native.downcast_ref::<PackError>(),
             Some(&PackError::UnsupportedVersion(u32::MAX))
@@ -58,6 +66,8 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
         let window = CurrentThreadWindow::open();
         let captured = Capture::read_with_buffer(&retained, buffer);
         assert_eq!(window.close().allocations, 0);
+        assert_eq!(captured.code, "purremb-attachment-embedding");
+        let captured = captured.child("cause");
         assert_eq!(captured.code, code);
         let native = captured.child("cause").child("cause");
         assert_eq!(native.code, "pack-unsupported-version");
