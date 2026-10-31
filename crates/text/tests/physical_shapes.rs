@@ -164,10 +164,11 @@ impl purrdf_sparql_eval::shapes::ShapeProvider for DictionaryMismatchProbe {
             return Ok(None);
         }
         assert!(workspace.is_bounded());
-        let held = self
-            .exhaust
-            .as_ref()
-            .map(|remaining| workspace.charge(remaining()).unwrap());
+        let held = self.exhaust.as_ref().map(|remaining| {
+            let mut held = workspace.charge(0).unwrap();
+            held.resize(remaining()).unwrap();
+            held
+        });
         let error = self
             .dictionary
             .scan(self.index.clone(), None, workspace)
