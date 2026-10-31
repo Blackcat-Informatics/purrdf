@@ -117,10 +117,12 @@ for the full contract.
 
 ## Deterministic embedding companions
 
-`.purremb` is the mmap-native companion for embedding projections over one
-exact `.purrpck`. It does not modify the pack or RDF canonical identity. Its
-sorted section directory binds finite dense `f32` or `f64` matrices to the
-source pack's exact SHA-256, an independently verified RDFC digest, complete
+`.purremb` is a companion for embedding projections over one exact `.purrpck`
+or a Columnar schema version 1 dataset. Pack attachments bind the pack's exact
+SHA-256; Columnar attachments bind the canonical manifest of all five actual
+files. Neither changes the source or its RDF canonical identity. The sorted
+section directory binds finite dense `f32` or `f64` matrices to this exact
+source identity, an independently verified RDFC digest, complete
 model and processing contracts, stable target sets, and per-section plus
 whole-artifact integrity evidence. The `purrdf::embedding` facade owns source
 certification and construction. `EmbeddingBuilder` accepts unordered rows;
@@ -133,7 +135,7 @@ records retain content digests, logical identities, byte and Unicode-scalar
 coordinates, chunking contracts, and family-scoped token spans. RDF data uses
 one RDF 1.2 model for datasets, default and named graphs, statements, reifier
 bindings, annotations, directional literals, blank nodes, and recursive triple
-terms. Source-local pack ordinals are verified lookup hints, never identity.
+terms. Source-local ordinals are verified lookup hints, never identity.
 
 Matryoshka families store only their widest dense matrix. Each declared leading
 prefix is a distinct `VectorSpaceId` and `ProjectionId`, so a coarse prefix
@@ -164,7 +166,7 @@ Matryoshka contract lists its allowed leading dimensions, while its
 inputs.
 
 Large collections shard at artifact boundaries: each `.purremb` names its own
-exact source pack and local target set, while equal family contracts retain the
+exact source attachment and local target set, while equal family contracts retain the
 same `FamilyId` and `VectorSpaceId`. Corpus manifests and
 `ExternalBinding::from_bytes` bind external text or other exact artifacts;
 `bind_external_pack` adds independently certified RDF evidence through the
