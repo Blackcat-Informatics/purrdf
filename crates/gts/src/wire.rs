@@ -163,6 +163,20 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, HeaderError> 
     }
 }
 
+/// Consume a header after the shared interpretation check, retaining its map.
+/// This preserves the original native refusal while avoiding a successful copy.
+pub(crate) fn into_header(mut item: Value) -> Result<Vec<(Value, Value)>, HeaderError> {
+    unwrap_header(&item)?;
+    let inner = match &mut item {
+        Value::Tag(_, inner) => inner.as_mut(),
+        other => other,
+    };
+    let Value::Map(entries) = inner else {
+        unreachable!("the shared header interpretation validated this map");
+    };
+    Ok(std::mem::take(entries))
+}
+
 /// A native refusal to interpret an item as a header map.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]

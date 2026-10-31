@@ -1899,7 +1899,7 @@ struct ActiveStreamingSegment {
 
 impl ActiveStreamingSegment {
     fn new(
-        raw_header: &Value,
+        raw_header: Value,
         index_offset: u64,
         segment_index: u64,
         sink: &mut dyn StreamingSink,
@@ -1909,9 +1909,9 @@ impl ActiveStreamingSegment {
         let mut header = Vec::new();
         let mut expected_prev = Vec::new();
         let mut valid_header = false;
-        match unwrap_header(raw_header) {
+        match crate::wire::into_header(raw_header) {
             Ok(entries) => {
-                header.clone_from(entries);
+                header = entries;
                 valid_header = true;
                 let stored_hid: Option<Vec<u8>> = match map_get(&header, "id") {
                     Some(Value::Bytes(b)) => Some(b.clone()),
@@ -2302,7 +2302,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                 return result;
             }
             current = Some(ActiveStreamingSegment::new(
-                &item,
+                item,
                 item_index,
                 result.segment_heads.len() as u64,
                 sink,
