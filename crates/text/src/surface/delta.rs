@@ -25,7 +25,16 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
         if self.document_order.is_some() != added.document_order.is_some()
             || self.coordinate_generation != added.coordinate_generation
         {
-            return Err(TextError::config("surface document coordinate owners differ; update an indexed surface through TextIndex::with_delta").into());
+            return Err(
+                crate::configuration::ConfigurationRefusal::SurfaceCoordinates {
+                    expected_owner: self.document_order.is_some(),
+                    actual_owner: added.document_order.is_some(),
+                    expected_generation: self.coordinate_generation,
+                    actual_generation: added.coordinate_generation,
+                }
+                .into_error()
+                .into(),
+            );
         }
         let documents = added
             .sources

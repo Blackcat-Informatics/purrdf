@@ -120,10 +120,9 @@ impl<P: CorpusProfile> TextIndex<P> {
         D::ReadError: purrdf_hash::error::StructuredError,
     {
         if P::GRAPH_FREE && next.supports_named_graphs() {
-            return Err(TextError::config(
-                "the graph-free text profile requires a graph-free source",
-            )
-            .into());
+            return Err(crate::configuration::ConfigurationRefusal::GraphFreeSource
+                .into_error()
+                .into());
         }
         if let Some(previous) = &self.source_version {
             let mut digest = self.source_digest;

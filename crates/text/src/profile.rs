@@ -173,9 +173,10 @@ impl AnalyzerProfile {
     /// Refuses bounds below the longest recognized emoji or above 1024.
     pub fn new(max_token_scalars: usize) -> Result<Self, TextError> {
         if !(crate::unicode::MAX_EMOJI_SCALARS..=MAX_TOKEN_SCALARS).contains(&max_token_scalars) {
-            return Err(TextError::config(
-                "token bound must admit the longest recognized emoji and be at most 1024",
-            ));
+            return Err(crate::configuration::ConfigurationRefusal::TokenBound {
+                requested: max_token_scalars,
+            }
+            .into_error());
         }
         Ok(Self {
             max_token_scalars,
@@ -216,7 +217,12 @@ impl AnalyzerProfile {
     ) -> Result<Self, TextError> {
         crate::phonetic::DoubleMetaphone::new(code_length)?;
         if edit_distance > crate::phonetic::MAX_EDIT_DISTANCE {
-            return Err(TextError::config("phonetic edit distance exceeds 64"));
+            return Err(
+                crate::configuration::ConfigurationRefusal::PhoneticProfileDistance {
+                    requested: edit_distance,
+                }
+                .into_error(),
+            );
         }
         self.code_length = code_length;
         self.edit_distance = edit_distance;

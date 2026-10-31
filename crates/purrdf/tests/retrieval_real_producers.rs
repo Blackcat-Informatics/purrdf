@@ -2394,7 +2394,10 @@ fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
         .expect_err("a multi-partition index has no one ranked order to declare");
     match error {
         TextError::Config(message) => assert!(
-            message.contains("rank is computed within one"),
+            message
+                .cause()
+                .to_string()
+                .contains("rank is computed within one"),
             "the refusal must say why a multi-partition rank is not a ranking, got {message}"
         ),
         other => panic!("expected a configuration refusal, got {other:?}"),

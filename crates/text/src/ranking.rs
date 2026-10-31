@@ -150,12 +150,19 @@ impl RankingField {
     pub fn new(name: impl Into<String>, weight: Fixed, b: Fixed) -> Result<Self, TextError> {
         let name = name.into();
         if name.is_empty() || weight < Fixed::ZERO {
-            return Err(TextError::config(
-                "a field needs a name and a nonnegative weight",
-            ));
+            return Err(
+                crate::configuration::ConfigurationRefusal::FieldNameOrWeight {
+                    name,
+                    weight: weight.into_raw(),
+                }
+                .into_error(),
+            );
         }
         if !(Fixed::ZERO..=Fixed::ONE).contains(&b) {
-            return Err(TextError::config("a field's b must be in [0, 1]"));
+            return Err(
+                crate::configuration::ConfigurationRefusal::FieldNormalization { b: b.into_raw() }
+                    .into_error(),
+            );
         }
         Ok(Self { name, weight, b })
     }
@@ -204,36 +211,44 @@ impl RankingProfile {
         unclassified: Option<usize>,
     ) -> Result<Self, TextError> {
         if fields.is_empty() {
-            return Err(TextError::config(
-                "a ranking profile needs at least one field",
-            ));
+            return Err(crate::configuration::ConfigurationRefusal::NoFields.into_error());
         }
         let mut names = FastSet::default();
         for field in &fields {
             if !names.insert(field.name.as_str()) {
-                return Err(TextError::config(format!(
-                    "repeated field name {:?}",
-                    field.name
-                )));
+                return Err(crate::configuration::ConfigurationRefusal::DuplicateField {
+                    name: field.name.clone(),
+                }
+                .into_error());
             }
         }
-        if unclassified.is_some_and(|field| field >= fields.len()) {
-            return Err(TextError::config(
-                "the unclassified field is not in this profile",
-            ));
+        if let Some(field) = unclassified.filter(|&field| field >= fields.len()) {
+            return Err(
+                crate::configuration::ConfigurationRefusal::UnclassifiedField {
+                    field,
+                    fields: fields.len(),
+                }
+                .into_error(),
+            );
         }
         mappings.sort_by(|left, right| left.0.cmp(&right.0));
         for (at, (predicate, field)) in mappings.iter().enumerate() {
             validate_predicate(predicate)?;
             if *field >= fields.len() {
-                return Err(TextError::config(
-                    "a predicate mapping needs an IRI and an existing field",
-                ));
+                return Err(crate::configuration::ConfigurationRefusal::MappingField {
+                    predicate: predicate.clone(),
+                    field: *field,
+                    fields: fields.len(),
+                }
+                .into_error());
             }
             if at > 0 && mappings[at - 1].0 == *predicate {
-                return Err(TextError::config(format!(
-                    "repeated mapped predicate {predicate:?}"
-                )));
+                return Err(
+                    crate::configuration::ConfigurationRefusal::DuplicateMapping {
+                        predicate: predicate.clone(),
+                    }
+                    .into_error(),
+                );
             }
         }
         let mut profile = Self {
@@ -303,9 +318,10 @@ impl RankingProfile {
             .map(|at| self.mappings[at].1)
             .or(self.unclassified)
             .ok_or_else(|| {
-                TextError::config(format!(
-                    "selected predicate {predicate:?} has no ranking field"
-                ))
+                crate::configuration::ConfigurationRefusal::UnmappedPredicate {
+                    predicate: predicate.clone(),
+                }
+                .into_error()
             })
     }
 
@@ -794,15 +810,25 @@ fn from_count(value: u64, _workspace: Option<&WorkspaceCapability>) -> Result<Fi
 /// Require an absolute, lexically valid RDF predicate IRI.
 fn validate_predicate(predicate: &TermValue) -> Result<(), TextError> {
     let TermValue::Iri(iri) = predicate else {
-        return Err(TextError::config("a ranking predicate must be an IRI"));
+        return Err(
+            crate::configuration::ConfigurationRefusal::RankingPredicate {
+                predicate: predicate.clone(),
+            }
+            .into_error(),
+        );
     };
     let parsed = purrdf_core::parse_iri(iri).map_err(|error| {
-        TextError::config(format!("invalid ranking predicate {iri:?}: {error}"))
+        crate::configuration::ConfigurationRefusal::RankingIri {
+            iri: iri.clone(),
+            cause: error,
+        }
+        .into_error()
     })?;
     if !parsed.has_scheme() {
-        return Err(TextError::config(format!(
-            "ranking predicate {iri:?} must be absolute"
-        )));
+        return Err(
+            crate::configuration::ConfigurationRefusal::RelativeRankingIri { iri: iri.clone() }
+                .into_error(),
+        );
     }
     Ok(())
 }

@@ -55,7 +55,14 @@ impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
             .predicates()
             .iter()
             .position(|configured| configured == predicate)
-            .ok_or_else(|| EvalError::config("phrase predicate is not configured in the index"))?;
+            .ok_or_else(|| {
+                EvalError::from(
+                    crate::configuration::ConfigurationRefusal::PhrasePredicate {
+                        predicate: predicate.clone(),
+                    }
+                    .into_error(),
+                )
+            })?;
         self.predicate = Some(u32::try_from(at).map_err(|_| EvalError::WorkspaceBoundOverflow)?);
         Ok(self)
     }
