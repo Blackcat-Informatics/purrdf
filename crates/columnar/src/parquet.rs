@@ -6,7 +6,10 @@
 use std::collections::BTreeMap;
 
 use purrdf_core::ir::pack::bits::{read_varint, write_varint};
-use structured_zstd::decoding::FrameDecoder;
+use structured_zstd::decoding::{
+    ContentChecksum, FrameContentSize, FrameDecoder, find_frame_compressed_size,
+    read_frame_header_info,
+};
 use structured_zstd::encoding::{CompressionLevel, compress_slice_to_vec};
 
 use std::borrow::Cow;
@@ -347,7 +350,7 @@ fn encode_column(
     };
     let plain = values.encode_plain()?;
     encode_page(
-        plain,
+        &plain,
         &definitions,
         row_count,
         values.null_count(),
@@ -357,7 +360,7 @@ fn encode_column(
 }
 
 fn encode_page(
-    plain: Vec<u8>,
+    plain: &[u8],
     definitions: &[u8],
     row_count: usize,
     null_count: usize,
@@ -366,8 +369,8 @@ fn encode_page(
 ) -> Result<EncodedPage, ColumnarError> {
     let plain_len = plain.len();
     let compressed_values = match compression {
-        Compression::Uncompressed => plain,
-        Compression::Zstd => compress_slice_to_vec(&plain, CompressionLevel::Level(3)),
+        Compression::Uncompressed => Cow::Borrowed(plain),
+        Compression::Zstd => Cow::Owned(compress_slice_to_vec(plain, CompressionLevel::Level(3))),
     };
     let uncompressed_page_size = checked_i32_len(
         definitions.len().checked_add(plain_len).ok_or_else(|| {
@@ -1664,6 +1667,9 @@ fn decode_page(
             },
         ));
     }
+    if compression == Compression::Zstd {
+        validate_zstd_frames(encoded_values, plain_len)?;
+    }
     let presence = if schema.repetition == Repetition::Optional {
         decode_definition_levels(definitions_bytes, row_count)?
     } else {
@@ -1688,7 +1694,9 @@ fn decode_page(
                 .try_reserve_exact(plain_len)
                 .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
             plain.resize(plain_len, 0);
-            let written = FrameDecoder::new()
+            let mut decoder = FrameDecoder::new();
+            decoder.set_content_checksum(ContentChecksum::Verify);
+            let written = decoder
                 .decode_all(encoded_values, &mut plain)
                 .map_err(|error| {
                     ColumnarError::malformed("Zstandard page body", error.to_string())
@@ -1706,6 +1714,66 @@ fn decode_page(
         }
     };
     decode_plain(&plain, schema.physical_type, presence, present)
+}
+
+/// Admit native frame extents and all provable output-size constraints before
+/// allocating a page. Unknown frame sizes are verified by actual decompression;
+/// matching declarations do not establish a caller resource-admission policy.
+fn validate_zstd_frames(mut encoded: &[u8], expected: usize) -> Result<(), ColumnarError> {
+    use structured_zstd::decoding::errors::ReadFrameHeaderError;
+
+    if encoded.is_empty() {
+        return Err(ColumnarError::malformed(
+            "Zstandard page body",
+            "empty frame stream",
+        ));
+    }
+    let mut known = 0usize;
+    let mut all_known = true;
+    while !encoded.is_empty() {
+        let length = find_frame_compressed_size(encoded).map_err(|error| {
+            // Keep the existing external-codec presentation boundary; native
+            // Parquet size operands below remain structured and full width.
+            ColumnarError::malformed("Zstandard frame extent", format!("{error:?}"))
+        })?;
+        match read_frame_header_info(encoded, false) {
+            Ok(header) => match header.content_size {
+                FrameContentSize::Known(declared) => {
+                    let remaining = (expected - known) as u64;
+                    if declared > remaining {
+                        return Err(ColumnarError::page_body(
+                            "Zstandard frame content size",
+                            PageBodyReason::FrameContentSize {
+                                declared,
+                                remaining,
+                            },
+                        ));
+                    }
+                    // The comparison proves this fits the remaining usize body.
+                    known += declared as usize;
+                }
+                FrameContentSize::Unknown => all_known = false,
+            },
+            Err(ReadFrameHeaderError::SkipFrame { .. }) => {}
+            Err(error) => {
+                return Err(ColumnarError::malformed(
+                    "Zstandard frame header",
+                    error.to_string(),
+                ));
+            }
+        }
+        encoded = &encoded[length..];
+    }
+    if all_known && known != expected {
+        return Err(ColumnarError::page_body(
+            "Zstandard frame content size",
+            PageBodyReason::FrameContentTotal {
+                declared: known as u64,
+                expected: expected as u64,
+            },
+        ));
+    }
+    Ok(())
 }
 
 fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Presence, ColumnarError> {
@@ -2012,6 +2080,8 @@ mod tests {
         assert_eq!(
             fields.code,
             match expected {
+                PageBodyReason::FrameContentSize { .. } => "columnar-frame-content-size",
+                PageBodyReason::FrameContentTotal { .. } => "columnar-frame-content-total",
                 PageBodyReason::DefinitionPresence { .. } => "columnar-definition-presence",
                 PageBodyReason::DefinitionSize { .. } => "columnar-definition-size",
                 PageBodyReason::PlainSize { .. } => "columnar-plain-size",
@@ -2021,6 +2091,25 @@ mod tests {
             }
         );
         match expected {
+            PageBodyReason::FrameContentSize {
+                declared,
+                remaining,
+            } => {
+                assert!(
+                    matches!(fields.field("declared"), ErrorValue::ByteCount(value) if value == u128::from(declared))
+                );
+                assert!(
+                    matches!(fields.field("remaining"), ErrorValue::ByteCount(value) if value == u128::from(remaining))
+                );
+            }
+            PageBodyReason::FrameContentTotal { declared, expected } => {
+                assert!(
+                    matches!(fields.field("declared"), ErrorValue::ByteCount(value) if value == u128::from(declared))
+                );
+                assert!(
+                    matches!(fields.field("expected"), ErrorValue::ByteCount(value) if value == u128::from(expected))
+                );
+            }
             PageBodyReason::Cardinality {
                 declared,
                 required,
@@ -2325,7 +2414,11 @@ mod tests {
                 assert!(measured.allocations <= allocations);
                 assert!(measured.requested_bytes <= requested);
                 assert!(measured.retained_bytes <= retained);
-                assert!(measured.peak_working_bytes <= peak);
+                // The column-streaming writer retains the digest's four-byte
+                // length prefix and 32-byte value until the complete group
+                // commits, so a later column can trigger rollback. Allocation
+                // counts, requested bytes and retained output stay unchanged.
+                assert!(measured.peak_working_bytes <= peak + 4 + 32);
                 assert_eq!(read_table(&bytes, Table::Blobs).unwrap(), data);
             }
         }
@@ -2848,6 +2941,116 @@ mod tests {
             })
         ));
         assert_eq!(bounded_row_capacity(usize::MAX), 65_536);
+    }
+
+    #[test]
+    fn compressed_frames_validate_sizes_extents_and_each_checksum() {
+        use structured_zstd::encoding::{FrameCompressor, MatchGeneratorDriver};
+        let frame = |bytes: &[u8]| {
+            let mut encoder: FrameCompressor<std::io::Empty, std::io::Sink, MatchGeneratorDriver> =
+                FrameCompressor::new(CompressionLevel::Level(3));
+            encoder.set_content_checksum(true);
+            encoder.compress_independent_frame(bytes)
+        };
+        let plain = b"\x04\0\0\0test";
+        let first = frame(&plain[..4]);
+        let second = frame(&plain[4..]);
+        let skip = [0x50, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, b'a', b'b', b'c'];
+        let combined = [first.as_slice(), &skip, second.as_slice()].concat();
+        // No FCS: ordinary window descriptor, followed by one last raw block.
+        let unknown = [&[0x28, 0xb5, 0x2f, 0xfd, 0, 0, 65, 0, 0][..], plain].concat();
+        let page = |encoded: &[u8], expected: usize| {
+            let body = [&[2, 1][..], encoded].concat();
+            let header = ParsedPageHeader {
+                page_type: PAGE_TYPE_DATA_V2,
+                uncompressed_page_size: i32::try_from(expected + 2).unwrap(),
+                compressed_page_size: i32::try_from(body.len()).unwrap(),
+                data_v2: ParsedDataPageV2 {
+                    num_values: 1,
+                    num_nulls: 0,
+                    num_rows: 1,
+                    encoding: ENCODING_PLAIN,
+                    definition_levels_byte_length: 2,
+                    repetition_levels_byte_length: 0,
+                    is_compressed: true,
+                },
+                header_len: 0,
+            };
+            (body, header)
+        };
+        for encoded in [&combined, &unknown] {
+            let (body, header) = page(encoded, plain.len());
+            let values = decode_page(
+                &body,
+                &header,
+                &Table::Terms.schema().columns[2],
+                1,
+                Compression::Zstd,
+            )
+            .unwrap();
+            assert_eq!(values, ColumnValues::bytes(vec![Some(b"test".to_vec())]));
+        }
+        assert!(validate_zstd_frames(&frame(b""), 0).is_ok());
+        assert!(validate_zstd_frames(&skip, 0).is_ok());
+        assert!(validate_zstd_frames(&[], 0).is_err());
+        for (index, mut encoded) in [first.clone(), second.clone()].into_iter().enumerate() {
+            *encoded.last_mut().unwrap() ^= 1;
+            let damaged = if index == 0 {
+                [encoded.as_slice(), second.as_slice()].concat()
+            } else {
+                [first.as_slice(), encoded.as_slice()].concat()
+            };
+            let (body, header) = page(&damaged, plain.len());
+            assert!(
+                decode_page(
+                    &body,
+                    &header,
+                    &Table::Terms.schema().columns[2],
+                    1,
+                    Compression::Zstd
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = combined.clone();
+        trailing.push(0);
+        assert!(validate_zstd_frames(&trailing, plain.len()).is_err());
+        assert!(validate_zstd_frames(&combined[..combined.len() - 1], plain.len()).is_err());
+        let (body, header) = page(&combined, 257 * 1024 * 1024);
+        let window = CurrentThreadWindow::open();
+        let error = decode_page(
+            &body,
+            &header,
+            &Table::Terms.schema().columns[2],
+            1,
+            Compression::Zstd,
+        )
+        .unwrap_err();
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.peak_working_bytes), (0, 0));
+        assert_page_refusal(
+            error,
+            PageBodyReason::FrameContentTotal {
+                declared: 8,
+                expected: 257 * 1024 * 1024,
+            },
+            "columnar Zstandard frame content size is malformed: frame headers declare 8 bytes, Parquet declares 269484032",
+        );
+        let oversized = [
+            0x28, 0xb5, 0x2f, 0xfd, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 1, 0, 0,
+        ];
+        let window = CurrentThreadWindow::open();
+        let error = validate_zstd_frames(&oversized, 8).unwrap_err();
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.peak_working_bytes), (0, 0));
+        assert_page_refusal(
+            error,
+            PageBodyReason::FrameContentSize {
+                declared: u64::MAX,
+                remaining: 8,
+            },
+            "columnar Zstandard frame content size is malformed: declares 18446744073709551615 decoded bytes, only 8 remain in the Parquet value body",
+        );
     }
 
     #[test]

@@ -9,6 +9,20 @@ use core::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PageBodyReason {
+    /// Known frame declarations do not sum to the Parquet value-body size.
+    FrameContentTotal {
+        /// Total bytes claimed by the native frame headers, without decoding.
+        declared: u64,
+        /// Original Parquet plain value-body size.
+        expected: u64,
+    },
+    /// A frame's declared output exceeds the remaining Parquet value body.
+    FrameContentSize {
+        /// Original full-width frame content size.
+        declared: u64,
+        /// Remaining bytes allowed by the original Parquet declaration.
+        remaining: u64,
+    },
     /// Definition-level presence disagrees with schema nullability.
     DefinitionPresence {
         /// Original definition-level byte count.
@@ -59,6 +73,12 @@ pub enum PageBodyReason {
 
 impl purrdf_hash::error::StructuredError for PageBodyReason {
     purrdf_hash::error_visit! {
+        FrameContentTotal { declared, expected } => "columnar-frame-content-total" {
+            "declared" => ByteCount(u128::from(*declared)), "expected" => ByteCount(u128::from(*expected)),
+        },
+        FrameContentSize { declared, remaining } => "columnar-frame-content-size" {
+            "declared" => ByteCount(u128::from(*declared)), "remaining" => ByteCount(u128::from(*remaining)),
+        },
         DefinitionPresence { length, repetition } => "columnar-definition-presence" {
             "length" => ByteCount(*length as u128),
             "repetition" => Code(match repetition {
@@ -88,6 +108,21 @@ impl fmt::Display for PageBodyReason {
     /// Render the established body diagnostic from its original scalar operands.
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FrameContentTotal { declared, expected } => {
+                write!(
+                    output,
+                    "frame headers declare {declared} bytes, Parquet declares {expected}"
+                )
+            }
+            Self::FrameContentSize {
+                declared,
+                remaining,
+            } => {
+                write!(
+                    output,
+                    "declares {declared} decoded bytes, only {remaining} remain in the Parquet value body"
+                )
+            }
             Self::DefinitionPresence { .. } => {
                 output.write_str("presence disagrees with schema nullability")
             }

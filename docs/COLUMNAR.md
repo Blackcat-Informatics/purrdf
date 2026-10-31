@@ -135,6 +135,15 @@ constant or the host's available memory. Files whose rows fit one group retain
 the same encoding. Offsets and table row counts fit signed 64-bit fields; the
 footer fits its unsigned 32-bit length. Schema version remains `1`.
 
+Pending groups hold encoded PLAIN column buffers, packed nullable-column
+presence, and one four-byte end offset per present byte-array value. Source
+rows are released after their cells are appended. Integer columns need no
+per-row offset array. Compression and subdivision borrow ranges of these
+buffers; each child rebuilds its definition levels for its own row range.
+Buffers are reused across groups, and their capacities are bounded by the
+largest admitted group. Compression output and final file buffers are separate
+resident owners.
+
 The reader accepts any self-consistent sequence of supported groups; it need
 not reproduce the writer's cuts or compressed bytes. It validates column and
 page sizes, offsets, row totals, null counts and PLAIN cardinality before large
@@ -142,6 +151,13 @@ decoding allocations or decompression. Metadata collection counts are bounded
 by the actual enclosing footer bytes, rather than an arbitrary item ceiling.
 Row uniqueness and canonical order hold across group boundaries as well as
 within groups. A later group refusal aborts the complete conversion.
+
+For ZSTD pages, native frame inspection checks every concatenated and skippable
+frame extent before allocating the bitmap or PLAIN buffer. Known frame content
+sizes must fit the Parquet declaration; their total must match when every frame
+declares its size. Unknown sizes are checked by actual decompression. Frame
+checksums are verified during decompression. Header claims and actual decoder
+output remain distinct evidence in refusal diagnostics.
 
 There is no chosen table-byte ceiling. One decoded group is consumed and
 released before the next. The term dictionary retains flat records across
@@ -155,7 +171,11 @@ The API owns the input or output file buffers, and the RDF dataset and content
 store remain resident. Writing also retains canonical dictionary and sorted row
 metadata needed for backend-independent ids and ordering; reading retains term
 resolution state and the builder. Footer metadata grows with group count.
+Native codec workspace and the page body can still be allocated from matching
+metadata before malformed compressed content is rejected. These structural
+checks do not establish a separate caller resource-admission policy.
 Group streaming removes complete-table decoded columns and intermediate
 statement tables, not these necessary owners. `project()` remains an explicitly
-eager relational representation; direct `write()` borrows canonical cells and
-blob payloads without first constructing that representation.
+eager relational representation; direct `write()` consumes borrowed canonical
+cells and blob payloads into pending columns without first constructing that
+representation.
