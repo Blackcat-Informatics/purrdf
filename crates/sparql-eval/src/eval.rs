@@ -40,6 +40,7 @@ use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
 use crate::governor::soundness::CapPushdown;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
+use crate::vm::RowContinuation as _;
 use crate::witness::RelationWitness;
 use crate::xpath_regex::Selection;
 
@@ -560,7 +561,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// encoded per-focus-node identity tags (see [`Self::with_bnode_mint_prefix`]).
     pub bnode_mint_prefix: Option<purrdf_lex::allocation::SharedText>,
     /// The row ordinal of the solution currently being extended, set by
-    /// [`crate::expr::eval_extend`] right before it evaluates that row's
+    /// [`crate::expr::begin_extend_child_with_owner`] right before it evaluates that row's
     /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.9) uses this to
     /// memoize per-solution: the row/argument pair identifies "the same query
     /// solution" across the chain of `Extend` nodes one `SELECT`'s
@@ -806,10 +807,10 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::property_functions`], so carrying it is a `Copy` pointer, never a
     /// clone.
     pub(crate) aggregates: &'d crate::agg_fn::AggregateRegistry,
-    /// The current SHACL-AF function call depth, incremented by
-    /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
-    /// mutually-recursive functions fail closed rather than overflow the stack.
+    /// The current logical UDF depth, inherited by child calls and host reentry.
     pub(crate) udf_depth: u32,
+    /// The caller's inclusive logical ceiling; `None` permits any represented depth.
+    pub(crate) max_udf_depth: Option<u64>,
     /// The precision an `xsd:integer`/`xsd:decimal` quotient is formed at
     /// ([`purrdf_xsd::exact::DivisionPolicy`]), supplied per query through
     /// [`QueryOptions::division`](crate::QueryOptions::division) and shared by `/`
@@ -933,12 +934,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) witnessing: bool,
 }
 
-/// The maximum SHACL-AF function call depth. A function body that calls another
-/// function (directly or in a cycle) is bounded here and fails closed on overflow —
-/// the evaluator's counterpart of the shapes engine's `MAX_RECURSION_DEPTH`. The two
-/// counters are independent: this bounds function→function chains inside SPARQL
-/// evaluation, while the shapes guard bounds shape re-entry.
-pub(crate) const MAX_UDF_DEPTH: u32 = 32;
+/// The ordinary inclusive logical UDF ceiling. Callers can replace or remove it.
+pub(crate) const DEFAULT_UDF_DEPTH: u64 = 32;
 
 /// Compile-time proof that [`EvalCtx`] is `Send + Sync`, so a future parallel
 /// worker can hold `&EvalCtx`/build its own from a shared `&'d RdfDataset`
@@ -1006,6 +1003,10 @@ pub(crate) enum ScopeRestore {
     },
     PositiveShape(Option<crate::plan::PlanHandle>),
     CorrelatedMap,
+    CapPushdown {
+        previous: Option<crate::workspace::SharedWorkspace<CapPushdown>>,
+        cursor: Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
+    },
 }
 
 impl ScopeRestore {
@@ -1029,6 +1030,10 @@ impl ScopeRestore {
             }
             Self::CorrelatedMap => {
                 ctx.correlated_node_maps.pop();
+            }
+            Self::CapPushdown { previous, cursor } => {
+                ctx.cap_pushdown = previous;
+                ctx.cap_at = cursor;
             }
         }
     }
@@ -1396,6 +1401,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             expanded_dictionary: None,
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
+            max_udf_depth: Some(DEFAULT_UDF_DEPTH),
             division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
             exact_deferral: None,
             focus_graph: None,
@@ -1495,6 +1501,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Scope eligibility numbering without changing source numbering or any
     /// substitution state. The caller keeps the numbered AST alive until drop.
+    #[cfg(test)]
     fn enter_positive_shape(
         &mut self,
         shape: crate::plan::PlanHandle,
@@ -1750,6 +1757,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         mut self,
         governors: crate::workspace::SharedWorkspace<GovernorState>,
     ) -> Self {
+        self.max_udf_depth = governors.max_udf_depth();
         if self
             .governors
             .as_ref()
@@ -2135,7 +2143,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///    volatility is unknown, where an unresolved scalar function IRI has a
     ///    defined deterministic meaning).
     ///
-    /// This governs WHICH GROUP runs on which worker, gating [`crate::modifier::eval_group`]'s
+    /// This governs WHICH GROUP runs on which worker, gating [`crate::modifier::begin_group_child_with_owner`]'s
     /// across-groups fork. It does NOT gate whether the fold WITHIN one group
     /// chunks: `eval_aggregate`/`eval_custom_aggregate` decide that separately —
     /// a built-in's within-group chunked fold never touches `EvalCtx` (see
@@ -2969,6 +2977,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // would.
             aggregates: self.aggregates,
             udf_depth: self.udf_depth,
+            max_udf_depth: self.max_udf_depth,
             division: self.division,
             // A worker's deferral is installed by the loop that forks it, for that
             // loop's rows; a function body runs on its caller's row, and defers with it.
@@ -3179,35 +3188,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
-    /// Build a child context for evaluating a SHACL-AF function body: it shares the
-    /// dataset, clock/entropy, order cache, standpoint table, loss vocabulary,
-    /// remote source and function registry, but starts fresh mutable evaluation state
-    /// (the body is an independent query) and increments the call depth.
-    ///
-    /// `Ok(None)` means a governed execution reached its fixed UDF-depth ceiling. The
-    /// trip is recorded on the shared expression barrier, so the operator owning the call
-    /// returns typed exhaustion rather than an ordinary function error.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::FunctionOperational`] if an **ungoverned** call would exceed
-    /// [`MAX_UDF_DEPTH`] — mutually-recursive functions still fail closed rather than
-    /// overflow the stack when there is no governed outcome channel.
-    pub(crate) fn child_for_user_fn(&self) -> Result<Option<Self>, EvalError> {
-        let next_depth = self.udf_depth + 1;
-        // The recursion guard is a governed dimension whose ceiling is a build constant.
-        // `QueryGovernors::UNBOUNDED` already carries `MAX_UDF_DEPTH` on
-        // `ResourceDimension::UdfDepth` and there is no builder that writes that slot, so
-        // observing the depth here reports the consumption through the same evidence as
-        // every other dimension **without** making the bound relaxable: the ceiling the
-        // governor compares against and the constant below are the same number, and a
-        // caller has no way to move either.
-        //
-        // The observation's own result is deliberately not the decision. A state that has
-        // already latched some other governor answers `Err` for every dimension, and
-        // reading that as "recursion too deep" would report the wrong cause; and a
-        // caller-relaxable stack-recursion bound is not a bound, so the constant stays
-        // the authority on both the governed and the ungoverned path.
+    /// Observe the next logical call once. A governed refusal records its typed
+    /// expression barrier; an ordinary refusal names the caller's finite limit.
+    pub(crate) fn next_udf_depth(&self) -> Result<Option<u32>, EvalError> {
+        let next_depth = self
+            .udf_depth
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
         if let Some(state) = self.governors.as_ref()
             && let Err(tripped) = state.observe_peak(
                 purrdf_core::ResourceDimension::UdfDepth,
@@ -3217,11 +3204,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             self.record_barrier(tripped);
             return Ok(None);
         }
-        if next_depth > MAX_UDF_DEPTH {
+        if let Some(limit) = self.max_udf_depth
+            && u64::from(next_depth) > limit
+        {
             return Err(EvalError::function_operational(format!(
-                "SHACL-AF function recursion exceeded the depth bound of {MAX_UDF_DEPTH}"
+                "SHACL-AF function recursion exceeded the depth bound of {limit}"
             )));
         }
+        Ok(Some(next_depth))
+    }
+
+    pub(crate) fn child_for_user_fn(&self) -> Result<Option<Self>, EvalError> {
+        let Some(next_depth) = self.next_udf_depth()? else {
+            return Ok(None);
+        };
         Ok(Some(Self {
             dataset: self.dataset,
             bounded_workspace: self.bounded_workspace,
@@ -3317,6 +3313,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // registry the calling query sees.
             aggregates: self.aggregates,
             udf_depth: next_depth,
+            max_udf_depth: self.max_udf_depth,
             division: self.division,
             // A worker's deferral is installed by the loop that forks it, for that
             // loop's rows; a function body runs on its caller's row, and defers with it.
@@ -3537,38 +3534,168 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    if matches!(
-        pattern,
-        GraphPattern::Filter { .. }
-            | GraphPattern::Slice { .. }
-            | GraphPattern::Lateral { .. }
-            | GraphPattern::LeftJoin { .. }
-    ) {
-        return eval_ordinary_chain(pattern, ctx);
-    }
-    // A correlated substitution or ENF preparation can evaluate a copied AST
-    // outside the source numbering. Number its first reached Join once, rather
-    // than rescanning every suffix of a deep copied join chain. Leaf-only calls
-    // and source-known trees retain their allocation-free eligibility path.
-    eval_evaluated_with(pattern, ctx, |ctx| eval_numbered_node(pattern, ctx))
+    eval_ordinary_chain(pattern, ctx)
 }
 
-fn eval_numbered_node<D: DatasetView + Sync>(
-    pattern: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    // The shared boundary has already checked stop and charged node entry.
-    // The copied Join's positive scope precedes dictionary and Shapes offers.
-    if matches!(pattern, GraphPattern::Join { .. }) && ctx.positive_region(pattern).is_none() {
-        #[cfg(test)]
-        {
-            ctx.temporary_positive_numberings += 1;
+#[derive(Clone, Copy)]
+enum OrdinaryBinary {
+    Join,
+    Minus,
+    Optional,
+}
+
+#[derive(Clone, Copy, Default)]
+enum DeliveryTarget {
+    #[default]
+    None,
+    Discard,
+    External,
+    Parent(usize),
+    ApplicationRight(usize),
+}
+
+pub(crate) fn discard_delivery<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> bool {
+    ctx.expression_barrier.observed().is_some() || ctx.stop_check().is_some()
+}
+
+enum DeliveryResume<I: ViewTermId> {
+    Node(Evaluated<I>),
+    Acknowledge,
+    ApplicationContinue(usize),
+}
+
+struct DeliveryReturn<I: ViewTermId> {
+    target: usize,
+    resume: DeliveryResume<I>,
+    output: Option<SolutionSeq<I>>,
+    graph_restore: Option<GraphMatch<I>>,
+    slice_input: Option<(SolutionSeq<I>, usize)>,
+    application_right: bool,
+}
+
+struct StreamSequence<'a, I: ViewTermId> {
+    target: DeliveryTarget,
+    lift: Option<crate::governor::lift::DetachedLift>,
+    blocks: crate::AdmittedVec<SolutionSeq<I>>,
+    kind: StreamKind<'a, I>,
+    stopped: bool,
+    busy: bool,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum StreamKind<'a, I: ViewTermId> {
+    Application(ApplicationStream<I>),
+    Slice {
+        start: usize,
+        length: Option<usize>,
+        index: usize,
+        kept: usize,
+        schema: Option<crate::solution::SharedSchema>,
+        rows: crate::solution::RowsBuilder<I>,
+    },
+    Graph(crate::modifier::GraphSequence<I>),
+    Group {
+        sequence: Option<crate::modifier::ContextualGroupSequence<'a, I>>,
+        bucket_pending: bool,
+    },
+    Filter {
+        annotation: Option<crate::expr::AnnotationRanges>,
+    },
+    Extend,
+    Dedup(crate::modifier::DeliveryDedup<I>),
+    Project {
+        endpoint_depth: usize,
+    },
+    Union {
+        ordinal: usize,
+    },
+    BinaryRight {
+        minus: bool,
+    },
+    BinaryLeft {
+        right: SolutionSeq<I>,
+        minus: bool,
+    },
+}
+
+struct ApplicationStream<I: ViewTermId> {
+    drivers: Option<SolutionSeq<I>>,
+    ordinal: usize,
+    row: Option<crate::binop::ApplicationRow<I>>,
+    first_block: usize,
+    emitted: usize,
+    ceiling: Option<usize>,
+}
+
+struct ApplicationBody {
+    target: usize,
+    child: Option<crate::binop::LateralPending>,
+}
+
+impl<D: DatasetView + Sync> ResidentAbort<D> for Box<ApplicationBody> {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        if let Some(child) = &mut self.child {
+            child.abort(ctx);
         }
-        let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
-        let mut guard = ctx.enter_positive_shape(tree.handle());
-        eval_node_with(pattern, (), &mut guard)
-    } else {
-        eval_node_with(pattern, (), ctx)
+    }
+}
+
+enum DeliveryEvent<'a, I: ViewTermId> {
+    Original {
+        position: OrdinaryPosition<'a>,
+        evaluated: Evaluated<I>,
+        stopped: bool,
+    },
+    Offer {
+        position: OrdinaryPosition<'a>,
+        target: DeliveryTarget,
+        block: SolutionSeq<I>,
+        resume: DeliveryResume<I>,
+    },
+    Transformed(Result<Evaluated<I>, EvalError>),
+    Consumed {
+        stopped: bool,
+    },
+    SliceNext {
+        stopped: bool,
+    },
+    ApplicationNext {
+        target: usize,
+        advance: bool,
+    },
+    Acknowledged {
+        position: OrdinaryPosition<'a>,
+        resume: DeliveryResume<I>,
+        stopped: bool,
+    },
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum DeliveryAdvance<'a, 'd, D: DatasetView + Sync> {
+    Complete(OrdinaryPosition<'a>, Result<Evaluated<D::Id>, EvalError>),
+    Function(crate::user_fn::UserInvocation<'d, 'd, D>),
+    Descend(OrdinaryPosition<'a>),
+}
+
+enum StreamStart<'a, I: ViewTermId> {
+    Descend(OrdinaryPosition<'a>),
+    Complete(Evaluated<I>),
+}
+
+impl<I: ViewTermId, D: DatasetView<Id = I> + Sync> ResidentAbort<D> for Box<StreamSequence<'_, I>> {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        match &mut self.kind {
+            StreamKind::Filter { annotation } => ctx.annotation_range = annotation.take(),
+            StreamKind::Project { endpoint_depth } => ctx.endpoint_frames.truncate(*endpoint_depth),
+            StreamKind::Graph(sequence) => ctx.active_graph = sequence.saved_graph(),
+            _ => {}
+        }
     }
 }
 
@@ -3576,7 +3703,70 @@ fn eval_numbered_node<D: DatasetView + Sync>(
 /// frame and local cap in one admitted worklist while graph children descend.
 /// Expression rows and copied EXISTS children use their own suspended states.
 enum OrdinaryAfter<'a, I: ViewTermId> {
+    ApplicationBody {
+        state: Box<ApplicationBody>,
+        _allocation: crate::WorkspaceAllocation,
+    },
+    Stream {
+        state: Box<StreamSequence<'a, I>>,
+        _allocation: crate::WorkspaceAllocation,
+    },
+    Delivery {
+        state: Box<DeliveryReturn<I>>,
+        _allocation: crate::WorkspaceAllocation,
+    },
+    BinaryFirst {
+        kind: OrdinaryBinary,
+        first: usize,
+        lift: crate::governor::lift::DetachedLift,
+    },
+    BinarySecond {
+        kind: OrdinaryBinary,
+        first: usize,
+        rows: SolutionSeq<I>,
+        lift: crate::governor::lift::DetachedLift,
+        endpoint_depth: usize,
+    },
+    MinusPartition {
+        state: Box<crate::binop::MinusPartitions<I>>,
+        _allocation: crate::WorkspaceAllocation,
+        endpoint_depth: usize,
+    },
+    Union {
+        blocks: crate::AdmittedVec<SolutionSeq<I>>,
+        ordinal: usize,
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Dedup {
+        lift: crate::governor::lift::DetachedLift,
+        adjacent: bool,
+    },
+    Graph {
+        state: Box<crate::modifier::GraphSequence<I>>,
+        _allocation: crate::WorkspaceAllocation,
+    },
     OptionalLeft,
+    Project {
+        lift: crate::governor::lift::DetachedLift,
+        endpoint_depth: usize,
+    },
+    Extend {
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Group {
+        out_schema: crate::solution::SharedSchema,
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Order {
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Unfold {
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Function {
+        state: Box<OrdinaryFunction<'a, I>>,
+        _allocation: crate::WorkspaceAllocation,
+    },
     Filter {
         lift: crate::governor::lift::DetachedLift,
     },
@@ -3585,10 +3775,19 @@ enum OrdinaryAfter<'a, I: ViewTermId> {
         length: Option<usize>,
         lift: crate::governor::lift::DetachedLift,
     },
+    ApplicationLeft {
+        lift: crate::governor::lift::DetachedLift,
+    },
+    ApplicationSpecialLeft {
+        lift: crate::governor::lift::DetachedLift,
+    },
+    ApplicationSpecialRight {
+        lift: crate::governor::lift::DetachedLift,
+    },
     LateralLeft {
         lift: crate::governor::lift::DetachedLift,
     },
-    LateralRight {
+    CorrelatedRight {
         state: Box<OrdinaryLateral<I>>,
         _allocation: crate::WorkspaceAllocation,
     },
@@ -3598,17 +3797,314 @@ enum OrdinaryAfter<'a, I: ViewTermId> {
     },
 }
 
+/// One operator's original row loop; its active VM and row remain with it.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum OrdinaryExpression<'a, I: ViewTermId> {
+    Filter(crate::expr::FilterSequence<'a, I>),
+    Extend(crate::expr::ExtendSequence<'a, I>),
+    Order(crate::modifier::OrderSequence<'a, I>),
+    Group(crate::modifier::GroupSequence<'a, I>),
+    GroupRow(crate::modifier::ContextualGroupSequence<'a, I>),
+    Unfold(crate::cdt_unfold::UnfoldSequence<'a, I>),
+    Optional(crate::binop::OptionalSequence<'a, I>),
+    SeededOptional(crate::binop::SeededOptionalSequence<'a, I>),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum ExpressionStep<'a, 'd, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(OrdinaryExpression<'a, I>, crate::vm::Suspend<'d>),
+    GroupBlock(crate::modifier::ContextualGroupSequence<'a, I>, bool),
+}
+
+fn attached_expression(
+    node: &GraphPattern,
+) -> Result<&purrdf_sparql_algebra::Expression, EvalError> {
+    match node {
+        GraphPattern::Filter { expr, .. } => Ok(expr),
+        GraphPattern::Extend { expression, .. } | GraphPattern::Unfold { expression, .. } => {
+            Ok(expression)
+        }
+        GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => Ok(expression),
+        _ => Err(EvalError::internal(
+            "an expression continuation lost its operator",
+        )),
+    }
+}
+
+impl<'a, I: ViewTermId> crate::vm::RowContinuation<'a, I> for OrdinaryExpression<'a, I> {
+    fn row_frame<'s>(&'s self) -> &'s crate::vm::RowExpressionFrame<'a, I>
+    where
+        'a: 's,
+    {
+        match self {
+            Self::Filter(sequence) => sequence.row_frame(),
+            Self::Extend(sequence) => sequence.row_frame(),
+            Self::Order(sequence) => sequence.row_frame(),
+            Self::Group(sequence) => sequence.row_frame(),
+            Self::GroupRow(sequence) => sequence.row_frame(),
+            Self::Unfold(sequence) => sequence.row_frame(),
+            Self::Optional(sequence) => sequence.row_frame(),
+            Self::SeededOptional(sequence) => sequence.row_frame(),
+        }
+    }
+    fn row_frame_mut<'s>(&'s mut self) -> &'s mut crate::vm::RowExpressionFrame<'a, I>
+    where
+        'a: 's,
+    {
+        match self {
+            Self::Filter(sequence) => sequence.row_frame_mut(),
+            Self::Extend(sequence) => sequence.row_frame_mut(),
+            Self::Order(sequence) => sequence.row_frame_mut(),
+            Self::Group(sequence) => sequence.row_frame_mut(),
+            Self::GroupRow(sequence) => sequence.row_frame_mut(),
+            Self::Unfold(sequence) => sequence.row_frame_mut(),
+            Self::Optional(sequence) => sequence.row_frame_mut(),
+            Self::SeededOptional(sequence) => sequence.row_frame_mut(),
+        }
+    }
+    fn schema(&self) -> &VarSchema {
+        match self {
+            Self::Filter(sequence) => sequence.schema(),
+            Self::Extend(sequence) => sequence.schema(),
+            Self::Order(sequence) => sequence.schema(),
+            Self::Group(sequence) => sequence.schema(),
+            Self::GroupRow(sequence) => sequence.schema(),
+            Self::Unfold(sequence) => sequence.schema(),
+            Self::Optional(sequence) => sequence.schema(),
+            Self::SeededOptional(sequence) => sequence.schema(),
+        }
+    }
+}
+
+impl<'a, I: ViewTermId> OrdinaryExpression<'a, I> {
+    fn prepare_exists<D: DatasetView<Id = I> + Sync>(
+        &self,
+        site: u32,
+        node: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<
+        (
+            crate::expr::ExistsDecision<I>,
+            Option<crate::evidence_exec::RowEvidence>,
+        ),
+        EvalError,
+    > {
+        let expression = if let Self::Order(sequence) = self {
+            let GraphPattern::OrderBy { expression, .. } = node else {
+                return Err(EvalError::internal("ORDER continuation lost its node"));
+            };
+            match &expression[sequence.expression_index()] {
+                purrdf_sparql_algebra::OrderExpression::Asc(expression)
+                | purrdf_sparql_algebra::OrderExpression::Desc(expression) => expression,
+            }
+        } else if matches!(self, Self::Group(_) | Self::GroupRow(_)) {
+            let GraphPattern::Group { aggregates, .. } = node else {
+                return Err(EvalError::internal("GROUP expression lost its node"));
+            };
+            let (aggregate_index, index) = match self {
+                Self::Group(sequence) => (sequence.aggregate_index(), sequence.expression_index()),
+                Self::GroupRow(sequence) => {
+                    (sequence.aggregate_index(), sequence.expression_index())
+                }
+                _ => unreachable!("the GROUP continuation retains its aggregate"),
+            };
+            let aggregate = &aggregates[aggregate_index].1;
+            if let Some(expression) = aggregate.args().get(index) {
+                expression
+            } else {
+                aggregate.order_by()[index - aggregate.args().len()].expression()
+            }
+        } else {
+            attached_expression(node)?
+        };
+        crate::vm::RowContinuation::prepare_exists(self, site, expression, ctx)
+    }
+
+    fn step<'d, D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        group_domain: Option<&[Variable]>,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<ExpressionStep<'a, 'd, I>, EvalError> {
+        if let Self::GroupRow(sequence) = self {
+            let GraphPattern::Group { aggregates, .. } = node else {
+                return Err(EvalError::internal("contextual GROUP lost its node"));
+            };
+            return match sequence.step(aggregates, ctx)? {
+                crate::modifier::ContextualGroupStep::BlockComplete(sequence, control) => {
+                    Ok(ExpressionStep::GroupBlock(sequence, control.is_break()))
+                }
+                crate::modifier::ContextualGroupStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::GroupRow(sequence), request))
+                }
+            };
+        }
+        if let Self::SeededOptional(sequence) = self {
+            let GraphPattern::LeftJoin {
+                right,
+                expression: Some(expression),
+                ..
+            } = node
+            else {
+                return Err(EvalError::internal("seeded OPTIONAL lost its condition"));
+            };
+            return match sequence.step(node, right, expression, ctx)? {
+                crate::binop::SeededOptionalStep::Complete(done) => {
+                    Ok(ExpressionStep::Complete(done))
+                }
+                crate::binop::SeededOptionalStep::Suspend(sequence, request) => Ok(
+                    ExpressionStep::Suspend(Self::SeededOptional(sequence), request),
+                ),
+            };
+        }
+        if let Self::Order(sequence) = self {
+            let GraphPattern::OrderBy { expression, .. } = node else {
+                return Err(EvalError::internal("ORDER continuation lost its node"));
+            };
+            return match sequence.step(node, expression, ctx)? {
+                crate::modifier::OrderStep::Complete(done) => Ok(ExpressionStep::Complete(done)),
+                crate::modifier::OrderStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::Order(sequence), request))
+                }
+            };
+        }
+        if let Self::Group(sequence) = self {
+            let GraphPattern::Group { aggregates, .. } = node else {
+                return Err(EvalError::internal("GROUP continuation lost its node"));
+            };
+            return match sequence.step(node, aggregates, group_domain, ctx)? {
+                crate::modifier::GroupStep::Complete(done) => Ok(ExpressionStep::Complete(done)),
+                crate::modifier::GroupStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::Group(sequence), request))
+                }
+            };
+        }
+        if let Self::Unfold(sequence) = self {
+            return match sequence.step(node, ctx)? {
+                crate::cdt_unfold::UnfoldStep::Complete(done) => Ok(ExpressionStep::Complete(done)),
+                crate::cdt_unfold::UnfoldStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::Unfold(sequence), request))
+                }
+            };
+        }
+        let expression = attached_expression(node)?;
+        match self {
+            Self::Filter(sequence) => match sequence.step(node, expression, ctx)? {
+                crate::expr::FilterSequenceStep::Complete(done) => {
+                    Ok(ExpressionStep::Complete(done))
+                }
+                crate::expr::FilterSequenceStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::Filter(sequence), request))
+                }
+            },
+            Self::Extend(sequence) => match sequence.step(node, expression, ctx)? {
+                crate::expr::ExtendStep::Complete(done) => Ok(ExpressionStep::Complete(done)),
+                crate::expr::ExtendStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::Extend(sequence), request))
+                }
+            },
+            Self::Optional(sequence) => match sequence.step(node, expression, ctx)? {
+                crate::binop::OptionalStep::Complete(done) => Ok(ExpressionStep::Complete(done)),
+                crate::binop::OptionalStep::Suspend(sequence, request) => {
+                    Ok(ExpressionStep::Suspend(Self::Optional(sequence), request))
+                }
+            },
+            Self::Group(_) => unreachable!("GROUP handled before scalar expression"),
+            Self::GroupRow(_) => unreachable!("contextual GROUP handled before scalar expression"),
+            Self::Unfold(_) => unreachable!("UNFOLD handled before scalar expression"),
+            Self::Order(_) => unreachable!("ORDER handled before scalar expression"),
+            Self::SeededOptional(_) => {
+                unreachable!("seeded OPTIONAL handled before scalar expression")
+            }
+        }
+    }
+}
+
+struct OrdinaryFunction<'a, I: ViewTermId> {
+    sequence: OrdinaryExpression<'a, I>,
+    call: u32,
+}
+
 /// The copied child and its parent FILTER cursor retain their separate owners.
 /// The box is admitted only for a row that actually suspends at EXISTS.
 struct OrdinaryExists<'a, I: ViewTermId> {
-    sequence: crate::expr::FilterSequence<'a, I>,
+    sequence: OrdinaryExpression<'a, I>,
     decision: Option<crate::expr::ExistsChild<I>>,
     child: Option<crate::expr::ExistsPending<I>>,
     record: Option<crate::evidence_exec::RowEvidence>,
 }
 
+enum OrdinaryCorrelation<I: ViewTermId> {
+    Lateral(crate::binop::LateralSequence<I>),
+    Application(crate::binop::ApplicationSequence<I>),
+}
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum OrdinaryCorrelationStep<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Child(OrdinaryCorrelation<I>, crate::binop::LateralPending),
+}
+impl<I: ViewTermId> OrdinaryCorrelation<I> {
+    fn has_row(&self) -> bool {
+        match self {
+            Self::Lateral(sequence) => sequence.has_row(),
+            Self::Application(sequence) => sequence.has_row(),
+        }
+    }
+    fn step<D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        right: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<OrdinaryCorrelationStep<I>, EvalError> {
+        match self {
+            Self::Lateral(sequence) => match sequence.step(node, right, ctx)? {
+                crate::binop::LateralStep::Complete(done) => {
+                    Ok(OrdinaryCorrelationStep::Complete(done))
+                }
+                crate::binop::LateralStep::Child(sequence, child) => Ok(
+                    OrdinaryCorrelationStep::Child(Self::Lateral(sequence), child),
+                ),
+            },
+            Self::Application(sequence) => match sequence.step(node, ctx)? {
+                crate::binop::ApplicationStep::Complete(done) => {
+                    Ok(OrdinaryCorrelationStep::Complete(done))
+                }
+                crate::binop::ApplicationStep::Child(sequence, child) => Ok(
+                    OrdinaryCorrelationStep::Child(Self::Application(sequence), child),
+                ),
+            },
+        }
+    }
+    fn resume<D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        match self {
+            Self::Lateral(sequence) => sequence.resume(node, evaluated, ctx).map(Self::Lateral),
+            Self::Application(sequence) => {
+                sequence.resume(node, evaluated, ctx).map(Self::Application)
+            }
+        }
+    }
+}
+
 struct OrdinaryLateral<I: ViewTermId> {
-    sequence: Option<crate::binop::LateralSequence<I>>,
+    sequence: Option<OrdinaryCorrelation<I>>,
     child: Option<crate::binop::LateralPending>,
 }
 
@@ -3631,56 +4127,6 @@ impl<D: DatasetView + Sync, C: ResidentAbort<D>> Drop for ResidentPending<'_, '_
     }
 }
 
-// The child is moved into the already-admitted suspended row; an additional
-// enum box would allocate on every ordinary FILTER row.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "suspended FILTER storage is admitted at its existing owner"
-)]
-enum OrdinaryFilterStep<'a, I: ViewTermId> {
-    Complete(Evaluated<I>),
-    Child {
-        sequence: crate::expr::FilterSequence<'a, I>,
-        decision: crate::expr::ExistsChild<I>,
-        record: Option<crate::evidence_exec::RowEvidence>,
-    },
-}
-
-fn step_ordinary_filter<'a, D: DatasetView + Sync>(
-    mut sequence: crate::expr::FilterSequence<'a, D::Id>,
-    node: &GraphPattern,
-    expression: &purrdf_sparql_algebra::Expression,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<OrdinaryFilterStep<'a, D::Id>, EvalError> {
-    loop {
-        match sequence.step(node, expression, ctx)? {
-            crate::expr::FilterSequenceStep::Complete(done) => {
-                return Ok(OrdinaryFilterStep::Complete(done));
-            }
-            crate::expr::FilterSequenceStep::Exists(mut pending, site) => {
-                let (decision, record) = pending.prepare_exists(site, expression, ctx)?;
-                match decision {
-                    crate::expr::ExistsDecision::Complete(answer) => {
-                        pending.resume(
-                            Some(crate::expr::intern_boolean(ctx, answer)?),
-                            record,
-                            ctx,
-                        )?;
-                        sequence = pending;
-                    }
-                    crate::expr::ExistsDecision::Child(decision) => {
-                        return Ok(OrdinaryFilterStep::Child {
-                            sequence: pending,
-                            decision,
-                            record,
-                        });
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[derive(Clone)]
 enum OrdinaryPosition<'a> {
     Borrowed(&'a GraphPattern),
@@ -3695,11 +4141,13 @@ impl OrdinaryPosition<'_> {
         }
     }
 
-    fn copied_child(&self, child: &GraphPattern) -> Result<Self, EvalError> {
+    fn child(&self, child: &GraphPattern) -> Result<Self, EvalError> {
         match self {
-            Self::Borrowed(_) => Err(EvalError::internal(
-                "a borrowed child needs its original owner",
-            )),
+            Self::Borrowed(parent) => crate::expr::immediate_pattern_child(parent, child)
+                .map(Self::Borrowed)
+                .ok_or_else(|| {
+                    EvalError::internal("a borrowed node's child is absent from its owner")
+                }),
             Self::Copied(cursor) => cursor.child(child).map(Self::Copied),
         }
     }
@@ -3707,17 +4155,23 @@ impl OrdinaryPosition<'_> {
 
 struct OrdinaryFrame<'a, I: ViewTermId> {
     position: OrdinaryPosition<'a>,
-    boundary: NodeBoundary,
+    boundary: NodeBoundary<I>,
     after: OrdinaryAfter<'a, I>,
 }
 
 /// One owner for every installed ordinary boundary. A panic cannot skip the
 /// node cursor, evidence-search or local-cap restoration when frames move.
+struct OrdinaryState<'a, I: ViewTermId> {
+    active: Option<NodeBoundary<I>>,
+    first: Option<OrdinaryFrame<'a, I>>,
+    pending: crate::AdmittedVec<OrdinaryFrame<'a, I>>,
+    next_delivery: DeliveryTarget,
+}
+
+/// Resident adapter; the movable state itself never borrows its query context.
 struct OrdinaryRunner<'a, 'ctx, 'd, D: DatasetView + Sync> {
+    state: OrdinaryState<'a, D::Id>,
     ctx: &'ctx mut EvalCtx<'d, D>,
-    active: Option<NodeBoundary>,
-    first: Option<OrdinaryFrame<'a, D::Id>>,
-    pending: crate::AdmittedVec<OrdinaryFrame<'a, D::Id>>,
 }
 
 // Immediate rows remain allocation-free; the child branch uses its existing
@@ -3727,32 +4181,1154 @@ struct OrdinaryRunner<'a, 'ctx, 'd, D: DatasetView + Sync> {
     reason = "do not box an immediate FILTER row"
 )]
 enum OrdinaryExistsSchedule<'a, I: ViewTermId> {
-    Immediate(crate::expr::FilterSequence<'a, I>),
+    Immediate(OrdinaryExpression<'a, I>),
     Descend(OrdinaryPosition<'a>),
 }
 
-enum OrdinaryLateralSchedule<'a, I: ViewTermId> {
+enum OrdinaryCorrelationSchedule<'a, I: ViewTermId> {
     Complete(Evaluated<I>),
     Descend(OrdinaryPosition<'a>),
 }
 
-enum OrdinaryAdvance<'a, I: ViewTermId> {
-    Complete(Evaluated<I>),
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum OrdinaryAdvance<'a, 'd, D: DatasetView + Sync> {
+    Complete(Evaluated<D::Id>),
     Descend(OrdinaryPosition<'a>),
+    Function(crate::user_fn::UserInvocation<'d, 'd, D>),
+    Consumed(bool),
 }
 
-impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
-    fn pop(&mut self) -> Option<OrdinaryFrame<'a, D::Id>> {
+impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
+    fn frame_mut(&mut self, token: usize) -> Result<&mut OrdinaryFrame<'a, I>, EvalError> {
+        if token == 0 {
+            self.first.as_mut()
+        } else {
+            self.pending.as_mut_slice().get_mut(token - 1)
+        }
+        .ok_or_else(|| EvalError::internal("delivery parent frame is absent"))
+    }
+
+    fn stream_mut(&mut self, token: usize) -> Result<&mut StreamSequence<'a, I>, EvalError> {
+        let OrdinaryAfter::Stream { state, .. } = &mut self.frame_mut(token)?.after else {
+            return Err(EvalError::internal(
+                "delivery parent has another continuation",
+            ));
+        };
+        Ok(state)
+    }
+
+    fn advance_delivery<'d, D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        mut event: DeliveryEvent<'a, I>,
+        mut delivery: Option<&mut RowConsumer<'_, D>>,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<DeliveryAdvance<'a, 'd, D>, EvalError> {
+        loop {
+            event = match event {
+                DeliveryEvent::Original {
+                    position,
+                    evaluated,
+                    stopped,
+                } => {
+                    let boundary = self
+                        .active
+                        .as_mut()
+                        .expect("materialized producer boundary");
+                    let ordinal = boundary.delivery_ordinal;
+                    let seq = evaluated.rows();
+                    if stopped
+                        || matches!(boundary.delivery, DeliveryTarget::None)
+                        || (ordinal != 0 && (boundary.delivery_whole || ordinal >= seq.rows.len()))
+                    {
+                        boundary.delivery = DeliveryTarget::None;
+                        let finished = finish_ordinary_active(
+                            &mut self.active,
+                            ctx,
+                            position.pattern(),
+                            Ok(evaluated),
+                        );
+                        return Ok(DeliveryAdvance::Complete(position, finished));
+                    }
+                    let block = if boundary.delivery_whole || seq.rows.is_empty() {
+                        seq.clone()
+                    } else {
+                        let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+                        rows.push_row(seq.rows[ordinal].clone_admitted(&ctx.growth)?)?;
+                        SolutionSeq {
+                            schema: seq.schema.clone(),
+                            rows: rows.finish()?,
+                        }
+                    };
+                    boundary.delivery_ordinal = ordinal
+                        .checked_add(1)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    DeliveryEvent::Offer {
+                        position,
+                        target: boundary.delivery,
+                        block,
+                        resume: DeliveryResume::Node(evaluated),
+                    }
+                }
+                DeliveryEvent::Offer {
+                    position,
+                    target,
+                    block,
+                    resume,
+                } => {
+                    let application_right = matches!(target, DeliveryTarget::ApplicationRight(_));
+                    match target {
+                        DeliveryTarget::None => DeliveryEvent::Acknowledged {
+                            position,
+                            resume,
+                            stopped: false,
+                        },
+                        DeliveryTarget::Discard => DeliveryEvent::Acknowledged {
+                            position,
+                            resume,
+                            stopped: discard_delivery(ctx),
+                        },
+                        DeliveryTarget::External => {
+                            let terminal = delivery.as_deref_mut().ok_or_else(|| {
+                                EvalError::internal("external delivery has no terminal consumer")
+                            })?;
+                            terminal.deliver(&block, ctx)?;
+                            DeliveryEvent::Acknowledged {
+                                position,
+                                resume,
+                                stopped: terminal.stopped(),
+                            }
+                        }
+                        DeliveryTarget::Parent(target)
+                        | DeliveryTarget::ApplicationRight(target) => {
+                            if ctx.expression_barrier.observed().is_some()
+                                || ctx.stop_check().is_some()
+                            {
+                                event = DeliveryEvent::Acknowledged {
+                                    position,
+                                    resume,
+                                    stopped: true,
+                                };
+                                continue;
+                            }
+                            let consumer = self.frame_mut(target)?.position.clone();
+                            if !application_right && self.stream_mut(target)?.busy {
+                                return Err(EvalError::internal(
+                                    "delivery parent received an overlapping block",
+                                ));
+                            }
+                            if self.first.is_some() {
+                                self.pending.reserve_next()?;
+                            }
+                            let (state, allocation) = crate::workspace::box_native(
+                                DeliveryReturn {
+                                    target,
+                                    resume,
+                                    output: None,
+                                    graph_restore: None,
+                                    slice_input: None,
+                                    application_right,
+                                },
+                                &ctx.growth,
+                                "producer delivery continuation",
+                            )?;
+                            self.push_parent(
+                                position,
+                                OrdinaryAfter::Delivery {
+                                    state,
+                                    _allocation: allocation,
+                                },
+                            );
+                            if !application_right {
+                                self.stream_mut(target)?.busy = true;
+                            }
+                            let node = consumer.pattern();
+                            let needs_overlay = !matches!(
+                                self.stream_mut(target)?.kind,
+                                StreamKind::Union { .. }
+                                    | StreamKind::Group { .. }
+                                    | StreamKind::Graph(_)
+                                    | StreamKind::Slice { .. }
+                                    | StreamKind::Application(_)
+                            );
+                            self.active = Some(NodeBoundary::delivery_overlay(
+                                needs_overlay.then(|| ctx.enter_node(node)),
+                            ));
+                            let lift = || {
+                                crate::governor::lift::Lift::at_admitted(node, &ctx.growth)
+                                    .map(crate::governor::lift::Lift::detach)
+                            };
+                            let owner = || match &consumer {
+                                OrdinaryPosition::Borrowed(parent) => attached_expression(parent)
+                                    .map(crate::expr::FilterLink::Borrowed),
+                                OrdinaryPosition::Copied(cursor) => {
+                                    Ok(crate::expr::FilterLink::Copied(cursor.owner()))
+                                }
+                            };
+                            let computation: Result<Option<OrdinaryExpression<'a, I>>, EvalError> =
+                                match &self.stream_mut(target)?.kind {
+                                    StreamKind::Application(application) if application_right => {
+                                        let drivers = application.drivers.as_ref().ok_or_else(|| EvalError::internal("application right block has no original driver"))?;
+                                        let driver = drivers.rows.get(application.ordinal).ok_or_else(|| EvalError::internal("application right block lost its driver ordinal"))?;
+                                        let rows = crate::binop::merge_application_block(
+                                            driver,
+                                            &drivers.schema,
+                                            &block,
+                                            ctx,
+                                        )?;
+                                        event = DeliveryEvent::Transformed(finish_ordinary_active(
+                                            &mut self.active,
+                                            ctx,
+                                            node,
+                                            Ok(Evaluated::Complete(rows)),
+                                        ));
+                                        continue;
+                                    }
+                                    StreamKind::Application(_) => {
+                                        let GraphPattern::Apply { right, .. } = node else {
+                                            return Err(EvalError::internal(
+                                                "streamed application lost its right operand",
+                                            ));
+                                        };
+                                        crate::service_endpoints::admit_lateral_endpoints(
+                                            &block, right, ctx,
+                                        )?;
+                                        let StreamKind::Application(application) =
+                                            &mut self.stream_mut(target)?.kind
+                                        else {
+                                            unreachable!("application retains its driver owner");
+                                        };
+                                        application.drivers = Some(block);
+                                        application.ordinal = 0;
+                                        application.row = None;
+                                        event = DeliveryEvent::ApplicationNext {
+                                            target,
+                                            advance: false,
+                                        };
+                                        continue;
+                                    }
+                                    StreamKind::Slice { .. } => {
+                                        let frame = self
+                                            .pending
+                                            .last_mut()
+                                            .or(self.first.as_mut())
+                                            .expect("published slice delivery");
+                                        let OrdinaryAfter::Delivery { state, .. } =
+                                            &mut frame.after
+                                        else {
+                                            unreachable!("slice retains its delivery owner");
+                                        };
+                                        state.slice_input = Some((block, 0));
+                                        event = DeliveryEvent::SliceNext { stopped: false };
+                                        continue;
+                                    }
+                                    StreamKind::Group { .. } => {
+                                        let StreamKind::Group { sequence, .. } =
+                                            &mut self.stream_mut(target)?.kind
+                                        else {
+                                            unreachable!("contextual group retains its owner");
+                                        };
+                                        let mut sequence = sequence.take().ok_or_else(|| {
+                                            EvalError::internal(
+                                                "contextual GROUP already owns an offered block",
+                                            )
+                                        })?;
+                                        // offer_block owns its entry cursor until it hands it to this active overlay.
+                                        self.active
+                                            .as_mut()
+                                            .expect("contextual overlay")
+                                            .abort(ctx);
+                                        match sequence.offer_block(node, &block, ctx)? {
+                                            crate::modifier::ContextualOffer::Stopped => {
+                                                let StreamKind::Group { sequence: slot, .. } =
+                                                    &mut self.stream_mut(target)?.kind
+                                                else {
+                                                    unreachable!("retained contextual group");
+                                                };
+                                                *slot = Some(sequence);
+                                                event = DeliveryEvent::Consumed { stopped: true };
+                                                continue;
+                                            }
+                                            crate::modifier::ContextualOffer::Entered(restore) => {
+                                                self.active = Some(NodeBoundary::delivery_overlay(
+                                                    Some(restore),
+                                                ));
+                                                Ok(Some(OrdinaryExpression::GroupRow(sequence)))
+                                            }
+                                        }
+                                    }
+                                    StreamKind::Filter { .. } => {
+                                        match crate::expr::begin_filter_child_with_owner(
+                                            node,
+                                            attached_expression(node)?,
+                                            owner()?,
+                                            lift()?,
+                                            Evaluated::Complete(block),
+                                            ctx,
+                                        )? {
+                                            crate::expr::FilterStart::Complete(done) => {
+                                                let done = finish_ordinary_active(
+                                                    &mut self.active,
+                                                    ctx,
+                                                    node,
+                                                    Ok(done),
+                                                );
+                                                event = DeliveryEvent::Transformed(done);
+                                                continue;
+                                            }
+                                            crate::expr::FilterStart::Sequence(sequence) => {
+                                                Ok(Some(OrdinaryExpression::Filter(sequence)))
+                                            }
+                                        }
+                                    }
+                                    StreamKind::Extend => {
+                                        match crate::expr::begin_extend_child_with_owner(
+                                            node,
+                                            attached_expression(node)?,
+                                            owner()?,
+                                            lift()?,
+                                            Evaluated::Complete(block),
+                                            ctx,
+                                        )? {
+                                            crate::expr::ExtendStart::Complete(done) => {
+                                                let done = finish_ordinary_active(
+                                                    &mut self.active,
+                                                    ctx,
+                                                    node,
+                                                    Ok(done),
+                                                );
+                                                event = DeliveryEvent::Transformed(done);
+                                                continue;
+                                            }
+                                            crate::expr::ExtendStart::Sequence(sequence) => {
+                                                Ok(Some(OrdinaryExpression::Extend(sequence)))
+                                            }
+                                        }
+                                    }
+                                    StreamKind::Project { .. } => {
+                                        let variables = match node {
+                                            GraphPattern::Project { variables, .. } => {
+                                                purrdf_sparql_algebra::ProjectionNames::Explicit(
+                                                    variables,
+                                                )
+                                            }
+                                            GraphPattern::ProjectStar { variables, .. } => {
+                                                purrdf_sparql_algebra::ProjectionNames::Star(
+                                                    variables,
+                                                )
+                                            }
+                                            _ => {
+                                                return Err(EvalError::internal(
+                                                    "projected delivery lost its node",
+                                                ));
+                                            }
+                                        };
+                                        let done = crate::modifier::finish_project(
+                                            node,
+                                            variables,
+                                            lift()?,
+                                            Evaluated::Complete(block),
+                                            ctx,
+                                        );
+                                        event = DeliveryEvent::Transformed(finish_ordinary_active(
+                                            &mut self.active,
+                                            ctx,
+                                            node,
+                                            done,
+                                        ));
+                                        continue;
+                                    }
+                                    StreamKind::Union { .. } => {
+                                        event = DeliveryEvent::Transformed(finish_ordinary_active(
+                                            &mut self.active,
+                                            ctx,
+                                            node,
+                                            Ok(Evaluated::Complete(block)),
+                                        ));
+                                        continue;
+                                    }
+                                    StreamKind::BinaryLeft { right, minus } => {
+                                        let rows = if *minus {
+                                            let shared = block.schema.shared_columns_admitted(
+                                                &right.schema,
+                                                &ctx.growth,
+                                            )?;
+                                            crate::binop::minus_rows(block, right, &shared, ctx)?
+                                        } else {
+                                            crate::binop::hash_join(&block, right, ctx)?
+                                        };
+                                        event = DeliveryEvent::Transformed(finish_ordinary_active(
+                                            &mut self.active,
+                                            ctx,
+                                            node,
+                                            Ok(Evaluated::Complete(rows)),
+                                        ));
+                                        continue;
+                                    }
+                                    StreamKind::Dedup(_) => {
+                                        let StreamKind::Dedup(state) =
+                                            &mut self.stream_mut(target)?.kind
+                                        else {
+                                            unreachable!("dedup stream retains its state");
+                                        };
+                                        let rows = state.apply(block, &ctx.growth)?;
+                                        event = DeliveryEvent::Transformed(finish_ordinary_active(
+                                            &mut self.active,
+                                            ctx,
+                                            node,
+                                            Ok(Evaluated::Complete(rows)),
+                                        ));
+                                        continue;
+                                    }
+                                    StreamKind::Graph(sequence) => {
+                                        let (rows, producer) =
+                                            sequence.delivery_block(block, ctx)?;
+                                        let frame = self
+                                            .pending
+                                            .last_mut()
+                                            .or(self.first.as_mut())
+                                            .expect("published graph delivery");
+                                        let OrdinaryAfter::Delivery { state, .. } =
+                                            &mut frame.after
+                                        else {
+                                            unreachable!(
+                                                "graph block retains its delivery continuation"
+                                            );
+                                        };
+                                        state.graph_restore = Some(producer);
+                                        event = DeliveryEvent::Transformed(finish_ordinary_active(
+                                            &mut self.active,
+                                            ctx,
+                                            node,
+                                            Ok(Evaluated::Complete(rows)),
+                                        ));
+                                        continue;
+                                    }
+                                    StreamKind::BinaryRight { .. } => Err(EvalError::internal(
+                                        "binary right operand received streamed delivery",
+                                    )),
+                                };
+                            let sequence =
+                                computation?.expect("an expression delivery retains its VM");
+                            match self.advance_expression(consumer.clone(), node, sequence, ctx)? {
+                                OrdinaryAdvance::Complete(done) => DeliveryEvent::Transformed(
+                                    finish_ordinary_active(&mut self.active, ctx, node, Ok(done)),
+                                ),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    return Ok(DeliveryAdvance::Function(invocation));
+                                }
+                                OrdinaryAdvance::Descend(next) => {
+                                    return Ok(DeliveryAdvance::Descend(next));
+                                }
+                                OrdinaryAdvance::Consumed(stopped) => {
+                                    DeliveryEvent::Consumed { stopped }
+                                }
+                            }
+                        }
+                    }
+                }
+                DeliveryEvent::Transformed(evaluated) => {
+                    let OrdinaryFrame {
+                        position,
+                        boundary,
+                        after,
+                    } = self.pop().ok_or_else(|| {
+                        EvalError::internal("delivery completion has no producer")
+                    })?;
+                    self.active = Some(boundary);
+                    let OrdinaryAfter::Delivery {
+                        mut state,
+                        _allocation: allocation,
+                    } = after
+                    else {
+                        return Err(EvalError::internal(
+                            "delivery completion reached another continuation",
+                        ));
+                    };
+                    let node = self.frame_mut(state.target)?.position.clone();
+                    let consumer = self.stream_mut(state.target)?;
+                    let rows = match evaluated {
+                        Err(error) => {
+                            if let Some(graph) = state.graph_restore.take() {
+                                ctx.active_graph = graph;
+                            }
+                            self.active.as_mut().expect("restored producer").delivery =
+                                DeliveryTarget::None;
+                            let error = finish_ordinary_active(
+                                &mut self.active,
+                                ctx,
+                                position.pattern(),
+                                Err(error),
+                            );
+                            return Ok(DeliveryAdvance::Complete(position, error));
+                        }
+                        Ok(Evaluated::Complete(rows))
+                            if matches!(
+                                consumer.kind,
+                                StreamKind::Union { .. }
+                                    | StreamKind::Graph(_)
+                                    | StreamKind::Application(_)
+                            ) =>
+                        {
+                            Some(rows)
+                        }
+                        Ok(evaluated) => {
+                            let mut lift = consumer
+                                .lift
+                                .take()
+                                .expect("retained delivery lift")
+                                .attach(node.pattern());
+                            let rows = lift.absorb(0, evaluated);
+                            consumer.lift = Some(lift.detach());
+                            rows
+                        }
+                    };
+                    if let Some(rows) = rows {
+                        let target = consumer.target;
+                        state.output = Some(rows.clone());
+                        self.push_parent(
+                            position.clone(),
+                            OrdinaryAfter::Delivery {
+                                state,
+                                _allocation: allocation,
+                            },
+                        );
+                        self.active = Some(NodeBoundary::delivery_overlay(None));
+                        DeliveryEvent::Offer {
+                            position,
+                            target,
+                            block: rows,
+                            resume: DeliveryResume::Acknowledge,
+                        }
+                    } else {
+                        consumer.busy = false;
+                        consumer.stopped = true;
+                        DeliveryEvent::Acknowledged {
+                            position,
+                            resume: state.resume,
+                            stopped: true,
+                        }
+                    }
+                }
+                DeliveryEvent::Acknowledged {
+                    position,
+                    resume,
+                    stopped,
+                } => match resume {
+                    DeliveryResume::ApplicationContinue(target) => DeliveryEvent::ApplicationNext {
+                        target,
+                        advance: true,
+                    },
+                    DeliveryResume::Node(evaluated) => DeliveryEvent::Original {
+                        position,
+                        evaluated,
+                        stopped,
+                    },
+                    DeliveryResume::Acknowledge => {
+                        if let Some(active) = &mut self.active {
+                            active.abort(ctx);
+                        }
+                        let OrdinaryFrame {
+                            position,
+                            boundary,
+                            after,
+                        } = self.pop().ok_or_else(|| {
+                            EvalError::internal("delivery acknowledgement has no producer")
+                        })?;
+                        self.active = Some(boundary);
+                        let OrdinaryAfter::Delivery {
+                            mut state,
+                            _allocation: allocation,
+                        } = after
+                        else {
+                            return Err(EvalError::internal(
+                                "delivery acknowledgement reached another continuation",
+                            ));
+                        };
+                        if let Some(graph) = state.graph_restore.take() {
+                            ctx.active_graph = graph;
+                        }
+                        let consumer = self.stream_mut(state.target)?;
+                        let output = state.output.take().ok_or_else(|| {
+                            EvalError::internal("forwarded delivery block is absent")
+                        })?;
+                        if let StreamKind::Slice {
+                            index,
+                            kept,
+                            schema,
+                            rows,
+                            length,
+                            ..
+                        } = &mut consumer.kind
+                        {
+                            *schema = Some(output.schema);
+                            for row in output.rows {
+                                rows.push_row(row)?;
+                            }
+                            *kept = kept.saturating_add(1);
+                            *index = index.saturating_add(1);
+                            let stopped = stopped || length.is_some_and(|limit| *kept >= limit);
+                            consumer.stopped |= stopped;
+                            self.push_parent(
+                                position,
+                                OrdinaryAfter::Delivery {
+                                    state,
+                                    _allocation: allocation,
+                                },
+                            );
+                            self.active = Some(NodeBoundary::delivery_overlay(None));
+                            event = DeliveryEvent::SliceNext { stopped };
+                            continue;
+                        }
+                        let count = output.rows.len();
+                        if !matches!(
+                            consumer.kind,
+                            StreamKind::Union { .. } | StreamKind::Graph(_)
+                        ) {
+                            consumer.blocks.push(output)?;
+                        }
+                        let stopped =
+                            if let StreamKind::Application(application) = &mut consumer.kind {
+                                application.emitted = application.emitted.saturating_add(count);
+                                stopped
+                                    || application
+                                        .ceiling
+                                        .is_some_and(|limit| application.emitted >= limit)
+                            } else {
+                                stopped
+                            };
+                        if !state.application_right {
+                            consumer.busy = false;
+                        }
+                        consumer.stopped |= stopped;
+                        DeliveryEvent::Acknowledged {
+                            position,
+                            resume: state.resume,
+                            stopped,
+                        }
+                    }
+                },
+                DeliveryEvent::Consumed { stopped } => {
+                    if let Some(active) = &mut self.active {
+                        active.abort(ctx);
+                    }
+                    let OrdinaryFrame {
+                        position,
+                        boundary,
+                        after,
+                    } = self
+                        .pop()
+                        .ok_or_else(|| EvalError::internal("consumed delivery has no producer"))?;
+                    self.active = Some(boundary);
+                    let OrdinaryAfter::Delivery { state, .. } = after else {
+                        return Err(EvalError::internal(
+                            "consumed delivery reached another continuation",
+                        ));
+                    };
+                    let consumer = self.stream_mut(state.target)?;
+                    consumer.busy = false;
+                    consumer.stopped |= stopped;
+                    DeliveryEvent::Acknowledged {
+                        position,
+                        resume: state.resume,
+                        stopped,
+                    }
+                }
+                DeliveryEvent::SliceNext { stopped } => {
+                    if let Some(active) = &mut self.active {
+                        active.abort(ctx);
+                    }
+                    let OrdinaryFrame {
+                        position,
+                        boundary,
+                        after,
+                    } = self
+                        .pop()
+                        .ok_or_else(|| EvalError::internal("slice delivery has no producer"))?;
+                    self.active = Some(boundary);
+                    let OrdinaryAfter::Delivery {
+                        mut state,
+                        _allocation: allocation,
+                    } = after
+                    else {
+                        return Err(EvalError::internal(
+                            "slice delivery reached another continuation",
+                        ));
+                    };
+                    let consumer = self.stream_mut(state.target)?;
+                    let StreamKind::Slice { start, index, .. } = &mut consumer.kind else {
+                        return Err(EvalError::internal("slice delivery target changed"));
+                    };
+                    let (input, cursor) = state
+                        .slice_input
+                        .as_mut()
+                        .ok_or_else(|| EvalError::internal("slice delivery input is absent"))?;
+                    while !stopped && *cursor < input.rows.len() && *index < *start {
+                        *index = index.saturating_add(1);
+                        *cursor += 1;
+                    }
+                    if stopped || *cursor == input.rows.len() {
+                        consumer.busy = false;
+                        consumer.stopped |= stopped;
+                        DeliveryEvent::Acknowledged {
+                            position,
+                            resume: state.resume,
+                            stopped,
+                        }
+                    } else {
+                        let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+                        rows.push_row(input.rows[*cursor].clone_admitted(&ctx.growth)?)?;
+                        let output = SolutionSeq {
+                            schema: input.schema.clone(),
+                            rows: rows.finish()?,
+                        };
+                        *cursor += 1;
+                        state.output = Some(output.clone());
+                        let target = consumer.target;
+                        self.push_parent(
+                            position.clone(),
+                            OrdinaryAfter::Delivery {
+                                state,
+                                _allocation: allocation,
+                            },
+                        );
+                        self.active = Some(NodeBoundary::delivery_overlay(None));
+                        DeliveryEvent::Offer {
+                            position,
+                            target,
+                            block: output,
+                            resume: DeliveryResume::Acknowledge,
+                        }
+                    }
+                }
+                DeliveryEvent::ApplicationNext { target, advance } => {
+                    let consumer_position = self.frame_mut(target)?.position.clone();
+                    let node = consumer_position.pattern();
+                    let GraphPattern::Apply { right, policy, .. } = node else {
+                        return Err(EvalError::internal(
+                            "declared application delivery lost its node",
+                        ));
+                    };
+                    let consumer = self.stream_mut(target)?;
+                    let StreamKind::Application(application) = &mut consumer.kind else {
+                        return Err(EvalError::internal(
+                            "declared application delivery target changed",
+                        ));
+                    };
+                    if advance {
+                        application.ordinal += 1;
+                        application.row = None;
+                    }
+                    let drivers = application.drivers.as_ref().ok_or_else(|| {
+                        EvalError::internal("declared application has no offered drivers")
+                    })?;
+                    let retry = application
+                        .row
+                        .as_ref()
+                        .is_some_and(|row| !row.delivers_child());
+                    if (consumer.stopped && !retry) || application.ordinal >= drivers.rows.len() {
+                        application.drivers = None;
+                        event = DeliveryEvent::Consumed {
+                            stopped: consumer.stopped,
+                        };
+                        continue;
+                    }
+                    if application.row.is_none() {
+                        application.first_block = consumer.blocks.len();
+                    }
+                    if self.first.is_some() {
+                        self.pending.reserve_next()?;
+                    }
+                    let (body, allocation) = crate::workspace::box_native(
+                        ApplicationBody {
+                            target,
+                            child: None,
+                        },
+                        &ctx.growth,
+                        "streamed application body",
+                    )?;
+                    let mut pending = ResidentPending {
+                        child: Some(body),
+                        ctx,
+                    };
+                    let consumer = self.stream_mut(target)?;
+                    let StreamKind::Application(application) = &mut consumer.kind else {
+                        unreachable!("validated application target");
+                    };
+                    let drivers = application
+                        .drivers
+                        .as_ref()
+                        .expect("retained offered drivers");
+                    let (row, child) = crate::binop::ApplicationRow::prepare(
+                        application.row.take(),
+                        right,
+                        &drivers.rows[application.ordinal],
+                        &drivers.schema,
+                        policy,
+                        pending.ctx,
+                    )?;
+                    pending
+                        .child
+                        .as_mut()
+                        .expect("armed application body")
+                        .child = Some(child);
+                    let delivers = row.delivers_child();
+                    let consumer = self.stream_mut(target)?;
+                    let StreamKind::Application(application) = &mut consumer.kind else {
+                        unreachable!("validated application target");
+                    };
+                    application.row = Some(row);
+                    let next = OrdinaryPosition::Copied(
+                        pending
+                            .child
+                            .as_ref()
+                            .expect("prepared application body")
+                            .child
+                            .as_ref()
+                            .expect("installed substitution owner")
+                            .owner()
+                            .into_cursor(),
+                    );
+                    let state = pending.child.take().expect("published application body");
+                    self.push_parent(
+                        consumer_position,
+                        OrdinaryAfter::ApplicationBody {
+                            state,
+                            _allocation: allocation,
+                        },
+                    );
+                    self.next_delivery = if delivers {
+                        DeliveryTarget::ApplicationRight(target)
+                    } else {
+                        DeliveryTarget::None
+                    };
+                    return Ok(DeliveryAdvance::Descend(next));
+                }
+            };
+        }
+    }
+
+    fn begin_stream<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        position: &OrdinaryPosition<'a>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Option<StreamStart<'a, I>>, EvalError> {
+        let target = self
+            .active
+            .as_ref()
+            .expect("entered delivery producer")
+            .delivery;
+        if self
+            .active
+            .as_ref()
+            .expect("entered delivery producer")
+            .physical
+            .is_some()
+        {
+            return Ok(None);
+        }
+        let node = position.pattern();
+        let contextual = self
+            .special_application_policy(node)
+            .and_then(|policy| policy.group_domain.as_deref());
+        let contextual_group = matches!(node, GraphPattern::Group { aggregates, .. } if contextual.is_some() && !aggregates.iter().any(|(_, aggregate)| matches!(aggregate.function(), purrdf_sparql_algebra::AggregateFunction::Fold)));
+        if matches!(target, DeliveryTarget::None) && !contextual_group {
+            return Ok(None);
+        }
+        let mut graph = None;
+        let (kind, child, streamed) = match node {
+            GraphPattern::Apply { left, policy, .. }
+                if !policy.dataset_required
+                    && !policy.reduced_adjacent
+                    && policy.group_domain.is_none() =>
+            {
+                (
+                    StreamKind::Application(ApplicationStream {
+                        drivers: None,
+                        ordinal: 0,
+                        row: None,
+                        first_block: 0,
+                        emitted: 0,
+                        ceiling: ctx.row_ceiling(),
+                    }),
+                    left.as_ref(),
+                    true,
+                )
+            }
+            GraphPattern::Slice { .. } if ctx.candidate_scope.is_some() => {
+                self.active
+                    .as_mut()
+                    .expect("candidate slice boundary")
+                    .delivery_whole = true;
+                return Ok(None);
+            }
+            GraphPattern::Slice {
+                inner,
+                start,
+                length,
+            } => {
+                if *length == Some(0) {
+                    let lift = crate::governor::lift::Lift::at_admitted(node, &ctx.growth)?;
+                    let empty = SolutionSeq::empty(syntactic_schema_admitted(inner, &ctx.growth)?);
+                    self.active.as_mut().expect("empty slice boundary").delivery =
+                        DeliveryTarget::None;
+                    return Ok(Some(StreamStart::Complete(lift.finish(empty))));
+                }
+                (
+                    StreamKind::Slice {
+                        start: *start,
+                        length: *length,
+                        index: 0,
+                        kept: 0,
+                        schema: None,
+                        rows: crate::solution::RowsBuilder::new(&ctx.growth),
+                    },
+                    inner.as_ref(),
+                    true,
+                )
+            }
+            GraphPattern::Graph { name, inner } => {
+                match crate::modifier::begin_graph_child(node, name, inner, ctx)? {
+                    crate::modifier::GraphStart::Complete(done) => {
+                        self.active
+                            .as_mut()
+                            .expect("empty delivered GRAPH")
+                            .delivery = DeliveryTarget::None;
+                        return Ok(Some(StreamStart::Complete(done)));
+                    }
+                    crate::modifier::GraphStart::Sequence(mut sequence) => {
+                        let Some(next_graph) = sequence.next_delivered_graph(ctx) else {
+                            self.active
+                                .as_mut()
+                                .expect("unreached delivered GRAPH")
+                                .delivery = DeliveryTarget::None;
+                            return sequence
+                                .finish(node, inner, ctx)
+                                .map(StreamStart::Complete)
+                                .map(Some);
+                        };
+                        graph = Some(next_graph);
+                        (StreamKind::Graph(sequence), inner.as_ref(), true)
+                    }
+                }
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } if contextual_group => {
+                let owner = match position {
+                    OrdinaryPosition::Borrowed(parent) => {
+                        let GraphPattern::Group { aggregates, .. } = parent else {
+                            unreachable!("borrowed GROUP retains its node");
+                        };
+                        crate::modifier::GroupLink::Borrowed(aggregates)
+                    }
+                    OrdinaryPosition::Copied(cursor) => {
+                        crate::modifier::GroupLink::Copied(cursor.owner())
+                    }
+                };
+                let schema = crate::modifier::group_output_schema(variables, aggregates, ctx)?;
+                let sequence = crate::modifier::ContextualGroupSequence::begin(
+                    node,
+                    variables,
+                    aggregates,
+                    &owner,
+                    schema,
+                    contextual.expect("contextual GROUP domain"),
+                    ctx,
+                )?;
+                let bucket_pending = ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize);
+                (
+                    StreamKind::Group {
+                        sequence: Some(sequence),
+                        bucket_pending,
+                    },
+                    inner.as_ref(),
+                    !bucket_pending,
+                )
+            }
+            GraphPattern::Filter { inner, .. } => (
+                StreamKind::Filter { annotation: None },
+                inner.as_ref(),
+                true,
+            ),
+            GraphPattern::Extend { inner, .. } => (StreamKind::Extend, inner.as_ref(), true),
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner }
+                if crate::modifier::dedup_streaming_safe(inner, ctx) =>
+            {
+                (
+                    StreamKind::Dedup(crate::modifier::DeliveryDedup::new(
+                        self.special_application_policy(node)
+                            .is_some_and(|policy| policy.reduced_adjacent),
+                        &ctx.growth,
+                    )),
+                    inner.as_ref(),
+                    true,
+                )
+            }
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => (
+                StreamKind::Project {
+                    endpoint_depth: ctx.endpoint_frames.len(),
+                },
+                inner.as_ref(),
+                true,
+            ),
+            GraphPattern::Union { arms } if !arms.is_empty() => {
+                (StreamKind::Union { ordinal: 0 }, &arms[0], true)
+            }
+            GraphPattern::Union { .. } => {
+                let lift = crate::governor::lift::Lift::at_admitted(node, &ctx.growth)?;
+                let rows = crate::binop::concat_union(std::iter::empty(), ctx)?;
+                self.active
+                    .as_mut()
+                    .expect("empty delivered UNION")
+                    .delivery = DeliveryTarget::None;
+                return Ok(Some(StreamStart::Complete(lift.finish(rows))));
+            }
+            GraphPattern::Join { right, .. } => (
+                StreamKind::BinaryRight { minus: false },
+                right.as_ref(),
+                false,
+            ),
+            GraphPattern::Minus { right, .. } => (
+                StreamKind::BinaryRight { minus: true },
+                right.as_ref(),
+                false,
+            ),
+            _ => return Ok(None),
+        };
+        let next = self.reserve_child(position, child)?;
+        let lift = if matches!(
+            kind,
+            StreamKind::Group {
+                bucket_pending: false,
+                ..
+            } | StreamKind::Graph(_)
+        ) {
+            None
+        } else {
+            Some(crate::governor::lift::Lift::at_admitted(node, &ctx.growth)?.detach())
+        };
+        let (mut state, allocation) = crate::workspace::box_native(
+            StreamSequence {
+                target,
+                lift,
+                blocks: crate::AdmittedVec::new(&ctx.growth),
+                kind,
+                stopped: false,
+                busy: false,
+            },
+            &ctx.growth,
+            "streamed graph continuation",
+        )?;
+        let range = if let GraphPattern::Filter { expr, inner } = node {
+            if matches!(inner.as_ref(), GraphPattern::Bgp { .. }) {
+                crate::expr::annotation_range_constraint(expr, &ctx.growth)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        match &mut state.kind {
+            StreamKind::Filter { annotation } => {
+                *annotation = std::mem::replace(&mut ctx.annotation_range, range);
+            }
+            StreamKind::Project { .. } => {
+                let variables = match node {
+                    GraphPattern::Project { variables, .. } => {
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(variables)
+                    }
+                    GraphPattern::ProjectStar { variables, .. } => {
+                        purrdf_sparql_algebra::ProjectionNames::Star(variables)
+                    }
+                    _ => unreachable!("projected stream retains its node"),
+                };
+                crate::service_endpoints::enter_projected(variables, ctx)?;
+            }
+            _ => {}
+        }
+        self.active.as_mut().expect("entered stream").delivery = DeliveryTarget::None;
+        if let Some(graph) = graph {
+            ctx.active_graph = graph;
+        }
+        let token = if self.first.is_some() {
+            self.pending.len() + 1
+        } else {
+            0
+        };
+        self.push_parent(
+            position.clone(),
+            OrdinaryAfter::Stream {
+                state,
+                _allocation: allocation,
+            },
+        );
+        self.next_delivery = if streamed {
+            DeliveryTarget::Parent(token)
+        } else {
+            DeliveryTarget::None
+        };
+        Ok(Some(StreamStart::Descend(next)))
+    }
+
+    fn special_application_policy(
+        &self,
+        node: &GraphPattern,
+    ) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
+        self.pending
+            .iter()
+            .rev()
+            .chain(self.first.iter())
+            .find_map(|frame| {
+                if !matches!(frame.after, OrdinaryAfter::ApplicationSpecialRight { .. }) {
+                    return None;
+                }
+                let GraphPattern::Apply { right, policy, .. } = frame.position.pattern() else {
+                    return None;
+                };
+                std::ptr::eq(right.as_ref(), node).then_some(policy.as_ref())
+            })
+    }
+    fn reserve_child(
+        &mut self,
+        position: &OrdinaryPosition<'a>,
+        child: &GraphPattern,
+    ) -> Result<OrdinaryPosition<'a>, EvalError> {
+        let next = position.child(child)?;
+        if self.first.is_some() {
+            self.pending.reserve_next()?;
+        }
+        Ok(next)
+    }
+    fn push_parent(&mut self, position: OrdinaryPosition<'a>, after: OrdinaryAfter<'a, I>) {
+        let frame = OrdinaryFrame {
+            position,
+            boundary: self.active.take().expect("entered parent node"),
+            after,
+        };
+        if self.first.is_none() {
+            self.first = Some(frame);
+        } else {
+            self.pending.push_reserved(frame);
+        }
+    }
+
+    fn pop(&mut self) -> Option<OrdinaryFrame<'a, I>> {
         self.pending.pop().or_else(|| self.first.take())
     }
 
-    fn schedule_exists(
+    fn schedule_exists<D: DatasetView<Id = I> + Sync>(
         &mut self,
         position: OrdinaryPosition<'a>,
-        sequence: crate::expr::FilterSequence<'a, D::Id>,
-        decision: crate::expr::ExistsChild<D::Id>,
+        sequence: OrdinaryExpression<'a, I>,
+        decision: crate::expr::ExistsChild<I>,
         record: Option<crate::evidence_exec::RowEvidence>,
-    ) -> Result<OrdinaryExistsSchedule<'a, D::Id>, EvalError> {
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<OrdinaryExistsSchedule<'a, I>, EvalError> {
         if self.first.is_some() {
             self.pending.reserve_next()?;
         }
@@ -3764,7 +5340,7 @@ impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
                 child: None,
                 record,
             },
-            &self.ctx.growth,
+            &ctx.growth,
             "suspended EXISTS row",
         )?;
         let entered = state
@@ -3775,14 +5351,14 @@ impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
                 state.sequence.suspended_row(),
                 state.sequence.schema(),
                 state.record.as_mut(),
-                self.ctx,
+                ctx,
             )?;
         match entered {
             crate::expr::ExistsEntered::Complete(answer) => {
                 state.sequence.resume(
-                    Some(crate::expr::intern_boolean(self.ctx, answer)?),
+                    Some(crate::expr::intern_boolean(ctx, answer)?),
                     state.record.take(),
-                    self.ctx,
+                    ctx,
                 )?;
                 let OrdinaryExists { sequence, .. } = *state;
                 Ok(OrdinaryExistsSchedule::Immediate(sequence))
@@ -3808,19 +5384,19 @@ impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
         }
     }
 
-    fn schedule_lateral(
+    fn schedule_correlated<D: DatasetView<Id = I> + Sync>(
         &mut self,
         position: OrdinaryPosition<'a>,
         node: &GraphPattern,
         right: &GraphPattern,
-        sequence: crate::binop::LateralSequence<D::Id>,
-    ) -> Result<OrdinaryLateralSchedule<'a, D::Id>, EvalError> {
+        sequence: OrdinaryCorrelation<I>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<OrdinaryCorrelationSchedule<'a, I>, EvalError> {
         if !sequence.has_row() {
-            let crate::binop::LateralStep::Complete(done) = sequence.step(node, right, self.ctx)?
-            else {
+            let OrdinaryCorrelationStep::Complete(done) = sequence.step(node, right, ctx)? else {
                 return Err(EvalError::internal("completed LATERAL entered another row"));
             };
-            return Ok(OrdinaryLateralSchedule::Complete(done));
+            return Ok(OrdinaryCorrelationSchedule::Complete(done));
         }
         if self.first.is_some() {
             self.pending.reserve_next()?;
@@ -3831,26 +5407,32 @@ impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
                 sequence: Some(sequence),
                 child: None,
             },
-            &self.ctx.growth,
+            &ctx.growth,
             "suspended LATERAL row",
         )?;
         match state
             .sequence
             .take()
             .expect("one LATERAL sequence")
-            .step(node, right, self.ctx)?
+            .step(node, right, ctx)?
         {
-            crate::binop::LateralStep::Complete(done) => {
-                Ok(OrdinaryLateralSchedule::Complete(done))
+            OrdinaryCorrelationStep::Complete(done) => {
+                Ok(OrdinaryCorrelationSchedule::Complete(done))
             }
-            crate::binop::LateralStep::Child(sequence, child) => {
+            OrdinaryCorrelationStep::Child(sequence, child) => {
+                self.next_delivery = if matches!(&sequence, OrdinaryCorrelation::Application(application) if application.delivers_child())
+                {
+                    DeliveryTarget::Discard
+                } else {
+                    DeliveryTarget::None
+                };
                 let next = OrdinaryPosition::Copied(child.owner().into_cursor());
                 state.sequence = Some(sequence);
                 state.child = Some(child);
                 let frame = OrdinaryFrame {
                     position,
                     boundary: self.active.take().expect("entered LATERAL parent"),
-                    after: OrdinaryAfter::LateralRight {
+                    after: OrdinaryAfter::CorrelatedRight {
                         state,
                         _allocation: allocation,
                     },
@@ -3860,42 +5442,129 @@ impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
                 } else {
                     self.pending.push_reserved(frame);
                 }
-                Ok(OrdinaryLateralSchedule::Descend(next))
+                Ok(OrdinaryCorrelationSchedule::Descend(next))
             }
         }
     }
 
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the copied position retains its tree owner across each suspended row"
-    )]
-    fn advance_filter(
+    fn advance_expression<'d, D: DatasetView<Id = I> + Sync>(
         &mut self,
         position: OrdinaryPosition<'a>,
         node: &GraphPattern,
-        expression: &purrdf_sparql_algebra::Expression,
-        mut sequence: crate::expr::FilterSequence<'a, D::Id>,
-    ) -> Result<OrdinaryAdvance<'a, D::Id>, EvalError> {
+        mut sequence: OrdinaryExpression<'a, I>,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<OrdinaryAdvance<'a, 'd, D>, EvalError> {
         loop {
-            match step_ordinary_filter(sequence, node, expression, self.ctx)? {
-                OrdinaryFilterStep::Complete(done) => return Ok(OrdinaryAdvance::Complete(done)),
-                OrdinaryFilterStep::Child {
-                    sequence: pending,
-                    decision,
-                    record,
-                } => match self.schedule_exists(position.clone(), pending, decision, record)? {
-                    OrdinaryExistsSchedule::Immediate(resumed) => sequence = resumed,
-                    OrdinaryExistsSchedule::Descend(next) => {
-                        return Ok(OrdinaryAdvance::Descend(next));
+            let domain = self
+                .special_application_policy(node)
+                .and_then(|policy| policy.group_domain.as_deref());
+            match sequence.step(node, domain, ctx)? {
+                ExpressionStep::GroupBlock(sequence, stopped) => {
+                    let frame = self.pending.last().or(self.first.as_ref()).ok_or_else(|| {
+                        EvalError::internal("contextual GROUP delivery parent missing")
+                    })?;
+                    let OrdinaryAfter::Delivery { state, .. } = &frame.after else {
+                        return Err(EvalError::internal(
+                            "contextual GROUP block completed outside delivery",
+                        ));
+                    };
+                    let target = state.target;
+                    let StreamKind::Group { sequence: slot, .. } =
+                        &mut self.stream_mut(target)?.kind
+                    else {
+                        return Err(EvalError::internal(
+                            "contextual GROUP delivery target changed",
+                        ));
+                    };
+                    *slot = Some(sequence);
+                    if let Some(active) = &mut self.active {
+                        active.abort(ctx);
                     }
-                },
+                    self.active = None;
+                    return Ok(OrdinaryAdvance::Consumed(stopped));
+                }
+                ExpressionStep::Complete(done) => return Ok(OrdinaryAdvance::Complete(done)),
+                ExpressionStep::Suspend(mut pending, crate::vm::Suspend::Exists(site)) => {
+                    let (decision, record) = pending.prepare_exists(site, node, ctx)?;
+                    match decision {
+                        crate::expr::ExistsDecision::Complete(answer) => {
+                            pending.resume(
+                                Some(crate::expr::intern_boolean(ctx, answer)?),
+                                record,
+                                ctx,
+                            )?;
+                            sequence = pending;
+                        }
+                        crate::expr::ExistsDecision::Child(decision) => {
+                            match self.schedule_exists(
+                                position.clone(),
+                                pending,
+                                decision,
+                                record,
+                                ctx,
+                            )? {
+                                OrdinaryExistsSchedule::Immediate(resumed) => sequence = resumed,
+                                OrdinaryExistsSchedule::Descend(next) => {
+                                    return Ok(OrdinaryAdvance::Descend(next));
+                                }
+                            }
+                        }
+                    }
+                }
+                ExpressionStep::Suspend(
+                    mut pending,
+                    crate::vm::Suspend::SparqlUdf {
+                        func,
+                        body,
+                        call,
+                        vals,
+                    },
+                ) => {
+                    let invocation = crate::user_fn::prepare_user_function(
+                        func,
+                        body,
+                        pending.custom_iri(call)?,
+                        &vals,
+                        ctx,
+                    )?;
+                    let Some(invocation) = invocation else {
+                        pending.resume(None, None, ctx)?;
+                        sequence = pending;
+                        continue;
+                    };
+                    if self.first.is_some() {
+                        self.pending.reserve_next()?;
+                    }
+                    let (state, allocation) = crate::workspace::box_native(
+                        OrdinaryFunction {
+                            sequence: pending,
+                            call,
+                        },
+                        &ctx.growth,
+                        "suspended function row",
+                    )?;
+                    let frame = OrdinaryFrame {
+                        position,
+                        boundary: self.active.take().expect("entered function parent"),
+                        after: OrdinaryAfter::Function {
+                            state,
+                            _allocation: allocation,
+                        },
+                    };
+                    if self.first.is_none() {
+                        self.first = Some(frame);
+                    } else {
+                        self.pending.push_reserved(frame);
+                    }
+                    return Ok(OrdinaryAdvance::Function(invocation));
+                }
             }
         }
     }
 }
 
 fn finish_ordinary_active<D: DatasetView + Sync>(
-    active: &mut Option<NodeBoundary>,
+    active: &mut Option<NodeBoundary<D::Id>>,
     ctx: &mut EvalCtx<'_, D>,
     pattern: &GraphPattern,
     evaluated: Result<Evaluated<D::Id>, EvalError>,
@@ -3904,141 +5573,732 @@ fn finish_ordinary_active<D: DatasetView + Sync>(
         .as_mut()
         .expect("one entered ordinary node")
         .finish(pattern, ctx, evaluated);
-    *active = None;
+    if !active.as_ref().is_some_and(NodeBoundary::awaiting_delivery) {
+        *active = None;
+    }
     result
 }
 
-impl<D: DatasetView + Sync> Drop for OrdinaryRunner<'_, '_, '_, D> {
-    fn drop(&mut self) {
+impl<I: ViewTermId> OrdinaryState<'_, I> {
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            active: None,
+            first: None,
+            pending: crate::AdmittedVec::new(workspace),
+            next_delivery: DeliveryTarget::None,
+        }
+    }
+    fn abort<D: DatasetView<Id = I> + Sync>(&mut self, ctx: &mut EvalCtx<'_, D>) {
         if let Some(active) = &mut self.active {
-            active.abort(self.ctx);
+            active.abort(ctx);
         }
         while let Some(mut frame) = self.pending.pop().or_else(|| self.first.take()) {
             if let OrdinaryAfter::Exists { state, .. } = &mut frame.after
                 && let Some(child) = &mut state.child
             {
-                child.abort(self.ctx);
+                child.abort(ctx);
             }
-            if let OrdinaryAfter::LateralRight { state, .. } = &mut frame.after
+            if let OrdinaryAfter::CorrelatedRight { state, .. } = &mut frame.after
                 && let Some(child) = &mut state.child
             {
-                child.abort(self.ctx);
+                child.abort(ctx);
             }
-            frame.boundary.abort(self.ctx);
+            if let OrdinaryAfter::Project { endpoint_depth, .. }
+            | OrdinaryAfter::BinarySecond { endpoint_depth, .. }
+            | OrdinaryAfter::MinusPartition { endpoint_depth, .. } = &frame.after
+            {
+                ctx.endpoint_frames.truncate(*endpoint_depth);
+            }
+            if let OrdinaryAfter::Graph { state, .. } = &frame.after {
+                ctx.active_graph = state.saved_graph();
+            }
+            if let OrdinaryAfter::Stream { state, .. } = &mut frame.after {
+                state.abort(ctx);
+            }
+            if let OrdinaryAfter::Delivery { state, .. } = &mut frame.after
+                && let Some(graph) = state.graph_restore.take()
+            {
+                ctx.active_graph = graph;
+            }
+            if let OrdinaryAfter::ApplicationBody { state, .. } = &mut frame.after {
+                state.abort(ctx);
+            }
+            frame.boundary.abort(ctx);
         }
     }
+}
+impl<D: DatasetView + Sync> Drop for OrdinaryRunner<'_, '_, '_, D> {
+    fn drop(&mut self) {
+        self.state.abort(self.ctx);
+    }
+}
+
+type FunctionValue = (Option<TermValue>, Option<crate::evidence_exec::RowEvidence>);
+
+enum OrdinaryEntry<'a> {
+    Pattern(OrdinaryPosition<'a>),
+    Literal(OrdinaryPosition<'a>),
+    Function(FunctionValue),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+enum OrdinaryPoll<'a, 'd, D: DatasetView + Sync> {
+    Complete(Evaluated<D::Id>),
+    Function(
+        OrdinaryState<'a, D::Id>,
+        crate::user_fn::UserInvocation<'d, 'd, D>,
+    ),
+}
+
+impl<'a, 'd, D: DatasetView + Sync> OrdinaryRunner<'a, '_, 'd, D> {
+    fn suspend(
+        &mut self,
+        invocation: crate::user_fn::UserInvocation<'d, 'd, D>,
+    ) -> OrdinaryPoll<'a, 'd, D> {
+        let state = std::mem::replace(&mut self.state, OrdinaryState::new(&self.ctx.growth));
+        OrdinaryPoll::Function(state, invocation)
+    }
+}
+
+/// Flat child frames own their contexts and immutable bodies, never their parents.
+struct QueryFrame<'a, 'd, D: DatasetView + Sync> {
+    state: Option<OrdinaryState<'a, D::Id>>,
+    invocation: crate::user_fn::UserInvocation<'d, 'd, D>,
+}
+
+struct QueryDriver<'a, 'ctx, 'd, D: DatasetView + Sync> {
+    frames: crate::AdmittedVec<QueryFrame<'a, 'd, D>>,
+    root_state: Option<OrdinaryState<'a, D::Id>>,
+    root: &'ctx mut EvalCtx<'d, D>,
+    root_iri: Option<&'a str>,
+}
+
+enum DriverResult<I: ViewTermId> {
+    Graph(Evaluated<I>),
+    Function(FunctionValue),
+}
+
+impl<D: DatasetView + Sync> Drop for QueryDriver<'_, '_, '_, D> {
+    fn drop(&mut self) {
+        while let Some(mut frame) = self.frames.pop() {
+            if let Some(state) = &mut frame.state {
+                state.abort(&mut frame.invocation.child);
+            }
+        }
+        if let Some(state) = &mut self.root_state {
+            state.abort(self.root);
+        }
+    }
+}
+
+fn function_identity<'a, I: ViewTermId>(
+    state: &'a OrdinaryState<'_, I>,
+) -> Result<&'a str, EvalError> {
+    let frame = state
+        .pending
+        .last()
+        .or(state.first.as_ref())
+        .ok_or_else(|| EvalError::internal("function caller frame is absent"))?;
+    let OrdinaryAfter::Function { state, .. } = &frame.after else {
+        return Err(EvalError::internal(
+            "function caller has another continuation",
+        ));
+    };
+    state.sequence.custom_iri(state.call)
 }
 
 fn eval_ordinary_chain<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    // A single ordinary graph-child suspension keeps its parent inline.
-    // Only an actual nested suspension needs the admitted spill buffer.
-    let mut runner = OrdinaryRunner {
-        pending: crate::AdmittedVec::new(&ctx.growth),
-        ctx,
-        active: None,
-        first: None,
+    eval_ordinary_chain_with_delivery(pattern, None, false, ctx)
+}
+
+fn eval_ordinary_chain_with_delivery<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    delivery: Option<&mut RowConsumer<'_, D>>,
+    literal: bool,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut root_state = OrdinaryState::new(&ctx.growth);
+    if delivery.is_some() {
+        root_state.next_delivery = DeliveryTarget::External;
+    }
+    let mut driver = QueryDriver {
+        frames: crate::AdmittedVec::new(&ctx.growth),
+        root_state: Some(root_state),
+        root: ctx,
+        root_iri: None,
     };
-    let mut current = OrdinaryPosition::Borrowed(pattern);
-    'drive: loop {
-        let mut completed = loop {
-            let current_pattern = current.pattern();
-            match NodeBoundary::enter(current_pattern, runner.ctx) {
-                Ok(boundary) => runner.active = Some(boundary),
-                Err(error) => break Err(error),
-            }
-            match runner
-                .active
-                .as_mut()
-                .expect("entered node")
-                .start(current_pattern, runner.ctx)
-            {
-                Ok(Some(early)) => {
-                    break finish_ordinary_active(
-                        &mut runner.active,
-                        &mut *runner.ctx,
-                        current_pattern,
-                        Ok(early),
-                    );
+    let entry = if literal {
+        OrdinaryEntry::Literal(OrdinaryPosition::Borrowed(pattern))
+    } else {
+        OrdinaryEntry::Pattern(OrdinaryPosition::Borrowed(pattern))
+    };
+    match run_query_driver(&mut driver, entry, delivery)? {
+        DriverResult::Graph(done) => Ok(done),
+        DriverResult::Function(_) => Err(EvalError::internal(
+            "a graph entry returned as a function value",
+        )),
+    }
+}
+
+pub(crate) fn evaluate_user_invocation<'d, D: DatasetView + Sync>(
+    mut invocation: crate::user_fn::UserInvocation<'d, 'd, D>,
+    iri: &str,
+    ctx: &mut EvalCtx<'d, D>,
+) -> Result<FunctionValue, EvalError> {
+    let mut driver = QueryDriver {
+        frames: crate::AdmittedVec::new(&ctx.growth),
+        root_state: None,
+        root: ctx,
+        root_iri: Some(iri),
+    };
+    driver.frames.reserve_next()?;
+    begin_query_evaluated(&invocation.query.query, None, &mut invocation.child)?;
+    let position = crate::expr::PreparedPattern::Query(invocation.query.clone()).into_cursor();
+    driver.frames.push_reserved(QueryFrame {
+        state: Some(OrdinaryState::new(&invocation.child.growth)),
+        invocation,
+    });
+    match run_query_driver(
+        &mut driver,
+        OrdinaryEntry::Pattern(OrdinaryPosition::Copied(position)),
+        None,
+    )? {
+        DriverResult::Function(value) => Ok(value),
+        DriverResult::Graph(_) => Err(EvalError::internal(
+            "a function entry returned as a graph result",
+        )),
+    }
+}
+
+fn run_query_driver<'a, D: DatasetView + Sync>(
+    driver: &mut QueryDriver<'a, '_, '_, D>,
+    mut entry: OrdinaryEntry<'a>,
+    mut delivery: Option<&mut RowConsumer<'_, D>>,
+) -> Result<DriverResult<D::Id>, EvalError> {
+    loop {
+        let polled = if let Some(frame) = driver.frames.last_mut() {
+            run_ordinary(
+                frame.state.take().expect("one active child query"),
+                entry,
+                &mut frame.invocation.child,
+                delivery.as_deref_mut(),
+            )?
+        } else {
+            run_ordinary(
+                driver.root_state.take().expect("one active root query"),
+                entry,
+                driver.root,
+                delivery.as_deref_mut(),
+            )?
+        };
+        match polled {
+            OrdinaryPoll::Function(state, mut invocation) => {
+                if let Some(frame) = driver.frames.last_mut() {
+                    frame.state = Some(state);
+                } else {
+                    driver.root_state = Some(state);
                 }
-                Err(error) => {
-                    break finish_ordinary_active(
-                        &mut runner.active,
-                        &mut *runner.ctx,
-                        current_pattern,
-                        Err(error),
-                    );
-                }
-                Ok(None) => {}
+                // Retained frame backing storage precedes entry into the child body.
+                driver.frames.reserve_next()?;
+                begin_query_evaluated(&invocation.query.query, None, &mut invocation.child)?;
+                let position =
+                    crate::expr::PreparedPattern::Query(invocation.query.clone()).into_cursor();
+                let child_state = OrdinaryState::new(&invocation.child.growth);
+                driver.frames.push_reserved(QueryFrame {
+                    state: Some(child_state),
+                    invocation,
+                });
+                entry = OrdinaryEntry::Pattern(OrdinaryPosition::Copied(position));
             }
-            if matches!(current_pattern, GraphPattern::Join { .. })
-                && runner.ctx.positive_region(current_pattern).is_none()
-            {
-                let evaluated = eval_numbered_node(current_pattern, runner.ctx);
-                break finish_ordinary_active(
-                    &mut runner.active,
-                    &mut *runner.ctx,
-                    current_pattern,
-                    evaluated,
-                );
-            }
-            match precomputed_evaluated(current_pattern, runner.ctx) {
-                Ok(Some(evaluated)) => {
-                    break finish_ordinary_active(
-                        &mut runner.active,
-                        &mut *runner.ctx,
-                        current_pattern,
-                        Ok(evaluated),
-                    );
-                }
-                Err(error) => {
-                    break finish_ordinary_active(
-                        &mut runner.active,
-                        &mut *runner.ctx,
-                        current_pattern,
-                        Err(error),
-                    );
-                }
-                Ok(None) => {}
-            }
-            if let GraphPattern::Filter { expr, inner } = current_pattern
-                && matches!(inner.as_ref(), GraphPattern::Bgp { .. })
-            {
-                let ranges = crate::expr::annotation_range_constraint(expr, &runner.ctx.growth);
-                let evaluated = match ranges {
-                    Ok(Some(ranges)) => Some(crate::expr::eval_filter_range(
-                        current_pattern,
-                        expr,
-                        inner,
-                        Some(ranges),
-                        runner.ctx,
-                    )),
-                    Ok(None) => None,
-                    Err(error) => Some(Err(error)),
+            OrdinaryPoll::Complete(done) => {
+                let Some(mut frame) = driver.frames.pop() else {
+                    return Ok(DriverResult::Graph(done));
                 };
-                if let Some(evaluated) = evaluated {
-                    break finish_ordinary_active(
-                        &mut runner.active,
-                        &mut *runner.ctx,
-                        current_pattern,
-                        evaluated,
-                    );
+                let outcome = finish_solution_query(
+                    &frame.invocation.query.query,
+                    done,
+                    &mut frame.invocation.child,
+                )?;
+                if driver.frames.is_empty() && driver.root_state.is_none() {
+                    let iri = driver.root_iri.ok_or_else(|| {
+                        EvalError::internal("direct function entry lost its call identity")
+                    })?;
+                    return crate::user_fn::finish_user_function(
+                        frame.invocation,
+                        outcome,
+                        iri,
+                        driver.root,
+                    )
+                    .map(DriverResult::Function);
+                }
+                let returned = if let Some(parent) = driver.frames.last_mut() {
+                    let iri =
+                        function_identity(parent.state.as_ref().expect("suspended parent query"))?;
+                    crate::user_fn::finish_user_function(
+                        frame.invocation,
+                        outcome,
+                        iri,
+                        &mut parent.invocation.child,
+                    )?
+                } else {
+                    let iri = function_identity(
+                        driver.root_state.as_ref().expect("suspended root query"),
+                    )?;
+                    crate::user_fn::finish_user_function(
+                        frame.invocation,
+                        outcome,
+                        iri,
+                        driver.root,
+                    )?
+                };
+                entry = OrdinaryEntry::Function(returned);
+            }
+        }
+    }
+}
+
+fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
+    state: OrdinaryState<'a, D::Id>,
+    entry: OrdinaryEntry<'a>,
+    ctx: &mut EvalCtx<'d, D>,
+    mut delivery: Option<&mut RowConsumer<'_, D>>,
+) -> Result<OrdinaryPoll<'a, 'd, D>, EvalError> {
+    let mut runner = OrdinaryRunner { state, ctx };
+    let mut ready = None;
+    let mut literal_root = false;
+    let mut current = match entry {
+        OrdinaryEntry::Pattern(position) => position,
+        OrdinaryEntry::Literal(position) => {
+            literal_root = true;
+            position
+        }
+        OrdinaryEntry::Function((value, record)) => {
+            let frame = runner
+                .state
+                .pop()
+                .ok_or_else(|| EvalError::internal("function caller is absent"))?;
+            let OrdinaryFrame {
+                position,
+                boundary,
+                after,
+            } = frame;
+            runner.state.active = Some(boundary);
+            let OrdinaryAfter::Function { mut state, .. } = after else {
+                return Err(EvalError::internal(
+                    "function returned to another continuation",
+                ));
+            };
+            let node = position.pattern();
+            let advanced = (|| {
+                let value = value
+                    .map(|value| crate::expr::intern(runner.ctx, value))
+                    .transpose()?
+                    .flatten();
+                state.sequence.resume(value, record, runner.ctx)?;
+                runner
+                    .state
+                    .advance_expression(position.clone(), node, state.sequence, runner.ctx)
+            })();
+            match advanced {
+                Ok(OrdinaryAdvance::Consumed(stopped)) => {
+                    match runner.state.advance_delivery(
+                        DeliveryEvent::Consumed { stopped },
+                        delivery.as_deref_mut(),
+                        runner.ctx,
+                    )? {
+                        DeliveryAdvance::Complete(position, evaluated) => {
+                            ready = Some(evaluated);
+                            position
+                        }
+                        DeliveryAdvance::Function(invocation) => {
+                            return Ok(runner.suspend(invocation));
+                        }
+                        DeliveryAdvance::Descend(next) => next,
+                    }
+                }
+                Ok(OrdinaryAdvance::Descend(next)) => next,
+                Ok(OrdinaryAdvance::Function(invocation)) => return Ok(runner.suspend(invocation)),
+                other => {
+                    ready = Some(finish_ordinary_active(
+                        &mut runner.state.active,
+                        runner.ctx,
+                        node,
+                        other.and_then(|done| match done {
+                            OrdinaryAdvance::Complete(done) => Ok(done),
+                            _ => Err(EvalError::internal(
+                                "missing returned expression completion",
+                            )),
+                        }),
+                    ));
+                    position
                 }
             }
-            let after = match current_pattern {
-                GraphPattern::LeftJoin { .. } => Ok(Some(OrdinaryAfter::OptionalLeft)),
-                GraphPattern::Filter { .. } => {
-                    crate::governor::lift::Lift::at_admitted(current_pattern, &runner.ctx.growth)
+        }
+    };
+    'drive: loop {
+        let mut completed = if let Some(done) = ready.take() {
+            done
+        } else {
+            loop {
+                let current_pattern = current.pattern();
+                let literal = std::mem::take(&mut literal_root);
+                if literal {
+                    runner.state.active = Some(NodeBoundary::delivery_overlay(None));
+                } else {
+                    match NodeBoundary::enter(current_pattern, runner.ctx) {
+                        Ok(mut boundary) => {
+                            boundary.delivery = std::mem::take(&mut runner.state.next_delivery);
+                            runner.state.active = Some(boundary);
+                        }
+                        Err(error) => break Err(error),
+                    }
+                }
+                if !literal {
+                    match runner
+                        .state
+                        .active
+                        .as_mut()
+                        .expect("entered node")
+                        .start(current_pattern, runner.ctx)
+                    {
+                        Ok(Some(early)) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                &mut *runner.ctx,
+                                current_pattern,
+                                Ok(early),
+                            );
+                        }
+                        Err(error) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                &mut *runner.ctx,
+                                current_pattern,
+                                Err(error),
+                            );
+                        }
+                        Ok(None) => {}
+                    }
+                }
+                if !literal
+                    && matches!(current_pattern, GraphPattern::Join { .. })
+                    && runner.ctx.positive_region(current_pattern).is_none()
+                    && !runner
+                        .state
+                        .active
+                        .as_ref()
+                        .expect("entered node")
+                        .awaiting_delivery()
+                {
+                    #[cfg(test)]
+                    {
+                        runner.ctx.temporary_positive_numberings += 1;
+                    }
+                    let tree = match crate::plan::Tree::build_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    ) {
+                        Ok(tree) => tree,
+                        Err(error) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Err(error),
+                            );
+                        }
+                    };
+                    let restore = runner.ctx.begin_positive_shape(tree.handle());
+                    runner
+                        .state
+                        .active
+                        .as_mut()
+                        .expect("armed numbered Join boundary")
+                        .positive = Some(restore);
+                }
+                let special_operand = runner
+                    .state
+                    .special_application_policy(current_pattern)
+                    .is_some();
+                match if literal || special_operand {
+                    Ok(crate::shapes::ShapeStart::Declined)
+                } else {
+                    precomputed_evaluated(current_pattern, runner.ctx)
+                } {
+                    Ok(crate::shapes::ShapeStart::Complete(evaluated)) => {
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            &mut *runner.ctx,
+                            current_pattern,
+                            Ok(evaluated),
+                        );
+                    }
+                    Err(error) => {
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            &mut *runner.ctx,
+                            current_pattern,
+                            Err(error),
+                        );
+                    }
+                    Ok(crate::shapes::ShapeStart::Native(physical)) => {
+                        let boundary = runner
+                            .state
+                            .active
+                            .as_mut()
+                            .expect("armed native shape boundary");
+                        boundary.physical = Some(physical);
+                        boundary.physical_delivery = std::mem::take(&mut boundary.delivery);
+                        boundary
+                            .physical
+                            .as_mut()
+                            .expect("owned native shape scope")
+                            .install(runner.ctx);
+                    }
+                    Ok(crate::shapes::ShapeStart::Declined) => {}
+                }
+                match runner.state.begin_stream(&current, runner.ctx) {
+                    Ok(Some(StreamStart::Descend(next))) => {
+                        current = next;
+                        continue;
+                    }
+                    Ok(Some(StreamStart::Complete(done))) => {
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            runner.ctx,
+                            current_pattern,
+                            Ok(done),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            runner.ctx,
+                            current_pattern,
+                            Err(error),
+                        );
+                    }
+                }
+                if let GraphPattern::Graph { name, inner } = current_pattern {
+                    let scheduled: Result<OrdinaryAdvance<'a, 'd, D>, EvalError> =
+                        (|| match crate::modifier::begin_graph_child(
+                            current_pattern,
+                            name,
+                            inner,
+                            runner.ctx,
+                        )? {
+                            crate::modifier::GraphStart::Complete(done) => {
+                                Ok(OrdinaryAdvance::Complete(done))
+                            }
+                            crate::modifier::GraphStart::Sequence(mut state) => {
+                                if let Some(graph) = state.next_graph(runner.ctx) {
+                                    let next = runner.state.reserve_child(&current, inner)?;
+                                    let (state, allocation) = crate::workspace::box_native(
+                                        state,
+                                        &runner.ctx.growth,
+                                        "suspended GRAPH loop",
+                                    )?;
+                                    runner.ctx.active_graph = graph;
+                                    runner.state.push_parent(
+                                        current.clone(),
+                                        OrdinaryAfter::Graph {
+                                            state,
+                                            _allocation: allocation,
+                                        },
+                                    );
+                                    Ok(OrdinaryAdvance::Descend(next))
+                                } else {
+                                    state
+                                        .finish(current_pattern, inner, runner.ctx)
+                                        .map(OrdinaryAdvance::Complete)
+                                }
+                            }
+                        })();
+                    match scheduled {
+                        Ok(OrdinaryAdvance::Descend(next)) => {
+                            current = next;
+                            continue;
+                        }
+                        other => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                other.and_then(|step| match step {
+                                    OrdinaryAdvance::Complete(done) => Ok(done),
+                                    _ => Err(EvalError::internal(
+                                        "GRAPH scheduling returned another continuation",
+                                    )),
+                                }),
+                            );
+                        }
+                    }
+                }
+                if let GraphPattern::Filter { expr, inner } = current_pattern
+                    && matches!(inner.as_ref(), GraphPattern::Bgp { .. })
+                {
+                    let ranges = crate::expr::annotation_range_constraint(expr, &runner.ctx.growth);
+                    let evaluated = match ranges {
+                        Ok(Some(ranges)) => Some(crate::expr::eval_filter_range(
+                            current_pattern,
+                            expr,
+                            inner,
+                            Some(ranges),
+                            runner.ctx,
+                        )),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    };
+                    if let Some(evaluated) = evaluated {
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            &mut *runner.ctx,
+                            current_pattern,
+                            evaluated,
+                        );
+                    }
+                }
+                let after = match current_pattern {
+                    GraphPattern::Join { left, right }
+                        if !runner.ctx.positive_region(current_pattern).unwrap_or(false) =>
+                    {
+                        let lift = crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )?
+                        .detach();
+                        crate::service_endpoints::binds_left_endpoints(left, right, runner.ctx).map(
+                            |reverse| {
+                                Some(OrdinaryAfter::BinaryFirst {
+                                    kind: OrdinaryBinary::Join,
+                                    first: usize::from(reverse),
+                                    lift,
+                                })
+                            },
+                        )
+                    }
+                    GraphPattern::Minus { .. } => crate::governor::lift::Lift::at_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    )
+                    .map(|lift| {
+                        Some(OrdinaryAfter::BinaryFirst {
+                            kind: OrdinaryBinary::Minus,
+                            first: 0,
+                            lift: lift.detach(),
+                        })
+                    }),
+                    GraphPattern::Union { arms }
+                        if !arms.is_empty()
+                            && !runner.ctx.positive_region(current_pattern).unwrap_or(false) =>
+                    {
+                        crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )
                         .map(|lift| {
-                            Some(OrdinaryAfter::Filter {
+                            Some(OrdinaryAfter::Union {
+                                blocks: crate::AdmittedVec::new(&runner.ctx.growth),
+                                ordinal: 0,
                                 lift: lift.detach(),
                             })
                         })
-                }
-                GraphPattern::Slice { start, length, .. } => {
-                    crate::governor::lift::Lift::at_admitted(current_pattern, &runner.ctx.growth)
+                    }
+                    GraphPattern::Distinct { .. } | GraphPattern::Reduced { .. } => {
+                        crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )
+                        .map(|lift| {
+                            Some(OrdinaryAfter::Dedup {
+                                lift: lift.detach(),
+                                adjacent: runner
+                                    .state
+                                    .special_application_policy(current_pattern)
+                                    .is_some_and(|policy| policy.reduced_adjacent),
+                            })
+                        })
+                    }
+                    GraphPattern::LeftJoin { .. } => Ok(Some(OrdinaryAfter::OptionalLeft)),
+                    GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                        crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )
+                        .map(|lift| {
+                            Some(OrdinaryAfter::Project {
+                                lift: lift.detach(),
+                                endpoint_depth: runner.ctx.endpoint_frames.len(),
+                            })
+                        })
+                    }
+                    GraphPattern::Group {
+                        variables,
+                        aggregates,
+                        ..
+                    } => {
+                        let out_schema = crate::modifier::group_output_schema(
+                            variables, aggregates, runner.ctx,
+                        )?;
+                        crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )
+                        .map(|lift| {
+                            Some(OrdinaryAfter::Group {
+                                out_schema,
+                                lift: lift.detach(),
+                            })
+                        })
+                    }
+                    GraphPattern::OrderBy { .. } => crate::governor::lift::Lift::at_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    )
+                    .map(|lift| {
+                        Some(OrdinaryAfter::Order {
+                            lift: lift.detach(),
+                        })
+                    }),
+                    GraphPattern::Unfold { .. } => crate::governor::lift::Lift::at_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    )
+                    .map(|lift| {
+                        Some(OrdinaryAfter::Unfold {
+                            lift: lift.detach(),
+                        })
+                    }),
+                    GraphPattern::Extend { .. } => crate::governor::lift::Lift::at_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    )
+                    .map(|lift| {
+                        Some(OrdinaryAfter::Extend {
+                            lift: lift.detach(),
+                        })
+                    }),
+                    GraphPattern::Filter { .. } => crate::governor::lift::Lift::at_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    )
+                    .map(|lift| {
+                        Some(OrdinaryAfter::Filter {
+                            lift: lift.detach(),
+                        })
+                    }),
+                    GraphPattern::Slice { start, length, .. } => {
+                        crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )
                         .map(|lift| {
                             Some(OrdinaryAfter::Slice {
                                 start: *start,
@@ -4046,101 +6306,592 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                                 lift: lift.detach(),
                             })
                         })
-                }
-                GraphPattern::Lateral { .. } => {
-                    crate::governor::lift::Lift::at_admitted(current_pattern, &runner.ctx.growth)
-                        .map(|lift| {
-                            Some(OrdinaryAfter::LateralLeft {
-                                lift: lift.detach(),
-                            })
-                        })
-                }
-                _ => Ok(None),
-            };
-            let after = match after {
-                Ok(after) => after,
-                Err(error) => {
-                    break finish_ordinary_active(
-                        &mut runner.active,
-                        &mut *runner.ctx,
-                        current_pattern,
-                        Err(error),
-                    );
-                }
-            };
-            if let Some(after) = after {
-                let next = match current_pattern {
-                    GraphPattern::Filter { inner, .. } | GraphPattern::Slice { inner, .. } => inner,
-                    GraphPattern::Lateral { left, .. } | GraphPattern::LeftJoin { left, .. } => {
-                        left
                     }
-                    _ => unreachable!("only admitted graph-child frames suspend here"),
-                };
-                let next = match &current {
-                    OrdinaryPosition::Borrowed(parent) => match parent {
-                        GraphPattern::Filter { inner, .. } | GraphPattern::Slice { inner, .. } => {
-                            OrdinaryPosition::Borrowed(inner)
+                    GraphPattern::Apply { right, policy, .. } if !policy.dataset_required => {
+                        if policy.reduced_adjacent
+                            && !matches!(right.as_ref(), GraphPattern::Reduced { .. })
+                        {
+                            return Err(EvalError::config(
+                                "adjacent reduction requires a Reduced operand",
+                            ));
                         }
-                        GraphPattern::Lateral { left, .. }
-                        | GraphPattern::LeftJoin { left, .. } => OrdinaryPosition::Borrowed(left),
-                        _ => unreachable!("only admitted graph-child frames suspend here"),
-                    },
-                    OrdinaryPosition::Copied(_) => match current.copied_child(next) {
-                        Ok(next) => next,
-                        Err(error) => {
-                            break finish_ordinary_active(
-                                &mut runner.active,
-                                &mut *runner.ctx,
-                                current_pattern,
-                                Err(error),
-                            );
+                        if policy.group_domain.is_some()
+                            && !matches!(right.as_ref(), GraphPattern::Group { .. })
+                        {
+                            return Err(EvalError::config(
+                                "group mapping domain requires a Group operand",
+                            ));
                         }
-                    },
+                        crate::governor::lift::Lift::at_admitted(
+                            current_pattern,
+                            &runner.ctx.growth,
+                        )
+                        .map(|lift| {
+                            Some(
+                                if policy.reduced_adjacent || policy.group_domain.is_some() {
+                                    OrdinaryAfter::ApplicationSpecialLeft {
+                                        lift: lift.detach(),
+                                    }
+                                } else {
+                                    OrdinaryAfter::ApplicationLeft {
+                                        lift: lift.detach(),
+                                    }
+                                },
+                            )
+                        })
+                    }
+                    GraphPattern::Lateral { .. } => crate::governor::lift::Lift::at_admitted(
+                        current_pattern,
+                        &runner.ctx.growth,
+                    )
+                    .map(|lift| {
+                        Some(OrdinaryAfter::LateralLeft {
+                            lift: lift.detach(),
+                        })
+                    }),
+                    _ => Ok(None),
                 };
-                if runner.first.is_none() {
-                    runner.first = Some(OrdinaryFrame {
-                        position: current.clone(),
-                        boundary: runner.active.take().expect("entered parent"),
-                        after,
-                    });
-                } else {
-                    if let Err(error) = runner.pending.reserve_next() {
+                let after = match after {
+                    Ok(after) => after,
+                    Err(error) => {
                         break finish_ordinary_active(
-                            &mut runner.active,
+                            &mut runner.state.active,
                             &mut *runner.ctx,
                             current_pattern,
                             Err(error),
                         );
                     }
-                    runner.pending.push_reserved(OrdinaryFrame {
+                };
+                if let Some(after) = after {
+                    let next = match (current_pattern, &after) {
+                        (
+                            GraphPattern::Join { left, right }
+                            | GraphPattern::Minus { left, right },
+                            OrdinaryAfter::BinaryFirst { first, .. },
+                        ) => {
+                            if *first == 0 {
+                                left.as_ref()
+                            } else {
+                                right.as_ref()
+                            }
+                        }
+                        (GraphPattern::Union { arms }, _) => &arms[0],
+                        (
+                            GraphPattern::Filter { inner, .. }
+                            | GraphPattern::Slice { inner, .. }
+                            | GraphPattern::Extend { inner, .. }
+                            | GraphPattern::Unfold { inner, .. }
+                            | GraphPattern::Group { inner, .. }
+                            | GraphPattern::OrderBy { inner, .. }
+                            | GraphPattern::Project { inner, .. }
+                            | GraphPattern::ProjectStar { inner, .. }
+                            | GraphPattern::Distinct { inner }
+                            | GraphPattern::Reduced { inner },
+                            _,
+                        ) => inner.as_ref(),
+                        (
+                            GraphPattern::Lateral { left, .. }
+                            | GraphPattern::LeftJoin { left, .. }
+                            | GraphPattern::Apply { left, .. },
+                            _,
+                        ) => left.as_ref(),
+                        _ => unreachable!("only admitted graph-child frames suspend here"),
+                    };
+                    let next = match current.child(next) {
+                        Ok(next) => next,
+                        Err(error) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Err(error),
+                            );
+                        }
+                    };
+                    if runner.state.first.is_some()
+                        && let Err(error) = runner.state.pending.reserve_next()
+                    {
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            runner.ctx,
+                            current_pattern,
+                            Err(error),
+                        );
+                    }
+                    // Install scoped endpoint hiding only after every fallible frame/cursor
+                    // preparation. No refused allocation can strand an unowned scope.
+                    if matches!(after, OrdinaryAfter::Project { .. }) {
+                        let variables = match current_pattern {
+                            GraphPattern::Project { variables, .. } => {
+                                purrdf_sparql_algebra::ProjectionNames::Explicit(variables)
+                            }
+                            GraphPattern::ProjectStar { variables, .. } => {
+                                purrdf_sparql_algebra::ProjectionNames::Star(variables)
+                            }
+                            _ => unreachable!("projection frame has its original node"),
+                        };
+                        if let Err(error) =
+                            crate::service_endpoints::enter_projected(variables, runner.ctx)
+                        {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Err(error),
+                            );
+                        }
+                    }
+                    let frame = OrdinaryFrame {
                         position: current.clone(),
-                        boundary: runner.active.take().expect("entered parent"),
+                        boundary: runner.state.active.take().expect("entered parent"),
                         after,
-                    });
+                    };
+                    if runner.state.first.is_none() {
+                        runner.state.first = Some(frame);
+                    } else {
+                        runner.state.pending.push_reserved(frame);
+                    }
+                    current = next;
+                } else {
+                    let evaluated = dispatch_node(current_pattern, runner.ctx);
+                    break finish_ordinary_active(
+                        &mut runner.state.active,
+                        &mut *runner.ctx,
+                        current_pattern,
+                        evaluated,
+                    );
                 }
-                current = next;
-            } else {
-                let evaluated = dispatch_node(current_pattern, &mut (), runner.ctx);
-                break finish_ordinary_active(
-                    &mut runner.active,
-                    &mut *runner.ctx,
-                    current_pattern,
-                    evaluated,
-                );
             }
         };
-        while let Some(frame) = runner.pop() {
+        loop {
+            macro_rules! delivery_event {
+                ($event:expr) => {
+                    match runner.state.advance_delivery(
+                        $event,
+                        delivery.as_deref_mut(),
+                        runner.ctx,
+                    )? {
+                        DeliveryAdvance::Complete(position, evaluated) => {
+                            current = position;
+                            completed = evaluated;
+                            continue;
+                        }
+                        DeliveryAdvance::Function(invocation) => {
+                            return Ok(runner.suspend(invocation))
+                        }
+                        DeliveryAdvance::Descend(next) => {
+                            current = next;
+                            continue 'drive;
+                        }
+                    }
+                };
+            }
+            if runner
+                .state
+                .active
+                .as_ref()
+                .is_some_and(NodeBoundary::awaiting_delivery)
+            {
+                delivery_event!(DeliveryEvent::Original {
+                    position: current.clone(),
+                    evaluated: completed?,
+                    stopped: false
+                });
+            }
+            if runner
+                .state
+                .pending
+                .last()
+                .or(runner.state.first.as_ref())
+                .is_some_and(|frame| matches!(frame.after, OrdinaryAfter::Delivery { .. }))
+            {
+                delivery_event!(DeliveryEvent::Transformed(completed));
+            }
+            let Some(frame) = runner.state.pop() else {
+                break;
+            };
             let OrdinaryFrame {
                 position,
                 boundary,
                 after,
             } = frame;
+            current = position.clone();
+            if let OrdinaryAfter::ApplicationBody { mut state, .. } = after {
+                runner.state.active = Some(boundary);
+                let node = position.pattern();
+                let evaluated = state
+                    .child
+                    .take()
+                    .expect("entered application body")
+                    .finish(completed, runner.ctx);
+                let event = (|| {
+                    let GraphPattern::Apply { policy, .. } = node else {
+                        return Err(EvalError::internal("application body lost its policy"));
+                    };
+                    let consumer = runner.state.stream_mut(state.target)?;
+                    let StreamKind::Application(application) = &mut consumer.kind else {
+                        return Err(EvalError::internal("application body target changed"));
+                    };
+                    let row = application.row.take().ok_or_else(|| {
+                        EvalError::internal("application body lost its current driver")
+                    })?;
+                    match row.finish(policy, evaluated?, runner.ctx)? {
+                        crate::binop::ApplicationRowResult::Retry(row) => {
+                            application.row = Some(row);
+                            Ok(DeliveryEvent::ApplicationNext {
+                                target: state.target,
+                                advance: false,
+                            })
+                        }
+                        crate::binop::ApplicationRowResult::Complete {
+                            evaluated: Evaluated::Complete(rows),
+                            padding,
+                        } => {
+                            if padding && !consumer.stopped {
+                                Ok(DeliveryEvent::Offer {
+                                    position: position.clone(),
+                                    target: DeliveryTarget::ApplicationRight(state.target),
+                                    block: rows,
+                                    resume: DeliveryResume::ApplicationContinue(state.target),
+                                })
+                            } else {
+                                Ok(DeliveryEvent::ApplicationNext {
+                                    target: state.target,
+                                    advance: true,
+                                })
+                            }
+                        }
+                        crate::binop::ApplicationRowResult::Complete {
+                            evaluated: truncated @ Evaluated::Truncated(_),
+                            ..
+                        } => {
+                            consumer.blocks.truncate(application.first_block);
+                            let mut lift = consumer
+                                .lift
+                                .take()
+                                .expect("application delivery lift")
+                                .attach(node);
+                            drop(lift.absorb(1, truncated));
+                            consumer.lift = Some(lift.detach());
+                            consumer.stopped = true;
+                            Ok(DeliveryEvent::ApplicationNext {
+                                target: state.target,
+                                advance: true,
+                            })
+                        }
+                    }
+                })();
+                if let Some(active) = &mut runner.state.active {
+                    active.abort(runner.ctx);
+                }
+                runner.state.active = Some(NodeBoundary::delivery_overlay(None));
+                delivery_event!(match event {
+                    Ok(event) => event,
+                    Err(error) => DeliveryEvent::Transformed(Err(error)),
+                });
+            }
+            if let OrdinaryAfter::Stream {
+                state,
+                _allocation: allocation,
+            } = after
+            {
+                runner.state.active = Some(boundary);
+                let node = position.pattern();
+                if matches!(state.kind, StreamKind::Graph(_)) {
+                    let mut pending = ResidentPending {
+                        child: Some(state),
+                        ctx: runner.ctx,
+                    };
+                    let result: Result<Option<Evaluated<D::Id>>, EvalError> = (|| {
+                        let state = pending.child.as_mut().expect("armed streamed graph");
+                        let StreamKind::Graph(sequence) = &mut state.kind else {
+                            unreachable!("streamed graph retains its owner");
+                        };
+                        pending.ctx.active_graph = sequence.saved_graph();
+                        let GraphPattern::Graph { inner, .. } = node else {
+                            return Err(EvalError::internal("streamed GRAPH lost its node"));
+                        };
+                        sequence.absorb(node, completed?, pending.ctx)?;
+                        if !state.stopped
+                            && let Some(graph) = sequence.next_delivered_graph(pending.ctx)
+                        {
+                            let next = runner.state.reserve_child(&position, inner)?;
+                            let token = if runner.state.first.is_some() {
+                                runner.state.pending.len() + 1
+                            } else {
+                                0
+                            };
+                            let state = pending
+                                .child
+                                .take()
+                                .expect("published streamed GRAPH owner");
+                            pending.ctx.active_graph = graph;
+                            runner.state.push_parent(
+                                position.clone(),
+                                OrdinaryAfter::Stream {
+                                    state,
+                                    _allocation: allocation,
+                                },
+                            );
+                            runner.state.next_delivery = DeliveryTarget::Parent(token);
+                            current = next;
+                            return Ok(None);
+                        }
+                        let state = pending
+                            .child
+                            .take()
+                            .expect("completed streamed GRAPH owner");
+                        let StreamKind::Graph(sequence) = state.kind else {
+                            unreachable!("completed graph retains its owner");
+                        };
+                        sequence.finish(node, inner, pending.ctx).map(Some)
+                    })(
+                    );
+                    drop(pending);
+                    if matches!(result, Ok(None)) {
+                        continue 'drive;
+                    }
+                    completed = finish_ordinary_active(
+                        &mut runner.state.active,
+                        runner.ctx,
+                        node,
+                        result.and_then(|value| {
+                            value.ok_or_else(|| {
+                                EvalError::internal("missing streamed GRAPH completion")
+                            })
+                        }),
+                    );
+                    continue;
+                }
+                if let StreamKind::Group { .. } = state.kind {
+                    let mut state = state;
+                    let GraphPattern::Group { aggregates, .. } = node else {
+                        return Err(EvalError::internal(
+                            "contextual GROUP continuation lost its node",
+                        ));
+                    };
+                    let StreamKind::Group {
+                        sequence,
+                        bucket_pending,
+                    } = &mut state.kind
+                    else {
+                        unreachable!("retained contextual GROUP");
+                    };
+                    if *bucket_pending {
+                        let mut lift = state
+                            .lift
+                            .take()
+                            .expect("bucketed contextual GROUP child lift")
+                            .attach(node);
+                        let Some(input) = lift.absorb(0, completed?) else {
+                            let schema = sequence
+                                .as_ref()
+                                .expect("refused contextual GROUP owner")
+                                .output_schema();
+                            completed = finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                node,
+                                Ok(lift.finish(SolutionSeq::empty(schema))),
+                            );
+                            continue;
+                        };
+                        let domain = runner
+                            .state
+                            .special_application_policy(node)
+                            .and_then(|policy| policy.group_domain.as_deref())
+                            .ok_or_else(|| {
+                                EvalError::internal("bucketed contextual GROUP lost its domain")
+                            })?;
+                        let input = sequence
+                            .as_mut()
+                            .expect("contextual GROUP owner")
+                            .prepare_bucket(input, lift, domain, runner.ctx)?;
+                        *bucket_pending = false;
+                        let token = if runner.state.first.is_some() {
+                            runner.state.pending.len() + 1
+                        } else {
+                            0
+                        };
+                        if runner.state.first.is_some() {
+                            runner.state.pending.reserve_next()?;
+                        }
+                        runner.state.push_parent(
+                            position.clone(),
+                            OrdinaryAfter::Stream {
+                                state,
+                                _allocation: allocation,
+                            },
+                        );
+                        runner.state.active = Some(NodeBoundary::delivery_overlay(None));
+                        delivery_event!(DeliveryEvent::Offer {
+                            position: position.clone(),
+                            target: DeliveryTarget::Parent(token),
+                            block: input.clone(),
+                            resume: DeliveryResume::Node(Evaluated::Complete(input))
+                        });
+                    }
+                    runner
+                        .state
+                        .active
+                        .as_mut()
+                        .expect("contextual GROUP boundary")
+                        .delivery = state.target;
+                    let sequence = sequence.take().expect("completed contextual GROUP owner");
+                    let done = sequence.finish(node, aggregates, completed?, runner.ctx);
+                    completed =
+                        finish_ordinary_active(&mut runner.state.active, runner.ctx, node, done);
+                    continue;
+                }
+                let mut pending = ResidentPending {
+                    child: Some(state),
+                    ctx: runner.ctx,
+                };
+                let result: Result<Option<Evaluated<D::Id>>, EvalError> = (|| {
+                    let state = pending.child.as_mut().expect("armed streamed parent");
+                    if state.busy {
+                        return Err(EvalError::internal(
+                            "stream producer ended before acknowledgement",
+                        ));
+                    }
+                    let child = completed?;
+                    let mut lift = state.lift.take().expect("stream lift").attach(node);
+                    let ordinal = match state.kind {
+                        StreamKind::Union { ordinal } => ordinal,
+                        StreamKind::BinaryRight { .. } => 1,
+                        _ => 0,
+                    };
+                    let Some(rows) = lift.absorb(ordinal, child) else {
+                        return Ok(Some(lift.withheld()));
+                    };
+                    match &mut state.kind {
+                        StreamKind::Slice { schema, rows, .. } => {
+                            let GraphPattern::Slice { inner, .. } = node else {
+                                return Err(EvalError::internal("streamed slice lost its node"));
+                            };
+                            let schema = match schema.take() {
+                                Some(schema) => schema,
+                                None => syntactic_schema_admitted(inner, &pending.ctx.growth)?,
+                            };
+                            let rows = std::mem::replace(
+                                rows,
+                                crate::solution::RowsBuilder::new(&pending.ctx.growth),
+                            )
+                            .finish()?;
+                            return Ok(Some(lift.finish(SolutionSeq { schema, rows })));
+                        }
+                        StreamKind::BinaryRight { minus } if !lift.is_truncated() => {
+                            let minus = *minus;
+                            let (GraphPattern::Join { left, .. }
+                            | GraphPattern::Minus { left, .. }) = node
+                            else {
+                                return Err(EvalError::internal(
+                                    "streamed binary parent lost its node",
+                                ));
+                            };
+                            let next = runner.state.reserve_child(&position, left)?;
+                            state.kind = StreamKind::BinaryLeft { right: rows, minus };
+                            state.lift = Some(lift.detach());
+                            let token = if runner.state.first.is_some() {
+                                runner.state.pending.len() + 1
+                            } else {
+                                0
+                            };
+                            let state = pending
+                                .child
+                                .take()
+                                .expect("published streamed binary parent");
+                            runner.state.push_parent(
+                                position.clone(),
+                                OrdinaryAfter::Stream {
+                                    state,
+                                    _allocation: allocation,
+                                },
+                            );
+                            runner.state.next_delivery = DeliveryTarget::Parent(token);
+                            current = next;
+                            return Ok(None);
+                        }
+                        StreamKind::BinaryRight { .. } => {
+                            return Ok(Some(lift.finish(SolutionSeq::empty(
+                                syntactic_schema_admitted(node, &pending.ctx.growth)?,
+                            ))));
+                        }
+                        StreamKind::Union { ordinal } => {
+                            state.blocks.push(rows)?;
+                            *ordinal += 1;
+                            let GraphPattern::Union { arms } = node else {
+                                return Err(EvalError::internal(
+                                    "streamed union parent lost its node",
+                                ));
+                            };
+                            if !state.stopped && !lift.is_truncated() && *ordinal < arms.len() {
+                                let next =
+                                    runner.state.reserve_child(&position, &arms[*ordinal])?;
+                                state.lift = Some(lift.detach());
+                                let token = if runner.state.first.is_some() {
+                                    runner.state.pending.len() + 1
+                                } else {
+                                    0
+                                };
+                                let state = pending
+                                    .child
+                                    .take()
+                                    .expect("published streamed union parent");
+                                runner.state.push_parent(
+                                    position.clone(),
+                                    OrdinaryAfter::Stream {
+                                        state,
+                                        _allocation: allocation,
+                                    },
+                                );
+                                runner.state.next_delivery = DeliveryTarget::Parent(token);
+                                current = next;
+                                return Ok(None);
+                            }
+                        }
+                        _ => {}
+                    }
+                    if !matches!(
+                        state.kind,
+                        StreamKind::Union { .. } | StreamKind::Application(_)
+                    ) && let Some(tripped) = pending.ctx.expression_barrier.observed()
+                    {
+                        return Ok(Some(Evaluated::Truncated(Truncation::barred_at(
+                            node,
+                            tripped,
+                            syntactic_schema_admitted(node, &pending.ctx.growth)?,
+                        ))));
+                    }
+                    let blocks = std::mem::replace(
+                        &mut state.blocks,
+                        crate::AdmittedVec::new(&pending.ctx.growth),
+                    );
+                    Ok(Some(
+                        lift.finish(crate::binop::concat_union(blocks, pending.ctx)?),
+                    ))
+                })();
+                drop(pending);
+                // Continued states retain their scopes in their published frame.
+                if matches!(result, Ok(None)) {
+                    continue 'drive;
+                }
+                completed = finish_ordinary_active(
+                    &mut runner.state.active,
+                    runner.ctx,
+                    node,
+                    result.and_then(|value| {
+                        value.ok_or_else(|| EvalError::internal("missing streamed completion"))
+                    }),
+                );
+                continue;
+            }
             if let OrdinaryAfter::Exists {
                 mut state,
                 _allocation,
             } = after
             {
-                runner.active = Some(boundary);
+                runner.state.active = Some(boundary);
                 // Retain the parent tree through child completion and any unwind.
                 let answer = state
                     .child
@@ -4155,30 +6906,40 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     );
                 let pattern = position.pattern();
                 let result = (|| {
-                    let GraphPattern::Filter { expr, .. } = pattern else {
-                        return Err(EvalError::internal("EXISTS parent lost its FILTER"));
-                    };
                     let found = answer?;
                     state.sequence.resume(
                         Some(crate::expr::intern_boolean(runner.ctx, found)?),
                         state.record.take(),
                         runner.ctx,
                     )?;
-                    runner.advance_filter(position.clone(), pattern, expr, state.sequence)
+                    runner.state.advance_expression(
+                        position.clone(),
+                        pattern,
+                        state.sequence,
+                        runner.ctx,
+                    )
                 })();
                 match result {
+                    Ok(OrdinaryAdvance::Consumed(stopped)) => {
+                        delivery_event!(DeliveryEvent::Consumed { stopped });
+                    }
+                    Ok(OrdinaryAdvance::Function(invocation)) => {
+                        return Ok(runner.suspend(invocation));
+                    }
                     Ok(OrdinaryAdvance::Descend(next)) => {
                         current = next;
                         continue 'drive;
                     }
                     result => {
                         completed = finish_ordinary_active(
-                            &mut runner.active,
+                            &mut runner.state.active,
                             &mut *runner.ctx,
                             pattern,
                             result.and_then(|done| match done {
                                 OrdinaryAdvance::Complete(done) => Ok(done),
-                                OrdinaryAdvance::Descend(_) => {
+                                OrdinaryAdvance::Function(_)
+                                | OrdinaryAdvance::Descend(_)
+                                | OrdinaryAdvance::Consumed(_) => {
                                     Err(EvalError::internal("missing FILTER completion"))
                                 }
                             }),
@@ -4187,12 +6948,12 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     }
                 }
             }
-            if let OrdinaryAfter::LateralRight {
+            if let OrdinaryAfter::CorrelatedRight {
                 mut state,
                 _allocation,
             } = after
             {
-                runner.active = Some(boundary);
+                runner.state.active = Some(boundary);
                 let evaluated = state
                     .child
                     .take()
@@ -4200,26 +6961,34 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     .finish(completed, runner.ctx);
                 let pattern = position.pattern();
                 let result = (|| {
-                    let GraphPattern::Lateral { right, .. } = pattern else {
+                    let (GraphPattern::Lateral { right, .. } | GraphPattern::Apply { right, .. }) =
+                        pattern
+                    else {
                         return Err(EvalError::internal("LATERAL parent lost its pattern"));
                     };
                     let sequence = state.sequence.take().expect("one LATERAL sequence");
                     let sequence = sequence.resume(pattern, evaluated?, runner.ctx)?;
-                    runner.schedule_lateral(position.clone(), pattern, right, sequence)
+                    runner.state.schedule_correlated(
+                        position.clone(),
+                        pattern,
+                        right,
+                        sequence,
+                        runner.ctx,
+                    )
                 })();
                 match result {
-                    Ok(OrdinaryLateralSchedule::Descend(next)) => {
+                    Ok(OrdinaryCorrelationSchedule::Descend(next)) => {
                         current = next;
                         continue 'drive;
                     }
                     result => {
                         completed = finish_ordinary_active(
-                            &mut runner.active,
+                            &mut runner.state.active,
                             &mut *runner.ctx,
                             pattern,
                             result.and_then(|outcome| match outcome {
-                                OrdinaryLateralSchedule::Complete(done) => Ok(done),
-                                OrdinaryLateralSchedule::Descend(_) => {
+                                OrdinaryCorrelationSchedule::Complete(done) => Ok(done),
+                                OrdinaryCorrelationSchedule::Descend(_) => {
                                     Err(EvalError::internal("missing LATERAL completion"))
                                 }
                             }),
@@ -4228,24 +6997,601 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     }
                 }
             }
-            runner.active = Some(boundary);
+            if let OrdinaryAfter::Graph {
+                mut state,
+                _allocation: allocation,
+            } = after
+            {
+                runner.state.active = Some(boundary);
+                runner.ctx.active_graph = state.saved_graph();
+                let pattern = position.pattern();
+                let scheduled = (|| {
+                    let GraphPattern::Graph { inner, .. } = pattern else {
+                        return Err(EvalError::internal("GRAPH continuation lost its node"));
+                    };
+                    state.absorb(pattern, completed?, runner.ctx)?;
+                    if let Some(graph) = state.next_graph(runner.ctx) {
+                        let next = runner.state.reserve_child(&position, inner)?;
+                        runner.ctx.active_graph = graph;
+                        runner.state.push_parent(
+                            position.clone(),
+                            OrdinaryAfter::Graph {
+                                state,
+                                _allocation: allocation,
+                            },
+                        );
+                        current = next;
+                        Ok(None)
+                    } else {
+                        (*state).finish(pattern, inner, runner.ctx).map(Some)
+                    }
+                })();
+                match scheduled {
+                    Ok(None) => continue 'drive,
+                    other => {
+                        completed = finish_ordinary_active(
+                            &mut runner.state.active,
+                            runner.ctx,
+                            pattern,
+                            other.and_then(|done| {
+                                done.ok_or_else(|| EvalError::internal("missing GRAPH completion"))
+                            }),
+                        );
+                        continue;
+                    }
+                }
+            }
+            if let OrdinaryAfter::MinusPartition {
+                mut state,
+                _allocation: allocation,
+                endpoint_depth,
+            } = after
+            {
+                runner.state.active = Some(boundary);
+                runner.ctx.endpoint_frames.truncate(endpoint_depth);
+                let pattern = position.pattern();
+                let result = (|| {
+                    let evaluated = completed?;
+                    match state.absorb(pattern, evaluated, runner.ctx)? {
+                        crate::binop::MinusPartitionStep::Complete(done) => Ok(Some(done)),
+                        crate::binop::MinusPartitionStep::Finish => {
+                            (*state).finish(pattern, runner.ctx).map(Some)
+                        }
+                        crate::binop::MinusPartitionStep::Next => {
+                            let GraphPattern::Minus { right, .. } = pattern else {
+                                return Err(EvalError::internal("MINUS partition lost its node"));
+                            };
+                            let next = runner.state.reserve_child(&position, right)?;
+                            let partition = state.partition().ok_or_else(|| {
+                                EvalError::internal("MINUS next partition absent")
+                            })?;
+                            let endpoint_depth = crate::service_endpoints::enter_minus_partition(
+                                partition, runner.ctx,
+                            )?;
+                            runner.state.push_parent(
+                                position.clone(),
+                                OrdinaryAfter::MinusPartition {
+                                    state,
+                                    _allocation: allocation,
+                                    endpoint_depth,
+                                },
+                            );
+                            current = next;
+                            Ok(None)
+                        }
+                    }
+                })();
+                match result {
+                    Ok(None) => continue 'drive,
+                    result => {
+                        completed = finish_ordinary_active(
+                            &mut runner.state.active,
+                            runner.ctx,
+                            pattern,
+                            result.and_then(|done| {
+                                done.ok_or_else(|| {
+                                    EvalError::internal("missing MINUS partition completion")
+                                })
+                            }),
+                        );
+                        continue;
+                    }
+                }
+            }
+            runner.state.active = Some(boundary);
             let pattern = position.pattern();
+            let mut function = None;
             let result = match (after, completed) {
+                (OrdinaryAfter::BinaryFirst { kind, first, lift }, Ok(child)) => (|| {
+                    let mut lift = lift.attach(pattern);
+                    let Some(rows) = lift.absorb(first, child) else {
+                        return Ok(Some(lift.withheld()));
+                    };
+                    if lift.is_truncated() {
+                        return Ok(Some(lift.finish(SolutionSeq::empty(rows.schema))));
+                    }
+                    let other = match pattern {
+                        GraphPattern::Join { left, right }
+                        | GraphPattern::Minus { left, right } => {
+                            if first == 0 {
+                                right.as_ref()
+                            } else {
+                                left.as_ref()
+                            }
+                        }
+                        _ => return Err(EvalError::internal("binary continuation lost its node")),
+                    };
+                    if matches!(kind, OrdinaryBinary::Join)
+                        && first == 0
+                        && crate::bgp::PositivePlan::seed_eligible_admitted(
+                            other,
+                            &rows.schema,
+                            &runner.ctx.growth,
+                        )?
+                    {
+                        return crate::binop::finish_seeded_join(
+                            lift, rows, other, 1, None, runner.ctx,
+                        )
+                        .map(Some);
+                    }
+                    let next = runner.state.reserve_child(&position, other)?;
+                    if matches!(kind, OrdinaryBinary::Minus)
+                        && let Some(partitions) =
+                            crate::service_endpoints::minus_partitions(&rows, other, runner.ctx)?
+                    {
+                        let state = crate::binop::MinusPartitions::new(
+                            rows,
+                            partitions,
+                            lift.detach(),
+                            runner.ctx,
+                        )?;
+                        if state.partition().is_none() {
+                            return state.finish(pattern, runner.ctx).map(Some);
+                        }
+                        let (state, allocation) = crate::workspace::box_native(
+                            state,
+                            &runner.ctx.growth,
+                            "suspended MINUS partitions",
+                        )?;
+                        let endpoint_depth = crate::service_endpoints::enter_minus_partition(
+                            state.partition().expect("inspected first partition"),
+                            runner.ctx,
+                        )?;
+                        runner.state.push_parent(
+                            position.clone(),
+                            OrdinaryAfter::MinusPartition {
+                                state,
+                                _allocation: allocation,
+                                endpoint_depth,
+                            },
+                        );
+                    } else {
+                        let role = match kind {
+                            OrdinaryBinary::Join => crate::service_endpoints::FrameRole::Join,
+                            OrdinaryBinary::Minus => crate::service_endpoints::FrameRole::Minus,
+                            OrdinaryBinary::Optional => {
+                                crate::service_endpoints::FrameRole::Optional
+                            }
+                        };
+                        let endpoint_depth = crate::service_endpoints::enter_right_operand(
+                            &rows, other, role, runner.ctx,
+                        )?;
+                        runner.state.push_parent(
+                            position.clone(),
+                            OrdinaryAfter::BinarySecond {
+                                kind,
+                                first,
+                                rows,
+                                lift: lift.detach(),
+                                endpoint_depth,
+                            },
+                        );
+                    }
+                    current = next;
+                    Ok(None)
+                })(
+                ),
+                (
+                    OrdinaryAfter::BinarySecond {
+                        kind,
+                        first,
+                        rows,
+                        lift,
+                        endpoint_depth,
+                    },
+                    child,
+                ) => {
+                    runner.ctx.endpoint_frames.truncate(endpoint_depth);
+                    (|| {
+                        let mut lift = lift.attach(pattern);
+                        let Some(second) = lift.absorb(1 - first, child?) else {
+                            return Ok(Some(lift.withheld()));
+                        };
+                        if matches!(kind, OrdinaryBinary::Optional) {
+                            let pad_unmatched = !lift.is_truncated();
+                            let GraphPattern::LeftJoin { expression, .. } = pattern else {
+                                return Err(EvalError::internal(
+                                    "OPTIONAL second child lost its node",
+                                ));
+                            };
+                            let Some(expression) = expression else {
+                                let joined = crate::binop::left_outer_join(
+                                    &rows,
+                                    &second,
+                                    runner.ctx,
+                                    pad_unmatched,
+                                )?;
+                                return Ok(Some(lift.finish(joined)));
+                            };
+                            let owner = match &position {
+                                OrdinaryPosition::Borrowed(parent) => {
+                                    crate::expr::FilterLink::Borrowed(attached_expression(parent)?)
+                                }
+                                OrdinaryPosition::Copied(cursor) => {
+                                    crate::expr::FilterLink::Copied(cursor.owner())
+                                }
+                            };
+                            let sequence = crate::binop::begin_optional_condition_with_owner(
+                                pattern,
+                                expression,
+                                owner,
+                                rows,
+                                second,
+                                pad_unmatched,
+                                lift.detach(),
+                                runner.ctx,
+                            )?;
+                            return match runner.state.advance_expression(
+                                position.clone(),
+                                pattern,
+                                OrdinaryExpression::Optional(sequence),
+                                runner.ctx,
+                            )? {
+                                OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                    "a scalar operator consumed a delivery block",
+                                )),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                OrdinaryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                            };
+                        }
+                        let joined = match kind {
+                            OrdinaryBinary::Join => {
+                                if first == 0 {
+                                    crate::binop::hash_join(&rows, &second, runner.ctx)?
+                                } else {
+                                    crate::binop::hash_join(&second, &rows, runner.ctx)?
+                                }
+                            }
+                            OrdinaryBinary::Optional => {
+                                unreachable!("OPTIONAL handled before binary kernel")
+                            }
+                            OrdinaryBinary::Minus => {
+                                let shared = rows
+                                    .schema
+                                    .shared_columns_admitted(&second.schema, &runner.ctx.growth)?;
+                                crate::binop::minus_rows(rows, &second, &shared, runner.ctx)?
+                            }
+                        };
+                        Ok(Some(lift.finish(joined)))
+                    })()
+                }
+                (
+                    OrdinaryAfter::Union {
+                        mut blocks,
+                        ordinal,
+                        lift,
+                    },
+                    Ok(child),
+                ) => (|| {
+                    let mut lift = lift.attach(pattern);
+                    let Some(rows) = lift.absorb(ordinal, child) else {
+                        return Ok(Some(lift.withheld()));
+                    };
+                    blocks.push(rows)?;
+                    let GraphPattern::Union { arms } = pattern else {
+                        return Err(EvalError::internal("UNION continuation lost its node"));
+                    };
+                    let ordinal = ordinal + 1;
+                    if lift.is_truncated() || ordinal == arms.len() {
+                        let joined = crate::binop::concat_union(blocks, runner.ctx)?;
+                        return Ok(Some(lift.finish(joined)));
+                    }
+                    let next = runner.state.reserve_child(&position, &arms[ordinal])?;
+                    runner.state.push_parent(
+                        position.clone(),
+                        OrdinaryAfter::Union {
+                            blocks,
+                            ordinal,
+                            lift: lift.detach(),
+                        },
+                    );
+                    current = next;
+                    Ok(None)
+                })(),
+                (OrdinaryAfter::Dedup { lift, adjacent }, Ok(child)) => if adjacent {
+                    crate::modifier::finish_dedup::<D, true>(pattern, lift, child, runner.ctx)
+                } else {
+                    crate::modifier::finish_dedup::<D, false>(pattern, lift, child, runner.ctx)
+                }
+                .map(Some),
                 (OrdinaryAfter::OptionalLeft, Ok(child)) => (|| {
                     let GraphPattern::LeftJoin {
                         right, expression, ..
                     } = pattern
                     else {
-                        return Err(EvalError::internal("OPTIONAL frame lost its pattern"));
+                        return Err(EvalError::internal("OPTIONAL frame lost its node"));
                     };
-                    crate::binop::finish_left_join(
-                        pattern,
-                        child,
+                    let child = if let Evaluated::Complete(rows) = child {
+                        let mut left = Some(rows);
+                        let owner = if expression.is_some() {
+                            Some(match &position {
+                                OrdinaryPosition::Borrowed(parent) => {
+                                    crate::expr::FilterLink::Borrowed(attached_expression(parent)?)
+                                }
+                                OrdinaryPosition::Copied(cursor) => {
+                                    crate::expr::FilterLink::Copied(cursor.owner())
+                                }
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(start) = crate::binop::begin_seeded_optional(
+                            pattern,
+                            right,
+                            expression.as_ref(),
+                            owner,
+                            &mut left,
+                            runner.ctx,
+                        )? {
+                            return match start {
+                                crate::binop::SeededOptionalStart::Complete(done) => Ok(Some(done)),
+                                crate::binop::SeededOptionalStart::Sequence(sequence) => {
+                                    match runner.state.advance_expression(
+                                        position.clone(),
+                                        pattern,
+                                        OrdinaryExpression::SeededOptional(sequence),
+                                        runner.ctx,
+                                    )? {
+                                        OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                        OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                            "a scalar operator consumed a delivery block",
+                                        )),
+                                        OrdinaryAdvance::Function(invocation) => {
+                                            function = Some(invocation);
+                                            Ok(None)
+                                        }
+                                        OrdinaryAdvance::Descend(next) => {
+                                            current = next;
+                                            Ok(None)
+                                        }
+                                    }
+                                }
+                            };
+                        }
+                        Evaluated::Complete(
+                            left.take().expect("ineligible seed retains its driver"),
+                        )
+                    } else {
+                        child
+                    };
+                    let mut lift =
+                        crate::governor::lift::Lift::at_admitted(pattern, &runner.ctx.growth)?;
+                    let Some(rows) = lift.absorb(0, child) else {
+                        return Ok(Some(lift.withheld()));
+                    };
+                    if lift.is_truncated() {
+                        return Ok(Some(lift.finish(SolutionSeq::empty(rows.schema))));
+                    }
+                    let next = runner.state.reserve_child(&position, right)?;
+                    let endpoint_depth = crate::service_endpoints::enter_right_operand(
+                        &rows,
                         right,
-                        expression.as_ref(),
+                        crate::service_endpoints::FrameRole::Optional,
                         runner.ctx,
-                    )
-                    .map(Some)
+                    )?;
+                    runner.state.push_parent(
+                        position.clone(),
+                        OrdinaryAfter::BinarySecond {
+                            kind: OrdinaryBinary::Optional,
+                            first: 0,
+                            rows,
+                            lift: lift.detach(),
+                            endpoint_depth,
+                        },
+                    );
+                    current = next;
+                    Ok(None)
+                })(),
+                (
+                    OrdinaryAfter::Project {
+                        lift,
+                        endpoint_depth,
+                    },
+                    child,
+                ) => {
+                    runner.ctx.endpoint_frames.truncate(endpoint_depth);
+                    child.and_then(|child| {
+                        let variables = match pattern {
+                            GraphPattern::Project { variables, .. } => {
+                                purrdf_sparql_algebra::ProjectionNames::Explicit(variables)
+                            }
+                            GraphPattern::ProjectStar { variables, .. } => {
+                                purrdf_sparql_algebra::ProjectionNames::Star(variables)
+                            }
+                            _ => {
+                                return Err(EvalError::internal(
+                                    "projection continuation lost its node",
+                                ));
+                            }
+                        };
+                        crate::modifier::finish_project(pattern, variables, lift, child, runner.ctx)
+                            .map(Some)
+                    })
+                }
+                (OrdinaryAfter::Group { out_schema, lift }, Ok(child)) => (|| {
+                    let GraphPattern::Group { aggregates, .. } = pattern else {
+                        return Err(EvalError::internal("GROUP continuation lost its node"));
+                    };
+                    let owner = match &position {
+                        OrdinaryPosition::Borrowed(parent) => {
+                            let GraphPattern::Group { aggregates, .. } = parent else {
+                                return Err(EvalError::internal("borrowed GROUP node changed"));
+                            };
+                            crate::modifier::GroupLink::Borrowed(aggregates)
+                        }
+                        OrdinaryPosition::Copied(cursor) => {
+                            crate::modifier::GroupLink::Copied(cursor.owner())
+                        }
+                    };
+                    match crate::modifier::begin_group_child_with_owner(
+                        pattern, aggregates, &owner, out_schema, lift, child, runner.ctx,
+                    )? {
+                        crate::modifier::GroupStart::Complete(done) => Ok(Some(done)),
+                        crate::modifier::GroupStart::Sequence(sequence) => {
+                            match runner.state.advance_expression(
+                                position.clone(),
+                                pattern,
+                                OrdinaryExpression::Group(sequence),
+                                runner.ctx,
+                            )? {
+                                OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                    "a scalar operator consumed a delivery block",
+                                )),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                OrdinaryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                            }
+                        }
+                    }
+                })(),
+                (OrdinaryAfter::Order { lift }, Ok(child)) => (|| {
+                    let GraphPattern::OrderBy { expression, .. } = pattern else {
+                        return Err(EvalError::internal("ORDER continuation lost its node"));
+                    };
+                    let owner = match &position {
+                        OrdinaryPosition::Borrowed(parent) => {
+                            let GraphPattern::OrderBy { expression, .. } = parent else {
+                                return Err(EvalError::internal("borrowed ORDER node changed"));
+                            };
+                            crate::modifier::OrderLink::Borrowed(expression)
+                        }
+                        OrdinaryPosition::Copied(cursor) => {
+                            crate::modifier::OrderLink::Copied(cursor.owner())
+                        }
+                    };
+                    match crate::modifier::begin_order_child_with_owner(
+                        pattern, expression, &owner, lift, child, runner.ctx,
+                    )? {
+                        crate::modifier::OrderStart::Complete(done) => Ok(Some(done)),
+                        crate::modifier::OrderStart::Sequence(sequence) => {
+                            match runner.state.advance_expression(
+                                position.clone(),
+                                pattern,
+                                OrdinaryExpression::Order(sequence),
+                                runner.ctx,
+                            )? {
+                                OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                    "a scalar operator consumed a delivery block",
+                                )),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                OrdinaryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                            }
+                        }
+                    }
+                })(),
+                (OrdinaryAfter::Unfold { lift }, Ok(child)) => (|| {
+                    let expression = attached_expression(pattern)?;
+                    let owner = match &position {
+                        OrdinaryPosition::Borrowed(parent) => {
+                            crate::expr::FilterLink::Borrowed(attached_expression(parent)?)
+                        }
+                        OrdinaryPosition::Copied(cursor) => {
+                            crate::expr::FilterLink::Copied(cursor.owner())
+                        }
+                    };
+                    match crate::cdt_unfold::begin_unfold_child_with_owner(
+                        pattern, expression, owner, lift, child, runner.ctx,
+                    )? {
+                        crate::cdt_unfold::UnfoldStart::Complete(done) => Ok(Some(done)),
+                        crate::cdt_unfold::UnfoldStart::Sequence(sequence) => {
+                            match runner.state.advance_expression(
+                                position.clone(),
+                                pattern,
+                                OrdinaryExpression::Unfold(sequence),
+                                runner.ctx,
+                            )? {
+                                OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                    "a scalar operator consumed a delivery block",
+                                )),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                OrdinaryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                            }
+                        }
+                    }
+                })(),
+                (OrdinaryAfter::Extend { lift }, Ok(child)) => (|| {
+                    let expression = attached_expression(pattern)?;
+                    let owner = match &position {
+                        OrdinaryPosition::Borrowed(parent) => {
+                            crate::expr::FilterLink::Borrowed(attached_expression(parent)?)
+                        }
+                        OrdinaryPosition::Copied(cursor) => {
+                            crate::expr::FilterLink::Copied(cursor.owner())
+                        }
+                    };
+                    match crate::expr::begin_extend_child_with_owner(
+                        pattern, expression, owner, lift, child, runner.ctx,
+                    )? {
+                        crate::expr::ExtendStart::Complete(done) => Ok(Some(done)),
+                        crate::expr::ExtendStart::Sequence(sequence) => {
+                            match runner.state.advance_expression(
+                                position.clone(),
+                                pattern,
+                                OrdinaryExpression::Extend(sequence),
+                                runner.ctx,
+                            )? {
+                                OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                    "a scalar operator consumed a delivery block",
+                                )),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                OrdinaryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                            }
+                        }
+                    }
                 })(),
                 (OrdinaryAfter::Filter { lift }, Ok(child)) => (|| {
                     let GraphPattern::Filter {
@@ -4272,13 +7618,20 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     )? {
                         crate::expr::FilterStart::Complete(done) => Ok(Some(done)),
                         crate::expr::FilterStart::Sequence(sequence) => {
-                            match runner.advance_filter(
+                            match runner.state.advance_expression(
                                 position.clone(),
                                 pattern,
-                                expression,
-                                sequence,
+                                OrdinaryExpression::Filter(sequence),
+                                runner.ctx,
                             )? {
                                 OrdinaryAdvance::Complete(done) => Ok(Some(done)),
+                                OrdinaryAdvance::Consumed(_) => Err(EvalError::internal(
+                                    "a scalar operator consumed a delivery block",
+                                )),
+                                OrdinaryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
                                 OrdinaryAdvance::Descend(next) => {
                                     current = next;
                                     Ok(None)
@@ -4296,21 +7649,87 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     Ok(child),
                 ) => crate::modifier::finish_slice(pattern, start, length, lift, child, runner.ctx)
                     .map(Some),
+                (OrdinaryAfter::ApplicationSpecialLeft { lift }, Ok(child)) => (|| {
+                    let GraphPattern::Apply { right, policy, .. } = pattern else {
+                        return Err(EvalError::internal("special application lost its node"));
+                    };
+                    let mut lift = lift.attach(pattern);
+                    if lift.absorb(0, child).is_none() {
+                        return Ok(Some(lift.withheld()));
+                    }
+                    let next = runner.state.reserve_child(&position, right)?;
+                    let delivery = if policy.reduced_adjacent {
+                        std::mem::take(
+                            &mut runner
+                                .state
+                                .active
+                                .as_mut()
+                                .expect("entered adjacent application")
+                                .delivery,
+                        )
+                    } else {
+                        DeliveryTarget::None
+                    };
+                    runner.state.push_parent(
+                        position.clone(),
+                        OrdinaryAfter::ApplicationSpecialRight {
+                            lift: lift.detach(),
+                        },
+                    );
+                    runner.state.next_delivery = delivery;
+                    current = next;
+                    Ok(None)
+                })(),
+                (OrdinaryAfter::ApplicationSpecialRight { lift }, Ok(child)) => {
+                    let mut lift = lift.attach(pattern);
+                    Ok(Some(match lift.absorb(1, child) {
+                        Some(rows) => lift.finish(rows),
+                        None => lift.withheld(),
+                    }))
+                }
+                (OrdinaryAfter::ApplicationLeft { lift }, Ok(child)) => (|| {
+                    let GraphPattern::Apply { right, .. } = pattern else {
+                        return Err(EvalError::internal("application left lost its node"));
+                    };
+                    match crate::binop::begin_application_child(
+                        pattern, right, lift, child, runner.ctx,
+                    )? {
+                        crate::binop::ApplicationStart::Complete(done) => Ok(Some(done)),
+                        crate::binop::ApplicationStart::Sequence(sequence) => {
+                            match runner.state.schedule_correlated(
+                                position.clone(),
+                                pattern,
+                                right,
+                                OrdinaryCorrelation::Application(sequence),
+                                runner.ctx,
+                            )? {
+                                OrdinaryCorrelationSchedule::Complete(done) => Ok(Some(done)),
+                                OrdinaryCorrelationSchedule::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                            }
+                        }
+                    }
+                })(),
                 (OrdinaryAfter::LateralLeft { lift }, Ok(child)) => (|| {
-                    let GraphPattern::Lateral { right, .. } = pattern else {
+                    let (GraphPattern::Lateral { right, .. } | GraphPattern::Apply { right, .. }) =
+                        pattern
+                    else {
                         return Err(EvalError::internal("LATERAL frame lost its pattern"));
                     };
                     match crate::binop::begin_lateral(pattern, right, lift, child, runner.ctx)? {
                         crate::binop::LateralStart::Complete(done) => Ok(Some(done)),
                         crate::binop::LateralStart::Sequence(sequence) => {
-                            match runner.schedule_lateral(
+                            match runner.state.schedule_correlated(
                                 position.clone(),
                                 pattern,
                                 right,
-                                sequence,
+                                OrdinaryCorrelation::Lateral(sequence),
+                                runner.ctx,
                             )? {
-                                OrdinaryLateralSchedule::Complete(done) => Ok(Some(done)),
-                                OrdinaryLateralSchedule::Descend(next) => {
+                                OrdinaryCorrelationSchedule::Complete(done) => Ok(Some(done)),
+                                OrdinaryCorrelationSchedule::Descend(next) => {
                                     current = next;
                                     Ok(None)
                                 }
@@ -4319,18 +7738,36 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     }
                 })(),
                 (_, Err(error)) => Err(error),
+                (OrdinaryAfter::Graph { .. }, _) => unreachable!("GRAPH handled before parent"),
+                (OrdinaryAfter::MinusPartition { .. }, _) => {
+                    unreachable!("MINUS partition handled before parent")
+                }
+                (OrdinaryAfter::Function { .. }, _) => {
+                    return Err(EvalError::internal(
+                        "function continuation resumed as graph",
+                    ));
+                }
                 (OrdinaryAfter::Exists { .. }, _) => unreachable!("EXISTS handled before parent"),
-                (OrdinaryAfter::LateralRight { .. }, _) => {
+                (OrdinaryAfter::CorrelatedRight { .. }, _) => {
                     unreachable!("LATERAL child handled before parent")
                 }
+                (OrdinaryAfter::Stream { .. } | OrdinaryAfter::Delivery { .. }, _) => {
+                    unreachable!("delivery continuations handled before ordinary parents")
+                }
+                (OrdinaryAfter::ApplicationBody { .. }, _) => {
+                    unreachable!("application body handled before ordinary parents")
+                }
             };
+            if let Some(invocation) = function {
+                return Ok(runner.suspend(invocation));
+            }
             match result {
                 Ok(None) => {
                     continue 'drive;
                 }
                 result => {
                     completed = finish_ordinary_active(
-                        &mut runner.active,
+                        &mut runner.state.active,
                         &mut *runner.ctx,
                         pattern,
                         result.and_then(|done| {
@@ -4340,7 +7777,7 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                 }
             }
         }
-        break 'drive completed;
+        break 'drive completed.map(OrdinaryPoll::Complete);
     }
 }
 
@@ -4444,20 +7881,57 @@ pub(crate) fn eval_cached_bgp_evaluated<D: DatasetView + Sync>(
 
 /// Own the entry and completion bookkeeping for one algebra node without
 /// retaining a borrow of the evaluation context across its child evaluation.
-struct NodeBoundary {
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "local caps, search certificates, cursor overlays and whole-bag delivery are independent obligations"
+)]
+struct NodeBoundary<I: ViewTermId> {
     local_cap: bool,
     tracking_search: bool,
     restore: Option<NodeCursors>,
+    delivery: DeliveryTarget,
+    delivery_ordinal: usize,
+    overlay: bool,
+    delivery_whole: bool,
+    physical: Option<crate::shapes::runtime::NativeShapeRun<I>>,
+    physical_delivery: DeliveryTarget,
+    positive: Option<ScopeRestore>,
 }
 
-impl NodeBoundary {
+impl<I: ViewTermId> NodeBoundary<I> {
+    fn awaiting_delivery(&self) -> bool {
+        !matches!(self.delivery, DeliveryTarget::None)
+    }
+
+    fn delivery_overlay(restore: Option<NodeCursors>) -> Self {
+        Self {
+            local_cap: false,
+            tracking_search: false,
+            restore,
+            delivery: DeliveryTarget::None,
+            delivery_ordinal: 0,
+            overlay: true,
+            delivery_whole: false,
+            physical: None,
+            physical_delivery: DeliveryTarget::None,
+            positive: None,
+        }
+    }
     /// Release the node's installed cursors, evidence search frame and local
     /// answer cap in their original order. An explicit worklist also calls
     /// this on unwind, before any copied pattern owner is released.
-    fn abort<D: DatasetView + Sync>(
+    fn abort<D: DatasetView<Id = I> + Sync>(
         &mut self,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Option<crate::evidence_exec::RowEvidence> {
+        if let Some(physical) = &mut self.physical {
+            physical.restore(ctx);
+        }
+        self.physical = None;
+        self.physical_delivery = DeliveryTarget::None;
+        if let Some(positive) = self.positive.take() {
+            positive.restore(ctx);
+        }
         if let Some(restore) = self.restore.take() {
             ctx.leave_node(restore);
         }
@@ -4476,7 +7950,7 @@ impl NodeBoundary {
         search
     }
 
-    fn enter<D: DatasetView + Sync>(
+    fn enter<D: DatasetView<Id = I> + Sync>(
         pattern: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Self, EvalError> {
@@ -4493,33 +7967,41 @@ impl NodeBoundary {
             });
         }
         let local_cap = install_local_slice_pushdown(pattern, ctx)?;
-        if let Some(error) = ctx.dataset.read_error() {
-            if local_cap {
-                ctx.cap_pushdown = None;
-            }
+        let mut pending = ResidentPending {
+            child: Some(Self {
+                local_cap,
+                tracking_search: false,
+                restore: None,
+                delivery: DeliveryTarget::None,
+                delivery_ordinal: 0,
+                overlay: false,
+                delivery_whole: false,
+                physical: None,
+                physical_delivery: DeliveryTarget::None,
+                positive: None,
+            }),
+            ctx,
+        };
+        if let Some(error) = pending.ctx.dataset.read_error() {
             return Err(EvalError::source_read(error));
         }
-        let tracking_search = ctx.may_have_evidence();
-        if tracking_search {
-            let pushed = ctx
+        if pending.ctx.may_have_evidence() {
+            let workspace = pending.ctx.growth.clone();
+            pending
+                .ctx
                 .evidence_search
-                .get_or_insert_with(|| crate::AdmittedVec::new(&ctx.growth))
-                .push(crate::evidence_exec::RowEvidence::default());
-            if let Err(error) = pushed {
-                if local_cap {
-                    ctx.cap_pushdown = None;
-                }
-                return Err(error);
-            }
+                .get_or_insert_with(|| crate::AdmittedVec::new(&workspace))
+                .push(crate::evidence_exec::RowEvidence::default())?;
+            pending
+                .child
+                .as_mut()
+                .expect("armed node setup")
+                .tracking_search = true;
         }
-        Ok(Self {
-            local_cap,
-            tracking_search,
-            restore: None,
-        })
+        Ok(pending.child.take().expect("one admitted node boundary"))
     }
 
-    fn start<D: DatasetView + Sync>(
+    fn start<D: DatasetView<Id = I> + Sync>(
         &mut self,
         pattern: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
@@ -4533,24 +8015,41 @@ impl NodeBoundary {
                 tripped,
             ))));
         }
-        let restore = ctx.enter_node(pattern);
+        self.restore = Some(ctx.enter_node(pattern));
         if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
-            ctx.leave_node(restore);
+            ctx.leave_node(self.restore.take().expect("entered node cursor"));
             return Ok(Some(Evaluated::Truncated(Truncation::origin(
                 SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
                 tripped,
             ))));
         }
-        self.restore = Some(restore);
         Ok(None)
     }
 
-    fn finish<D: DatasetView + Sync>(
+    fn finish<D: DatasetView<Id = I> + Sync>(
         &mut self,
         pattern: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
         mut evaluated: Result<Evaluated<D::Id>, EvalError>,
     ) -> Result<Evaluated<D::Id>, EvalError> {
+        if let Some(physical) = &mut self.physical {
+            if let Err(error) = physical.finish(pattern, &evaluated, ctx) {
+                evaluated = Err(error);
+            }
+            self.physical = None;
+            self.delivery = std::mem::take(&mut self.physical_delivery);
+        }
+        if let Some(positive) = self.positive.take() {
+            positive.restore(ctx);
+        }
+        if self.overlay {
+            self.abort(ctx);
+            return evaluated;
+        }
+        if evaluated.is_ok() && self.awaiting_delivery() {
+            return evaluated;
+        }
+        self.delivery = DeliveryTarget::None;
         if self.restore.is_some() {
             evaluated = evaluated.map(|value| {
                 // A child has restored its own cursor; charge this output at its parent.
@@ -4618,7 +8117,7 @@ pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
     evaluated
 }
 
-impl<D: DatasetView + Sync> ResidentAbort<D> for NodeBoundary {
+impl<I: ViewTermId, D: DatasetView<Id = I> + Sync> ResidentAbort<D> for NodeBoundary<I> {
     fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
         let _ = Self::abort(self, ctx);
     }
@@ -4855,45 +8354,7 @@ impl<'a, D: DatasetView + Sync> RowConsumer<'a, D> {
     }
 }
 
-pub(crate) trait RowDelivery<D: DatasetView + Sync> {
-    const ACTIVE: bool;
-    type Borrowed<'a>: RowDelivery<D>
-    where
-        Self: 'a;
-    fn reborrow(&mut self) -> Self::Borrowed<'_>;
-    fn stopped(&self) -> bool;
-    fn deliver(
-        &mut self,
-        rows: &SolutionSeq<D::Id>,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<(), EvalError>;
-}
-
-impl<D: DatasetView + Sync> RowDelivery<D> for () {
-    const ACTIVE: bool = false;
-    type Borrowed<'a> = ();
-    fn reborrow(&mut self) {}
-    fn stopped(&self) -> bool {
-        false
-    }
-    fn deliver(
-        &mut self,
-        _rows: &SolutionSeq<D::Id>,
-        _ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<(), EvalError> {
-        Ok(())
-    }
-}
-
-impl<'s, D: DatasetView + Sync> RowDelivery<D> for &mut RowConsumer<'s, D> {
-    const ACTIVE: bool = true;
-    type Borrowed<'a>
-        = &'a mut RowConsumer<'s, D>
-    where
-        Self: 'a;
-    fn reborrow(&mut self) -> Self::Borrowed<'_> {
-        &mut **self
-    }
+impl<D: DatasetView + Sync> RowConsumer<'_, D> {
     fn stopped(&self) -> bool {
         self.stopped
     }
@@ -4919,9 +8380,7 @@ pub(crate) fn eval_yielding<D: DatasetView + Sync>(
     delivery: &mut RowConsumer<'_, D>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_evaluated_with(pattern, ctx, |ctx| {
-        eval_delivered_node(pattern, delivery, ctx)
-    })
+    eval_ordinary_chain_with_delivery(pattern, Some(delivery), false, ctx)
 }
 
 /// Execute the original answer pattern with its exact verdict as the consumer.
@@ -4982,121 +8441,22 @@ pub(crate) fn eval_answer_pattern<D: DatasetView + Sync>(
     })
 }
 
-/// Keep contextual dispatch out of the recursive admission frame, just as the
-/// native dispatcher does. Both boundaries instantiate the same match below.
-#[inline(never)]
-fn eval_delivered_node<D: DatasetView + Sync>(
-    pattern: &GraphPattern,
-    delivery: &mut RowConsumer<'_, D>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_node_with(pattern, delivery, ctx)
-}
-
-/// Compose a row transformer with its producer without materializing the
-/// producer before the transformer runs. Output blocks use the shared union
-/// alignment home; child truncation and expression barriers keep their lifts.
-#[inline(never)]
-pub(crate) fn yield_transform<D: DatasetView + Sync, M: RowDelivery<D>>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    mut delivery: M,
-    mut transform: impl FnMut(
-        SolutionSeq<D::Id>,
-        &mut EvalCtx<'_, D>,
-    ) -> Result<Evaluated<D::Id>, EvalError>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
-    let mut lift = crate::governor::lift::Lift::at_admitted(node, &ctx.growth)?;
-    let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-        let restore = ctx.enter_node(node);
-        let transformed = transform(rows.clone(), ctx);
-        ctx.leave_node(restore);
-        let transformed = transformed?;
-        if let Some(rows) = lift.absorb(0, transformed) {
-            delivery.deliver(&rows, ctx)?;
-            blocks.push(rows);
-        }
-        Ok(if delivery.stopped() {
-            std::ops::ControlFlow::Break(())
-        } else {
-            std::ops::ControlFlow::Continue(())
-        })
-    };
-    let child = eval_yielding(inner, &mut RowConsumer::new(&mut consume), ctx)?;
-    drop(consume);
-    if lift.absorb(0, child).is_none() {
-        return Ok(lift.withheld());
-    }
-    if let Some(tripped) = ctx.expression_barrier.observed() {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            node,
-            tripped,
-            syntactic_schema_admitted(node, &ctx.growth)?,
-        )));
-    }
-    Ok(lift.finish(crate::binop::concat_union(blocks, ctx)?))
-}
-
-// Specialize the one match into the native boundary with its original default
-// attribute, and into the separate out-of-line contextual boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
-    pattern: &GraphPattern,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if let Some(evaluated) = precomputed_evaluated(pattern, ctx)? {
-        if M::ACTIVE {
-            deliver_evaluated(&evaluated, delivery, ctx)?;
-        }
-        return Ok(evaluated);
-    }
-    if !M::ACTIVE {
-        return dispatch_node(pattern, &mut delivery, ctx);
-    }
-    let streamed = M::ACTIVE
-        && matches!(
-            pattern,
-            GraphPattern::Filter { .. }
-                | GraphPattern::Join { .. }
-                | GraphPattern::Minus { .. }
-                | GraphPattern::Extend { .. }
-                | GraphPattern::Project { .. }
-                | GraphPattern::ProjectStar { .. }
-                | GraphPattern::Apply { .. }
-                | GraphPattern::Union { .. }
-                | GraphPattern::Distinct { .. }
-                | GraphPattern::Reduced { .. }
-                | GraphPattern::Slice { .. }
-                | GraphPattern::Graph { .. }
-        );
-    let evaluated = dispatch_node(pattern, &mut delivery, ctx)?;
-    if !streamed {
-        deliver_evaluated(&evaluated, delivery, ctx)?;
-    }
-    Ok(evaluated)
-}
-
 /// The single node prelude, shared by direct and suspended ordinary dispatch.
 fn precomputed_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<Evaluated<D::Id>>, EvalError> {
+) -> Result<crate::shapes::ShapeStart<D::Id>, EvalError> {
     if let Some(seq) = ctx
         .expanded_dictionary
         .as_ref()
         .and_then(|materialized| materialized.get(pattern))
         .cloned()
     {
-        return Ok(Some(Evaluated::Complete(seq)));
+        return Ok(crate::shapes::ShapeStart::Complete(Evaluated::Complete(
+            seq,
+        )));
     }
-    if let Some(evaluated) = crate::shapes::eval_shape(pattern, ctx)? {
-        return Ok(Some(evaluated));
-    }
-    Ok(None)
+    crate::shapes::begin_shape(pattern, ctx)
 }
 
 /// Literal root dispatch for a physical runtime input. Child nodes still use
@@ -5105,20 +8465,15 @@ pub(crate) fn eval_literal_node<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    dispatch_node(pattern, &mut (), ctx)
+    eval_ordinary_chain_with_delivery(pattern, None, true, ctx)
 }
 
-// Inline the one bare match directly into the mode boundary. A captured
-// dispatcher closure would add storage and a call frame to native recursion.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-fn dispatch_node<D: DatasetView + Sync, M: RowDelivery<D>>(
+/// Execute only operators with no ordinary graph continuation.
+fn dispatch_node<D: DatasetView + Sync>(
     pattern: &GraphPattern,
-    delivery: &mut M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     match pattern {
-        // Leaves: a truncation cannot happen "below" them, so they have no lift.
         GraphPattern::Bgp { patterns } => {
             Ok(Evaluated::Complete(crate::bgp::eval_bgp(patterns, ctx)?))
         }
@@ -5135,146 +8490,21 @@ fn dispatch_node<D: DatasetView + Sync, M: RowDelivery<D>>(
         } => Ok(Evaluated::Complete(crate::modifier::eval_values(
             variables, bindings, ctx,
         )?)),
-
-        GraphPattern::Join { left, right } => {
-            crate::binop::eval_join_delivered(pattern, left, right, delivery.reborrow(), ctx)
-        }
-        GraphPattern::Union { arms } => {
-            crate::binop::eval_union_delivered(pattern, arms, delivery.reborrow(), ctx)
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => crate::binop::eval_left_join(pattern, left, right, expression.as_ref(), ctx),
-        GraphPattern::Minus { left, right } => {
-            crate::binop::eval_minus_delivered(pattern, left, right, delivery.reborrow(), ctx)
-        }
-        GraphPattern::Filter { expr, inner } => {
-            crate::expr::eval_filter_with(pattern, expr, inner, delivery.reborrow(), ctx)
-        }
-        GraphPattern::Extend {
-            inner,
-            variable,
-            expression,
-        } => crate::expr::eval_extend_with(
-            pattern,
-            inner,
-            variable,
-            expression,
-            delivery.reborrow(),
-            ctx,
-        ),
-        GraphPattern::Unfold {
-            inner,
-            expression,
-            element,
-            companion,
-        } => crate::cdt_unfold::eval_unfold(
-            pattern,
-            inner,
-            expression,
-            element,
-            companion.as_ref(),
-            ctx,
-        ),
-        GraphPattern::Project { inner, variables } => crate::modifier::eval_project_with(
-            pattern,
-            inner,
-            purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
-            delivery.reborrow(),
-            ctx,
-        ),
-        GraphPattern::ProjectStar { inner, variables } => crate::modifier::eval_project_with(
-            pattern,
-            inner,
-            purrdf_sparql_algebra::ProjectionNames::Star(variables),
-            delivery.reborrow(),
-            ctx,
-        ),
-        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-            crate::modifier::eval_dedup_delivered::<D, false, _>(
-                pattern,
-                inner,
-                delivery.reborrow(),
-                ctx,
-            )
-        }
-        GraphPattern::Slice {
-            inner,
-            start,
-            length,
-        } => crate::modifier::eval_slice_with(
-            pattern,
-            inner,
-            *start,
-            *length,
-            delivery.reborrow(),
-            ctx,
-        ),
-        GraphPattern::OrderBy { inner, expression } => {
-            crate::modifier::eval_order_by(pattern, inner, expression, ctx)
-        }
-        GraphPattern::Graph { name, inner } => {
-            crate::modifier::eval_graph_with(pattern, name, inner, delivery.reborrow(), ctx)
-        }
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => crate::modifier::eval_group(pattern, inner, variables, aggregates, ctx),
         GraphPattern::Service {
             name,
             inner,
             silent,
         } => crate::remote::eval_service(pattern, name, inner, *silent, ctx),
-        GraphPattern::Lateral { left, right } => {
-            crate::binop::eval_lateral(pattern, left, right, ctx)
-        }
-        GraphPattern::Apply {
-            left,
-            right,
-            policy,
-        } => crate::binop::eval_apply_with(pattern, left, right, policy, delivery.reborrow(), ctx),
-        // A call reached without an enclosing `Lateral` — nothing was written before it
-        // in its group — so it is driven over the identity table. The correlated shape
-        // (the parser's usual one) is intercepted by `binop::eval_lateral`, which hands
-        // the dispatch its left rows directly instead of substituting into this node.
         GraphPattern::PropertyFunction(call) => {
             crate::property_fn_eval::eval_property_function(call, ctx)
         }
+        GraphPattern::Apply { policy, .. } if policy.dataset_required => Err(EvalError::config(
+            "GRAPH requires a dataset, but this query is scoped to a single graph",
+        )),
+        _ => Err(EvalError::internal(
+            "a composite graph operator reached the leaf dispatcher without its heap continuation",
+        )),
     }
-}
-
-/// Deliver a materializing operator's completed rows outside the dispatcher
-/// frame, keeping row storage and consumer callbacks out of recursive dispatch.
-#[inline(never)]
-pub(crate) fn deliver_evaluated<D: DatasetView + Sync, M: RowDelivery<D>>(
-    evaluated: &Evaluated<D::Id>,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<(), EvalError> {
-    let seq = evaluated.rows();
-    if seq.is_empty() {
-        // An empty invocation still owns its reached search scope. Deliver that
-        // boundary without fabricating an identity row or evaluating a suffix.
-        return delivery.deliver(seq, ctx);
-    }
-    for row in &seq.rows {
-        if delivery.stopped() {
-            break;
-        }
-        let mut output = crate::solution::RowsBuilder::new(&ctx.growth);
-        output.push_row(row.clone_admitted(&ctx.growth)?)?;
-        delivery.deliver(
-            &SolutionSeq {
-                schema: seq.schema.clone(),
-                rows: output.finish()?,
-            },
-            ctx,
-        )?;
-    }
-    Ok(())
 }
 
 /// Derive the columns an algebra node exposes without evaluating it.
@@ -5988,11 +9218,11 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
 
 /// [`evaluate_query_evaluated`], numbering `query` through `kept` when its owner keeps a
 /// plan cache for it (see [`prepare_query_context_over`]).
-pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
+fn begin_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+) -> Result<(), EvalError> {
     if ctx.dataset.storage_live_budget().is_some()
         && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
     {
@@ -6010,27 +9240,28 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
     if let Some(error) = ctx.dataset.read_error() {
         return Err(EvalError::source_read(error));
     }
+    Ok(())
+}
+
+fn finish_solution_query<D: DatasetView + Sync>(
+    query: &Query,
+    evaluated: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
     match query {
-        // A parsed `SELECT` ends in a projection, which already names only the
-        // pattern's variables; a caller-built one need not, so a shared blank's column
-        // (see `crate::blank_scope`) is dropped from the answer here either way.
-        Query::Select { pattern, .. } => {
-            match commit_answer_rows(eval_answer_pattern(pattern, ctx)?, ctx) {
-                Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(
-                    crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?,
-                ))),
-                Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
-                    outcome: Outcome::Solutions(
-                        crate::blank_scope::without_joined_blanks_admitted(
-                            certificate.rows().clone(),
-                            &ctx.growth,
-                        )?,
-                    ),
-                    certificate,
-                }),
-            }
-        }
-        Query::Ask { pattern, .. } => match eval_answer_pattern(pattern, ctx)? {
+        Query::Select { .. } => match commit_answer_rows(evaluated, ctx) {
+            Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(
+                crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?,
+            ))),
+            Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
+                outcome: Outcome::Solutions(crate::blank_scope::without_joined_blanks_admitted(
+                    certificate.rows().clone(),
+                    &ctx.growth,
+                )?),
+                certificate,
+            }),
+        },
+        Query::Ask { .. } => match evaluated {
             Evaluated::Complete(seq) => {
                 let tracked = ctx.may_have_evidence()
                     || seq.rows.may_have_evidence_attachment()
@@ -6058,6 +9289,26 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
                 certificate,
             }),
         },
+        _ => Err(EvalError::internal(
+            "a solution query continuation has another query form",
+        )),
+    }
+}
+
+pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    begin_query_evaluated(query, kept, ctx)?;
+    match query {
+        // A parsed `SELECT` ends in a projection, which already names only the
+        // pattern's variables; a caller-built one need not, so a shared blank's column
+        // (see `crate::blank_scope`) is dropped from the answer here either way.
+        Query::Select { pattern, .. } | Query::Ask { pattern, .. } => {
+            let evaluated = eval_answer_pattern(pattern, ctx)?;
+            finish_solution_query(query, evaluated, ctx)
+        }
         Query::Construct {
             template, pattern, ..
         } => {
@@ -6332,10 +9583,13 @@ mod tests {
             let (workspace, ledger, _) = account(base);
             ctx.growth = workspace.capability();
             let mut runner = OrdinaryRunner {
-                pending: crate::AdmittedVec::new(&ctx.growth),
+                state: OrdinaryState {
+                    pending: crate::AdmittedVec::new(&ctx.growth),
+                    active: None,
+                    first,
+                    next_delivery: DeliveryTarget::None,
+                },
                 ctx: &mut ctx,
-                active: None,
-                first,
             };
             assert_eq!(
                 ledger.live.load(Ordering::Relaxed),
@@ -6343,11 +9597,18 @@ mod tests {
                 "empty pending storage has no native grant"
             );
             let error = runner
-                .schedule_lateral(OrdinaryPosition::Borrowed(&node), &node, right, sequence)
+                .state
+                .schedule_correlated(
+                    OrdinaryPosition::Borrowed(&node),
+                    &node,
+                    right,
+                    OrdinaryCorrelation::Lateral(sequence),
+                    runner.ctx,
+                )
                 .err()
                 .expect("first new spill or box grant refuses");
             assert!(matches!(error, EvalError::WorkspaceStopped));
-            assert!(runner.pending.is_empty());
+            assert!(runner.state.pending.is_empty());
             drop(runner);
             assert!(!ctx.in_substituted_exists);
             assert!(ctx.active_copied_pattern.is_none());
@@ -6396,35 +9657,43 @@ mod tests {
         else {
             panic!("one FILTER row");
         };
-        let OrdinaryFilterStep::Child {
-            sequence,
-            decision,
-            record,
-        } = step_ordinary_filter(sequence, &node, &expression, &mut ctx).unwrap()
+        let crate::expr::FilterSequenceStep::Suspend(sequence, crate::vm::Suspend::Exists(site)) =
+            sequence.step(&node, &expression, &mut ctx).unwrap()
         else {
+            panic!("actual EXISTS suspension");
+        };
+        let (decision, record) = sequence
+            .prepare_exists(site, &expression, &mut ctx)
+            .unwrap();
+        let crate::expr::ExistsDecision::Child(decision) = decision else {
             panic!("actual Definition child event");
         };
         let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().unwrap();
         let (workspace, ledger, _) = account(base);
         ctx.growth = workspace.capability();
         let mut runner = OrdinaryRunner {
-            pending: crate::AdmittedVec::new(&ctx.growth),
+            state: OrdinaryState {
+                pending: crate::AdmittedVec::new(&ctx.growth),
+                active: None,
+                first: None,
+                next_delivery: DeliveryTarget::None,
+            },
             ctx: &mut ctx,
-            active: None,
-            first: None,
         };
         let error = runner
+            .state
             .schedule_exists(
                 OrdinaryPosition::Borrowed(&node),
-                sequence,
+                OrdinaryExpression::Filter(sequence),
                 decision,
                 record,
+                runner.ctx,
             )
             .err()
             .expect("actual suspended EXISTS box refuses its first grant");
         assert!(matches!(error, EvalError::WorkspaceStopped));
-        assert!(runner.first.is_none());
-        assert!(runner.pending.is_empty());
+        assert!(runner.state.first.is_none());
+        assert!(runner.state.pending.is_empty());
         drop(runner);
         assert!(!ctx.in_substituted_exists);
         assert!(ctx.active_copied_pattern.is_none());

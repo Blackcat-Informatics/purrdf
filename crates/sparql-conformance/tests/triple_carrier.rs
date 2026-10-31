@@ -43,7 +43,7 @@ fn run_triple(
             base_iri: Some(&case.base),
             substitutions: &[],
         },
-        options,
+        &options,
     );
     match result {
         Ok(complete) => Ok(Some(run::RunOutcome::RetainedEval {

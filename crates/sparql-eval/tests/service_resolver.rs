@@ -113,7 +113,7 @@ fn run_with_base(
             substitutions: &[],
         },
         resolver,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
 }
 
@@ -141,7 +141,7 @@ fn run_recorded(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::new().with_remote(Some(resolver)),
+        &QueryOptions::new().with_remote(Some(resolver)),
         &QueryGovernors::METERED,
     )?;
     let silenced = outcome
@@ -261,12 +261,12 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
         let before = spy.posts();
         let per_run = usize::from(endpoint == NET_EP);
         let expected = engine
-            .explain_query_with_options(&resident, &query, None, options)
+            .explain_query_with_options(&resident, &query, None, &options)
             .expect("the configured resident source answers");
         assert_eq!(spy.posts(), before + per_run);
         let ordinary = paged.query_view(PagedQueryLimits::UNBOUNDED);
         let (explanation, evidence) = engine
-            .explain_query_with_options_fallible_view(&ordinary, &query, None, options)
+            .explain_query_with_options_fallible_view(&ordinary, &query, None, &options)
             .expect("operational EXPLAIN forwards the same request source");
         support::assert_scan_explanation_matches_resident(&explanation, &expected.render());
         assert_eq!(evidence.consumed_pages, 1);
@@ -278,7 +278,7 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
                 &quiet,
                 &query,
                 None,
-                options,
+                &options,
                 Arc::new(CancellationFlag::new()),
             )
             .expect("a quiet stop still measures the configured source");
@@ -289,11 +289,11 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
         let stop = Arc::new(CancellationFlag::new());
         stop.cancel();
         let stopped_resident = engine
-            .explain_query_with_stop_signal(&resident, &query, None, options, stop.clone())
+            .explain_query_with_stop_signal(&resident, &query, None, &options, stop.clone())
             .expect("resident cancellation reports its truncated measuring receipt");
         let cancelled = paged.query_view(PagedQueryLimits::UNBOUNDED);
         let (stopped, _) = engine
-            .explain_query_with_stop_signal_fallible_view(&cancelled, &query, None, options, stop)
+            .explain_query_with_stop_signal_fallible_view(&cancelled, &query, None, &options, stop)
             .expect("operational cancellation reports the same measuring receipt");
         support::assert_scan_explanation_matches_resident(&stopped, &stopped_resident.render());
         assert_eq!(
@@ -324,11 +324,11 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
     let query = service_query(NET_EP, false);
     let before = spy.posts();
     let expected = engine
-        .explain_query_with_options(&resident, &query, None, denied_options)
+        .explain_query_with_options(&resident, &query, None, &denied_options)
         .expect_err("resident EXPLAIN propagates the source capability refusal");
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let failed = engine
-        .explain_query_with_options_fallible_view(&view, &query, None, denied_options)
+        .explain_query_with_options_fallible_view(&view, &query, None, &denied_options)
         .expect_err("a failed SERVICE cannot publish an operational explanation");
     assert!(failed.operational_error().is_none());
     assert!(failed.partial_answers().is_none());

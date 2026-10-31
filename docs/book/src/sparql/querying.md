@@ -1852,7 +1852,7 @@ let result = engine.query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions::EMPTY.with_env(&env),
+    &QueryOptions::EMPTY.with_env(&env),
 ).expect("custom total");
 let SparqlResult::Solutions { rows, .. } = result else {
     panic!("SELECT result");

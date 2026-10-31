@@ -106,7 +106,7 @@ fn tagged_by_a_native_function(tag: &str) -> Option<TermValue> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_functions(&functions),
+            &QueryOptions::new().with_functions(&functions),
         )
         .expect("the query evaluates whatever the function returned");
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -181,7 +181,7 @@ fn a_refused_tag_costs_the_binding_and_nothing_else() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_functions(&functions),
+            &QueryOptions::new().with_functions(&functions),
         )
         .expect("the query evaluates");
     let SparqlResult::Solutions {
@@ -275,7 +275,7 @@ fn prebind_purr_tagged_via(tag: &str, prebinding: ShaclPrebinding) -> Result<usi
             base_iri: None,
             substitutions: &substitutions,
         },
-        QueryOptions::new().with_prebinding(prebinding),
+        &QueryOptions::new().with_prebinding(prebinding),
     );
     match result {
         Ok(SparqlResult::Solutions { rows, .. }) => Ok(rows.len()),
@@ -348,7 +348,7 @@ fn a_zero_length_path_over_an_absent_tagged_endpoint_keeps_its_row() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("the query evaluates");
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -401,7 +401,7 @@ fn a_hand_built_algebra_is_judged_at_admission() {
             base_iri: None,
             version: None,
         };
-        purrdf_sparql_eval::PreparedQuery::rewritten(query, QueryOptions::EMPTY)
+        purrdf_sparql_eval::PreparedQuery::rewritten(query, &QueryOptions::EMPTY)
             .map(|_| ())
             .map_err(|diagnostic| diagnostic.code)
     };

@@ -107,6 +107,10 @@ export interface GovernorOptions {
   readonly maxScratchBytes?: GovernorCeiling | null;
   /** Requests issued to remote or federated endpoints. */
   readonly maxRemoteRequests?: GovernorCeiling | null;
+  /** Inclusive logical user-function depth; the default is thirty-two. */
+  readonly maxUdfDepth?: GovernorCeiling | null;
+  /** Remove the logical depth ceiling. Cannot be combined with maxUdfDepth. */
+  readonly unlimitedUdfDepth?: boolean;
   /** A cancellation bit the host can flip. The engine is handed a share of it. */
   readonly cancel?: CancellationToken | null;
 }

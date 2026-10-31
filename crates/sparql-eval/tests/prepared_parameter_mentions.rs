@@ -18,7 +18,7 @@ const SELECT: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
 fn prepared(query: &str, parameters: &[&str]) -> purrdf_sparql_eval::PreparedExecution {
     NativeSparqlEngine::new()
-        .prepare_execution(query, None, parameters, QueryOptions::EMPTY)
+        .prepare_execution(query, None, parameters, &QueryOptions::EMPTY)
         .unwrap_or_else(|error| panic!("{query}: {error}"))
 }
 
@@ -65,7 +65,7 @@ fn a_declared_used_parameter_passes_and_runs() {
         "SELECT * WHERE { { SELECT * WHERE { ?this <http://example.org/p> ?o } } }",
     ] {
         let mut execution = engine
-            .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+            .prepare_execution(query, None, &["this"], &QueryOptions::EMPTY)
             .expect("prepare");
         execution
             .check_parameters_mentioned()
@@ -74,7 +74,7 @@ fn a_declared_used_parameter_passes_and_runs() {
             .bind(0, TermValue::Iri("http://example.org/s".to_owned()))
             .expect("bind");
         let rows = engine
-            .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut execution, &*dataset, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };

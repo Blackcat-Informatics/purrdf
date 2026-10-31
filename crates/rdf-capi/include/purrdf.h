@@ -342,8 +342,15 @@
  * or a canonical decimal `u64`. Every run reports its own effective policy and
  * charged work. Errors retain original native causes and receipts until freed.
  * All output slots must be distinct; rebuild affected callers against this header.
+ *
+ * # `0.17.0` → `0.18.0`: caller-selected logical UDF depth
+ *
+ * `PurrdfQueryGovernors` gains `max_udf_depth` before `deadline_millis`.
+ * MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
+ * the default depth limit of 32. The two flag bits conflict. Rebuild callers
+ * against the new structure layout and regenerate any copied declarations.
  */
-#define PURRDF_ABI_MINOR 17
+#define PURRDF_ABI_MINOR 18
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -633,6 +640,14 @@ enum PurrdfGovernorFlag
      * Poll `cancellation`.
      */
     PURRDF_GOVERNOR_FLAG_CANCELLATION = (1 << 6),
+    /**
+     * Enforce the inclusive logical depth in `max_udf_depth`.
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_UDF_DEPTH = (1 << 7),
+    /**
+     * Remove the default logical user-function depth ceiling.
+     */
+    PURRDF_GOVERNOR_FLAG_UNLIMITED_UDF_DEPTH = (1 << 8),
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
@@ -1175,7 +1190,9 @@ typedef struct {
  * Set the corresponding [`PurrdfGovernorFlag`] bit in `enabled` for every field that is
  * meaningful. Zero is a valid inclusive ceiling. Unset numeric fields are ignored, and
  * every governed call still meters them at the native `METERED` ceiling so its evidence
- * is useful. `reserved` must be zero. `cancellation`, when enabled, must remain a live
+ * is useful. Logical UDF depth defaults to 32. Enable MaxUdfDepth for an inclusive
+ * finite depth or UnlimitedUdfDepth to remove it; enabling both is an error.
+ * `reserved` must be zero. `cancellation`, when enabled, must remain a live
  * handle until the synchronous call returns.
  */
 typedef struct {
@@ -1207,6 +1224,11 @@ typedef struct {
      * Inclusive remote-request ceiling.
      */
     uint64_t max_remote_requests;
+    /**
+     * Inclusive logical depth when MaxUdfDepth is enabled.
+     * MaxUdfDepth and UnlimitedUdfDepth are mutually exclusive.
+     */
+    uint64_t max_udf_depth;
     /**
      * Relative wall-clock budget in milliseconds.
      */
@@ -2538,7 +2560,8 @@ int32_t purrdf_geo_point_index_call(const PurrdfGeoPointIndex *index,
 void purrdf_geo_point_index_free(PurrdfGeoPointIndex *index);
 
 /**
- * Initialize `*out` as a metered governed call with no finite caller ceiling.
+ * Initialize `*out` as a metered governed call with the default UDF depth limit.
+ * Other resource dimensions have no finite caller ceiling.
  *
  * # Safety
  * `out` must be writable.

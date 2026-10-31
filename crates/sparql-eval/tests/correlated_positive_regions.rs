@@ -67,7 +67,7 @@ fn copied_lateral_union_keeps_native_bindings_and_source_columns() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("native correlated schedule")
@@ -100,7 +100,7 @@ fn correlated_and_uncorrelated_exists_copies_preserve_their_row_scopes() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("native EXISTS schedule")
@@ -129,7 +129,7 @@ fn copied_positive_schedule_fuel_cuts_remain_complete_binding_lower_bounds() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED
                     .with_max_intermediate_cells(CELLS)
                     .with_fuel(fuel),

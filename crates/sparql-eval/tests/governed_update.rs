@@ -119,7 +119,7 @@ fn graph_publication_observes_the_post_freeze_stop_before_assigning_the_arc() {
                     .update_governed(
                         &mut control,
                         request(&update),
-                        options,
+                        &options,
                         &QueryGovernors::UNBOUNDED.with_stop_signal(polls.clone()),
                     )
                     .unwrap()
@@ -140,7 +140,7 @@ fn graph_publication_observes_the_post_freeze_stop_before_assigning_the_arc() {
                     .update_governed(
                         &mut dataset,
                         request(&update),
-                        options,
+                        &options,
                         &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(quiet)),
                     )
                     .expect("a publication stop is an outcome");
@@ -200,7 +200,7 @@ fn graph_publication_bulk_withdrawal_stops_between_empty_declarations() {
                         .update_governed(
                             &mut dataset,
                             request(&update),
-                            QueryOptions::EMPTY.with_graph_existence(mode),
+                            &QueryOptions::EMPTY.with_graph_existence(mode),
                             &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(quiet)),
                         )
                         .expect("a metadata-loop stop is an outcome, including SILENT");
@@ -257,7 +257,7 @@ fn graph_silent_semantic_noops_do_not_suppress_cancellation_or_deadline() {
                 .update_governed(
                     &mut dataset,
                     request(&update),
-                    QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::RememberEmpty),
+                    &QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::RememberEmpty),
                     &QueryGovernors::UNBOUNDED.with_stop_signal(signal),
                 )
                 .expect("a stop is not a semantic SILENT failure");
@@ -276,7 +276,7 @@ fn graph_silent_semantic_noops_do_not_suppress_cancellation_or_deadline() {
             .update_governed(
                 &mut dataset,
                 request(&update),
-                QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::RememberEmpty),
+                &QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::RememberEmpty),
                 &QueryGovernors::UNBOUNDED.with_fuel(0),
             )
             .expect("the semantic SILENT neighbor has no row work to price");
@@ -302,7 +302,7 @@ fn graph_metadata_does_not_reprice_transfer_fuel_or_publish_an_earlier_create_on
                 .update_governed(
                     &mut metered_dataset,
                     request(&update),
-                    QueryOptions::EMPTY.with_graph_existence(mode),
+                    &QueryOptions::EMPTY.with_graph_existence(mode),
                     &QueryGovernors::METERED,
                 )
                 .expect("metered transfer");
@@ -320,7 +320,7 @@ fn graph_metadata_does_not_reprice_transfer_fuel_or_publish_an_earlier_create_on
                     .update_governed(
                         &mut dataset,
                         request(&update),
-                        QueryOptions::EMPTY.with_graph_existence(mode),
+                        &QueryOptions::EMPTY.with_graph_existence(mode),
                         &QueryGovernors::UNBOUNDED.with_fuel(limit),
                     )
                     .expect("a fuel ceiling is an outcome");
@@ -363,7 +363,7 @@ fn governed(update: &str, governors: &QueryGovernors) -> (Arc<RdfDataset>, Gover
         .update_governed(
             &mut dataset,
             request(update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             governors,
         )
         .expect("a tripped governor is an outcome, not an update error");
@@ -400,7 +400,7 @@ fn metered_query_fuel(select: &str) -> u64 {
         .query_governed(
             &fixture(),
             request(select),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("the metering query runs");
@@ -524,7 +524,7 @@ fn insert_template_blank_reservations_trip_atomically_after_where_completes() {
             .update_governed(
                 &mut dataset,
                 request(&update),
-                QueryOptions::EMPTY.with_entropy_seed(0),
+                &QueryOptions::EMPTY.with_entropy_seed(0),
                 &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(required - 1),
             )
             .expect("reservation exhaustion remains a typed governor outcome");
@@ -615,7 +615,7 @@ fn update_governed_trip_leaves_the_store_byte_identical() {
         .update_governed(
             &mut dataset,
             request(&whole),
-            QueryOptions::EMPTY.with_entropy_seed(0),
+            &QueryOptions::EMPTY.with_entropy_seed(0),
             &QueryGovernors::UNBOUNDED.with_fuel(ceiling),
         )
         .expect("a tripped governor is an outcome, not an update error");
@@ -667,7 +667,7 @@ fn a_trip_inside_a_bulk_operation_still_leaves_the_store_byte_identical() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             // Enough for the INSERT DATA and part of the CLEAR, never enough for all of it.
             &QueryGovernors::UNBOUNDED.with_fuel(full - 1),
         )
@@ -700,7 +700,7 @@ fn load_is_not_issued_when_the_stop_signal_is_already_latched() {
             request(&format!(
                 "{PREFIX}INSERT DATA {{ ex:added ex:p ex:one }} ;\nLOAD ex:doc"
             )),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &cancelled_governors(),
         )
         .expect("a tripped governor is an outcome, not an update error");
@@ -737,7 +737,7 @@ fn load_is_not_issued_when_the_stop_signal_latches_at_the_host_seam() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(1)),
         )
         .expect("a tripped governor is an outcome");
@@ -768,7 +768,7 @@ fn load_silent_does_not_launder_a_governor_trip_into_a_noop_success() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD SILENT ex:doc")),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(1)),
         )
         .expect("a tripped governor is an outcome");
@@ -795,7 +795,7 @@ fn load_returning_after_cancellation_is_discarded_before_publication() {
             .update_governed(
                 &mut dataset,
                 request(&format!("{PREFIX}LOAD{silent} ex:doc")),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
             )
             .expect("a post-return stop is an outcome");
@@ -829,7 +829,7 @@ fn load_charges_for_the_document_it_ingests() {
         .update_governed(
             &mut metered,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("the metering run");
@@ -855,7 +855,7 @@ fn load_charges_for_the_document_it_ingests() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(0),
         )
         .expect("a tripped governor is an outcome");
@@ -874,7 +874,7 @@ fn load_charges_for_the_document_it_ingests() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(1),
         )
         .expect("a tripped governor is an outcome");
@@ -911,7 +911,7 @@ fn a_remote_request_ceiling_bounds_load_before_the_fetch() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_remote_requests(0),
         )
         .expect("a tripped governor is an outcome");
@@ -1041,7 +1041,7 @@ fn a_where_clause_stops_on_the_fuel_ceiling_and_applies_nothing() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(full / 2),
         )
         .expect("a tripped governor is an outcome");
@@ -1081,7 +1081,7 @@ fn a_governor_trip_inside_the_where_crosses_as_a_typed_governor_not_a_diagnostic
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(fuel - 1),
         )
         .expect("a WHERE-clause trip is an outcome, not a diagnostic");
@@ -1126,7 +1126,7 @@ fn a_where_stopped_part_way_applies_none_of_the_mutation_it_had_computed() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             // No ceiling on any dimension: a stop signal, and nothing else.
             &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(1)),
         )
@@ -1165,7 +1165,7 @@ fn an_intermediate_cell_ceiling_refuses_an_update_whose_where_would_breach_it() 
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY.with_entropy_seed(0),
+            &QueryOptions::EMPTY.with_entropy_seed(0),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(4),
         )
         .expect("a refusal is an outcome, not an update error");
@@ -1209,7 +1209,7 @@ fn an_intermediate_cell_ceiling_bounds_update_staging_before_limit_plus_one() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
         )
         .expect("a staging trip is an outcome, not an update error");
@@ -1305,7 +1305,7 @@ fn every_mutating_operation_kind_charges_and_stops() {
             .update_governed(
                 &mut dataset,
                 request(&update),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(fuel - 1),
             )
             .unwrap_or_else(|error| panic!("{kind} reported a trip as an error: {error:?}"));
@@ -1348,7 +1348,7 @@ fn a_latched_stop_signal_stops_every_operation_kind_before_it_runs() {
             .update_governed(
                 &mut dataset,
                 request(&update),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &cancelled_governors(),
             )
             .expect("a tripped governor is an outcome");
@@ -1378,7 +1378,7 @@ fn a_parse_failure_is_an_error_not_an_exhausted_budget() {
         .update_governed(
             &mut dataset,
             request("INSERT DATA { this is not sparql"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect_err("a malformed request is an error");
@@ -1395,7 +1395,7 @@ fn a_missing_host_seam_is_an_error_not_an_exhausted_budget() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect_err("a LOAD with no resolver is an error");
@@ -1440,7 +1440,7 @@ fn a_governed_update_over_triple_terms_charges_and_rolls_back() {
         .update_governed(
             &mut dataset,
             request(&update),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(fuel - 1),
         )
         .expect("a tripped governor is an outcome");

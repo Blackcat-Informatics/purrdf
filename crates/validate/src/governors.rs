@@ -5,25 +5,19 @@
 //! evaluator's [`QueryGovernors`].
 //!
 //! The command line, the C ABI, the wasm package and the Python binding each
-//! take the same five ceilings — fuel, answers, intermediate cells, scratch
-//! bytes, remote requests — in their own spelling, plus a stop signal they build
+//! take the same ceilings — fuel, answers, intermediate cells, scratch bytes,
+//! remote requests and logical UDF depth — in their own spelling, plus a stop signal they build
 //! from their own clock and cancellation handle. [`from_parts`] is the one place
 //! those become a configuration, so a governed call means the same thing on
 //! every host.
 //!
 //! # The base is `METERED`
 //!
-//! A ceiling the caller did not name is not enforced, but it is **metered**:
-//! every call starts from [`QueryGovernors::METERED`], which charges every
-//! caller-settable dimension against a ceiling no query can reach. Two things
-//! follow, and both are what a governed call promises. Every outcome — a
-//! complete one included — carries evidence a caller can size the next budget
-//! from, where [`QueryGovernors::UNBOUNDED`] reports nothing because it charges
-//! nothing. And the evaluator polls the stop signal every
-//! [`STOP_POLL_FUEL`](purrdf_sparql_eval::STOP_POLL_FUEL) units of fuel as well
-//! as at each algebra node it enters, so a deadline or a cancellation is noticed
-//! promptly inside a long-running operator; with fuel disengaged only the second
-//! poll runs.
+//! Calls start from [`QueryGovernors::METERED`]. Unnamed ordinary dimensions
+//! are metered without practical ceilings; logical UDF depth deliberately retains
+//! the default of 32 unless the caller raises it or explicitly removes it.
+//! Completed and incomplete outcomes report their engaged dimensions. The stop
+//! signal is polled on the native governor schedule.
 //!
 //! # "No ceiling" is said, not defaulted
 //!
@@ -47,7 +41,8 @@ use purrdf_sparql_eval::{QueryGovernors, ResourceDimension, StopSignal};
 ///
 /// The default names nothing, and [`from_parts`] turns it into
 /// [`QueryGovernors::METERED`]: a governed call that bounds nothing and reports
-/// everything. Only [`Self::no_ceiling`] reaches the ungoverned state.
+/// everything while retaining the default logical UDF depth of 32.
+/// Only [`Self::no_ceiling`] reaches the ungoverned state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GovernorParts {
     /// Abstract execution steps ([`ResourceDimension::Fuel`]).
@@ -65,6 +60,11 @@ pub struct GovernorParts {
     /// Requests issued to remote or federated endpoints
     /// ([`ResourceDimension::RemoteRequests`]).
     pub max_remote_requests: Option<u64>,
+    /// Inclusive logical UDF depth ceiling ([`ResourceDimension::UdfDepth`]).
+    pub max_udf_depth: Option<u64>,
+    /// Remove only the logical UDF depth limit, retaining the other governors.
+    /// Refused beside [`Self::max_udf_depth`].
+    pub unlimited_udf_depth: bool,
     /// Decline every ceiling and all accounting:
     /// [`QueryGovernors::UNBOUNDED`] instead of [`QueryGovernors::METERED`].
     /// Refused beside any named ceiling.
@@ -85,6 +85,7 @@ impl GovernorParts {
             ),
             (ResourceDimension::ScratchBytes, self.max_scratch_bytes),
             (ResourceDimension::RemoteRequests, self.max_remote_requests),
+            (ResourceDimension::UdfDepth, self.max_udf_depth),
         ]
         .into_iter()
         .filter_map(|(dimension, ceiling)| ceiling.map(|ceiling| (dimension, ceiling)))
@@ -106,6 +107,11 @@ pub enum GovernorPartsError {
         /// The dimension a ceiling was named on.
         dimension: ResourceDimension,
     },
+    /// A finite logical depth ceiling and explicit removal were both supplied.
+    UdfDepthConflict {
+        /// The original caller-supplied ceiling, including zero.
+        limit: u64,
+    },
     /// An `UPDATE` was given an answer cap. An update has no answer sequence to
     /// bound, so the cap would be a governor the caller believes is set and that
     /// nothing can ever trip.
@@ -119,6 +125,10 @@ impl fmt::Display for GovernorPartsError {
                 f,
                 "a {dimension:?} ceiling was named together with no ceiling at all; name the \
                  ceiling, or ask for none"
+            ),
+            Self::UdfDepthConflict { limit } => write!(
+                f,
+                "a finite UDF-depth ceiling of {limit} and an unlimited UDF-depth policy cannot both apply"
             ),
             Self::AnswerCapOnUpdate => f.write_str(
                 "an answer cap is not accepted by an UPDATE: an UPDATE has no answer sequence \
@@ -142,11 +152,17 @@ impl std::error::Error for GovernorPartsError {}
 /// # Errors
 ///
 /// [`GovernorPartsError::CeilingWithNoCeiling`] when `parts` asks for no ceiling
-/// and names one.
+/// and names one, or [`GovernorPartsError::UdfDepthConflict`] when both logical
+/// depth spellings are supplied.
 pub fn from_parts(
     parts: &GovernorParts,
     stop: Option<Arc<dyn StopSignal>>,
 ) -> Result<QueryGovernors, GovernorPartsError> {
+    if let Some(limit) = parts.max_udf_depth
+        && parts.unlimited_udf_depth
+    {
+        return Err(GovernorPartsError::UdfDepthConflict { limit });
+    }
     let mut governors = if parts.no_ceiling {
         if let Some(&(dimension, _)) = parts.named().first() {
             return Err(GovernorPartsError::CeilingWithNoCeiling { dimension });
@@ -169,6 +185,12 @@ pub fn from_parts(
     }
     if let Some(requests) = parts.max_remote_requests {
         governors = governors.with_max_remote_requests(requests);
+    }
+    // Resolve one depth policy. Unspecified retains the selected base's policy.
+    if parts.unlimited_udf_depth {
+        governors = governors.without_udf_depth_limit();
+    } else if let Some(limit) = parts.max_udf_depth {
+        governors = governors.with_max_udf_depth(limit);
     }
     if let Some(stop) = stop {
         governors = governors.with_stop_signal(stop);
@@ -230,7 +252,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 governors,
             )
             .expect("the query parses and evaluates")
@@ -252,6 +274,8 @@ mod tests {
             max_intermediate_cells: Some(13),
             max_scratch_bytes: Some(14),
             max_remote_requests: Some(15),
+            max_udf_depth: Some(16),
+            unlimited_udf_depth: false,
             no_ceiling: false,
         };
         let limits = from_parts(&parts, None).expect("no conflict").limits();
@@ -261,6 +285,7 @@ mod tests {
             .with_max_intermediate_cells(13)
             .with_max_scratch_bytes(14)
             .with_max_remote_requests(15)
+            .with_max_udf_depth(16)
             .limits();
         assert_eq!(limits, expected);
 

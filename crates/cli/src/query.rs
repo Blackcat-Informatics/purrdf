@@ -250,7 +250,7 @@ impl<'a> RelationSpecs<'a> {
         let prepared = engine.prepare_query_with_options(
             self.query,
             self.base,
-            EngineQueryOptions::new()
+            &EngineQueryOptions::new()
                 .with_geo(self.geo)
                 .with_env(&engine_env(aggregates, Some(&registry))?),
         )?;
@@ -311,7 +311,7 @@ impl ViewOp for QueryOp<'_> {
                 view,
                 prepared.as_deref().unwrap_or(self.prepared),
                 &[],
-                options.with_coordinate_observer(capture),
+                &options.with_coordinate_observer(capture),
             )?)
         })
     }
@@ -384,7 +384,7 @@ impl ViewOp for GovernedQueryOp<'_> {
                 view,
                 prepared.as_deref().unwrap_or(self.prepared),
                 &[],
-                options.with_coordinate_observer(capture),
+                &options.with_coordinate_observer(capture),
                 &governors,
             )?)
         })
@@ -437,7 +437,7 @@ impl ViewOp for ExplainOp<'_> {
                 view,
                 self.query,
                 self.base,
-                options.with_coordinate_observer(capture),
+                &options.with_coordinate_observer(capture),
             )?)
         })
     }
@@ -681,7 +681,7 @@ fn entailed_query<D: DatasetView>(
     regime: &str,
     closure: &EntailmentClosure<'_>,
     governors: &QueryGovernors,
-    options: EngineQueryOptions<'_, '_>,
+    options: &EngineQueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
     canonical: &crate::canonical::Request,
@@ -800,7 +800,7 @@ impl ViewOp for EntailedQueryOp<'_> {
                 &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
                     .with_limits(self.limits.eval_options()),
                 self.governors,
-                engine_options(
+                &engine_options(
                     &engine_env(self.aggregates, admitted.as_ref())?,
                     self.relations.geo,
                     self.division,
@@ -983,7 +983,7 @@ pub(crate) fn run(
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
-        EngineQueryOptions::new()
+        &EngineQueryOptions::new()
             .with_geo(options.geo)
             .with_env(&engine_env(aggregates.as_ref(), None)?),
     )?;

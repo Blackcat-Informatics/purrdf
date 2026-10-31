@@ -463,7 +463,7 @@ fn governed_query(profile: &Profile) -> Result<Vec<Metric>, String> {
         .query_governed(
             &dataset,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .map_err(|d| format!("metered join: {d}"))?;
@@ -496,7 +496,7 @@ fn governed_query(profile: &Profile) -> Result<Vec<Metric>, String> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &tiny,
         )
         .map_err(|d| format!("truncation join: {d}"))?;
@@ -515,7 +515,7 @@ fn governed_query(profile: &Profile) -> Result<Vec<Metric>, String> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &tiny,
         )
         .map_err(|d| format!("selective neighbor: {d}"))?;
@@ -647,7 +647,7 @@ fn pack_paged(
             &view,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .map_err(|d| format!("pack query: {d}"))?;
@@ -697,7 +697,7 @@ fn pack_paged(
     let result = engine.query_governed_fallible_view(
         &bounded,
         request,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
     if let Err(diagnostic) = result {
@@ -743,7 +743,7 @@ fn pack_paged(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .map_err(|diagnostic| format!("the single-graph query failed unbounded: {diagnostic}"))?;
@@ -810,7 +810,7 @@ fn pack_paged(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .map_err(|diagnostic| {
@@ -847,7 +847,7 @@ fn pack_paged(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
     if refused.is_ok() {
@@ -867,7 +867,7 @@ fn pack_paged(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .map_err(|diagnostic| {

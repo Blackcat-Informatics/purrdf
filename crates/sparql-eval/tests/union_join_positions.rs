@@ -121,7 +121,7 @@ fn union_and_connected_predicates_are_position_independent_under_the_same_ceilin
                             base_iri: None,
                             substitutions: &substitutions,
                         },
-                        options,
+                        &options,
                         &governors,
                     )
                     .expect("the query has an outcome");
@@ -167,7 +167,7 @@ fn a_genuinely_disconnected_product_is_still_refused_before_work() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &governors,
         )
         .expect("the query has an outcome");
@@ -221,7 +221,7 @@ fn independent_union_factors_run_once_and_preserve_cartesian_bags_and_cuts() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(120),
         )
         .expect("exact capacity outcome");
@@ -253,7 +253,7 @@ fn independent_union_factors_run_once_and_preserve_cartesian_bags_and_cuts() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(119),
         )
         .expect("below-capacity outcome");
@@ -277,7 +277,7 @@ fn independent_union_factors_run_once_and_preserve_cartesian_bags_and_cuts() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(ceiling),
             )
             .expect("independent product cut outcome");
@@ -308,7 +308,7 @@ fn independent_union_factors_run_once_and_preserve_cartesian_bags_and_cuts() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("unit arms outcome")
@@ -400,7 +400,7 @@ fn retained_unit_order_preserves_the_structural_override_and_ordinary_cache_path
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .expect("ordinary outcome")
@@ -451,7 +451,7 @@ fn tiny_union_drives_large_attributes_without_changing_the_ceiling() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &governors,
                 )
                 .expect("an outcome"),
@@ -506,7 +506,7 @@ fn tiny_attributes_drive_large_union_without_changing_the_ceiling() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             )
             .expect("mirror outcome");
@@ -560,7 +560,7 @@ fn selective_attribute_components_connect_before_their_product() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("selective components outcome");
@@ -612,7 +612,7 @@ fn heterogeneous_union_bindings_choose_native_probes_per_row() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("mask outcome")
@@ -676,7 +676,7 @@ fn all_eight_spo_masks_preserve_union_bags() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("all mask outcome")
@@ -743,7 +743,7 @@ fn four_arm_connector_keeps_twenty_ambient_attributes_connected() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("wide outcome");
@@ -777,7 +777,7 @@ fn exact_report_having_alias_keeps_its_normative_empty_bag() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
             )
             .expect("literal report outcome");
@@ -824,7 +824,7 @@ fn every_fuel_cut_is_a_complete_binding_lower_bound() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("full fuel outcome");
@@ -841,7 +841,7 @@ fn every_fuel_cut_is_a_complete_binding_lower_bound() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(ceiling),
             )
             .expect("cut outcome");
@@ -951,15 +951,15 @@ fn projectless_raw_local_blank_slots_do_not_reappear_after_a_positive_join() {
             .iter()
             .all(|row| row.len() == 2 && row.iter().all(Option::is_some))
     );
-    let rewritten = PreparedQuery::rewritten(query.clone(), QueryOptions::EMPTY)
+    let rewritten = PreparedQuery::rewritten(query.clone(), &QueryOptions::EMPTY)
         .expect("rewritten raw blank query");
     let engine = NativeSparqlEngine::new();
     let compiled = engine
-        .prepare_algebra(query, QueryOptions::EMPTY)
+        .prepare_algebra(query, &QueryOptions::EMPTY)
         .expect("compiled raw blank query");
     for prepared in [&rewritten, &*compiled] {
         let result = engine
-            .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&data, prepared, &[], &QueryOptions::EMPTY)
             .expect("prepared raw blank query");
         let SparqlResult::Solutions {
             variables, rows, ..
@@ -995,7 +995,7 @@ fn local_blank_working_width_is_refused_before_work_without_exposing_the_slot() 
         .query_governed(
             &data,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(1),
         )
         .expect("blank width refusal");
@@ -1014,7 +1014,7 @@ fn local_blank_working_width_is_refused_before_work_without_exposing_the_slot() 
         .query_governed(
             &data,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(2),
         )
         .expect("blank width admitted")
@@ -1035,7 +1035,7 @@ fn local_blank_working_width_is_refused_before_work_without_exposing_the_slot() 
         .query_governed(
             &empty,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(0),
         )
         .expect("empty blank width outcome");
@@ -1076,7 +1076,7 @@ fn empty_native_seed_does_not_charge_a_unit_row() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(ceiling),
             )
             .expect("empty seed outcome");
@@ -1103,7 +1103,7 @@ fn empty_native_seed_does_not_charge_a_unit_row() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(ceiling),
             )
             .expect("unit seed outcome");
@@ -1226,7 +1226,7 @@ fn both_reported_alternatives_preserve_focus_and_duplicate_bags() {
                             base_iri: None,
                             substitutions: &substitutions,
                         },
-                        options,
+                        &options,
                         &QueryGovernors::METERED.with_max_intermediate_cells(CELLS),
                     )
                     .expect("two alternatives outcome");

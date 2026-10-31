@@ -165,7 +165,7 @@ fn cases() -> Vec<(&'static str, String, usize)> {
 /// Evaluate a prepared plan and return its solution count.
 fn run(engine: &NativeSparqlEngine, data: &Arc<RdfDataset>, prepared: &PreparedQuery) -> usize {
     match engine
-        .query_prepared(data, prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(data, prepared, &[], &QueryOptions::EMPTY)
         .expect("the expression benchmark query evaluates")
     {
         SparqlResult::Solutions { rows, .. } => rows.len(),

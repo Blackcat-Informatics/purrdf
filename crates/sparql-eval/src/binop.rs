@@ -17,14 +17,13 @@
 //! — stays an O(n+m) hash join.
 
 #[cfg(test)]
-#[cfg(test)]
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, TermId, ViewTermId};
-use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
+use purrdf_sparql_algebra::{Expression, GraphPattern};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, ResidentAbort, ResidentPending, eval_evaluated};
+use crate::eval::{EvalCtx, ResidentAbort, eval_evaluated};
 use crate::governor::lift::{DetachedLift, Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema, compatible};
@@ -61,195 +60,10 @@ impl<I: ViewTermId> JoinIndex<I> {
     }
 }
 
-/// Evaluate `left . right` (algebra `Join`) as a hash join on shared variables.
-///
-/// # Under a truncated child
-///
-/// A join's output is a function of **both** inputs, so a truncated left arm leaves
-/// nothing computable: the right arm is deliberately not evaluated (that would be an
-/// unbounded scan after the budget is spent — see [`Lift`]) and the node yields the empty
-/// bag, which is a sound lower bound. A truncated right arm joins normally against the
-/// rows in hand and yields a sub-bag of the true output — sound as a multiset, and
-/// classified [`crate::governor::soundness::PrefixFidelity::BagOnly`] because the missing
-/// rows come from the middle of each left row's block rather than from the end.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_join<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let positive = ctx.positive_region(node).unwrap_or(false);
-    if positive
-        && let Some(plan) = crate::bgp::PositivePlan::build_admitted(
-            ctx.dataset,
-            &ctx.active_dataset,
-            ctx.active_graph,
-            node,
-            &ctx.workspace,
-        )?
-    {
-        let evaluated = eval_positive_join(node, left, right, None, &plan, ctx)?;
-        return Ok(match evaluated {
-            Evaluated::Complete(rows) => {
-                Evaluated::Complete(rows.reorder_like_admitted(plan.root_schema(), &ctx.growth)?)
-            }
-            Evaluated::Truncated(truncation) => {
-                let (rows, certificate) = truncation.split();
-                Evaluated::Truncated(Truncation::new(
-                    rows.reorder_like_admitted(plan.root_schema(), &ctx.growth)?,
-                    certificate,
-                ))
-            }
-        });
-    }
-    // Values Insertion keeps the authored leaf on the left and its row on the
-    // right. Preserve that ordinary join: seeding the leaf would change the
-    // actual work its governor and source-node ledger record.
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
-    // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
-    // answered over the endpoints the right rows bind, exactly as the mirrored shape is:
-    // the right operand is evaluated first, the left over its endpoint list, and the
-    // join then runs left against right as always, so the output is the one the
-    // left-bound order gives. See `crate::service_endpoints::binds_left_endpoints`.
-    if crate::service_endpoints::binds_left_endpoints(left, right, ctx)? {
-        let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
-            return Ok(lift.withheld());
-        };
-        if lift.is_truncated() {
-            return Ok(lift.finish(SolutionSeq::empty(r.schema)));
-        }
-        let evaluated = crate::service_endpoints::eval_right_operand(
-            &r,
-            left,
-            crate::service_endpoints::FrameRole::Join,
-            ctx,
-        )?;
-        let Some(l) = lift.absorb(0, evaluated) else {
-            return Ok(lift.withheld());
-        };
-        return Ok(lift.finish(hash_join(&l, &r, ctx)?));
-    }
-    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
-        return Ok(lift.withheld());
-    };
-    if lift.is_truncated() {
-        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
-    }
-    finish_join(lift, l, right, ctx)
-}
-
-// Erase the static mode wrapper while preserving the native kernel call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_join_delivered<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if M::ACTIVE {
-        eval_binary_yielding::<D, false, M>(node, left, right, delivery, ctx)
-    } else {
-        eval_join(node, left, right, ctx)
-    }
-}
-
-// Erase the static mode wrapper while preserving the native kernel call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_minus_delivered<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if M::ACTIVE {
-        eval_binary_yielding::<D, true, M>(node, left, right, delivery, ctx)
-    } else {
-        eval_minus(node, left, right, ctx)
-    }
-}
-
-/// Contextual nonlazy binary operators materialize their right operand once,
-/// then transform each yielded left mapping through the shared row kernels.
-#[inline(never)]
-fn eval_binary_yielding<
-    D: DatasetView + Sync,
-    const MINUS: bool,
-    M: crate::eval::RowDelivery<D>,
->(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(right) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
-        return Ok(lift.withheld());
-    };
-    if lift.is_truncated() {
-        return Ok(
-            lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(
-                node,
-                &ctx.growth,
-            )?)),
-        );
-    }
-    crate::eval::yield_transform(
-        node,
-        left,
-        delivery,
-        |left, ctx| {
-            let rows = if MINUS {
-                let shared = left
-                    .schema
-                    .shared_columns_admitted(&right.schema, &ctx.growth)?;
-                minus_rows(left, &right, &shared, ctx)?
-            } else {
-                hash_join(&left, &right, ctx)?
-            };
-            Ok(Evaluated::Complete(rows))
-        },
-        ctx,
-    )
-}
-
-/// Build the driven relation only after the recursive driver has returned, so
-/// its seed and physical forecast do not enlarge every frame of a join spine.
-#[inline(never)]
-fn finish_join<D: DatasetView + Sync>(
-    mut lift: Lift<'_>,
-    l: SolutionSeq<D::Id>,
-    right: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if crate::bgp::PositivePlan::seed_eligible_admitted(right, &l.schema, &ctx.growth)? {
-        return finish_seeded_join(lift, l, right, 1, None, ctx);
-    }
-    // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
-    // the left rows bind — see `crate::service_endpoints`.
-    let evaluated = crate::service_endpoints::eval_right_operand(
-        &l,
-        right,
-        crate::service_endpoints::FrameRole::Join,
-        ctx,
-    )?;
-    let Some(r) = lift.absorb(1, evaluated) else {
-        return Ok(lift.withheld());
-    };
-    Ok(lift.finish(hash_join(&l, &r, ctx)?))
-}
-
 /// Execute the ordinary seeded join after one actual child has produced its
 /// driver. A copied correlation supplies the original logical schema; other
 /// joins retain their existing driver-first union schema.
-fn finish_seeded_join<D: DatasetView + Sync>(
+pub(crate) fn finish_seeded_join<D: DatasetView + Sync>(
     mut lift: Lift<'_>,
     driver: SolutionSeq<D::Id>,
     driven: &GraphPattern,
@@ -368,7 +182,7 @@ pub(crate) fn eval_positive_join<D: DatasetView + Sync>(
 }
 
 /// Evaluate a graph pattern for ONE outer row μ, substituted in — the single seam
-/// shared by `LATERAL`'s per-left-row evaluation ([`eval_lateral`], below) and an
+/// shared by `LATERAL`'s per-left-row evaluation ([`begin_lateral`], below) and an
 /// expression-correlated `EXISTS`'s per-outer-row evaluation
 /// (`crate::expr::exists`'s correlated branch): both need "evaluate `pattern` as
 /// if μ's bindings had been joined in below every solution modifier, once, for
@@ -441,19 +255,15 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
     source: crate::deferred_exists::CorrelatedSource<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_substituted_with::<D, false, false>(pattern, row, source, ctx)
-}
-
-// Erase the static mode wrapper while preserving the native kernel call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-fn eval_substituted_with<D: DatasetView + Sync, const DECLARED: bool, const FIRST: bool>(
-    pattern: &GraphPattern,
-    row: &crate::expr::SubstitutionRow,
-    source: crate::deferred_exists::CorrelatedSource<'_>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_substituted_delivered::<D, DECLARED, FIRST, _>(pattern, row, source, (), ctx)
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+    let preparation = prepare_substituted::<D, false, false>(pattern, row, source, ctx)?;
+    let mut runner = SubstitutionRunner::enter(
+        preparation.body,
+        preparation.ledger_map,
+        preparation.placeholders,
+        ctx,
+    )?;
+    runner.run(eval_evaluated)
 }
 
 struct SubstitutedFrame {
@@ -574,7 +384,6 @@ pub(crate) struct SubstitutedPreparation {
         Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
     pub(crate) first_pushdown:
         Option<crate::workspace::SharedWorkspace<crate::governor::soundness::CapPushdown>>,
-    forced_eager: bool,
 }
 
 pub(crate) fn prepare_substituted<
@@ -594,7 +403,6 @@ pub(crate) fn prepare_substituted<
             ledger_map: None,
             placeholders: None,
             first_pushdown: None,
-            forced_eager: true,
         });
     }
     let sites;
@@ -673,332 +481,34 @@ pub(crate) fn prepare_substituted<
         ledger_map,
         placeholders,
         first_pushdown,
-        forced_eager: false,
     })
 }
 
-fn eval_substituted_delivered<
-    D: DatasetView + Sync,
-    const DECLARED: bool,
-    const FIRST: bool,
-    M: crate::eval::RowDelivery<D>,
->(
-    pattern: &GraphPattern,
-    row: &crate::expr::SubstitutionRow,
-    source: crate::deferred_exists::CorrelatedSource<'_>,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
-    let preparation = prepare_substituted::<D, DECLARED, FIRST>(pattern, row, source, ctx)?;
-    let forced_eager = preparation.forced_eager;
-    let first_pushdown = preparation.first_pushdown;
-    let mut runner = SubstitutionRunner::enter(
-        preparation.body,
-        preparation.ledger_map,
-        preparation.placeholders,
-        ctx,
-    )?;
-    if forced_eager {
-        return runner.run(eval_evaluated);
+pub(crate) fn merge_application_block<D: DatasetView + Sync>(
+    driver: &RetainedRow<D::Id>,
+    schema: &VarSchema,
+    input: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    let out = schema
+        .union_admitted(&input.schema, &ctx.growth)?
+        .shared_admitted(&ctx.growth)?;
+    let indices = right_to_out_map(&input.schema, &out, &ctx.growth)?;
+    let mut output = RowsBuilder::new(&ctx.growth);
+    for row in &input.rows {
+        output.push_row(merge_application_row(
+            driver,
+            row,
+            schema.len(),
+            &indices,
+            out.len(),
+            &ctx.growth,
+        )?)?;
     }
-    if DECLARED {
-        // Contextual mappings share labelled BNODE identities across the query.
-        // The ordinary specialization retains its per-solution row identity.
-        runner.ctx.current_row = 0;
-    }
-    if FIRST {
-        runner.run(|body, ctx| {
-            let previous = std::mem::replace(&mut ctx.cap_pushdown, first_pushdown);
-            let cursor = ctx.cap_at;
-            let evaluated = eval_evaluated(body, ctx);
-            ctx.cap_pushdown = previous;
-            ctx.cap_at = cursor;
-            evaluated
-        })
-    } else if M::ACTIVE {
-        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-            delivery.deliver(rows, ctx)?;
-            Ok(if delivery.stopped() {
-                std::ops::ControlFlow::Break(())
-            } else {
-                std::ops::ControlFlow::Continue(())
-            })
-        };
-        runner.run(|body, ctx| {
-            crate::eval::eval_yielding(body, &mut crate::eval::RowConsumer::new(&mut consume), ctx)
-        })
-    } else {
-        runner.run(eval_evaluated)
-    }
-}
-
-/// The right side of a copied `LATERAL` whose operand the substitution walk deferred
-/// (`slot`), for the left row `mu`: the operand's site substituted with the carried
-/// substitution and `mu` together, and evaluated — what [`eval_correlated`] computes for
-/// the operand the walk would have copied, up to redundant one-row `VALUES` joins (see
-/// `crate::deferred_exists`).
-///
-/// The substitution and the row are one row when they agree, which the parser's scope
-/// check makes the only case a parsed query reaches: the site's body is substituted once,
-/// in a window that tracks it to the plan nodes it copies. Where they disagree — a
-/// rebinding hand-built algebra can still reach — the layers are substituted one at a
-/// time and the last copy is evaluated, exactly as the full substitution did.
-///
-/// # Errors
-///
-/// As [`eval_correlated`].
-/// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
-/// `right` with μ's bindings substituted in as ground constants, then merge each
-/// right solution ν with μ over the ordered-union schema.
-///
-/// Unlike `Join` (which evaluates `right` once, unconstrained), LATERAL evaluates
-/// `right` **once per left row** — required when `right`'s *evaluation* depends on
-/// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
-/// bound by μ. Reuses the correlated-EXISTS substitution machinery via
-/// [`eval_correlated`], including the address-keyed-cache ABA guard
-/// (`in_substituted_exists`) around the inner eval. A `LATERAL` inside such a copy finds
-/// its right operand deferred — a placeholder the substitution walk left, owed the
-/// enclosing rows — and substitutes the operand's site once per left row instead
-/// ([`eval_deferred_lateral`]), so `d` nested levels cost each level's own nodes per row
-/// rather than a copy of the whole chain below every level (see `crate::deferred_exists`).
-///
-/// # What the compatibility merge below still discharges
-///
-/// The per-row merge (the `compatible_row` test below, over columns shared between
-/// `left`'s schema and ν's) is NOT what makes a `GRAPH ?g` right operand sound —
-/// `crate::expr::substitute_pattern_impl`'s `Graph` arm now resolves/restricts `?g`
-/// itself via substitution and a retaining `Values` join, so by the time a `Graph`
-/// node's rows reach this merge, `?g` is already μ's own value or the row does not
-/// exist. What the merge is STILL the only guard for:
-///
-/// * A variable μ binds to a term kind `crate::expr`'s ground-term conversion has
-///   no [`purrdf_sparql_algebra::GroundTerm`] representation for (a quoted
-///   triple with a non-IRI predicate) is absent from BOTH substitution rows
-///   (`SubstitutionRow::expr` and `::term`), so no leaf/`Graph` join ever restricts
-///   it — `right`'s own evaluation is free to (re)bind it, and this merge is what
-///   rejects a value incompatible with μ's.
-/// * A `SERVICE ?g` whose endpoint binding is not an `Expression::NamedNode` (no
-///   IRI to resolve to) keeps `name` an unresolved variable with NO retaining
-///   `Values` join added (unlike the `Graph` arm's discipline) — whatever `?g`
-///   ultimately reads as is reconciled against μ here, not by substitution.
-/// * The general backstop for any future right-operand shape whose substitution
-///   arm does not (or cannot) inject every outer-bound variable it shares with
-///   `left`: a compatibility mismatch is rejected here rather than silently
-///   producing an unjoined pair.
-///
-/// # Under a truncated child
-///
-/// The right side is evaluated once per left row, so a trip inside it is a trip **in
-/// flight**: the left row being processed has not finished producing its output and is
-/// discarded whole, while every left row already processed keeps its complete block. That
-/// is the commit-per-input-row rule, and it is what makes the surviving rows a sound
-/// sub-bag rather than a mixture of complete and half-complete blocks.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-// The wrapper must disappear; the specialized kernel keeps that original boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_lateral<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_application(node, left, right, (), ctx)
-}
-
-// Every dispatcher arm retains an operator boundary, including a contextual
-// application reached through the ordinary materializing entry.
-#[inline(never)]
-pub(crate) fn eval_apply<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if policy.dataset_required {
-        return Err(EvalError::config(
-            "GRAPH requires a dataset, but this query is scoped to a single graph",
-        ));
-    }
-    if policy.reduced_adjacent {
-        let GraphPattern::Reduced { inner } = right else {
-            return Err(EvalError::config(
-                "adjacent reduction requires a Reduced operand",
-            ));
-        };
-        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-        if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
-            return Ok(lift.withheld());
-        }
-        let result = crate::eval::eval_evaluated_with(right, ctx, |ctx| {
-            crate::modifier::eval_dedup_with::<D, true>(right, inner, ctx)
-        })?;
-        return Ok(match lift.absorb(1, result) {
-            Some(seq) => lift.finish(seq),
-            None => lift.withheld(),
-        });
-    }
-    if let Some(domain) = &policy.group_domain {
-        let GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } = right
-        else {
-            return Err(EvalError::config(
-                "group mapping domain requires a Group operand",
-            ));
-        };
-        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-        if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
-            return Ok(lift.withheld());
-        }
-        let result = crate::eval::eval_evaluated_with(right, ctx, |ctx| {
-            crate::modifier::eval_group_with(right, inner, variables, aggregates, &**domain, ctx)
-        })?;
-        return Ok(match lift.absorb(1, result) {
-            Some(seq) => lift.finish(seq),
-            None => lift.withheld(),
-        });
-    }
-    eval_application(node, left, right, policy, ctx)
-}
-
-// Erase the static mode wrapper while preserving the native kernel call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_apply_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if !M::ACTIVE {
-        return eval_apply(node, left, right, policy, ctx);
-    }
-    if policy.dataset_required {
-        return eval_apply(node, left, right, policy, ctx);
-    }
-    if policy.reduced_adjacent {
-        let GraphPattern::Reduced { inner } = right else {
-            return Err(EvalError::config(
-                "adjacent reduction requires a Reduced operand",
-            ));
-        };
-        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-        if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
-            return Ok(lift.withheld());
-        }
-        let evaluated = crate::eval::eval_evaluated_with(right, ctx, |ctx| {
-            crate::modifier::eval_dedup_delivered::<D, true, _>(
-                right,
-                inner,
-                delivery.reborrow(),
-                ctx,
-            )
-        })?;
-        return Ok(match lift.absorb(1, evaluated) {
-            Some(rows) => lift.finish(rows),
-            None => lift.withheld(),
-        });
-    }
-    if policy.group_domain.is_some() {
-        let evaluated = eval_apply(node, left, right, policy, ctx)?;
-        crate::eval::deliver_evaluated(&evaluated, delivery, ctx)?;
-        return Ok(evaluated);
-    }
-    eval_application_yielding(node, left, right, policy, delivery, ctx)
-}
-
-#[inline(never)]
-fn eval_application_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut blocks = crate::AdmittedVec::new(&ctx.growth);
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let mut halted = false;
-    let ceiling = ctx.row_ceiling();
-    let mut emitted = 0usize;
-    let mut consume = |drivers: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-        if halted {
-            return Ok(std::ops::ControlFlow::Break(()));
-        }
-        crate::service_endpoints::admit_lateral_endpoints(drivers, right, ctx)?;
-        for driver in &drivers.rows {
-            let first_block = blocks.len();
-            let mut rhs = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-                let out = drivers
-                    .schema
-                    .union_admitted(&rows.schema, &ctx.growth)?
-                    .shared_admitted(&ctx.growth)?;
-                let indices = right_to_out_map(&rows.schema, &out, &ctx.growth)?;
-                let mut output = RowsBuilder::new(&ctx.growth);
-                for row in &rows.rows {
-                    output.push_row(merge_application_row(
-                        driver,
-                        row,
-                        drivers.schema.len(),
-                        &indices,
-                        out.len(),
-                        &ctx.growth,
-                    )?)?;
-                }
-                let rows = SolutionSeq {
-                    schema: out,
-                    rows: output.finish()?,
-                };
-                delivery.deliver(&rows, ctx)?;
-                emitted = emitted.saturating_add(rows.rows.len());
-                blocks.push(rows)?;
-                Ok(
-                    if delivery.stopped() || ceiling.is_some_and(|cap| emitted >= cap) {
-                        std::ops::ControlFlow::Break(())
-                    } else {
-                        std::ops::ControlFlow::Continue(())
-                    },
-                )
-            };
-            let evaluated = evaluate_application_row_with(
-                right,
-                driver,
-                &drivers.schema,
-                policy,
-                &mut crate::eval::RowConsumer::new(&mut rhs),
-                ctx,
-            )?;
-            if !matches!(evaluated, Evaluated::Complete(_)) {
-                blocks.truncate(first_block);
-                drop(lift.absorb(1, evaluated));
-                halted = true;
-                break;
-            }
-            if delivery.stopped() || ceiling.is_some_and(|cap| emitted >= cap) {
-                halted = true;
-                break;
-            }
-        }
-        Ok(if halted {
-            std::ops::ControlFlow::Break(())
-        } else {
-            std::ops::ControlFlow::Continue(())
-        })
-    };
-    let evaluated =
-        crate::eval::eval_yielding(left, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
-    drop(consume);
-    if lift.absorb(0, evaluated).is_none() {
-        return Ok(lift.withheld());
-    }
-    Ok(lift.finish(concat_union(blocks, ctx)?))
+    Ok(SolutionSeq {
+        schema: out,
+        rows: output.finish()?,
+    })
 }
 
 // Share the row loop without adding a helper call or frame to the native kernel.
@@ -1031,111 +541,7 @@ fn merge_application_row<I: ViewTermId>(
     })
 }
 
-fn evaluate_application_row<D: DatasetView + Sync>(
-    right: &GraphPattern,
-    driver: &Solution<D::Id>,
-    schema: &VarSchema,
-    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    // Even a materializing caller must preserve the stored operand's yield
-    // order: its own Slice and accumulator consumers can stop or interleave it.
-    let mut consume =
-        |_: &SolutionSeq<D::Id>, _: &mut EvalCtx<'_, D>| Ok(std::ops::ControlFlow::Continue(()));
-    evaluate_application_row_with(
-        right,
-        driver,
-        schema,
-        policy,
-        &mut crate::eval::RowConsumer::new(&mut consume),
-        ctx,
-    )
-}
-
-fn evaluate_application_row_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    right: &GraphPattern,
-    driver: &Solution<D::Id>,
-    schema: &VarSchema,
-    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let outer = crate::expr::outer_bindings_for_substitution(driver, schema, ctx)?;
-    let mut run = |inputs: &[(Variable, Variable)], first: bool, ctx: &mut EvalCtx<'_, D>| {
-        let marker = policy
-            .optional
-            .as_ref()
-            .map(|optional| (&optional.forget_marker, first));
-        let row = outer.application_inputs(inputs, marker, &ctx.growth)?;
-        let source = crate::deferred_exists::CorrelatedSource {
-            sites: if ctx.in_substituted_exists {
-                crate::deferred_exists::SiteSlot::Transient
-            } else {
-                crate::deferred_exists::SiteSlot::Plan
-            },
-            plan_map: None,
-        };
-        if first {
-            eval_substituted_delivered::<D, true, false, _>(
-                right,
-                &row,
-                source,
-                delivery.reborrow(),
-                ctx,
-            )
-        } else {
-            eval_substituted_with::<D, true, true>(right, &row, source, ctx)
-        }
-    };
-    let first = run(&policy.inputs, true, ctx)?;
-    let Some(optional) = &policy.optional else {
-        return Ok(first);
-    };
-    let Evaluated::Complete(mut first) = first else {
-        return Ok(first);
-    };
-    if !first.rows.is_empty() {
-        return Ok(Evaluated::Complete(first));
-    }
-    let retry = run(&optional.retry_inputs, false, ctx)?;
-    drop(run);
-    let Evaluated::Complete(retry) = retry else {
-        return Ok(retry);
-    };
-    if retry.rows.is_empty() {
-        let mut padding = RowsBuilder::new(&ctx.growth);
-        padding.push_cells(
-            first.schema.len(),
-            std::iter::repeat_n(None, first.schema.len()),
-        )?;
-        first.rows = padding.finish()?;
-        if M::ACTIVE {
-            delivery.deliver(&first, ctx)?;
-        }
-    }
-    Ok(Evaluated::Complete(first))
-}
-
 /// Unit has no ABI argument or storage; only a declared application carries policy.
-trait ApplicationMode: Copy {
-    const DECLARED: bool;
-    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy>;
-}
-
-impl ApplicationMode for () {
-    const DECLARED: bool = false;
-    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
-        None
-    }
-}
-
-impl ApplicationMode for &purrdf_sparql_algebra::algebra::ApplicationPolicy {
-    const DECLARED: bool = true;
-    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
-        Some(self)
-    }
-}
-
 /// A copied right operand retained until its substitution and ledger scopes
 /// have been restored. The worklist and the resident caller share this entry.
 pub(crate) struct LateralPending {
@@ -1143,6 +549,7 @@ pub(crate) struct LateralPending {
     substitution: Option<SubstitutionFrames>,
     scope: Option<crate::eval::ScopeRestore>,
     ledger: Option<crate::eval::ScopeRestore>,
+    cap: Option<crate::eval::ScopeRestore>,
     _deferred: Option<crate::deferred_exists::DeferredLateral>,
 }
 
@@ -1163,6 +570,9 @@ impl LateralPending {
 
 impl<D: DatasetView + Sync> ResidentAbort<D> for LateralPending {
     fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        if let Some(cap) = self.cap.take() {
+            cap.restore(ctx);
+        }
         if let Some(frames) = &mut self.substitution {
             frames.unwind(ctx);
         }
@@ -1207,6 +617,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
             substitution: Some(frames),
             scope: None,
             ledger: None,
+            cap: None,
             _deferred: None,
         });
     };
@@ -1244,6 +655,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
                 substitution: Some(frames),
                 scope: None,
                 ledger: guard.into_restore(),
+                cap: None,
                 _deferred: Some(slot.clone()),
             });
         }
@@ -1259,6 +671,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
             substitution: Some(frames),
             scope: None,
             ledger: None,
+            cap: None,
             _deferred: Some(slot.clone()),
         });
     }
@@ -1286,6 +699,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
         substitution: None,
         scope: guard.into_restore(),
         ledger: None,
+        cap: None,
         _deferred: Some(slot.clone()),
     })
 }
@@ -1430,110 +844,304 @@ impl<I: ViewTermId> LateralSequence<I> {
         self.ordinal += 1;
         Ok(self)
     }
+}
 
-    pub(crate) fn run_recursive<D: DatasetView<Id = I> + Sync>(
-        mut self,
-        node: &GraphPattern,
+/// One declared application's preparation, first result and optional retry.
+pub(crate) struct ApplicationRow<I: ViewTermId> {
+    outer: Option<crate::expr::SubstitutionRow>,
+    empty: Option<SolutionSeq<I>>,
+    retry: bool,
+}
+
+pub(crate) enum ApplicationRowResult<I: ViewTermId> {
+    Retry(ApplicationRow<I>),
+    Complete {
+        evaluated: Evaluated<I>,
+        /// Only an empty retry creates a padding delivery. A successful retry
+        /// returns the empty first result and emits no retry rows.
+        padding: bool,
+    },
+}
+
+impl<I: ViewTermId> ApplicationRow<I> {
+    pub(crate) fn delivers_child(&self) -> bool {
+        !self.retry
+    }
+
+    /// None begins a new original driver; Some resumes its sole optional retry.
+    /// Every call retains the original preparation/check/marker/substitution order.
+    pub(crate) fn prepare<D: DatasetView<Id = I> + Sync>(
+        previous: Option<Self>,
         right: &GraphPattern,
+        driver: &RetainedRow<I>,
+        schema: &VarSchema,
+        policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Evaluated<I>, EvalError> {
-        loop {
-            match self.step(node, right, ctx)? {
-                LateralStep::Complete(done) => return Ok(done),
-                LateralStep::Child(sequence, child) => {
-                    let mut guard = ResidentPending {
-                        child: Some(child),
-                        ctx,
-                    };
-                    let evaluated = eval_evaluated(
-                        &guard.child.as_ref().expect("one LATERAL child").owner,
-                        guard.ctx,
-                    );
-                    let evaluated = guard
-                        .child
-                        .take()
-                        .expect("one LATERAL child")
-                        .finish(evaluated, guard.ctx)?;
-                    self = sequence.resume(node, evaluated, guard.ctx)?;
-                }
-            }
+    ) -> Result<(Self, LateralPending), EvalError> {
+        let mut state = previous.unwrap_or(Self {
+            outer: None,
+            empty: None,
+            retry: false,
+        });
+        if state.outer.is_none() {
+            state.outer = Some(crate::expr::outer_bindings_for_substitution(
+                driver, schema, ctx,
+            )?);
         }
+        let inputs = if state.retry {
+            &policy
+                .optional
+                .as_ref()
+                .expect("optional retry policy")
+                .retry_inputs
+        } else {
+            &policy.inputs
+        };
+        let marker = policy
+            .optional
+            .as_ref()
+            .map(|optional| (&optional.forget_marker, !state.retry));
+        let row = state
+            .outer
+            .as_ref()
+            .expect("one application driver")
+            .application_inputs(inputs, marker, &ctx.growth)?;
+        let source = crate::deferred_exists::CorrelatedSource {
+            sites: if ctx.in_substituted_exists {
+                crate::deferred_exists::SiteSlot::Transient
+            } else {
+                crate::deferred_exists::SiteSlot::Plan
+            },
+            plan_map: None,
+        };
+        let prepared = if state.retry {
+            prepare_substituted::<D, true, true>(right, &row, source, ctx)?
+        } else {
+            prepare_substituted::<D, true, false>(right, &row, source, ctx)?
+        };
+        let frames = SubstitutionFrames::enter(
+            prepared.body,
+            prepared.ledger_map,
+            prepared.placeholders,
+            ctx,
+        )?;
+        ctx.current_row = 0;
+        let cap = if state.retry {
+            let previous = std::mem::replace(&mut ctx.cap_pushdown, prepared.first_pushdown);
+            Some(crate::eval::ScopeRestore::CapPushdown {
+                previous,
+                cursor: ctx.cap_at,
+            })
+        } else {
+            None
+        };
+        let child = LateralPending {
+            owner: frames.owner(),
+            substitution: Some(frames),
+            scope: None,
+            ledger: None,
+            cap,
+            _deferred: None,
+        };
+        Ok((state, child))
+    }
+
+    /// Call only AFTER LateralPending::finish restores substitution/cap owners.
+    /// The caller forwards first-body blocks before this completion, pauses its
+    /// producer until acknowledged, and evaluates retry without delivery.
+    pub(crate) fn finish<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<ApplicationRowResult<I>, EvalError> {
+        let right = match evaluated {
+            Evaluated::Complete(right) => right,
+            truncated @ Evaluated::Truncated(_) => {
+                return Ok(ApplicationRowResult::Complete {
+                    evaluated: truncated,
+                    padding: false,
+                });
+            }
+        };
+        if self.retry {
+            let mut first = self.empty.take().ok_or_else(|| {
+                EvalError::internal("application retry lost its empty first result")
+            })?;
+            let padding = right.rows.is_empty();
+            if padding {
+                let mut rows = RowsBuilder::new(&ctx.growth);
+                rows.push_cells(
+                    first.schema.len(),
+                    std::iter::repeat_n(None, first.schema.len()),
+                )?;
+                first.rows = rows.finish()?;
+            }
+            return Ok(ApplicationRowResult::Complete {
+                evaluated: Evaluated::Complete(first),
+                padding,
+            });
+        }
+        if policy.optional.is_some() && right.rows.is_empty() {
+            self.empty = Some(right);
+            self.retry = true;
+            return Ok(ApplicationRowResult::Retry(self));
+        }
+        Ok(ApplicationRowResult::Complete {
+            evaluated: Evaluated::Complete(right),
+            padding: false,
+        })
     }
 }
 
-#[inline(never)]
-fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+/// A declared application retains one exact driver and any empty first attempt
+/// while its stored operand or remembered-scope retry is suspended.
+pub(crate) struct ApplicationSequence<I: ViewTermId> {
+    left: SolutionSeq<I>,
+    lift: DetachedLift,
+    right_schema: VarSchema,
+    per_row: LateralRows<I>,
+    ordinal: usize,
+    emitted: usize,
+    row: Option<ApplicationRow<I>>,
+}
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+pub(crate) enum ApplicationStart<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(ApplicationSequence<I>),
+}
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+pub(crate) enum ApplicationStep<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Child(ApplicationSequence<I>, LateralPending),
+}
+pub(crate) fn begin_application_child<D: DatasetView + Sync>(
     node: &GraphPattern,
-    left: &GraphPattern,
     right: &GraphPattern,
-    mode: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
-    let child = eval_evaluated(left, ctx)?;
-    if !M::DECLARED {
-        return match begin_lateral(node, right, lift, child, ctx)? {
-            LateralStart::Complete(done) => Ok(done),
-            LateralStart::Sequence(sequence) => sequence.run_recursive(node, right, ctx),
-        };
-    }
+    lift: DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<ApplicationStart<D::Id>, EvalError> {
     let mut lift = lift.attach(node);
-    let Some(l) = lift.absorb(0, child) else {
-        return Ok(lift.withheld());
+    let Some(left) = lift.absorb(0, child) else {
+        return Ok(ApplicationStart::Complete(lift.withheld()));
     };
     if lift.is_truncated() {
-        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+        return Ok(ApplicationStart::Complete(
+            lift.finish(SolutionSeq::empty(left.schema)),
+        ));
     }
-    // A variable-endpoint `SERVICE` some left row names no endpoint for is refused before
-    // any row's evaluation sends a request, so a refused query never contacts a remote
-    // first, whatever order its left rows come in.
-    crate::service_endpoints::admit_lateral_endpoints(&l, right, ctx)?;
-
-    let left_schema = l.schema.clone();
-
-    // Evaluate `right` once per left row with μ substituted in; accumulate the
-    // per-row results and the union of their schemas (stable across rows for the
-    // SERVICE ?var use, but computed generally).
-    let mut right_schema = VarSchema::default();
-    // Each left row μ paired with the per-row `right` result it drives.
-    let mut per_row = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
-    let mut emitted = 0usize;
-    for mu in &l.rows {
-        let policy = mode
-            .policy()
-            .expect("declared application carries its policy");
-        let evaluated = evaluate_application_row(right, mu, &left_schema, policy, ctx)?;
-        let r = match evaluated {
-            Evaluated::Complete(seq) => seq,
+    crate::service_endpoints::admit_lateral_endpoints(&left, right, ctx)?;
+    let per_row = crate::AdmittedVec::with_capacity(left.rows.len(), &ctx.growth)?;
+    Ok(ApplicationStart::Sequence(ApplicationSequence {
+        left,
+        lift: lift.detach(),
+        right_schema: VarSchema::default(),
+        per_row,
+        ordinal: 0,
+        emitted: 0,
+        row: None,
+    }))
+}
+impl<I: ViewTermId> ApplicationSequence<I> {
+    pub(crate) fn delivers_child(&self) -> bool {
+        self.row.as_ref().is_none_or(ApplicationRow::delivers_child)
+    }
+    pub(crate) fn has_row(&self) -> bool {
+        self.ordinal < self.left.rows.len()
+    }
+    pub(crate) fn step<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<ApplicationStep<I>, EvalError> {
+        let GraphPattern::Apply { right, policy, .. } = node else {
+            return Err(EvalError::internal(
+                "application continuation lost its node",
+            ));
+        };
+        let Some(driver) = self.left.rows.get(self.ordinal) else {
+            return finish_application_rows(
+                &self.left.schema,
+                &self.right_schema,
+                &self.per_row,
+                self.lift.attach(node),
+                true,
+                ctx,
+            )
+            .map(ApplicationStep::Complete);
+        };
+        let (row, child) = ApplicationRow::prepare(
+            self.row.take(),
+            right,
+            driver,
+            &self.left.schema,
+            policy,
+            ctx,
+        )?;
+        self.row = Some(row);
+        Ok(ApplicationStep::Child(self, child))
+    }
+    pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        let GraphPattern::Apply { policy, .. } = node else {
+            return Err(EvalError::internal(
+                "application continuation lost its policy",
+            ));
+        };
+        let result = self
+            .row
+            .take()
+            .ok_or_else(|| EvalError::internal("application completion lost its current row"))?
+            .finish(policy, evaluated, ctx)?;
+        let (evaluated, padding) = match result {
+            ApplicationRowResult::Retry(row) => {
+                self.row = Some(row);
+                return Ok(self);
+            }
+            ApplicationRowResult::Complete { evaluated, padding } => (evaluated, padding),
+        };
+        if padding {
+            crate::eval::discard_delivery(ctx);
+        }
+        let right = match evaluated {
+            Evaluated::Complete(right) => right,
             truncated @ Evaluated::Truncated(_) => {
-                // Commit granularity: this left row's block is incomplete, so it is
-                // discarded entirely rather than emitted short. Absorbing here (rather
-                // than merging the partial block) is what keeps the surviving rows a
-                // sound bound instead of a bag with one truncated block inside it.
+                let mut lift = self.lift.attach(node);
                 drop(lift.absorb(1, truncated));
-                break;
+                self.lift = lift.detach();
+                self.ordinal = self.left.rows.len();
+                return Ok(self);
             }
         };
-        for v in r.schema.vars() {
-            right_schema.push_admitted(v.clone(), &ctx.growth)?;
+        for variable in right.schema.vars() {
+            self.right_schema
+                .push_admitted(variable.clone(), &ctx.growth)?;
         }
-        if M::DECLARED {
-            emitted = emitted.saturating_add(r.rows.len());
+        self.emitted = self.emitted.saturating_add(right.rows.len());
+        self.per_row.push((
+            self.left.rows[self.ordinal].clone_admitted(&ctx.growth)?,
+            right,
+        ))?;
+        self.ordinal += 1;
+        if ctx
+            .row_ceiling()
+            .is_some_and(|ceiling| self.emitted >= ceiling)
+        {
+            self.ordinal = self.left.rows.len();
         }
-        per_row.push((mu.clone_admitted(&ctx.growth)?, r))?;
-        if M::DECLARED && ctx.row_ceiling().is_some_and(|ceiling| emitted >= ceiling) {
-            break;
-        }
+        Ok(self)
     }
-
-    finish_application_rows(
-        &left_schema,
-        &right_schema,
-        &per_row,
-        lift,
-        M::DECLARED,
-        ctx,
-    )
 }
 
 /// The one ordered schema/compatibility merge after all per-row right children
@@ -1589,106 +1197,6 @@ fn finish_application_rows<D: DatasetView + Sync>(
         schema: out,
         rows: rows.finish()?,
     }))
-}
-
-/// Evaluate a `UNION` of `arms` as a multiset concatenation of their solutions, in arm
-/// order, over the ordered union of their schemas (each arm's new columns after the
-/// columns before it) — exactly what the left-nested chain of binary unions the node
-/// stands for produced, one arm at a time.
-///
-/// Gated on [`crate::parallel::is_parallel_safe_pattern`] over **every** arm: if any
-/// reaches an unsafe (counter/RNG-mutating) builtin, the sequential body below runs,
-/// evaluating the arms in order directly against the real `ctx`. Otherwise every arm
-/// mints new `Computed` terms that must escape into the union's output rows, so the
-/// arms are evaluated concurrently (an indexed parallel map) against their own forked
-/// child contexts, and each arm's escaping rows are captured via
-/// [`crate::parallel::portable_row`] **while its child is still alive** (the child is
-/// dropped the instant its closure returns). Only once every arm is done does the MAIN
-/// thread re-intern them back into `ctx.scratch`, in arm order, via
-/// [`crate::parallel::reintern_portable_row`] — reproducing the sequential concat's
-/// exact row order and column layout.
-///
-/// # Under a truncated child: ONE rule, both paths
-///
-/// `UNION` is a concatenation, and the rule is stated so that the result depends on the
-/// query, the data, and the budget — and on nothing else:
-///
-/// > A truncated `UNION` yields the rows of the arms that COMPLETED, in arm order, then
-/// > the partial rows of the first arm that truncated. Every arm after that one
-/// > contributes nothing **even if it was already computed**.
-///
-/// The clause about already-computed rows is the whole point. The parallel path starts
-/// every arm, so a later arm's rows may well exist by the time an earlier arm's
-/// truncation is known — and admitting them would make a governed
-/// result larger *because a second thread got there*. Same query, same data, same budget
-/// would then give different partial answers on different machines and under different
-/// scheduling, which is precisely the property the order-stable reduction exists to
-/// guarantee. Being "more informative" is not a licence a governor has; the result is
-/// truncated to the branch-ordered prefix on both paths and the extra rows are dropped.
-///
-/// The soundness half is the `MONOTONE_BAG` / `MONOTONE` split the one visitor already
-/// records for this node, which the lift reads rather than restating: truncating any arm
-/// but the last removes rows from the middle of the concatenation (a sub-bag, not a
-/// prefix), while truncating the last removes them from the end (a genuine prefix).
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_union<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    arms: &[GraphPattern],
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_union_with(node, arms, None, None, ctx)
-}
-
-// Erase the static mode wrapper while preserving the native kernel call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_union_delivered<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    arms: &[GraphPattern],
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if M::ACTIVE {
-        eval_union_yielding(node, arms, delivery, ctx)
-    } else {
-        eval_union(node, arms, ctx)
-    }
-}
-
-#[inline(never)]
-fn eval_union_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    arms: &[GraphPattern],
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
-    for (ordinal, arm) in arms.iter().enumerate() {
-        if delivery.stopped() {
-            break;
-        }
-        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-            delivery.deliver(rows, ctx)?;
-            Ok(if delivery.stopped() {
-                std::ops::ControlFlow::Break(())
-            } else {
-                std::ops::ControlFlow::Continue(())
-            })
-        };
-        let Some(rows) = lift.absorb(
-            ordinal,
-            crate::eval::eval_yielding(arm, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?,
-        ) else {
-            return Ok(lift.withheld());
-        };
-        blocks.push(rows);
-        if lift.is_truncated() {
-            break;
-        }
-    }
-    Ok(lift.finish(concat_union(blocks, ctx)?))
 }
 
 pub(crate) fn eval_positive_union<D: DatasetView + Sync>(
@@ -1900,7 +1408,7 @@ fn eval_union_with<D: DatasetView + Sync>(
 /// The sequential `UNION` body: concatenate the evaluated arms, in order, over the
 /// ordered union of their schemas (the first arm's columns first, then each later
 /// arm's new columns). Documents the exact row shape the parallel path in
-/// [`eval_union`] must reproduce.
+/// [`concat_union`] must reproduce.
 ///
 /// One arm is returned as it is: the union of one bag is that bag. Two or more are
 /// capped at the intermediate-cell ceiling for the output's width — the one bag this
@@ -2208,7 +1716,7 @@ pub(crate) fn probe_evidence<D: DatasetView + Sync>(
 }
 
 /// Hash-join two solution sequences on their shared variables.
-fn hash_join<D: DatasetView + Sync>(
+pub(crate) fn hash_join<D: DatasetView + Sync>(
     l: &SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
@@ -2478,101 +1986,6 @@ fn counting_merges<T>(run: impl FnOnce() -> T) -> (T, usize) {
     (output, observed)
 }
 
-/// Evaluate `left OPTIONAL { right }` (algebra `LeftJoin`) as a left outer join,
-/// with an optional inline `FILTER` condition evaluated on the merged solution.
-///
-/// # Under a truncated child: the fabrication hazard
-///
-/// A left outer join emits a left row **padded with unbound** exactly when no compatible
-/// right row exists — a claim about the *whole* right bag. So:
-///
-/// - **Truncated left arm.** The right arm is not evaluated at all, and the left rows in
-///   hand are NOT emitted padded. Padding them would assert "the OPTIONAL matched
-///   nothing" for rows whose right bag was never looked at: a fabricated answer, not a
-///   missing one. The node yields the empty bag, a sound lower bound.
-/// - **Truncated right arm.** Padding is **suppressed** and the operator degenerates to
-///   an inner join over the partial right bag. This is the same fabrication hazard, one
-///   step down: a left row whose only match lies past the cut would come out padded, and
-///   that padded row asserts "the OPTIONAL matched nothing" about a right bag the
-///   evaluator only holds a prefix of.
-///
-///   Padding it is not merely imprecise, it is **unsound in both directions**. It is not
-///   a lower bound — the padded row is not an answer. And it is not an upper bound
-///   either, which is the subtler half: emitting `l` padded *in place of* the true rows
-///   `l ⋈ m` for every `m` past the cut means those true answers are absent from the
-///   result, so the one licence an upper bound grants — "a row absent from this result is
-///   definitively not an answer" — is false of exactly the rows the cut hid.
-///
-///   Suppressing the padding restores a bound: what is emitted is `{l ⋈ m : m ∈ R'}` for
-///   the partial right bag `R' ⊆ R`, and every such row is in the true output, so the
-///   result is a certified sub-bag. That is why `LeftJoin`'s right edge is classified
-///   [`ChildEdge::MONOTONE_BAG`] — identical to `Join`'s right edge, which is exactly what
-///   this operator becomes once its right bag is known to be incomplete.
-///
-/// [`ChildEdge::MONOTONE_BAG`]: crate::governor::soundness::ChildEdge::MONOTONE_BAG
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_left_join<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    expression: Option<&Expression>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let evaluated = eval_evaluated(left, ctx)?;
-    finish_left_join(node, evaluated, right, expression, ctx)
-}
-
-/// The driver has returned before any seed forecast or match block is built.
-/// Keep these locals out of the frame retained while descending an OPTIONAL
-/// spine, just as the node dispatcher keeps operator work out of its frame.
-#[inline(never)]
-pub(crate) fn finish_left_join<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    evaluated: Evaluated<D::Id>,
-    right: &GraphPattern,
-    expression: Option<&Expression>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if let Evaluated::Complete(rows) = &evaluated
-        && crate::bgp::PositivePlan::seed_eligible_admitted(right, &rows.schema, &ctx.growth)?
-    {
-        let mut seed = crate::bgp::SeedEstimate::from_rows_admitted(rows, &ctx.growth)?;
-        // OPTIONAL commits one driver occurrence at a time. Its working bag
-        // therefore has one incoming row, even when the outer bag is large.
-        seed.rows = 1;
-        if let Some(plan) = crate::bgp::PositivePlan::build_seeded_admitted(
-            ctx.dataset,
-            &ctx.active_dataset,
-            ctx.active_graph,
-            right,
-            &seed,
-            &ctx.workspace,
-        )? {
-            let Evaluated::Complete(rows) = evaluated else {
-                unreachable!("the inspected left arm was complete")
-            };
-            return eval_seeded_left_join(node, rows, right, expression, &plan, ctx);
-        }
-    }
-    left_join_lift(
-        node,
-        evaluated,
-        // A variable-endpoint `SERVICE` in the optional side is answered over the
-        // endpoints the left rows bind — see `crate::service_endpoints`.
-        |l, ctx| {
-            crate::service_endpoints::eval_right_operand(
-                l,
-                right,
-                crate::service_endpoints::FrameRole::Optional,
-                ctx,
-            )
-        },
-        expression,
-        ctx,
-    )
-}
-
 /// Keep an OPTIONAL's driver occurrences separate until each has been fully
 /// tested. A duplicate driver contributes its own complete match block; an
 /// unmatched occurrence is padded only after its seeded relation finishes.
@@ -2580,7 +1993,6 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: SolutionSeq<D::Id>,
     right: &GraphPattern,
-    expression: Option<&Expression>,
     plan: &crate::bgp::PositivePlan,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -2593,8 +2005,7 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     let row_ceiling = ctx.row_ceiling();
     // Restore the ordinary ungoverned outer join's driver parallelism. Every
     // observable checkpoint/cap and every operational read remains sequential.
-    if expression.is_none()
-        && matches!(right, GraphPattern::Bgp { .. })
+    if matches!(right, GraphPattern::Bgp { .. })
         && ctx.may_fork_sibling_patterns()
         && ctx.ledger.is_none()
         && ctx.cap_pushdown.is_none()
@@ -2602,17 +2013,14 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
         && crate::engine::Sequencing::for_view::<D>() == crate::engine::Sequencing::Free
         && crate::parallel::should_parallelize(ctx.sequential_operation_required(), left.len())
     {
-        let rows = parallel_seeded_optional(node, &left, right, plan, &schema, ctx)?;
+        let rows = parallel_seeded_optional(&left, right, plan, &schema, ctx)?;
         return Ok(lift.finish(SolutionSeq { schema, rows }));
     }
     let mut rows = RowsBuilder::new(&ctx.growth);
     let mut bgp = None;
     for row in left.rows {
-        let (seed, padding) = if expression.is_none() {
-            (row.clone_admitted(&ctx.growth)?, Some(row))
-        } else {
-            (row, None)
-        };
+        let seed = row.clone_admitted(&ctx.growth)?;
+        let padding = Some(row);
         let mut seed_rows = RowsBuilder::new(&ctx.growth);
         seed_rows.push_row(seed)?;
         let unit = SolutionSeq {
@@ -2622,7 +2030,7 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
         let SeededOptionalBlock {
             evaluated,
             pad_unmatched,
-        } = seeded_optional_block(node, unit, right, expression, plan, &mut bgp, ctx)?;
+        } = seeded_optional_block(unit, right, plan, &mut bgp, ctx)?;
         let block = match evaluated {
             Evaluated::Complete(block) => block,
             truncated @ Evaluated::Truncated(_) => {
@@ -2658,47 +2066,22 @@ struct SeededOptionalBlock<I: ViewTermId> {
 /// Execute each driver through the same node/read/stop checkpoints. Unfiltered
 /// seeds move their singleton storage; conditions retain the ordinary lift.
 fn seeded_optional_block<D: DatasetView + Sync>(
-    node: &GraphPattern,
     unit: SolutionSeq<D::Id>,
     right: &GraphPattern,
-    expression: Option<&Expression>,
     plan: &crate::bgp::PositivePlan,
     bgp: &mut Option<crate::bgp::CompiledBgp<D::Id>>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SeededOptionalBlock<D::Id>, EvalError> {
-    let mut unit = Some(unit);
-    let input = if expression.is_none() {
-        crate::eval::PositiveInput::owned(unit.take().expect("the driver is present"))
-    } else {
-        crate::eval::PositiveInput::from_rows(unit.as_ref().expect("the driver is present"))
-    };
+    let input = crate::eval::PositiveInput::owned(unit);
     let evaluated = if matches!(right, GraphPattern::Bgp { .. }) {
         crate::eval::eval_cached_bgp_evaluated(right, input, bgp, ctx)?
     } else {
         crate::eval::eval_positive_evaluated(right, Some(input), plan, ctx)?
     };
-    if evaluated.is_truncated() {
-        return Ok(SeededOptionalBlock {
-            evaluated,
-            pad_unmatched: false,
-        });
-    }
-    if expression.is_none() {
-        let pad_unmatched = evaluated.rows().is_empty();
-        return Ok(SeededOptionalBlock {
-            evaluated,
-            pad_unmatched,
-        });
-    }
+    let pad_unmatched = !evaluated.is_truncated() && evaluated.rows().is_empty();
     Ok(SeededOptionalBlock {
-        evaluated: left_join_lift(
-            node,
-            Evaluated::Complete(unit.expect("a filtered block retains its driver")),
-            |_, _| Ok(evaluated),
-            expression,
-            ctx,
-        )?,
-        pad_unmatched: false,
+        evaluated,
+        pad_unmatched,
     })
 }
 
@@ -2760,7 +2143,6 @@ fn append_seeded_optional_block<D: DatasetView + Sync>(
 /// operational read can observe a fork. BGPs carry parent terms but mint none,
 /// so each child's complete rows escape without a scratch conversion.
 fn parallel_seeded_optional<D: DatasetView + Sync>(
-    node: &GraphPattern,
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
     plan: &crate::bgp::PositivePlan,
@@ -2781,7 +2163,7 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
             let SeededOptionalBlock {
                 evaluated,
                 pad_unmatched,
-            } = seeded_optional_block(node, unit, right, None, plan, bgp, child)?;
+            } = seeded_optional_block(unit, right, plan, bgp, child)?;
             let Evaluated::Complete(block) = evaluated else {
                 return Err(EvalError::internal(
                     "an ungoverned uncapped BGP driver unexpectedly truncated",
@@ -2841,14 +2223,13 @@ fn push_seeded_join_row<D: DatasetView + Sync>(
 /// evaluated*. Handing this function a value would make that impossible to express, and
 /// would license a full scan of the right arm after the budget was spent.
 ///
-/// Split out from [`eval_left_join`] so the fabrication hazard can be tested by feeding
-/// the arms directly, rather than only through a whole query whose trip point depends on
-/// a charge schedule.
+/// Compose the production lift and row kernel for the existing synthetic
+/// truncation fixture, whose injected bags do not depend on a charge schedule.
+#[cfg(test)]
 fn left_join_lift<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: Evaluated<D::Id>,
     right: impl FnOnce(&SolutionSeq<D::Id>, &mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
-    expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
@@ -2871,10 +2252,7 @@ fn left_join_lift<D: DatasetView + Sync>(
     // a fact this operator holds about any left row. See this operator's doc comment for
     // why padding then bounds the answer on neither side.
     let pad_unmatched = !lift.is_truncated();
-    let joined = match expression {
-        None => left_outer_join(&l, &r, ctx, pad_unmatched)?,
-        Some(expr) => left_outer_join_filtered(node, &l, &r, expr, ctx, pad_unmatched)?,
-    };
+    let joined = left_outer_join(&l, &r, ctx, pad_unmatched)?;
     // An `EXISTS` inside the inline condition is an opaque edge: a trip inside it makes
     // every emitted row's condition a boolean computed over a truncated bag, so the whole
     // output is withheld rather than certified.
@@ -2886,35 +2264,6 @@ fn left_join_lift<D: DatasetView + Sync>(
         )));
     }
     Ok(lift.finish(joined))
-}
-
-/// Which right rows [`left_outer_join_filtered`] must offer to the filter for one
-/// left row: an exact keyed bucket (already the compatible subsequence, in ascending
-/// row order) or the full compatibility scan.
-enum Candidates<'a> {
-    /// The keyed bucket for the left row's shared-column key (possibly empty).
-    Bucket(&'a [usize]),
-    /// No exact bucket is usable: scan every right row through `compatible`.
-    Scan,
-}
-
-/// The candidate set for `lrow` — see the index comment in
-/// [`left_outer_join_filtered`] for the proof that a bucket is exactly what the scan
-/// would visit. A bucket is only ever used when `wild` is empty AND `lrow` is fully
-/// bound on its shared columns; an absent bucket is the empty candidate list.
-fn filtered_candidates<'a, I: ViewTermId>(
-    lrow: &[Option<SolutionTerm<I>>],
-    shared: &[(usize, usize)],
-    keyed: &'a JoinIndex<I>,
-    wild: &[usize],
-    workspace: &crate::WorkspaceCapability,
-) -> Result<Candidates<'a>, EvalError> {
-    if wild.is_empty()
-        && let Some(key) = bound_key(lrow, shared, KeySide::Left, workspace)?
-    {
-        return Ok(Candidates::Bucket(keyed.get(&key).unwrap_or(&[])));
-    }
-    Ok(Candidates::Scan)
 }
 
 /// A left outer join whose right-side pairings must additionally satisfy `expr`
@@ -2933,56 +2282,380 @@ fn filtered_candidates<'a, I: ViewTermId>(
 ///
 /// `pad_unmatched` is `false` exactly when `r` is a *prefix* of the right bag rather than
 /// the whole of it, in which case "no pairing passes" is not a fact this operator holds
-/// and the left-alone row must not be emitted; see [`eval_left_join`].
-fn left_outer_join_filtered<D: DatasetView + Sync>(
+/// and the left-alone row must not be emitted; see [`begin_optional_condition_with_owner`].
+enum OptionalCandidates<I: ViewTermId> {
+    Bucket(JoinKey<I>),
+    Scan,
+}
+
+/// The original seeded OPTIONAL driver and its suspended current condition.
+pub(crate) struct SeededOptionalSequence<'e, I: ViewTermId> {
+    plan: crate::bgp::PositivePlan,
+    bgp: Option<crate::bgp::CompiledBgp<I>>,
+    input: Option<crate::solution::RowBagIntoIter<I>>,
+    driver_schema: crate::solution::SharedSchema,
+    schema: crate::solution::SharedSchema,
+    output: RowsBuilder<I>,
+    lift: Option<DetachedLift>,
+    owner: crate::expr::FilterLink<'e>,
+    active: Option<OptionalSequence<'e, I>>,
+    row_ceiling: Option<usize>,
+    cell_ceiling: Option<usize>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the seeded OPTIONAL state moves into the driver's admitted frame"
+)]
+pub(crate) enum SeededOptionalStart<'e, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(SeededOptionalSequence<'e, I>),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the seeded OPTIONAL state moves into the driver's admitted frame"
+)]
+pub(crate) enum SeededOptionalStep<'e, 'd, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(SeededOptionalSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+// Inspect and admit the plan before taking the caller's complete left bag.
+// A None result leaves it available for the ordinary OPTIONAL fallback.
+pub(crate) fn begin_seeded_optional<'e, D: DatasetView + Sync>(
     node: &GraphPattern,
-    l: &SolutionSeq<D::Id>,
-    r: &SolutionSeq<D::Id>,
-    expr: &Expression,
+    right: &GraphPattern,
+    expression: Option<&Expression>,
+    owner: Option<crate::expr::FilterLink<'e>>,
+    left: &mut Option<SolutionSeq<D::Id>>,
     ctx: &mut EvalCtx<'_, D>,
-    pad_unmatched: bool,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let out = l
+) -> Result<Option<SeededOptionalStart<'e, D::Id>>, EvalError> {
+    let rows = left
+        .as_ref()
+        .ok_or_else(|| EvalError::internal("seeded OPTIONAL lost its driver bag"))?;
+    if !crate::bgp::PositivePlan::seed_eligible_admitted(right, &rows.schema, &ctx.growth)? {
+        return Ok(None);
+    }
+    let mut seed = crate::bgp::SeedEstimate::from_rows_admitted(rows, &ctx.growth)?;
+    seed.rows = 1;
+    let Some(plan) = crate::bgp::PositivePlan::build_seeded_admitted(
+        ctx.dataset,
+        &ctx.active_dataset,
+        ctx.active_graph,
+        right,
+        &seed,
+        &ctx.workspace,
+    )?
+    else {
+        return Ok(None);
+    };
+    if expression.is_none() {
+        let rows = left.take().expect("the inspected driver bag is present");
+        return eval_seeded_left_join(node, rows, right, &plan, ctx)
+            .map(SeededOptionalStart::Complete)
+            .map(Some);
+    }
+    let owner =
+        owner.ok_or_else(|| EvalError::internal("seeded OPTIONAL lost its condition owner"))?;
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
+    let schema = rows
         .schema
-        .union_admitted(&r.schema, &ctx.growth)?
+        .union_admitted(plan.root_schema(), &ctx.growth)?
         .shared_admitted(&ctx.growth)?;
-    let out_len = out.len();
-    let left_len = l.schema.len();
-    let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
-    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
+    let row_ceiling = ctx.row_ceiling();
+    let cell_ceiling = ctx.cell_row_ceiling(schema.len());
+    let rows = left.take().expect("the inspected driver bag is present");
+    Ok(Some(SeededOptionalStart::Sequence(
+        SeededOptionalSequence {
+            plan,
+            bgp: None,
+            input: Some(rows.rows.into_iter()),
+            driver_schema: rows.schema,
+            schema,
+            output: RowsBuilder::new(&ctx.growth),
+            lift: Some(lift),
+            owner,
+            active: None,
+            row_ceiling,
+            cell_ceiling,
+        },
+    )))
+}
 
-    // Hash-index the right side (as the unfiltered `left_outer_join` does) so the
-    // per-left-row candidate set is a bucket lookup, not an O(|R|) compatibility scan.
-    // Used ONLY when `wild` is empty — every right row has all shared columns bound —
-    // because then, for a left row whose shared columns are all bound, `compatible`
-    // reduces to per-column equality on the shared columns, which is exactly
-    // `bound_key` equality (`JoinKey` atoms are collision-free term encodings, and a
-    // `Multi` key is termwise equality); `build_index` pushes indices into each
-    // bucket in ascending row order, so the bucket is precisely the ascending-index
-    // subsequence of `r.rows` the scan would have visited, in the same order.
-    // `merge` and the condition therefore run over the identical candidate sequence, and the
-    // emitted rows, padding decisions, cell-ceiling trip points and charges are
-    // unchanged. A left row with an unbound shared column (`bound_key` → `None`)
-    // keeps the full scan, and so does an index with any wild row.
-    let (keyed, wild) = build_index(r, &shared, &ctx.growth)?;
+impl<'e, I: ViewTermId> SeededOptionalSequence<'e, I> {
+    // Truncation discards the entire current driver's block, exactly as the
+    // existing seeded loop does. Earlier complete blocks remain certified.
+    fn append_block<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        node: &GraphPattern,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        let block = match evaluated {
+            Evaluated::Complete(block) => block,
+            truncated @ Evaluated::Truncated(_) => {
+                let mut lift = self
+                    .lift
+                    .take()
+                    .expect("one seeded OPTIONAL lift")
+                    .attach(node);
+                drop(lift.absorb(1, truncated));
+                self.lift = Some(lift.detach());
+                return Ok(false);
+            }
+        };
+        append_seeded_optional_block(
+            block,
+            None,
+            &mut self.output,
+            &self.schema,
+            self.row_ceiling,
+            self.cell_ceiling,
+            ctx,
+        )
+    }
 
-    // A left outer join emits at least one row per left row.
-    let cell_ceiling = ctx.cell_row_ceiling(out_len);
-    let program = crate::vm::program_at(ctx, node, expr)?;
-    let mut linked = crate::vm::Linked::link_admitted(program, expr, &out, ctx)?;
-    // A governed join forks its predicate loop only without a reachable cell ceiling or
-    // other caller ceilings beyond fuel/scratch, through
-    // an ordered ledger of its left rows (`crate::row_checkpoint::ItemLedger`): the
-    // fuel a predicate charges from inside its evaluation is committed in left-row
-    // order, so the row a ceiling trips at is the same on every host.
-    let rows = if !ctx.growth.is_bounded()
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        right: &GraphPattern,
+        expression: &Expression,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<SeededOptionalStep<'e, 'd, I>, EvalError> {
+        loop {
+            if let Some(active) = self.active.take() {
+                match active.step(node, expression, ctx)? {
+                    OptionalStep::Suspend(active, request) => {
+                        self.active = Some(active);
+                        return Ok(SeededOptionalStep::Suspend(self, request));
+                    }
+                    OptionalStep::Complete(evaluated) => {
+                        if !self.append_block(node, evaluated, ctx)? {
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some(row) = self
+                .input
+                .as_mut()
+                .expect("one original driver iterator")
+                .next()
+            else {
+                break;
+            };
+            let mut seed_rows = RowsBuilder::new(&ctx.growth);
+            seed_rows.push_row(row)?;
+            let unit = SolutionSeq {
+                schema: self.driver_schema.clone(),
+                rows: seed_rows.finish()?,
+            };
+            let input = crate::eval::PositiveInput::from_rows(&unit);
+            let evaluated = if matches!(right, GraphPattern::Bgp { .. }) {
+                crate::eval::eval_cached_bgp_evaluated(right, input, &mut self.bgp, ctx)?
+            } else {
+                crate::eval::eval_positive_evaluated(right, Some(input), &self.plan, ctx)?
+            };
+            if evaluated.is_truncated() {
+                // Do not run a condition or fabricate padding for this driver.
+                let _ = self.append_block(node, evaluated, ctx)?;
+                break;
+            }
+            // Match left_join_lift's placement after the seeded right read.
+            let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+            let left = lift
+                .absorb(0, Evaluated::Complete(unit))
+                .expect("a complete driver bag is available");
+            let right = lift
+                .absorb(1, evaluated)
+                .expect("a complete seeded relation is available");
+            self.active = Some(begin_optional_condition_with_owner(
+                node,
+                expression,
+                self.owner.clone(),
+                left,
+                right,
+                true,
+                lift.detach(),
+                ctx,
+            )?);
+        }
+        // The old consuming for loop drops the iterator before materializing
+        // the final output. Keep its storage and search scope until that point.
+        drop(self.input.take());
+        Ok(SeededOptionalStep::Complete(
+            self.lift
+                .take()
+                .expect("one seeded OPTIONAL lift")
+                .attach(node)
+                .finish(SolutionSeq {
+                    schema: self.schema,
+                    rows: self.output.finish()?,
+                }),
+        ))
+    }
+}
+
+// Forward the active driver's schema, which may have a different column order
+// from the accumulated output schema. EXISTS must see the actual VM row.
+impl<'e, I: ViewTermId> crate::vm::RowContinuation<'e, I> for SeededOptionalSequence<'e, I> {
+    fn row_frame<'s>(&'s self) -> &'s crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        crate::vm::RowContinuation::row_frame(
+            self.active
+                .as_ref()
+                .expect("one suspended driver condition"),
+        )
+    }
+
+    fn row_frame_mut<'s>(&'s mut self) -> &'s mut crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        crate::vm::RowContinuation::row_frame_mut(
+            self.active
+                .as_mut()
+                .expect("one suspended driver condition"),
+        )
+    }
+
+    fn schema(&self) -> &VarSchema {
+        crate::vm::RowContinuation::schema(
+            self.active
+                .as_ref()
+                .expect("one suspended driver condition"),
+        )
+    }
+}
+
+/// An OPTIONAL condition keeps its exact candidate and merged row while the
+/// expression VM waits for a graph or function child.
+pub(crate) struct OptionalSequence<'e, I: ViewTermId> {
+    left: SolutionSeq<I>,
+    right: SolutionSeq<I>,
+    schema: crate::solution::SharedSchema,
+    right_to_out: crate::AdmittedVec<usize>,
+    shared: crate::AdmittedVec<(usize, usize)>,
+    keyed: JoinIndex<I>,
+    wild: crate::AdmittedVec<usize>,
+    linked: Option<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    output: RowsBuilder<I>,
+    candidates: Option<OptionalCandidates<I>>,
+    left_index: usize,
+    next_candidate: usize,
+    matched: bool,
+    pad_unmatched: bool,
+    cell_ceiling: Option<usize>,
+    native: bool,
+    lift: DetachedLift,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the OPTIONAL sequence moves into the driver's admitted frame"
+)]
+pub(crate) enum OptionalStep<'e, 'd, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(OptionalSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the original child bags, lift and condition owner enter one continuation"
+)]
+pub(crate) fn begin_optional_condition_with_owner<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expression: &Expression,
+    owner: crate::expr::FilterLink<'e>,
+    left: SolutionSeq<D::Id>,
+    right: SolutionSeq<D::Id>,
+    pad_unmatched: bool,
+    lift: DetachedLift,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<OptionalSequence<'e, D::Id>, EvalError> {
+    let schema = left
+        .schema
+        .union_admitted(&right.schema, &ctx.growth)?
+        .shared_admitted(&ctx.growth)?;
+    let right_to_out = right_to_out_map(&right.schema, &schema, &ctx.growth)?;
+    let shared = left
+        .schema
+        .shared_columns_admitted(&right.schema, &ctx.growth)?;
+    let (keyed, wild) = build_index(&right, &shared, &ctx.growth)?;
+    let cell_ceiling = ctx.cell_row_ceiling(schema.len());
+    let program = crate::vm::program_at(ctx, node, expression)?;
+    let linked = match owner {
+        crate::expr::FilterLink::Borrowed(original) => {
+            if !std::ptr::eq(original, expression) {
+                return Err(EvalError::internal("OPTIONAL changed its expression owner"));
+            }
+            crate::vm::Linked::link_admitted(program, original, &schema, ctx)?
+        }
+        crate::expr::FilterLink::Copied(pattern) => {
+            crate::vm::Linked::link_copied_filter_owner_admitted(
+                program, expression, pattern, &schema, ctx,
+            )?
+        }
+    };
+    // Preserve the original post-link classification and cell/accounting guards.
+    // Registry resolution rejects SPARQL/Expr bodies; EXISTS stays on the driver.
+    let native = !ctx.growth.is_bounded()
         && cell_ceiling.is_none()
         && ctx.may_fork_governed_loop()
-        && ctx.may_fork_row_loop(expr)
-    {
-        // Harvesting, for `crate::expr::eval_filter`'s reason: the join predicate can
-        // reach a property function through an embedded `EXISTS`, and a worker's
-        // attestation must not die with the worker.
+        && ctx.may_fork_row_loop(expression)
+        && !crate::parallel::expression_re_enters_evaluation(expression);
+    Ok(OptionalSequence {
+        left,
+        right,
+        schema,
+        right_to_out,
+        shared,
+        keyed,
+        wild,
+        linked: Some(linked),
+        active: None,
+        output: RowsBuilder::new(&ctx.growth),
+        candidates: None,
+        left_index: 0,
+        next_candidate: 0,
+        matched: false,
+        pad_unmatched,
+        cell_ceiling,
+        native,
+        lift,
+    })
+}
+
+/// Complete the original pure OPTIONAL predicate kernel after both graph children.
+fn complete_parallel_optional<D: DatasetView + Sync>(
+    sequence: OptionalSequence<'_, D::Id>,
+    node: &GraphPattern,
+    expr: &Expression,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let OptionalSequence {
+        left: l,
+        right: r,
+        schema: out,
+        right_to_out,
+        shared,
+        keyed,
+        wild,
+        linked,
+        pad_unmatched,
+        lift,
+        ..
+    } = sequence;
+    let mut linked = linked.expect("native OPTIONAL condition link");
+    let out_len = out.len();
+    let left_len = l.schema.len();
+    let rows = {
+        // Preserve the original worker witness harvest and ordered ledger
+        // commit alongside each worker's admitted predicate output.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         // One left row's output: its compatible right rows the predicate keeps, or the
         // left row padded when it keeps none and padding is sound.
@@ -2992,8 +2665,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         acc: &mut Vec<RetainedRow<D::Id>>|
          -> Result<(), EvalError> {
             let before = acc.len();
-            match filtered_candidates(lrow, &shared, &keyed, &wild, &ctx.growth)? {
-                Candidates::Bucket(idxs) => {
+            match optional_candidate_key(lrow, &shared, &wild, &ctx.growth)?
+                .map(|key| keyed.get(&key).unwrap_or(&[]))
+            {
+                Some(idxs) => {
                     for &idx in idxs {
                         let merged = merge_admitted(
                             lrow,
@@ -3010,7 +2685,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         }
                     }
                 }
-                Candidates::Scan => {
+                None => {
                     for rrow in &r.rows {
                         if !compatible(lrow, rrow, &shared) {
                             continue;
@@ -3087,75 +2762,164 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             &ctx.growth,
         )
         .finish()?
+    };
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node, tripped, out,
+        )));
+    }
+    Ok(lift.attach(node).finish(SolutionSeq { schema: out, rows }))
+}
+
+fn optional_candidate_key<I: ViewTermId>(
+    left: &[Option<SolutionTerm<I>>],
+    shared: &[(usize, usize)],
+    wild: &[usize],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<JoinKey<I>>, EvalError> {
+    if wild.is_empty() {
+        bound_key(left, shared, KeySide::Left, workspace)
     } else {
-        let mut rows = RowsBuilder::new(&ctx.growth);
-        'left: for lrow in &l.rows {
-            let mut matched = false;
-            match filtered_candidates(lrow, &shared, &keyed, &wild, &ctx.growth)? {
-                Candidates::Bucket(idxs) => {
-                    for &idx in idxs {
-                        let merged = merge_admitted(
-                            lrow,
-                            &r.rows[idx],
-                            left_len,
-                            &right_to_out,
-                            out_len,
-                            &ctx.growth,
-                        )?;
-                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
-                        if keep {
-                            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                                break 'left;
-                            }
-                            rows.push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
-                            matched = true;
-                        }
-                    }
-                }
-                Candidates::Scan => {
-                    for rrow in &r.rows {
-                        if !compatible(lrow, rrow, &shared) {
-                            continue;
-                        }
-                        let merged = merge_admitted(
-                            lrow,
-                            rrow,
-                            left_len,
-                            &right_to_out,
-                            out_len,
-                            &ctx.growth,
-                        )?;
-                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
-                        if keep {
-                            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                                break 'left;
-                            }
-                            rows.push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
-                            matched = true;
-                        }
-                    }
-                }
+        Ok(None)
+    }
+}
+
+impl<'e, I: ViewTermId> OptionalSequence<'e, I> {
+    fn next_right(&mut self) -> Option<usize> {
+        match self.candidates.as_ref().expect("one active left row") {
+            OptionalCandidates::Bucket(key) => {
+                let index = self.keyed.get(key)?.get(self.next_candidate).copied()?;
+                self.next_candidate += 1;
+                Some(index)
             }
-            if pad_unmatched && !matched {
-                if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                    break;
+            OptionalCandidates::Scan => {
+                while self.next_candidate < self.right.rows.len() {
+                    let index = self.next_candidate;
+                    self.next_candidate += 1;
+                    if compatible(
+                        &self.left.rows[self.left_index],
+                        &self.right.rows[index],
+                        &self.shared,
+                    ) {
+                        return Some(index);
+                    }
                 }
-                let padded = RetainedRow::from_cells(
-                    out_len,
-                    (0..out_len).map(|column| lrow.get(column).copied().flatten()),
-                    &ctx.growth,
-                )?;
-                rows.push_row(
-                    padded.with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
-                )?;
+                None
             }
         }
-        rows.finish()?
-    };
-    Ok(SolutionSeq { schema: out, rows })
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        expression: &Expression,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<OptionalStep<'e, 'd, I>, EvalError> {
+        if self.native {
+            return complete_parallel_optional(self, node, expression, ctx)
+                .map(OptionalStep::Complete);
+        }
+        while self.left_index < self.left.rows.len() {
+            let mut frame = if let Some(frame) = self.active.take() {
+                frame
+            } else {
+                if self.candidates.is_none() {
+                    self.candidates = Some(
+                        match optional_candidate_key(
+                            &self.left.rows[self.left_index],
+                            &self.shared,
+                            &self.wild,
+                            &ctx.growth,
+                        )? {
+                            Some(key) => OptionalCandidates::Bucket(key),
+                            None => OptionalCandidates::Scan,
+                        },
+                    );
+                }
+                let Some(index) = self.next_right() else {
+                    if self.pad_unmatched && !self.matched {
+                        if self
+                            .cell_ceiling
+                            .is_some_and(|cap| self.output.len() >= cap)
+                        {
+                            let _ = ctx.observe_cells(
+                                self.output.len().saturating_add(1),
+                                self.schema.len(),
+                            );
+                            break;
+                        }
+                        let left = &self.left.rows[self.left_index];
+                        let padded = RetainedRow::from_cells(
+                            self.schema.len(),
+                            (0..self.schema.len())
+                                .map(|column| left.get(column).copied().flatten()),
+                            &ctx.growth,
+                        )?;
+                        self.output.push_row(padded.with_optional_evidence(
+                            optional_evidence(left, ctx)?,
+                            &ctx.growth,
+                        )?)?;
+                    }
+                    self.left_index += 1;
+                    self.next_candidate = 0;
+                    self.matched = false;
+                    self.candidates = None;
+                    continue;
+                };
+                let merged = merge_admitted(
+                    &self.left.rows[self.left_index],
+                    &self.right.rows[index],
+                    self.left.schema.len(),
+                    &self.right_to_out,
+                    self.schema.len(),
+                    &ctx.growth,
+                )?;
+                crate::vm::RowExpressionFrame::begin(
+                    self.linked.take().expect("one OPTIONAL condition link"),
+                    merged,
+                    ctx,
+                )?
+            };
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(request) => {
+                    self.active = Some(frame);
+                    return Ok(OptionalStep::Suspend(self, request));
+                }
+                crate::vm::VmStep::Value(value) => {
+                    let (linked, merged, keep, evidence) =
+                        frame.finish_filter(expression, &self.schema, value, ctx)?;
+                    self.linked = Some(linked);
+                    if keep {
+                        if self
+                            .cell_ceiling
+                            .is_some_and(|cap| self.output.len() >= cap)
+                        {
+                            let _ = ctx.observe_cells(
+                                self.output.len().saturating_add(1),
+                                self.schema.len(),
+                            );
+                            break;
+                        }
+                        self.output
+                            .push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
+                        self.matched = true;
+                    }
+                }
+            }
+        }
+        let rows = self.output.finish()?;
+        if let Some(tripped) = ctx.expression_barrier.observed() {
+            return Ok(OptionalStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.schema),
+            )));
+        }
+        Ok(OptionalStep::Complete(self.lift.attach(node).finish(
+            SolutionSeq {
+                schema: self.schema,
+                rows,
+            },
+        )))
+    }
 }
 
 /// Left outer join: every left solution merged with each compatible right
@@ -3163,10 +2927,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
 ///
 /// `pad_unmatched` is `false` exactly when `r` is a *prefix* of the right bag rather than
 /// the whole of it, in which case "no compatible right row exists" is not a fact this
-/// operator holds and the left-alone row must not be emitted; see [`eval_left_join`]. The
+/// operator holds and the left-alone row must not be emitted; see [`begin_optional_condition_with_owner`]. The
 /// operator then computes an inner join, which is what a `LeftJoin` over an incomplete
 /// right bag soundly is.
-fn left_outer_join<D: DatasetView + Sync>(
+pub(crate) fn left_outer_join<D: DatasetView + Sync>(
     l: &SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
@@ -3357,73 +3121,96 @@ fn left_outer_join<D: DatasetView + Sync>(
 /// empty bag rather than left rows that were never checked for removal — emitting them
 /// would fabricate rows `MINUS` would have deleted. A truncated RIGHT arm subtracts less
 /// than the true query would, so the output contains the true answer: an upper bound, not
-/// a black hole.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_minus<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
-        return Ok(lift.withheld());
-    };
-    if lift.is_truncated() {
-        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
-    }
-    // A variable-endpoint `SERVICE` in the subtracted side is answered over the endpoints
-    // the left rows bind, one partition of the left rows per endpoint: each partition is
-    // subtracted by the right side evaluated with its own endpoint alone listed, so a
-    // silenced endpoint contributes Ω0 to its own partition and removes nothing. Only the
-    // list of endpoints to invoke comes from the left: a row from any other endpoint binds
-    // the endpoint variable to a different IRI than every row of the partition, so it
-    // could remove none of them. See `crate::service_endpoints`.
-    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
-        let mut removed = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
+/// The original endpoint-partitioned MINUS loop, retained between right children.
+pub(crate) struct MinusPartitions<I: ViewTermId> {
+    left: SolutionSeq<I>,
+    partitions: crate::AdmittedVec<crate::service_endpoints::MinusPartition<I>>,
+    removed: crate::AdmittedVec<bool>,
+    evidence: crate::AdmittedVec<crate::evidence_exec::RowEvidence>,
+    tracking: bool,
+    next: usize,
+    lift: Option<DetachedLift>,
+}
+impl<I: ViewTermId> MinusPartitions<I> {
+    pub(crate) fn new<D: DatasetView<Id = I> + Sync>(
+        left: SolutionSeq<I>,
+        partitions: crate::AdmittedVec<crate::service_endpoints::MinusPartition<I>>,
+        lift: DetachedLift,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        let mut removed = crate::AdmittedVec::with_capacity(left.rows.len(), &ctx.growth)?;
         let mut evidence = crate::AdmittedVec::new(&ctx.growth);
-        let tracking = ctx.may_have_evidence() || l.rows.may_have_evidence_attachment();
+        let tracking = ctx.may_have_evidence() || left.rows.may_have_evidence_attachment();
         if tracking {
-            for row in &l.rows {
+            for row in &left.rows {
                 evidence.push(row.evidence().clone())?;
             }
         }
-        for _ in 0..l.rows.len() {
+        for _ in 0..left.rows.len() {
             removed.push(false)?;
         }
-        for partition in &partitions {
-            let evaluated = crate::service_endpoints::eval_minus_partition(partition, right, ctx)?;
-            let Some(r) = lift.absorb(1, evaluated) else {
-                return Ok(lift.withheld());
-            };
-            let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
-            for &position in &partition.rows {
-                let lrow = &l.rows[position];
-                if tracking {
-                    let decision = minus_evidence(lrow, &r, &shared, ctx)?;
-                    removed.as_mut_slice()[position] = decision.is_none();
-                    if let Some(retained) = decision {
-                        evidence.as_mut_slice()[position] = retained;
-                    }
-                    continue;
+        Ok(Self {
+            left,
+            partitions,
+            removed,
+            evidence,
+            tracking,
+            next: 0,
+            lift: Some(lift),
+        })
+    }
+    pub(crate) fn partition(&self) -> Option<&crate::service_endpoints::MinusPartition<I>> {
+        self.partitions.get(self.next)
+    }
+    pub(crate) fn absorb<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        node: &GraphPattern,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<MinusPartitionStep<I>, EvalError> {
+        let mut lift = self.lift.take().expect("one MINUS lift").attach(node);
+        let Some(right) = lift.absorb(1, evaluated) else {
+            return Ok(MinusPartitionStep::Complete(lift.withheld()));
+        };
+        let shared = self
+            .left
+            .schema
+            .shared_columns_admitted(&right.schema, &ctx.growth)?;
+        let partition = &self.partitions[self.next];
+        for &position in &partition.rows {
+            let left = &self.left.rows[position];
+            if self.tracking {
+                let decision = minus_evidence(left, &right, &shared, ctx)?;
+                self.removed.as_mut_slice()[position] = decision.is_none();
+                if let Some(retained) = decision {
+                    self.evidence.as_mut_slice()[position] = retained;
                 }
-                removed.as_mut_slice()[position] = r.rows.iter().any(|rrow| {
-                    compatible(lrow, rrow, &shared)
+            } else {
+                self.removed.as_mut_slice()[position] = right.rows.iter().any(|right| {
+                    compatible(left, right, &shared)
                         && shared
                             .iter()
-                            .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
+                            .any(|&(la, ra)| left[la].is_some() && right[ra].is_some())
                 });
             }
-            // A truncated right side subtracts less than the true one: the partitions not
-            // yet evaluated keep every row, which is the upper bound `MINUS` promises.
-            if lift.is_truncated() {
-                break;
-            }
         }
+        self.next += 1;
+        let done = lift.is_truncated() || self.next == self.partitions.len();
+        self.lift = Some(lift.detach());
+        Ok(if done {
+            MinusPartitionStep::Finish
+        } else {
+            MinusPartitionStep::Next
+        })
+    }
+    pub(crate) fn finish<D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Evaluated<I>, EvalError> {
         let mut rows = RowsBuilder::new(&ctx.growth);
-        let mut evidence = evidence.into_iter();
-        for (mut row, removed) in l.rows.into_iter().zip(removed.iter()) {
+        let mut evidence = self.evidence.into_iter();
+        for (mut row, removed) in self.left.rows.into_iter().zip(self.removed.iter()) {
             if let Some(retained) = evidence.next() {
                 row = row.with_evidence(retained, &ctx.growth)?;
             }
@@ -3431,29 +3218,26 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
                 rows.push_row(row)?;
             }
         }
-        return Ok(lift.finish(SolutionSeq {
-            schema: l.schema,
-            rows: rows.finish()?,
-        }));
+        Ok(self
+            .lift
+            .expect("one MINUS lift")
+            .attach(node)
+            .finish(SolutionSeq {
+                schema: self.left.schema,
+                rows: rows.finish()?,
+            }))
     }
-    let evaluated = crate::service_endpoints::eval_right_operand(
-        &l,
-        right,
-        crate::service_endpoints::FrameRole::Minus,
-        ctx,
-    )?;
-    let Some(r) = lift.absorb(1, evaluated) else {
-        return Ok(lift.withheld());
-    };
-    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
-
-    Ok(lift.finish(minus_rows(l, &r, &shared, ctx)?))
+}
+pub(crate) enum MinusPartitionStep<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Next,
+    Finish,
 }
 
 // Share the row loop without adding a helper call or frame to the native kernel.
 #[allow(clippy::inline_always)]
 #[inline(always)]
-fn minus_rows<D: DatasetView + Sync>(
+pub(crate) fn minus_rows<D: DatasetView + Sync>(
     l: SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     shared: &[(usize, usize)],
@@ -4362,7 +4146,7 @@ mod tests {
     /// Determinism smoke test: a 3-branch `UNION` (the `d_union_4` bench
     /// shape) where each branch `BIND`s a freshly-computed value — two branches
     /// minting the SAME value (`11`), one minting a DISJOINT value (`12`) — so the
-    /// escaping-computed-term merge in [`eval_union`] is exercised both ways.
+    /// escaping-computed-term merge in [`concat_union`] is exercised both ways.
     /// Evaluated once with the parallel `UNION` path FORCED and once with the
     /// sequential path FORCED, the two must produce byte-identical rows (schema
     /// and row order, left-branch rows then right-branch rows, nested left-to-right).
@@ -4541,7 +4325,6 @@ mod tests {
             |_left, _ctx| -> Result<Evaluated<TermId>, EvalError> {
                 panic!("the right arm must not be evaluated once the left arm truncated")
             },
-            None,
             &mut ctx,
         )
         .expect("lift over a truncated left arm");
@@ -4573,7 +4356,6 @@ mod tests {
             &node,
             Evaluated::Complete(left_rows.clone()),
             move |_left, _ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
-            None,
             &mut ctx,
         )
         .expect("lift over a truncated right arm");
@@ -4601,7 +4383,6 @@ mod tests {
             &node,
             Evaluated::Complete(left_rows),
             move |_left, _ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
-            None,
             &mut ctx,
         )
         .expect("lift over a truncated right arm");
@@ -5120,3 +4901,5 @@ mod tests {
         );
     }
 }
+
+crate::vm::row_continuation!(OptionalSequence, schema);

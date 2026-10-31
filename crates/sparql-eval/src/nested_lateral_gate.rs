@@ -77,7 +77,7 @@ fn answer(ds: &Arc<RdfDataset>, query: &str, eager: bool) -> Vec<Vec<String>> {
         .unwrap_or_else(|e| panic!("prepare {query}: {e}"));
     let _eager = eager.then(force_eager_substitution_for_test);
     let result = engine
-        .query_prepared(ds, &prepared, &[], crate::QueryOptions::EMPTY)
+        .query_prepared(ds, &prepared, &[], &crate::QueryOptions::EMPTY)
         .unwrap_or_else(|e| panic!("evaluate {query}: {e}"));
     rows_of(&result)
 }
@@ -92,7 +92,7 @@ fn answer_forked(ds: &Arc<RdfDataset>, query: &str) -> Vec<Vec<String>> {
     let _parallel = crate::parallel::force_parallel_for_test(true);
     let _chunks = crate::parallel::force_chunk_size_for_test(1);
     let result = engine
-        .query_prepared(ds, &prepared, &[], crate::QueryOptions::EMPTY)
+        .query_prepared(ds, &prepared, &[], &crate::QueryOptions::EMPTY)
         .unwrap_or_else(|e| panic!("evaluate {query}: {e}"));
     rows_of(&result)
 }
@@ -171,7 +171,7 @@ fn counted(ds: &Arc<RdfDataset>, query: &str, eager: bool) -> (Vec<Vec<String>>,
     let _eager = eager.then(force_eager_substitution_for_test);
     crate::op_count::reset();
     let result = engine
-        .query_prepared(ds, &prepared, &[], crate::QueryOptions::EMPTY)
+        .query_prepared(ds, &prepared, &[], &crate::QueryOptions::EMPTY)
         .expect("evaluate");
     let counts = crate::op_count::read();
     (rows_of(&result), counts)
@@ -648,12 +648,12 @@ fn disagreeing_layers_answer_as_the_full_substitution_does() {
         base_iri: None,
         version: None,
     };
-    let prepared = crate::PreparedQuery::rewritten(query, crate::QueryOptions::EMPTY)
+    let prepared = crate::PreparedQuery::rewritten(query, &crate::QueryOptions::EMPTY)
         .expect("no registry to fingerprint");
     let run = |eager: bool| {
         let _eager = eager.then(force_eager_substitution_for_test);
         let result = sequential_engine()
-            .query_prepared(&ds, &prepared, &[], crate::QueryOptions::EMPTY)
+            .query_prepared(&ds, &prepared, &[], &crate::QueryOptions::EMPTY)
             .expect("evaluate");
         rows_of(&result)
     };

@@ -640,6 +640,12 @@ pub(crate) enum Command {
         /// `SILENT`, is the join identity — before it can be charged.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Bound logical user-function depth. The default is thirty-two.
+        #[arg(long, value_name = "DEPTH", conflicts_with_all = ["unlimited_udf_depth", "explain"])]
+        max_udf_depth: Option<u64>,
+        /// Remove the logical user-function depth ceiling.
+        #[arg(long, conflicts_with_all = ["max_udf_depth", "explain"])]
+        unlimited_udf_depth: bool,
         /// Decline every ceiling AND all accounting: the query runs as if no governor
         /// existed, rather than metered against ceilings nothing can reach (the base every
         /// governed run otherwise starts from). Combines with `--deadline`, which is a stop
@@ -793,6 +799,12 @@ pub(crate) enum Command {
         /// Bound remote/federated requests issued while computing the mutation.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Bound logical user-function depth. The default is thirty-two.
+        #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
+        max_udf_depth: Option<u64>,
+        /// Remove the logical user-function depth ceiling.
+        #[arg(long, conflicts_with = "max_udf_depth")]
+        unlimited_udf_depth: bool,
         /// Decline every ceiling AND all accounting, rather than metering the mutation
         /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
         /// any numeric ceiling.
@@ -1398,6 +1410,12 @@ pub(crate) enum Command {
         /// Bound the requests a `SERVICE` clause in a SHACL-SPARQL constraint issues.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Bound logical user-function depth. The default is thirty-two.
+        #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
+        max_udf_depth: Option<u64>,
+        /// Remove the logical user-function depth ceiling.
+        #[arg(long, conflicts_with = "max_udf_depth")]
+        unlimited_udf_depth: bool,
         /// Decline every ceiling AND all accounting, rather than metering the validation
         /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
         /// any numeric ceiling.

@@ -34,7 +34,7 @@ fn query_admission_retains_each_original_parser_condition() {
             .expect_err("source refusal");
         assert_eq!(source.presentation().message_id(), identity);
         let diagnostic = engine
-            .prepare_execution(query, None, &[], QueryOptions::EMPTY)
+            .prepare_execution(query, None, &[], &QueryOptions::EMPTY)
             .expect_err("engine refusal");
         assert_eq!(diagnostic.code, "native-sparql-query-parse");
         assert_eq!(diagnostic.message, source.to_string());
@@ -60,7 +60,7 @@ fn query_admission_retains_each_original_parser_condition() {
     }
     assert!(
         engine
-            .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+            .prepare_execution("ASK {}", None, &[], &QueryOptions::EMPTY)
             .is_ok()
     );
 }

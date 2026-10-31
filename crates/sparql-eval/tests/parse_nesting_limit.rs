@@ -36,7 +36,7 @@ fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )?;
     let SparqlResult::Solutions { rows, .. } = result else {
         panic!("a SELECT answers with solutions");

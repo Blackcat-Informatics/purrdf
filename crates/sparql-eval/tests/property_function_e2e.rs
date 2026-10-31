@@ -127,7 +127,7 @@ fn a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relatio
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&relations()),
+            &QueryOptions::new().with_env(&relations()),
         )
         .expect("the call resolves and evaluates");
 
@@ -311,7 +311,7 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&env_of(registry)),
+            &QueryOptions::new().with_env(&env_of(registry)),
         )
         .expect(
             "an unregistered, merely-prefix-sharing predicate must parse and evaluate as an \
@@ -483,7 +483,7 @@ fn a_governed_query_answers_from_the_relation_and_charges_it() {
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            with_env(&registry),
+            &with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("the call resolves and evaluates under governors");
@@ -509,7 +509,7 @@ fn a_governed_query_answers_from_the_relation_and_charges_it() {
     // charge points that are unreachable from an entry with no registry — a run that
     // silently degraded the call to a BGP triple would spend zero at both.
     let explanation = engine
-        .explain_query_with_options(&dataset, GOVERNED_QUERY, None, with_env(&registry))
+        .explain_query_with_options(&dataset, GOVERNED_QUERY, None, &with_env(&registry))
         .expect("explain");
     let invocations: u64 = explanation
         .ledger()
@@ -551,7 +551,7 @@ fn a_governed_relation_query_trips_one_unit_below_its_metered_spend() {
             .query_governed(
                 &dataset,
                 request(GOVERNED_QUERY),
-                with_env(&registry),
+                &with_env(&registry),
                 governors,
             )
             .expect("a governor trip is an outcome, never an error")
@@ -598,7 +598,7 @@ fn a_governed_entry_refuses_a_declared_huge_relation_on_a_small_cell_ceiling() {
         .query_governed(
             &support::unrelated_quad(),
             request(GOVERNED_QUERY),
-            with_env(&env_of(registry)),
+            &with_env(&env_of(registry)),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
         )
         .expect("a refusal is an outcome, never an error");
@@ -645,7 +645,7 @@ fn the_governed_entry_cannot_silently_drop_a_registered_relation() {
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            with_env(&registry),
+            &with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("evaluates");
@@ -662,7 +662,7 @@ fn the_governed_entry_cannot_silently_drop_a_registered_relation() {
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("evaluates");
@@ -696,7 +696,7 @@ fn the_per_call_and_operation_governed_entries_spend_identically() {
         .query_governed(
             &dataset,
             request(GOVERNED_QUERY),
-            with_env(&registry),
+            &with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("evaluates")
@@ -712,7 +712,7 @@ fn the_per_call_and_operation_governed_entries_spend_identically() {
         .query_governed_in_operation(
             &*dataset,
             request(GOVERNED_QUERY),
-            with_env(&registry),
+            &with_env(&registry),
             &state,
         )
         .expect("evaluates")
@@ -748,7 +748,7 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
         &*dataset,
         &stale,
         &[],
-        with_env(&registry),
+        &with_env(&registry),
         &QueryGovernors::METERED,
     );
     let error = refused.expect_err("a plan/registry disagreement must be a diagnostic");
@@ -756,14 +756,14 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
 
     // Prepared under the SAME options, the very same text runs and answers.
     let matched = engine
-        .prepare_query_with_options(GOVERNED_QUERY, None, with_env(&registry))
+        .prepare_query_with_options(GOVERNED_QUERY, None, &with_env(&registry))
         .expect("the registry-aware parse lowers the predicate to a call");
     let GovernedOutcome::Complete { result, .. } = engine
         .query_prepared_governed_view(
             &*dataset,
             &matched,
             &[],
-            with_env(&registry),
+            &with_env(&registry),
             &QueryGovernors::METERED,
         )
         .expect("evaluates")
@@ -801,7 +801,7 @@ fn query_with_source_view_dispatches_a_registered_relation_with_options() {
             &*dataset,
             request(GOVERNED_QUERY),
             &source,
-            with_env(&registry),
+            &with_env(&registry),
         )
         .expect("a registered relation's outer-pattern call evaluates through the federated entry");
 
@@ -825,7 +825,7 @@ fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry
     let stale = engine
         .prepare_query(GOVERNED_QUERY, None)
         .expect("the text parses as ordinary data with no registry in scope");
-    let refused = engine.query_prepared(&dataset, &stale, &[], with_env(&registry));
+    let refused = engine.query_prepared(&dataset, &stale, &[], &with_env(&registry));
     let error = refused.expect_err(
         "a plan/registry disagreement must be a diagnostic, not a \
                                      silent empty-bag answer",
@@ -836,10 +836,10 @@ fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry
     // relation — never from the graph, which holds no `rel:memberOf` triple to have
     // matched instead.
     let matched = engine
-        .prepare_query_with_options(GOVERNED_QUERY, None, with_env(&registry))
+        .prepare_query_with_options(GOVERNED_QUERY, None, &with_env(&registry))
         .expect("the registry-aware parse lowers the predicate to a call");
     let result = engine
-        .query_prepared(&dataset, &matched, &[], with_env(&registry))
+        .query_prepared(&dataset, &matched, &[], &with_env(&registry))
         .expect("a plan and options that agree on the registry evaluate");
     assert_eq!(rows_of(&result).len(), 3);
 }
@@ -889,11 +889,11 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
 
     let dataset = support::unrelated_quad();
     let prepared = engine
-        .prepare_query_with_options(GOVERNED_QUERY, None, with_env(&registry_a))
+        .prepare_query_with_options(GOVERNED_QUERY, None, &with_env(&registry_a))
         .expect("registry A admits and lowers the predicate to a call");
 
     let error = engine
-        .query_prepared(&dataset, &prepared, &[], with_env(&env_of(registry_b)))
+        .query_prepared(&dataset, &prepared, &[], &with_env(&env_of(registry_b)))
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different relation",
@@ -907,7 +907,7 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
     // The non-regression twin: the SAME registry instance at both prepare and
     // execute must still work.
     let result = engine
-        .query_prepared(&dataset, &prepared, &[], with_env(&registry_a))
+        .query_prepared(&dataset, &prepared, &[], &with_env(&registry_a))
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(rows_of(&result).len(), 3);
 }
@@ -941,7 +941,7 @@ fn an_update_where_inserts_exactly_the_relations_rows() {
     let before = ds.quad_count();
 
     engine
-        .update_with_options(&mut ds, request(UPDATE_TEXT), with_env(&registry))
+        .update_with_options(&mut ds, request(UPDATE_TEXT), &with_env(&registry))
         .expect("the call resolves, evaluates, and the mutation applies");
 
     assert_eq!(
@@ -981,7 +981,7 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
             .update_governed(
                 &mut ds,
                 request(UPDATE_TEXT),
-                with_env(&registry),
+                &with_env(&registry),
                 governors,
             )
             .expect("a governor trip is an outcome, never an update error");
@@ -1038,7 +1038,7 @@ fn an_update_where_call_with_no_registry_hard_errors_precisely() {
         .update_with_options(
             &mut ds,
             request(UPDATE_TEXT),
-            QueryOptions::new().with_env(&env),
+            &QueryOptions::new().with_env(&env),
         )
         .expect_err("a call with nothing to resolve against must not read the graph instead");
     assert_eq!(error.code, "native-sparql-property-function");

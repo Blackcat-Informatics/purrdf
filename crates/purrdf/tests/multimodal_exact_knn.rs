@@ -498,12 +498,12 @@ fn bound_candidate(
         vector_term(0)
     );
     let mut execution = engine
-        .prepare_execution(&text, None, &["n"], options)
+        .prepare_execution(&text, None, &["n"], &options)
         .expect("the bound-candidate call prepares");
     let slot = execution.slot("n").expect("the declared parameter");
     execution.bind(slot, term.clone()).expect("the term binds");
     engine
-        .execute(&mut execution, dataset, options, |outcome| match outcome {
+        .execute(&mut execution, dataset, &options, |outcome| match outcome {
             InternedOutcome::Solutions(solutions) => {
                 let column = solutions.column("d").expect("?d is projected");
                 solutions
@@ -532,14 +532,14 @@ fn ranked_reading(
         vector_term(0)
     );
     let prepared = engine
-        .prepare_query_with_options(&text, None, options)
+        .prepare_query_with_options(&text, None, &options)
         .expect("the ranked call prepares");
     match engine
         .query_prepared_governed_view(
             dataset,
             &prepared,
             &[],
-            options,
+            &options,
             &purrdf::sparql::QueryGovernors::UNBOUNDED,
         )
         .expect("the ranked call runs")

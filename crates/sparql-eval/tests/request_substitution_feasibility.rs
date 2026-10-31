@@ -391,26 +391,32 @@ fn request(
     let state = || Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
     let answer = match door {
         Door::OptionsView => engine
-            .query_with_options_view(&**data, owned, options)
+            .query_with_options_view(&**data, owned, &options)
             .map(solutions),
-        Door::InternedView => engine.query_interned_view(&**data, interned, options, interned_rows),
+        Door::InternedView => {
+            engine.query_interned_view(&**data, interned, &options, interned_rows)
+        }
         Door::Governed => engine
-            .query_governed(data, owned, options, &QueryGovernors::UNBOUNDED)
+            .query_governed(data, owned, &options, &QueryGovernors::UNBOUNDED)
             .map(governed),
         Door::GovernedInOperation => engine
-            .query_governed_in_operation(&**data, owned, options, &state())
+            .query_governed_in_operation(&**data, owned, &options, &state())
             .map(governed),
         Door::GovernedInternedInOperation => engine
-            .query_governed_interned_in_operation(&**data, interned, options, &state(), |outcome| {
-                interned_rows(outcome)
-            })
+            .query_governed_interned_in_operation(
+                &**data,
+                interned,
+                &options,
+                &state(),
+                interned_rows,
+            )
             .map(|outcome| match outcome {
                 InternedGoverned::Complete { value, .. } => value,
                 InternedGoverned::BudgetExhausted(_) => panic!("an unbounded run completes"),
             }),
         Door::FallibleView => {
             return engine
-                .query_fallible_view(&**data, owned, options)
+                .query_fallible_view(&**data, owned, &options)
                 .map(|complete| {
                     sorted(
                         complete
@@ -438,13 +444,13 @@ fn prepared(
 ) -> Result<Vec<Vec<Option<TermValue>>>, String> {
     let options = QueryOptions::new().with_env(env).with_prebinding(lane);
     let mut execution = engine
-        .prepare_execution(query, None, &["q"], options)
+        .prepare_execution(query, None, &["q"], &options)
         .map_err(|diagnostic| diagnostic.message)?;
     execution
         .bind(0, value.clone())
         .expect("the value door binds every term kind");
     engine
-        .execute(&mut execution, &**data, options, interned_rows)
+        .execute(&mut execution, &**data, &options, interned_rows)
         .map_err(|diagnostic| diagnostic.message)
 }
 

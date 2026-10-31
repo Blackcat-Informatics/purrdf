@@ -225,7 +225,7 @@ fn bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer() {
 /// error — a trip is an outcome, never an `Err`.
 fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
     NativeSparqlEngine::new()
-        .query_governed(&fixture(), request(query), QueryOptions::EMPTY, governors)
+        .query_governed(&fixture(), request(query), &QueryOptions::EMPTY, governors)
         .expect("a tripped governor is an outcome, not a query error")
 }
 
@@ -277,7 +277,7 @@ fn plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity() {
                 .query_governed(
                     &dataset,
                     request(query),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 )
                 .expect("metered BIND");
@@ -359,7 +359,7 @@ fn stopped_partial_rows(dataset: &Arc<RdfDataset>, query: &str) -> usize {
         .query_governed(
             dataset,
             request(query),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(16)),
         )
         .expect("a stop is an outcome");
@@ -748,7 +748,7 @@ fn public_blank_node_filter_cannot_forge_an_upper_bound() {
         .query_governed(
             &dataset,
             request(query),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("metered query")
@@ -761,7 +761,7 @@ fn public_blank_node_filter_cannot_forge_an_upper_bound() {
             .query_governed(
                 &dataset,
                 request(query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(fuel),
             )
             .expect("a fuel trip is an outcome");
@@ -1079,7 +1079,7 @@ fn d6_precedence_order() {
         .query_governed(
             &fixture(),
             request("SELECT * WHERE { SERVICE <http://example.org/remote> { ?a ?b ?c } }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect_err("a federation failure is an error, not an exhausted budget");
@@ -1093,7 +1093,7 @@ fn d6_precedence_order() {
         .query_governed(
             &fixture(),
             request("SELECT WHERE {"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
         )
         .expect_err("an unparseable query is a parse error, not an exhausted budget");
@@ -1119,7 +1119,7 @@ fn prepared_plans_do_not_share_a_budget_across_runs() {
                 &*dataset,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             )
             .expect("prepared governed run");
@@ -1152,7 +1152,7 @@ fn a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters() {
         .query_governed_fallible_view(
             &view,
             request(ALL_ROWS),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("a metered run over a ready view completes");
@@ -1171,7 +1171,7 @@ fn a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters() {
         .query_governed_fallible_view(
             &view,
             request(ALL_ROWS),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_answers(2),
         )
         .expect_err("a trip is not a complete result");
@@ -1227,7 +1227,7 @@ fn a_fallible_federated_view_composes_page_and_remote_evidence() {
             &view,
             request(query),
             &source,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("the local page and remote response are both ready");
@@ -1252,7 +1252,7 @@ fn a_fallible_federated_view_composes_page_and_remote_evidence() {
             &view,
             request(query),
             &source,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(complete_fuel - 1),
         )
         .expect_err("the final fuel unit prevents a completeness certificate");
@@ -1303,7 +1303,7 @@ fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
             .query_governed(
                 dataset,
                 request(query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(128),
             )
             .unwrap();
@@ -1317,7 +1317,7 @@ fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
         .query_governed(
             dataset,
             request(seeded),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(128),
         )
         .unwrap();
@@ -1655,7 +1655,7 @@ fn statement_fixed_work_probe() {
         STATEMENT_RANGE_QUERIES.map(|(query, _)| engine.prepare_query(query, None).unwrap());
     for (index, query) in prepared.iter().enumerate() {
         let result = engine
-            .query_prepared_view(dataset.as_ref(), query, &[], QueryOptions::EMPTY)
+            .query_prepared_view(dataset.as_ref(), query, &[], &QueryOptions::EMPTY)
             .unwrap();
         assert_eq!(
             row_count(&result),
@@ -1676,7 +1676,12 @@ fn statement_fixed_work_probe() {
             black_box(expected)
         } else if let Some(query) = query {
             let result = engine
-                .query_prepared_view(dataset.as_ref(), black_box(query), &[], QueryOptions::EMPTY)
+                .query_prepared_view(
+                    dataset.as_ref(),
+                    black_box(query),
+                    &[],
+                    &QueryOptions::EMPTY,
+                )
                 .unwrap();
             row_count(black_box(&result))
         } else {
@@ -1717,7 +1722,7 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
     for edges in [WIDE_EDGES, WIDE_EDGES * 4] {
         let dataset = wide_fixture(edges);
         let outcome = engine
-            .query_governed(&dataset, request(ALL_ROWS), QueryOptions::EMPTY, &capped)
+            .query_governed(&dataset, request(ALL_ROWS), &QueryOptions::EMPTY, &capped)
             .expect("a capped run is an outcome, not an error");
         let exhausted = outcome
             .exhausted()
@@ -1747,7 +1752,7 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
             .query_governed(
                 &dataset,
                 request(ALL_ROWS),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .expect("a metered run completes");
@@ -1802,7 +1807,7 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
         .query_governed(
             &dataset,
             request(ALL_ROWS),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED,
         )
         .expect("the unlimited query");
@@ -1813,7 +1818,7 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
         .query_governed(
             &dataset,
             request("SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o } LIMIT 5"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED,
         )
         .expect("the limited query");
@@ -1855,7 +1860,7 @@ fn bookkeeping_cell_limit_retains_saturated_forecast_refusal() {
         .query_governed(
             &fixture(),
             request(&query),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_fuel(0),
         )
         .expect("a forecast refusal is an outcome");
@@ -1895,7 +1900,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         .query_governed(
             &dataset,
             request(ALL_ROWS),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(1),
         )
         .expect("a refusal is an outcome, not an error");
@@ -1956,7 +1961,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
             .query_governed(
                 &dataset,
                 request(ALL_ROWS),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(1),
             )
             .expect("a refusal is an outcome");
@@ -1973,7 +1978,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         .query_governed(
             &dataset,
             request(ALL_ROWS),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(estimate),
         )
         .expect("an admitted run");
@@ -1995,7 +2000,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
             .query_governed(
                 &dataset,
                 request(query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(1),
             )
             .expect("a refusal is an outcome");
@@ -2030,7 +2035,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         .query_governed(
             &dataset,
             request("SELECT ?s ?o WHERE { ?s <http://example.org/p>+ ?o }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(1),
         )
         .expect("an observed trip is an outcome");

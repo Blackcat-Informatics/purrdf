@@ -330,6 +330,8 @@ impl PyQuadStore {
         max_intermediate_cells=None,
         max_scratch_bytes=None,
         max_remote_requests=None,
+        max_udf_depth=None,
+        unlimited_udf_depth=false,
         no_ceiling=false,
         cancel=None,
     ))]
@@ -361,6 +363,8 @@ impl PyQuadStore {
         max_intermediate_cells: Option<u64>,
         max_scratch_bytes: Option<u64>,
         max_remote_requests: Option<u64>,
+        max_udf_depth: Option<u64>,
+        unlimited_udf_depth: bool,
         no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
@@ -384,6 +388,8 @@ impl PyQuadStore {
                 max_intermediate_cells,
                 max_scratch_bytes,
                 max_remote_requests,
+                max_udf_depth,
+                unlimited_udf_depth,
                 no_ceiling,
             };
             let inner = &self.inner;
@@ -409,7 +415,7 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &subs,
                         },
-                        coordinates.apply(
+                        &coordinates.apply(
                             purrdf_sparql_eval::QueryOptions::new()
                                 .with_geo(
                                     geo.as_deref()
@@ -497,6 +503,8 @@ impl PyQuadStore {
         max_intermediate_cells=None,
         max_scratch_bytes=None,
         max_remote_requests=None,
+        max_udf_depth=None,
+        unlimited_udf_depth=false,
         no_ceiling=false,
         cancel=None,
     ))]
@@ -534,6 +542,8 @@ impl PyQuadStore {
         max_intermediate_cells: Option<u64>,
         max_scratch_bytes: Option<u64>,
         max_remote_requests: Option<u64>,
+        max_udf_depth: Option<u64>,
+        unlimited_udf_depth: bool,
         no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
@@ -562,6 +572,8 @@ impl PyQuadStore {
                 max_intermediate_cells,
                 max_scratch_bytes,
                 max_remote_requests,
+                max_udf_depth,
+                unlimited_udf_depth,
                 no_ceiling,
             };
             let inner = &self.inner;
@@ -611,7 +623,7 @@ impl PyQuadStore {
                     },
                     &EntailmentClosure::new(plan.entailment(), &imports)
                         .with_limits(limits.eval_options()),
-                    coordinates.apply(
+                    &coordinates.apply(
                         purrdf_sparql_eval::QueryOptions::new()
                             .with_geo(
                                 geo.as_deref()
@@ -731,7 +743,7 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        coordinates.apply(
+                        &coordinates.apply(
                             purrdf_sparql_eval::QueryOptions::new()
                                 .with_geo(
                                     geo.as_deref()
@@ -792,6 +804,8 @@ impl PyQuadStore {
         max_intermediate_cells=None,
         max_scratch_bytes=None,
         max_remote_requests=None,
+        max_udf_depth=None,
+        unlimited_udf_depth=false,
         no_ceiling=false,
         cancel=None,
     ))]
@@ -821,6 +835,8 @@ impl PyQuadStore {
         max_intermediate_cells: Option<u64>,
         max_scratch_bytes: Option<u64>,
         max_remote_requests: Option<u64>,
+        max_udf_depth: Option<u64>,
+        unlimited_udf_depth: bool,
         no_ceiling: bool,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
@@ -843,6 +859,8 @@ impl PyQuadStore {
                 max_intermediate_cells,
                 max_scratch_bytes,
                 max_remote_requests,
+                max_udf_depth,
+                unlimited_udf_depth,
                 no_ceiling,
             };
             let inner = &self.inner;
@@ -867,7 +885,7 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        coordinates.apply(
+                        &coordinates.apply(
                             purrdf_sparql_eval::QueryOptions::new()
                                 .with_geo(
                                     geo.as_deref()
@@ -1192,11 +1210,11 @@ impl PyQuadStore {
                     engine.query_rdflib_with_options_view(
                         &*dataset,
                         request,
-                        options,
+                        &options,
                         M::single_graph(&selection),
                     )
                 } else {
-                    engine.query_with_options_view(&*dataset, request, options)
+                    engine.query_with_options_view(&*dataset, request, &options)
                 };
                 result.map_err(|e| {
                     presentation::value_error(format!("query evaluation error: {e}"), &e)

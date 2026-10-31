@@ -137,7 +137,12 @@ impl Prepared<'_> {
         &self,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, purrdf_core::RdfDiagnostic> {
-        query_eval_engine().query_governed(&self.dataset, self.request(), self.options(), governors)
+        query_eval_engine().query_governed(
+            &self.dataset,
+            self.request(),
+            &self.options(),
+            governors,
+        )
     }
 }
 
@@ -421,7 +426,7 @@ fn render_case(
         &prepared.dataset,
         prepared.request(),
         &prepared.remote,
-        QueryOptions::new().with_env(&prepared.env),
+        &QueryOptions::new().with_env(&prepared.env),
     ) {
         Ok(result) => render_result(&result, prepared.ordered, prepared.volatile, out, control),
         Err(error) => writeln!(out, "error {}", error.code).expect("write"),
@@ -451,7 +456,7 @@ fn render_case(
         &prepared.dataset,
         &prepared.query,
         Some(&case.base),
-        prepared.options(),
+        &prepared.options(),
     ) {
         Ok(explanation) => {
             writeln!(
@@ -542,7 +547,7 @@ fn render_update_case(
     match purrdf_sparql_eval::NativeSparqlEngine::new().update_with_options(
         &mut store,
         request(),
-        update_eval_options(&env),
+        &update_eval_options(&env),
     ) {
         Ok(()) => render_store(&store, volatile, out, control),
         Err(error) => writeln!(out, "error {}", error.code).expect("write"),
@@ -551,7 +556,7 @@ fn render_update_case(
     let governed = |governors: &QueryGovernors| {
         let mut store = Arc::clone(&pre);
         purrdf_sparql_eval::NativeSparqlEngine::new()
-            .update_governed(&mut store, request(), update_eval_options(&env), governors)
+            .update_governed(&mut store, request(), &update_eval_options(&env), governors)
             .map(|outcome| (outcome, store))
     };
 

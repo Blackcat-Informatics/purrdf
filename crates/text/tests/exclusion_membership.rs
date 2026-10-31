@@ -831,7 +831,7 @@ fn engine_answer_over(dataset: &RdfDataset, query: &str) -> (usize, [u64; 6]) {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(registry)
                     .expect("the fixture declarations read cleanly"),
             ),

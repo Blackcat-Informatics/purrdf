@@ -226,7 +226,7 @@ pub fn run_prefixed(ds: &RdfDataset, prefix: &str, query_body: &str) -> SparqlRe
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
 }

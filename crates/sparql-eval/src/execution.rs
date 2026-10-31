@@ -512,9 +512,9 @@ impl PreparedExecution {
     /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
     /// let engine = NativeSparqlEngine::new();
     /// let query = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
-    /// let used = engine.prepare_execution(query, None, &["this"], QueryOptions::EMPTY)?;
+    /// let used = engine.prepare_execution(query, None, &["this"], &QueryOptions::EMPTY)?;
     /// assert!(used.check_parameters_mentioned().is_ok());
-    /// let misspelt = engine.prepare_execution(query, None, &["thsi"], QueryOptions::EMPTY)?;
+    /// let misspelt = engine.prepare_execution(query, None, &["thsi"], &QueryOptions::EMPTY)?;
     /// assert!(misspelt.check_parameters_mentioned().is_err());
     /// # Ok::<(), purrdf_core::RdfDiagnostic>(())
     /// ```
@@ -575,7 +575,7 @@ impl PreparedExecution {
     ///     "SELECT ?o WHERE { ?this <http://example.org/p> ?o }",
     ///     None,
     ///     &["this"],
-    ///     QueryOptions::EMPTY,
+    ///     &QueryOptions::EMPTY,
     /// )?;
     ///
     /// // Resolved once, before the loop.

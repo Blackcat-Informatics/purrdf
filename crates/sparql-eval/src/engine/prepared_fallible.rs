@@ -36,7 +36,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         let reporting = super::reserve_governed_reporting(dataset, governors)?;
@@ -84,7 +84,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         preflight_governed_fallible_view(dataset, state)?;
@@ -111,7 +111,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &crate::workspace::SharedWorkspace<GovernorState>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
@@ -122,7 +122,7 @@ impl NativeSparqlEngine {
         let workspace = &*execution;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
-            .options(dataset, options)
+            .options(dataset, *options)
             .map_err(|diagnostic| {
                 super::fallible_admission_failure(
                     dataset,
@@ -135,7 +135,7 @@ impl NativeSparqlEngine {
             dataset,
             prepared,
             substitutions,
-            options,
+            &options,
             state,
             super::Sequencing::for_view::<D>(),
             workspace,
@@ -165,16 +165,16 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         source: &'d (dyn ServiceResolver + Sync),
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         self.query_prepared_governed_fallible_view(
             dataset,
             prepared,
             substitutions,
-            QueryOptions {
+            &QueryOptions {
                 remote: Some(source),
-                ..options
+                ..*options
             },
             governors,
         )
@@ -204,16 +204,16 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         source: &'d (dyn ServiceResolver + Sync),
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         self.query_prepared_governed_fallible_in_operation(
             dataset,
             prepared,
             substitutions,
-            QueryOptions {
+            &QueryOptions {
                 remote: Some(source),
-                ..options
+                ..*options
             },
             state,
         )

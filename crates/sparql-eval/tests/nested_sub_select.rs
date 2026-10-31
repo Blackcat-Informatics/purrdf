@@ -63,7 +63,7 @@ fn answer(query: &str) -> Result<SparqlResult, RdfDiagnostic> {
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
 }
 

@@ -148,12 +148,12 @@ fn rows_agreeing_across_backends(
 
     let (single_vars, single_rows) = solutions(
         engine
-            .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&single, &prepared, &[], &QueryOptions::EMPTY)
             .expect("single query"),
     );
     let (paged_vars, paged_rows) = solutions(
         engine
-            .query_prepared_view(&view, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&view, &prepared, &[], &QueryOptions::EMPTY)
             .expect("paged query"),
     );
     assert_eq!(single_vars, paged_vars, "same projected variables");
@@ -574,7 +574,7 @@ fn a_row_free_graph_costs_no_data_probe_yet_still_enumerates() {
         .expect("prepare");
     let (_vars, rows) = solutions(
         engine
-            .query_prepared_view(&view, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&view, &prepared, &[], &QueryOptions::EMPTY)
             .expect("counted query"),
     );
 
@@ -602,7 +602,7 @@ fn a_row_free_graph_costs_no_data_probe_yet_still_enumerates() {
         .expect("prepare");
     let (_vars, rows) = solutions(
         engine
-            .query_prepared_view(&view, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&view, &prepared, &[], &QueryOptions::EMPTY)
             .expect("enumeration query"),
     );
     assert_eq!(
@@ -729,7 +729,7 @@ fn graph_var_materializes_only_the_pages_that_own_a_named_graph() {
         .expect("prepare");
     let (_vars, rows) = solutions(
         engine
-            .query_prepared_view(&view, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&view, &prepared, &[], &QueryOptions::EMPTY)
             .expect("paged graph-var query"),
     );
     assert_eq!(
@@ -768,7 +768,7 @@ fn retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var() {
 
     let (_, rows) = solutions(
         engine
-            .query_prepared_view(&view, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&view, &prepared, &[], &QueryOptions::EMPTY)
             .expect("whole-dataset enumeration"),
     );
     let before = first_column(&rows);
@@ -785,7 +785,7 @@ fn retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var() {
 
     let (_, rows) = solutions(
         engine
-            .query_prepared_view(&retained, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&retained, &prepared, &[], &QueryOptions::EMPTY)
             .expect("enumeration after eviction"),
     );
     let after = first_column(&rows);
@@ -806,7 +806,7 @@ fn retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var() {
                 &view.retain_graph(gside),
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("enumeration after retaining a graph that owns rows"),
     );
