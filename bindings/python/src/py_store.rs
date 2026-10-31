@@ -28,7 +28,7 @@
 //! * [`query`] — the materialized SPARQL result model (`SparqlEngine` seam).
 //! * [`store`] — the mutable `Store` / `Dataset` / `QuadIter` (`MutableStore` /
 //!   `Dataset` seams).
-//! * [`canon`] — `CanonicalizationAlgorithm` + the `canonicalize_quads` core.
+//! * [`canon`] — the caller-controlled `canonicalize_quads` core.
 //!
 //! # Design
 //!

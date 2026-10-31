@@ -135,6 +135,7 @@ fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("raw-content dict compaction succeeds over the fixed source");
     let (trained, _cert) = compact_and_certify(
@@ -143,6 +144,7 @@ fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("trained dict compaction succeeds over the fixed source");
     let (undicted, _cert) = compact_and_certify(
@@ -151,6 +153,7 @@ fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("undicted compaction succeeds over the fixed source");
 
@@ -188,6 +191,7 @@ fn rawcontent_vector_is_byte_identical_to_a_fresh_regeneration() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("raw-content dict compaction succeeds over the fixed source");
 
@@ -211,7 +215,13 @@ fn rawcontent_vector_is_byte_identical_to_a_fresh_regeneration() {
     );
 
     let ring = keyring();
-    let report = verify_compaction(&source, &frozen, &ring).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &frozen,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.all_ok(),
         "the frozen raw-content vector must independently verify (incl. the carried \
@@ -246,7 +256,13 @@ fn trained_vector_folds_cleanly_decodes_and_carries_a_dct_entry() {
     );
 
     let ring = keyring();
-    let report = verify_compaction(&source, &frozen, &ring).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &frozen,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.all_ok(),
         "the frozen trained-dict vector must independently verify (incl. the carried \
@@ -265,6 +281,7 @@ fn trained_vector_folds_identically_to_a_fresh_regeneration() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("trained dict compaction succeeds over the fixed source");
 
@@ -291,8 +308,22 @@ fn trained_vector_folds_identically_to_a_fresh_regeneration() {
          frozen vector, even if the trained dictionary bytes differ cross-platform"
     );
     assert_eq!(
-        refold_digest(&frozen_fold).expect("frozen content-refold digest"),
-        refold_digest(&regenerated_fold).expect("regenerated content-refold digest"),
+        refold_digest(
+            &frozen_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("frozen content-refold digest"),
+        refold_digest(
+            &regenerated_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("regenerated content-refold digest"),
         "fold-equality: the RDFC-1.0 content-refold digest must agree"
     );
 
@@ -305,6 +336,7 @@ fn trained_vector_folds_identically_to_a_fresh_regeneration() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("raw-content dict compaction succeeds");
     assert_ne!(
@@ -336,6 +368,7 @@ fn rsyncable_vector_is_byte_identical_to_a_fresh_regeneration() {
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("rsyncable dict compaction succeeds over the fixed source");
     assert_eq!(
@@ -362,8 +395,13 @@ fn rsyncable_vector_is_byte_identical_to_a_fresh_regeneration() {
         "the rsyncable vector's header must pin a named, non-empty \"dct\" entry (§5)"
     );
 
-    let report =
-        verify_compaction(&source, &frozen, &keyring()).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &frozen,
+        &keyring(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.all_ok(),
         "the frozen rsyncable vector must independently verify: {report:?}"

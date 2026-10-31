@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! RDF canonicalization for the `purrdf` Python extension: the
-//! `CanonicalizationAlgorithm` pyclass and the `canonicalize_quads` wrapper.
+//! RDF canonicalization for the `purrdf` Python extension through
+//! the `canonicalize_quads` wrapper and caller-selected search control.
 //!
 //! All canonicalization runs the **native full W3C RDFC-1.0** engine
-//! (`purrdf_core::ir::canon`). The `CanonicalizationAlgorithm` pyclass is retained for Python API
-//! compatibility, but both variants resolve to the one native canonicalizer
-//! (greenfield: a single canonicalization algorithm).
+//! (`purrdf_core::ir::canon`) under the caller's explicit search policy.
 
 use purrdf_core::{CanonError, Canonicalized, FastHasher, FastMap, TermRef, try_canonicalize};
 
@@ -17,8 +15,7 @@ use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 /// Canonicalize a quad set's blank-node labels under native RDFC-1.0, returning the
 /// quads with canonical (`_:c14nN`) blanks, sorted by their N-Quads string. The
 /// caller's literal/IRI term forms are preserved exactly (only blanks are relabeled).
-/// The `algorithm` selector is retained for API compatibility; both variants map to
-/// the one native engine.
+/// The caller owns the search policy and cancellation control.
 ///
 /// `quads` is wholly caller-supplied (`Dataset.canonicalize()`'s own content), so this
 /// goes through the fallible, non-panicking [`try_canonicalize`] rather than

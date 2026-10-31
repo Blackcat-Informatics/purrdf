@@ -148,6 +148,10 @@ fn largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
                     proof.question(),
                     Some(answer.certificate()),
                     &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
                 )
                 .expect("independently check every necessary bound and inhabitance premise");
             assert_eq!(replay.checks().unattested(), 0);

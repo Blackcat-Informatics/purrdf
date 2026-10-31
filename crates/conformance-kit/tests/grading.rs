@@ -186,7 +186,7 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
     let b = TermValue::Iri("http://example.org/b".into());
     let left = vec![vec![Some(a.clone()), Some(b.clone())]];
     let right = vec![vec![Some(b.clone()), Some(a.clone())]];
-    (
+    bag::compare_solutions(
         &["a".into(), "b".into()],
         &left,
         &["b".into(), "a".into()],
@@ -194,7 +194,7 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
         false,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-        .unwrap();
+    .unwrap();
     let sequence = vec![vec![Some(a)], vec![Some(b)]];
     let reversed = vec![sequence[1].clone(), sequence[0].clone()];
     bag::compare_solutions(
@@ -607,12 +607,12 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
         sources: &sources,
         correspondence,
     };
-    (
+    report::compare_contextual(
         context(&expected, &expected_links),
         context(&actual, &actual_links),
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-        .unwrap();
+    .unwrap();
     let mut wrong = actual_links.clone();
     wrong[1].source_role = report::SourceRole::DataGraph;
     assert!(
@@ -722,7 +722,7 @@ fn composite_blank_renaming_is_global_across_permuted_rows() {
     };
     let expected = [row("same", BlankScope(11)), row("same", BlankScope(12))];
     let renamed = [row("second", BlankScope(2)), row("first", BlankScope(2))];
-    (
+    bag::compare_solutions(
         &["direct".into(), "list".into()],
         &expected,
         &["direct".into(), "list".into()],
@@ -730,7 +730,7 @@ fn composite_blank_renaming_is_global_across_permuted_rows() {
         false,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-        .unwrap();
+    .unwrap();
 }
 
 fn source_metadata_and_empty_graph_declarations_are_observable() {

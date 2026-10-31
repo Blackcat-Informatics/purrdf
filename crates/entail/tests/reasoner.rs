@@ -2295,7 +2295,16 @@ fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
             let proof = ServiceProof::decode(&answer.proof().expect("recorded").encode())
                 .expect("proof codec");
             let replay = proof
-                .verify(&input, &question, Some(answer.certificate()), &context)
+                .verify(
+                    &input,
+                    &question,
+                    Some(answer.certificate()),
+                    &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
                 .expect("independently prepared replay");
             assert_eq!(replay.runs(), replay.replayed());
             let expected_origin = ResolvedAxiomSource::EmptyRole(if mentioned {
@@ -2709,6 +2718,10 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
             &question,
             Some(answer.certificate()),
             &consumer.proof_context().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
     let mut wrong = Reasoner::with_proofs(
@@ -2787,6 +2800,7 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
         &input,
         purrdf_entail::reasoner::SchemaPreparationBudget::default(),
         signal.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap();
     let question = reference.object_property_classification_question().unwrap();
@@ -2804,6 +2818,10 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
             &input,
             purrdf_entail::reasoner::SchemaPreparationBudget::default(),
             signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
         signal.arm(cut);
@@ -2834,6 +2852,10 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
                         &question,
                         Some(answer.certificate()),
                         &consumer.proof_context().unwrap(),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
                     )
                     .unwrap();
             }
@@ -3017,6 +3039,10 @@ fn class_analysis_proof_binds_both_source_universes() {
                 &question,
                 Some(answer.certificate()),
                 &consumer.proof_context().unwrap(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         let mut wrong = Reasoner::with_proofs(
@@ -3041,7 +3067,11 @@ fn class_analysis_proof_binds_both_source_universes() {
                     &input,
                     &producer.realization_question(),
                     Some(answer.certificate()),
-                    &producer.borrowed_proof_context().unwrap()
+                    &producer.borrowed_proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .is_err()
         );
@@ -3111,6 +3141,10 @@ fn class_analysis_retains_native_refusals_and_joint_directness() {
             &question,
             Some(answer.certificate()),
             &consumer.proof_context().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
 }
@@ -3126,6 +3160,10 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
             &input,
             purrdf_entail::reasoner::SchemaPreparationBudget::default(),
             signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
         let question = reference.class_analysis_question();
@@ -3139,6 +3177,10 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
                 &input,
                 purrdf_entail::reasoner::SchemaPreparationBudget::default(),
                 signal.clone(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
             signal.arm(cut);
@@ -3169,6 +3211,10 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
                     &question,
                     Some(answer.certificate()),
                     &consumer.proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
                 )
                 .unwrap();
         }

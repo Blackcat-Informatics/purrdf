@@ -516,7 +516,15 @@ mod tests {
             &shapes.report_sources_with_profile(DATED[1]).unwrap()
         ));
         let prepared = PreparedShapes::new(Arc::new(shapes));
-        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let bytes = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
         let restored = ShapesProduct::open(&bytes)
             .unwrap()
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -565,7 +573,18 @@ mod tests {
             &original_classes,
             &restored.class_catalog().unwrap()
         ));
-        assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+        assert_eq!(
+            restored
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
+            bytes
+        );
         let rejected = restored
             .shapes()
             .report_sources_with_profile(DATED[0])
@@ -981,7 +1000,15 @@ mod tests {
         let options = crate::rules::RuleOptions::default();
         let warm = crate::rules::shacl_rule_set(prepared.shapes(), &options).unwrap();
         assert!(matches!(warm.rules[0].body, IrRuleBody::Elements(_)));
-        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let bytes = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
         let restored = ShapesProduct::open(&bytes)
             .unwrap()
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -1025,7 +1052,18 @@ mod tests {
                 ));
             }
             assert!(Arc::ptr_eq(&classes, &prepared.class_catalog().unwrap()));
-            assert_eq!(prepared.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+            assert_eq!(
+                prepared
+                    .to_product(
+                        &ShapesProfile::CORE,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap(),
+                bytes
+            );
         }
     }
 

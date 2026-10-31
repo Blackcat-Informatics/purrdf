@@ -526,7 +526,7 @@ impl PyDataset {
         self.checked_insert(quad.inner.clone())
     }
 
-    /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
+    /// Canonicalize blank-node labels under the caller's search policy (native RDFC-1.0).
     ///
     /// Raises `ValueError` if this dataset's content is refused canonicalization (a
     /// reserved-vocabulary IRI, or an n-degree search that exhausts its budget) — this

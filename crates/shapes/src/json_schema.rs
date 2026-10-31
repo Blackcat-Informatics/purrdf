@@ -8570,12 +8570,13 @@ mod tests {
             None,
         )
         .expect("ontology Turtle");
-        compile_schema(&SchemaCompileRequest::new(
-            &shapes,
-            &fixture_ns(),
-            ontology.as_ref(),
-            mode,
-        ))
+        compile_schema(
+            &SchemaCompileRequest::new(&shapes, &fixture_ns(), ontology.as_ref(), mode),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("ontology schema compilation")
     }
 
@@ -8740,12 +8741,13 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
             SchemaSurfaceMode::OntologyComplete,
         ] {
-            let error = compile_schema(&SchemaCompileRequest::new(
-                &shapes,
-                &fixture_ns(),
-                ontology.as_ref(),
-                mode,
-            ))
+            let error = compile_schema(
+                &SchemaCompileRequest::new(&shapes, &fixture_ns(), ontology.as_ref(), mode),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect_err("unknown target namespace must be typed");
             assert!(matches!(
                 error,
@@ -8945,7 +8947,10 @@ mod tests {
             ontology_a.as_ref(),
             SchemaSurfaceMode::ShapedOnly,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("shaped key");
         let shuffled = SchemaCompileRequest::new(
             &shapes_a,
@@ -8953,7 +8958,10 @@ mod tests {
             ontology_a_shuffled.as_ref(),
             SchemaSurfaceMode::ShapedOnly,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("shuffled key");
         assert_eq!(shaped, shuffled, "RDF load order is not key material");
         assert_eq!(shaped.as_str().len(), 64);
@@ -8965,7 +8973,10 @@ mod tests {
             ontology_a.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("complete key");
         assert_ne!(shaped, complete, "surface mode is key material");
 
@@ -8975,7 +8986,10 @@ mod tests {
             ontology_b.as_ref(),
             SchemaSurfaceMode::ShapedOnly,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("changed ontology key");
         assert_ne!(
             shaped, changed_ontology,
@@ -8988,7 +9002,10 @@ mod tests {
             ontology_a.as_ref(),
             SchemaSurfaceMode::ShapedOnly,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("changed shapes key");
         assert_ne!(shaped, changed_shapes, "shapes identity is key material");
 
@@ -9006,7 +9023,10 @@ mod tests {
             ontology_a.as_ref(),
             SchemaSurfaceMode::ShapedOnly,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("changed namespace key");
         assert_ne!(
             shaped, changed_namespaces,
@@ -9024,7 +9044,10 @@ mod tests {
             &projection,
             SchemaSurfaceMode::ShapedOnly,
         )
-        .compilation_key()
+        .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("value-vocabulary key");
         assert_ne!(
             shaped, with_vocab,
@@ -9181,12 +9204,18 @@ mod tests {
         )
         .expect("ontology Turtle");
         let legacy = compile(&shapes, &fixture_ns()).expect("schema compilation");
-        let requested = compile_schema(&SchemaCompileRequest::new(
-            &shapes,
-            &fixture_ns(),
-            ontology.as_ref(),
-            SchemaSurfaceMode::ShapedOnly,
-        ))
+        let requested = compile_schema(
+            &SchemaCompileRequest::new(
+                &shapes,
+                &fixture_ns(),
+                ontology.as_ref(),
+                SchemaSurfaceMode::ShapedOnly,
+            ),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("shaped-only request");
         assert_eq!(legacy.schema_json, requested.compiled.schema_json);
         assert_eq!(legacy.openapi_json, requested.compiled.openapi_json);
@@ -9382,12 +9411,18 @@ mod tests {
             None,
         )
         .expect("ontology Turtle");
-        let compilation = compile_schema(&SchemaCompileRequest::new(
-            &shapes,
-            &fixture_ns(),
-            ontology.as_ref(),
-            SchemaSurfaceMode::OntologyComplete,
-        ))
+        let compilation = compile_schema(
+            &SchemaCompileRequest::new(
+                &shapes,
+                &fixture_ns(),
+                ontology.as_ref(),
+                SchemaSurfaceMode::OntologyComplete,
+            ),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("a class named after a reserved key is disambiguated, not a collision");
         let schema = schema_of(&compilation.compiled);
         assert!(
@@ -11708,12 +11743,18 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
             SchemaSurfaceMode::OntologyComplete,
         ] {
-            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
-                &shapes,
-                &fixture_ns(),
-                &unknown_projection,
-                mode,
-            ))
+            let error = compile_schema(
+                &SchemaCompileRequest::from_value_vocab_projection(
+                    &shapes,
+                    &fixture_ns(),
+                    &unknown_projection,
+                    mode,
+                ),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect_err("unknown vocabulary namespace must be typed");
             assert!(matches!(
                 error,
@@ -11749,12 +11790,18 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
             SchemaSurfaceMode::OntologyComplete,
         ] {
-            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
-                &shapes,
-                &collision_namespaces,
-                &collision_projection,
-                mode,
-            ))
+            let error = compile_schema(
+                &SchemaCompileRequest::from_value_vocab_projection(
+                    &shapes,
+                    &collision_namespaces,
+                    &collision_projection,
+                    mode,
+                ),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect_err("colliding vocabulary keys must be typed");
             assert!(matches!(
                 error,

@@ -19,6 +19,7 @@ import {
   shaclEntail,
   version,
 } from "../../../crates/rdf-wasm/js/index.mjs";
+import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
 
 // The exact preloaded document the Input pane ships with: an RDF-1.2 graph in the
 // example.org namespace carrying a quoted triple in object position plus base-
@@ -129,13 +130,14 @@ test("serialize a plain graph to all 7 formats (Round-trip pane)", () => {
   for (const format of ["jsonld", "yamlld"]) {
     const encoded = ds.serialize(format);
     const back = Dataset.parse(encoded, format);
-    assert.ok(ds.isomorphic(back), `${format} round-trip must be isomorphic`);
+    assert.ok(canonicalValue(ds.isomorphic(back, "1000000")), `${format} round-trip must be isomorphic`);
   }
 });
 
 test("configured JSON-LD and YAML-LD follow worker dispatch", async () => {
   await workerCall("parse", { text: PLAIN, format: "turtle" });
   const result = await workerCall("serializeAll", {
+    canonicalSearch: "1000000",
     jsonldOptions: {
       version: 1,
       mode: "context",
@@ -163,7 +165,7 @@ test("preloaded (quoted-triple) doc: all 7 formats serialize; JSON-LD round-trip
     back.quads().some((q) => q.object.termType === "Quad"),
     "JSON-LD must preserve the quoted triple in object position",
   );
-  assert.ok(ds.isomorphic(back), "JSON-LD round-trip must be isomorphic");
+  assert.ok(canonicalValue(ds.isomorphic(back, "1000000")), "JSON-LD round-trip must be isomorphic");
 });
 
 test("N-Quads round-trips the object-position quoted triple", () => {
@@ -174,7 +176,7 @@ test("N-Quads round-trips the object-position quoted triple", () => {
     back.quads().some((q) => q.object.termType === "Quad"),
     "N-Quads must preserve the quoted triple in object position",
   );
-  assert.ok(ds.isomorphic(back), "N-Quads round-trip must be isomorphic");
+  assert.ok(canonicalValue(ds.isomorphic(back, "1000000")), "N-Quads round-trip must be isomorphic");
 });
 
 test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
@@ -225,7 +227,7 @@ test("SHACL validate → SARIF 2.1.0 with a violation (SHACL pane)", () => {
 test("shaclEntail materializes the sh:rule inference", () => {
   const ds = Dataset.parse(PERSON_DATA, "turtle");
   const dataNt = ds.serialize("ntriples");
-  const entailment = shaclEntail(SHAPES, dataNt);
+  const entailment = shaclEntail(SHAPES, dataNt, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "1000000");
   const entailed = entailment.ntriples;
   // The fixture's shapes graph has no empty sh:in / sh:xone list, so no diagnostic.
   assert.deepEqual(entailment.diagnostics, []);
@@ -248,8 +250,8 @@ test("shaclEntail materializes the sh:rule inference", () => {
 
 test("canonicalize is non-empty and stable (Round-trip / identity)", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
-  const c1 = ds.canonicalize();
-  const c2 = ds.canonicalize();
+  const c1 = canonicalValue(ds.canonicalize("1000000"));
+  const c2 = canonicalValue(ds.canonicalize("1000000"));
   assert.ok(c1.length > 0, "canonical form must be non-empty");
   assert.equal(c1, c2, "canonical form must be stable");
 });
@@ -269,8 +271,8 @@ test("isomorphic: true for a relabeled pair, false for a different graph", () =>
     `@prefix ex: <http://example.org/> . ex:root ex:member ex:different .`,
     "turtle",
   );
-  assert.equal(a.isomorphic(b), true, "relabeled pair must be isomorphic");
-  assert.equal(a.isomorphic(c), false, "different graph must not be isomorphic");
+  assert.equal(canonicalValue(a.isomorphic(b, "1000000")), true, "relabeled pair must be isomorphic");
+  assert.equal(canonicalValue(a.isomorphic(c, "1000000")), false, "different graph must not be isomorphic");
 });
 
 test("match() filters the dataset (Quad table pane)", () => {
