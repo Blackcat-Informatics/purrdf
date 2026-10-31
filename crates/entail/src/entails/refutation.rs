@@ -1131,7 +1131,15 @@ mod tests {
                     (
                         r.fact().to_string(),
                         r.witness().clone(),
-                        purrdf_core::try_canonicalize(r.premises()).unwrap().nquads,
+                        purrdf_core::try_canonicalize(
+                            r.premises(),
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None,
+                            ),
+                        )
+                        .unwrap()
+                        .nquads,
                         r.decisions(),
                     )
                 })

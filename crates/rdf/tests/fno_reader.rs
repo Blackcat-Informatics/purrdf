@@ -45,7 +45,17 @@ _:returned a fnom:DefaultReturnMapping ; rdfs:label "returned" ; fnom:functionOu
         FnoCatalog::from_dataset(&emitted, "urn:test:ontology").unwrap(),
         catalog
     );
-    assert!(datasets_isomorphic(&source, &emitted).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &source,
+            &emitted,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 purrdf_testkit::harness_main!(parsed_turtle_mappings_obey_both_graph_laws);

@@ -81,8 +81,22 @@ fn assert_same_result(
         }
         (_, _, Some(a), Some(e), ..) => assert_eq!(a, e, "ASK: {query}"),
         (_, _, _, _, Some(a), Some(e)) => assert_eq!(
-            PackBuilder::build_bytes(a).unwrap(),
-            PackBuilder::build_bytes(e).unwrap(),
+            PackBuilder::build_bytes(
+                a,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            PackBuilder::build_bytes(
+                e,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "CONSTRUCT carrier: {query}"
         ),
         _ => panic!("result shapes differ for {query}: {actual:?} != {expected:?}"),
@@ -214,7 +228,15 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     matrix(&original, &original_oracle, QUERIES);
     matrix(&removed, &removed_oracle, QUERIES);
     for n in [1, 4] {
-        let expected = canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap();
+        let expected = canonical_paged_seal(
+            oracle.as_ref(),
+            bound(n),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         for retained in [&head, &stack.snapshot().unwrap()] {
             let folded = retained
                 .compact(PagedQueryLimits::UNBOUNDED, bound(n))
@@ -236,7 +258,17 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
                 .compact(PagedQueryLimits::UNBOUNDED, bound(2))
                 .unwrap()
         ),
-        carrier_pages(&canonical_paged_seal(withdrawn_oracle.as_ref(), bound(2)).unwrap())
+        carrier_pages(
+            &canonical_paged_seal(
+                withdrawn_oracle.as_ref(),
+                bound(2),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        )
     );
     matrix(&head, &oracle, QUERIES);
 }
@@ -289,7 +321,17 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
                         .compact(PagedQueryLimits::UNBOUNDED, bound(n))
                         .unwrap()
                 ),
-                carrier_pages(&canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap())
+                carrier_pages(
+                    &canonical_paged_seal(
+                        oracle.as_ref(),
+                        bound(n),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap()
+                )
             );
         }
     }
@@ -404,7 +446,17 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                         .compact(PagedQueryLimits::UNBOUNDED, bound(n))
                         .unwrap()
                 ),
-                carrier_pages(&canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap())
+                carrier_pages(
+                    &canonical_paged_seal(
+                        oracle.as_ref(),
+                        bound(n),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap()
+                )
             );
         }
     }
@@ -447,7 +499,17 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                         .compact(PagedQueryLimits::UNBOUNDED, bound(n))
                         .unwrap()
                 ),
-                carrier_pages(&canonical_paged_seal(restored_oracle.as_ref(), bound(n)).unwrap())
+                carrier_pages(
+                    &canonical_paged_seal(
+                        restored_oracle.as_ref(),
+                        bound(n),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap()
+                )
             );
         }
     }
@@ -500,7 +562,17 @@ fn native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag() {
                 .compact(PagedQueryLimits::UNBOUNDED, bound(1))
                 .unwrap()
         ),
-        carrier_pages(&canonical_paged_seal(oracle.as_ref(), bound(1)).unwrap())
+        carrier_pages(
+            &canonical_paged_seal(
+                oracle.as_ref(),
+                bound(1),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        )
     );
 }
 impl ControlledProvider {
@@ -879,7 +951,16 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                     2
                 ),
                 _ => assert_eq!(
-                    canonical_paged_seal(&view, bound(1)).unwrap().page_count(),
+                    canonical_paged_seal(
+                        &view,
+                        bound(1),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap()
+                    .page_count(),
                     2
                 ),
             }
@@ -915,8 +996,15 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                     )
                     .0
                 }
-                _ => match canonical_paged_seal(&view, bound(1))
-                    .expect_err("final drift must refuse a built fold")
+                _ => match canonical_paged_seal(
+                    &view,
+                    bound(1),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect_err("final drift must refuse a built fold")
                 {
                     purrdf_core::CanonicalPagedError::Read(error) => error,
                     other => panic!("expected final checkpoint error, got {other:?}"),

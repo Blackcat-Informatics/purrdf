@@ -19,6 +19,9 @@ use crate::status::PurrdfStatus;
 #[derive(Debug)]
 pub struct PurrdfError {
     execution_receipt: Option<CString>,
+    canonicalization_json: Option<CString>,
+    native_cause_json: Option<CString>,
+    original_canonical_cause: Option<purrdf_core::CanonError>,
     pub(crate) code: PurrdfStatus,
     pub(crate) message: CString,
     /// The prepared-shapes-product admission dimension this refusal names, when it
@@ -52,12 +55,27 @@ pub(crate) struct ImportRefusal {
 }
 
 impl PurrdfError {
+    /// Preserve the original native canonicalization cause while mapping host text.
+    pub(crate) fn service(error: impl std::error::Error + 'static) -> Self {
+        Self::new(PurrdfStatus::ParseError, error.to_string()).retaining_cause(&error)
+    }
+
+    pub(crate) fn retaining_cause(mut self, error: &(dyn std::error::Error + 'static)) -> Self {
+        if let Some(cause) = purrdf_validate::canonical::native_canonical_cause(error) {
+            self.code = PurrdfStatus::CanonicalizationError;
+            self.original_canonical_cause = Some(cause.clone());
+        }
+        self
+    }
     /// Build an error from a status and a message. Interior NUL bytes in the
     /// message are replaced with spaces so the `CString` construction never
     /// fails.
     pub(crate) fn new(code: PurrdfStatus, message: impl Into<String>) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_cause_json: None,
+            original_canonical_cause: None,
             code,
             message: sanitized(&message.into()),
             dimension: None,
@@ -72,6 +90,7 @@ impl PurrdfError {
     /// as a `ParseError` with the engine's message.
     pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
         match error {
+            purrdf_validate::ShapesError::Canonical(cause) => Self::service(cause),
             purrdf_validate::ShapesError::RuleExecution(error) => {
                 let receipt =
                     purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
@@ -120,6 +139,9 @@ impl PurrdfError {
     pub(crate) fn shapes_import(error: &purrdf_validate::ShapesImportError) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_cause_json: None,
+            original_canonical_cause: None,
             code: PurrdfStatus::ShapesImportError,
             message: sanitized(&error.to_string()),
             dimension: None,
@@ -140,6 +162,9 @@ impl PurrdfError {
     pub(crate) fn product(dimension: Option<&'static str>, message: impl Into<String>) -> Self {
         Self {
             execution_receipt: None,
+            canonicalization_json: None,
+            native_cause_json: None,
+            original_canonical_cause: None,
             code: PurrdfStatus::ShapesProductError,
             message: sanitized(&message.into()),
             dimension: dimension.map(sanitized),
@@ -159,10 +184,37 @@ impl PurrdfError {
         error
     }
 
+    pub(crate) fn with_canonicalization(
+        mut self,
+        receipts: &str,
+        cause: Option<(purrdf_core::CanonError, String)>,
+    ) -> Self {
+        self.canonicalization_json = Some(sanitized(receipts));
+        if let Some((original, json)) = cause {
+            self.original_canonical_cause = Some(original);
+            self.native_cause_json = Some(sanitized(&json));
+        }
+        self
+    }
+
     /// Attach the actual native receipt to the original classified failure.
     pub(crate) fn with_execution_receipt(mut self, receipt: &str) -> Self {
         self.execution_receipt = Some(sanitized(receipt));
         self
+    }
+}
+
+impl std::fmt::Display for PurrdfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message.to_string_lossy())
+    }
+}
+
+impl std::error::Error for PurrdfError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.original_canonical_cause
+            .as_ref()
+            .map(|cause| cause as _)
     }
 }
 
@@ -179,6 +231,46 @@ pub unsafe extern "C" fn purrdf_error_execution_receipt_json(
             .as_ref()
             .and_then(|error| error.execution_receipt.as_ref())
             .map_or(std::ptr::null(), |receipt| receipt.as_ptr())
+    }
+}
+
+/// Borrow this canonicalization request's receipt JSON, including `[]` if no run
+/// started. Null denotes an error from another kind of operation.
+/// # Safety
+/// `error` must be null or a live error handle. The text lives until that handle is freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_canonicalization_json(
+    error: *const PurrdfError,
+) -> *const c_char {
+    unsafe {
+        ffi_guard!(std::ptr::null(), {
+            error
+                .as_ref()
+                .and_then(|error| error.canonicalization_json.as_ref())
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
+    }
+}
+
+/// Borrow the original canonicalization cause's closed native fields as JSON.
+/// The original native cause and its admission grant remain owned until error_free.
+/// Null means this error has no native canonicalization cause.
+/// # Safety
+/// `error` must be null or a live error handle. The text lives until that handle is freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_native_cause_json(
+    error: *const PurrdfError,
+) -> *const c_char {
+    unsafe {
+        ffi_guard!(std::ptr::null(), {
+            error
+                .as_ref()
+                .and_then(|error| {
+                    error.original_canonical_cause.as_ref()?;
+                    error.native_cause_json.as_ref()
+                })
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
     }
 }
 

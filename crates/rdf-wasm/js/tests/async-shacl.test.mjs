@@ -47,7 +47,7 @@ import {
   shaclValidateToSarifAsync,
 } from "../index.mjs";
 import init from "../pkg/purrdf_wasm.js";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 // Already instantiated: `init` hands back the one instance's raw exports.
 const exports = await init();
@@ -162,7 +162,7 @@ const validateAsync = (shapes, data, shapesBase, options) =>
 
 /** `shaclEntailAsync` over the shapes, data and `shapesBase`, with host `options`. */
 const entailAsync = (shapes, data, shapesBase, options) =>
-  shaclEntailAsync(shapes, data, shapesBase, undefined, undefined, undefined, undefined, undefined, undefined, undefined, options);
+  shaclEntailAsync(shapes, data, shapesBase, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited", options);
 
 /** A `ShaclEntailment`'s two facts, the entailment freed. */
 /** A `ShaclDiagnostic` array as plain `{ rule, shape }` values, comparable across calls. */
@@ -300,8 +300,8 @@ test("the change, entailment and product twins return their synchronous twins' v
   sparql.free();
 
   // Entailment.
-  const entailed = entailmentFacts(shaclEntail(RULE_SHAPES, CONFORMING));
-  assert.deepEqual(entailmentFacts(await shaclEntailAsync(RULE_SHAPES, CONFORMING)), entailed);
+  const entailed = entailmentFacts(shaclEntail(RULE_SHAPES, CONFORMING, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited"));
+  assert.deepEqual(entailmentFacts(await shaclEntailAsync(RULE_SHAPES, CONFORMING, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited")), entailed);
   assert.equal(entailed.ntriples.split("\n").filter((line) => line.includes(`<${EX}adult>`)).length, 12);
 
   // Rules: the inference graph, its proof and its diagnostics.
@@ -342,7 +342,7 @@ test("the change, entailment and product twins return their synchronous twins' v
   );
 
   // Every product door, current product and bound identity alike.
-  const product = shaclPackProduct(SPARQL_SHAPES);
+  const product = canonicalValue(shaclPackProduct(SPARQL_SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
   const identity = identityDigestOf(product);
   const reference = shaclValidateToSarif(SPARQL_SHAPES, NONCONFORMING);
   assert.equal(shaclProductValidateToSarif(product, NONCONFORMING), reference);
@@ -360,7 +360,7 @@ test("the change, entailment and product twins return their synchronous twins' v
 });
 
 test("a refused product rejects with the synchronous twin's ShaclProductRefusal, dimension and all", async () => {
-  const product = shaclPackProduct(CORE_SHAPES);
+  const product = canonicalValue(shaclPackProduct(CORE_SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
   const corrupted = Uint8Array.from(product);
   corrupted[Math.floor(corrupted.length / 2)] ^= 0xff;
 
@@ -375,7 +375,7 @@ test("a refused product rejects with the synchronous twin's ShaclProductRefusal,
   sync.free();
 
   // A product bound to a different identity: `shapes-graph`, on both lanes.
-  const other = identityDigestOf(shaclPackProduct(SPARQL_SHAPES));
+  const other = identityDigestOf(canonicalValue(shaclPackProduct(SPARQL_SHAPES, undefined, undefined, undefined, undefined, "unlimited")));
   const wrong = await rejection(shaclProductValidateToSarifExpectingAsync(product, NONCONFORMING, other));
   assert.ok(wrong instanceof ShaclProductRefusal);
   assert.equal(wrong.dimension, "shapes-graph");
@@ -470,16 +470,16 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
     WHERE { BIND (COALESCE($shapesGraph, <${EX}none>) AS ?g) }""" ] .
 `;
   const named = entailmentFacts(
-    shaclEntail(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, `${EX}shapes-graph`),
+    shaclEntail(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, `${EX}shapes-graph`, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited"),
   );
-  const unnamed = entailmentFacts(shaclEntail(shapesGraphRule, ALICE_AND_BOB));
+  const unnamed = entailmentFacts(shaclEntail(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited"));
   assert.match(named.ntriples, new RegExp(`<${EX}shapes-graph>`));
   assert.notEqual(named.ntriples, unnamed.ntriples);
   assert.deepEqual(
-    entailmentFacts(await shaclEntailAsync(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, `${EX}shapes-graph`)),
+    entailmentFacts(await shaclEntailAsync(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, `${EX}shapes-graph`, undefined, undefined, undefined, undefined, "unlimited")),
     named,
   );
-  assert.deepEqual(entailmentFacts(await shaclEntailAsync(shapesGraphRule, ALICE_AND_BOB)), unnamed);
+  assert.deepEqual(entailmentFacts(await shaclEntailAsync(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited")), unnamed);
 });
 
 // Large enough that the synchronous validation plainly occupies the event loop.
@@ -542,7 +542,7 @@ test("a signal stops a SHACL validation: its reason, a timeout, and an already-a
     reason,
   );
   assert.equal(
-    await rejection(shaclProductValidateToSarifAsync(shaclPackProduct(CORE_SHAPES), CONFORMING, { signal: early.signal })),
+    await rejection(shaclProductValidateToSarifAsync(canonicalValue(shaclPackProduct(CORE_SHAPES, undefined, undefined, undefined, undefined, "unlimited")), CONFORMING, { signal: early.signal })),
     reason,
   );
   assert.equal(never.calls.length, 0, "no job ran, so no handler was asked");
@@ -577,7 +577,7 @@ test("concurrent SHACL validations suspended at every poll, interleaved with syn
     sparql: shaclValidateToSarif(SPARQL_SHAPES, sparqlData),
     core: shaclValidateToSarif(CORE_SHAPES, NONCONFORMING),
     target: shaclValidateToSarif(LOCAL_TARGET_SHAPES, targetData),
-    entail: entailmentFacts(shaclEntail(RULE_SHAPES, CONFORMING)),
+    entail: entailmentFacts(shaclEntail(RULE_SHAPES, CONFORMING, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited")),
   };
   assert.equal(focusNodes(baseline.sparql).length, 8);
   assert.equal(focusNodes(baseline.core).length, 3);

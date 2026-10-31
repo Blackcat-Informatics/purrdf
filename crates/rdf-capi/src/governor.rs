@@ -118,6 +118,12 @@ pub unsafe extern "C" fn purrdf_query_governors_init(out: *mut PurrdfQueryGovern
 #[derive(Debug)]
 pub struct PurrdfCancellation(CancellationFlag);
 
+impl purrdf_core::StopSignal for PurrdfCancellation {
+    fn stopped(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
 /// Allocate a fresh, uncancelled handle in `*out`.
 ///
 /// # Safety

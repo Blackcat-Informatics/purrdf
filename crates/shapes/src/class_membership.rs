@@ -1124,9 +1124,23 @@ mod tests {
             ];
             for view in views {
                 let view = Arc::new(view);
-                let plain = try_canonicalize_view(view.as_ref(), CanonHash::Sha256);
+                let plain = try_canonicalize_view(
+                    view.as_ref(),
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                );
                 let membership = ClassMembershipView::from_view(view);
-                let derived = try_canonicalize_view(&membership, CanonHash::Sha256);
+                let derived = try_canonicalize_view(
+                    &membership,
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                );
                 drop(membership);
                 for result in [plain, derived] {
                     match (reserved, result) {

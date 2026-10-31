@@ -19,7 +19,6 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
 use super::load::insert_loaded_document;
 use super::presentation;
@@ -534,18 +533,22 @@ impl PyDataset {
     /// dataset's content is wholly caller-supplied, so the refusal comes back as an
     /// ordinary Python exception via the typed [`purrdf_core::try_canonicalize`] path,
     /// never a process abort. The dataset is left unchanged when it raises.
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
     fn canonicalize(
         &mut self,
         py: Python<'_>,
-        algorithm: PyCanonicalizationAlgorithm,
-    ) -> PyResult<()> {
-        // RDFC-1.0 hashing is the heavy path — run it detached (GIL released).
-        let quads = &self.quads;
-        let canonicalized = py
-            .detach(|| super::canon::canonicalize_quads(quads, algorithm))
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        canonical_search: &str,
+        cancel: Option<&super::query::PyCancellationToken>,
+    ) -> PyResult<Py<crate::py_canonical::PyCanonicalResult>> {
+        let (canonicalized, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                super::canon::canonicalize_quads(&self.quads, control)
+            })?;
+        // Prepare both the wrapped value and its Python class allocation before
+        // committing the nonfallible native replacement.
+        let result = Py::new(py, crate::py_canonical::finish(py, py.None(), receipts)?)?;
         self.quads = canonicalized;
-        Ok(())
+        Ok(result)
     }
 
     fn __len__(&self) -> usize {

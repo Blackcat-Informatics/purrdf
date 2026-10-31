@@ -225,7 +225,7 @@ pub use ir::{
     PagedStackError, PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot,
     PagedStackSnapshotError, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle,
     QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, QueryIndexAllocationError,
-    RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
     RdfEnvelope, RecordKind, RecordValues, ReservedVocabulary, SkolemError, StackPageOrigin,
     StackSource, SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
     TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead, TripleReadError,
@@ -233,10 +233,11 @@ pub use ir::{
     ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_paged_seal,
     canonical_relabel, canonical_relabel_with_mapping, check_admissible,
     check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
-    deskolemize, fold_term, skolemize, try_blank_count_view, try_canonicalize,
-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with,
-    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
+    deskolemize, fold_term, skolemize, try_blank_count_view, try_canonical_blake3_view,
+    try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_sha256_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
+    try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
@@ -361,3 +362,8 @@ pub mod purremb_fixture;
 pub mod term_fixture;
 #[doc(hidden)]
 pub mod view_fixture;
+
+pub use ir::canon::{
+    CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
+    SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
+};

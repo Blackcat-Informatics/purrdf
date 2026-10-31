@@ -249,7 +249,15 @@ fn every_validation_reports_the_mandatory_diagnostic_beside_its_results() {
                 .validate_focus_nodes(&[focus])
                 .expect("a candidate check");
             assert_eq!(candidate.diagnostics, whole.diagnostics, "{path}");
-            let product = prepared.to_product(&ShapesProfile::CORE).expect("encodes");
+            let product = prepared
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("encodes");
             let restored = ShapesProduct::open(&product)
                 .expect("opens")
                 .admit(&ShapesProfile::CORE, &HostBindings::empty())

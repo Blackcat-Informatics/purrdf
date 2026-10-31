@@ -48,7 +48,7 @@ import {
   entailVerifyEntailment,
   Reasoner,
 } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 
 /**
@@ -78,36 +78,36 @@ test("entailCheckProofGoldenVectors runs the committed proof artifact ON WASM", 
   // A rendered proof carries `ServiceProof::encode`'s canonical bytes, so a byte that
   // differs here is a difference in the proof TERM — a consumer's pinned digest would
   // have moved under them — rather than a difference in some rendering of one.
-  entailCheckProofGoldenVectors();
+  canonicalValue(entailCheckProofGoldenVectors("unlimited"));
 });
 
 test("an answer nobody recorded is never presented as verified ON WASM", () => {
-  entailCheckAbsentProof();
+  canonicalValue(entailCheckAbsentProof("unlimited"));
   // …and a caller reaching the boundary directly sees the same three states. An
   // ordinary answer records nothing and SAYS so.
-  const plain = entailConsistency(SCHEMA, [], [], [], 0, 0);
+  const plain = entailConsistency(SCHEMA, [], [], [], 0, 0, "unlimited");
   assert.equal(plain.proof, "purrdf-dl-proof 1\navailability not-recorded\n");
   assert.throws(
     () =>
-      entailCheckProof(SCHEMA, "consistency", "", plain.answer, plain.certificate, plain.proof),
+      canonicalValue(entailCheckProof(SCHEMA, "consistency", "", plain.answer, plain.certificate, plain.proof, "unlimited")),
     /nothing was recorded/,
   );
 
   // Asking produces a real proof, with byte-identical answer and certificate…
-  const proved = entailProve(SCHEMA, "consistency", "", 0, 0);
+  const proved = entailProve(SCHEMA, "consistency", "", 0, 0, "unlimited");
   assert.equal(proved.answer, plain.answer);
   assert.equal(proved.certificate, plain.certificate);
   assert.match(proved.proof, /\navailability recorded\n/);
 
   // …and it CHECKS, against this caller's own document, question and answer.
-  const report = entailCheckProof(
+  const report = canonicalValue(entailCheckProof(
     SCHEMA,
     "consistency",
     "",
     proved.answer,
     proved.certificate,
     proved.proof,
-  );
+   "unlimited"));
   assert.match(report, /^purrdf-dl-proof-check 1\nservice consistency\n/);
   assert.match(report, /\nanswer checked 1\n/);
 
@@ -115,14 +115,14 @@ test("an answer nobody recorded is never presented as verified ON WASM", () => {
   // term exists for.
   assert.throws(
     () =>
-      entailCheckProof(
+      canonicalValue(entailCheckProof(
         "<http://example.org/z> <http://example.org/p> <http://example.org/q> .\n",
         "consistency",
         "",
         proved.answer,
         proved.certificate,
         proved.proof,
-      ),
+       "unlimited")),
     /does not check/,
   );
 });
@@ -131,31 +131,31 @@ test("the session records proofs only when asked ON WASM", () => {
   const plain = new Reasoner(SCHEMA, 0, 0);
   assert.equal(plain.recordsProofs(), false);
   assert.equal(
-    plain.consistency().proof,
+    plain.consistency("unlimited").proof,
     "purrdf-dl-proof 1\navailability not-recorded\n",
   );
-  assert.throws(() => plain.prove("consistency", ""), /records nothing/);
+  assert.throws(() => plain.prove("consistency", "", "unlimited"), /records nothing/);
   plain.free();
 
   const recording = Reasoner.withProofs(SCHEMA, 0, 0);
   assert.equal(recording.recordsProofs(), true);
-  const proved = recording.prove("classify", "");
+  const proved = recording.prove("classify", "", "unlimited");
   assert.match(proved.proof, /\navailability recorded\n/);
-  entailCheckProof(SCHEMA, "classify", "", proved.answer, proved.certificate, proved.proof);
+  canonicalValue(entailCheckProof(SCHEMA, "classify", "", proved.answer, proved.certificate, proved.proof, "unlimited"));
   recording.free();
 });
 
 test("entailCheckGoldenVectors runs the committed tri-host artifact ON WASM", () => {
   // Throws with the case name and a diff of the two strings on the first byte that
   // differs from what the native build produced.
-  entailCheckGoldenVectors();
+  canonicalValue(entailCheckGoldenVectors("unlimited"));
 });
 
 test("an inconsistent input is refused WITH its certificate ON WASM", () => {
   // The path the golden artifact cannot cover: an inconsistent knowledge base has no
   // closure, so the only channel the evidence has is the thrown message. Same checker
   // as the C-ABI and `purrdf-validate` tests.
-  entailCheckInconsistentRefusal();
+  canonicalValue(entailCheckInconsistentRefusal("unlimited"));
   // …and a caller who reaches the boundary directly sees the same bytes: the witness
   // rule, the graph whose closure refused, and the three asserted triples.
   assert.throws(
@@ -172,7 +172,7 @@ test("an inconsistent input is refused WITH its certificate ON WASM", () => {
         [],
         [],
         [],
-      ),
+       undefined, undefined, undefined, "unlimited"),
     /inconsistency-premise <http:\/\/example\.org\/A>/,
   );
 });
@@ -233,14 +233,14 @@ test("every golden case is byte-identical across the wasm/JS boundary", async ()
       FIXTURE_MAX_STORED_FACTS,
       FIXTURE_MAX_JOIN_STEPS,
       FIXTURE_MAX_TERM_ARENA_BYTES,
-    );
+     "unlimited");
     assert.equal(closed.nquads, vector.closure, `${vector.name}: closure`);
     assert.equal(closed.report, vector.report, `${vector.name}: report`);
   }
 });
 
 test("entailMaterialize's evaluation limits refuse naming this host's arguments", () => {
-  const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], []);
+  const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited");
   for (const [dimension, name, position] of [
     ["stored-facts", "maxStoredFacts", 0], ["term-arena-bytes", "maxTermArenaBytes", 2],
   ]) {
@@ -248,14 +248,14 @@ test("entailMaterialize's evaluation limits refuse naming this host's arguments"
     const needed = BigInt(closed.report.split("\n").find((line) => line.startsWith(prefix)).slice(prefix.length));
     const limits = [undefined, undefined, undefined];
     limits[position] = needed - 1n;
-    assert.throws(() => entailMaterialize(SCHEMA, "rdfs", "", [], [], [], ...limits),
+    assert.throws(() => entailMaterialize(SCHEMA, "rdfs", "", [], [], [], ...limits, "unlimited"),
       (error) => error.message.includes(`${needed}${position === 0 ? " facts" : ""} observed, ${needed - 1n} permitted`) &&
         error.message.endsWith(`raise it with entailMaterialize's ${name}`));
     limits[position] = needed;
-    assert.equal(entailMaterialize(SCHEMA, "rdfs", "", [], [], [], ...limits).nquads, closed.nquads);
+    assert.equal(entailMaterialize(SCHEMA, "rdfs", "", [], [], [], ...limits, "unlimited").nquads, closed.nquads);
   }
   assert.throws(
-    () => entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, 1n),
+    () => entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, 1n, undefined, "unlimited"),
     (error) =>
       error.message.includes("evaluation exceeded the join-step limit: ") &&
       error.message.endsWith("raise it with entailMaterialize's maxJoinSteps"),
@@ -286,22 +286,22 @@ const DERIVED_B =
 test("entailMaterialize and entailConsistency close over the import table", () => {
   const iris = [IMPORT_LIB];
   const documents = [IMPORTED_LIB];
-  assert.throws(() => entailMaterialize(IMPORTING_PREMISE, "rdfs", "", [], [], []), /example\.org\/lib/);
-  const closed = entailMaterialize(IMPORTING_PREMISE, "rdfs", "", iris, documents, []);
+  assert.throws(() => entailMaterialize(IMPORTING_PREMISE, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited"), /example\.org\/lib/);
+  const closed = entailMaterialize(IMPORTING_PREMISE, "rdfs", "", iris, documents, [], undefined, undefined, undefined, "unlimited");
   assert.ok(closed.nquads.includes(DERIVED_B), closed.nquads);
   assert.ok(closed.report.includes("\nboundary ontology-import-resolved "), closed.report);
   assert.throws(
-    () => entailMaterialize(IMPORTED_FACTS, "rdfs", "", iris, documents, []),
+    () => entailMaterialize(IMPORTED_FACTS, "rdfs", "", iris, documents, [], undefined, undefined, undefined, "unlimited"),
     /would be read and never used/,
   );
-  assert.ok(!entailMaterialize(IMPORTED_FACTS, "rdfs", "", [], [], []).nquads.includes(DERIVED_B));
+  assert.ok(!entailMaterialize(IMPORTED_FACTS, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited").nquads.includes(DERIVED_B));
 
-  assert.throws(() => entailConsistency(IMPORTING_PREMISE, [], [], [], 0, 0), /example\.org\/lib/);
-  const decided = entailConsistency(IMPORTING_PREMISE, iris, documents, [], 0, 0);
+  assert.throws(() => entailConsistency(IMPORTING_PREMISE, [], [], [], 0, 0, "unlimited"), /example\.org\/lib/);
+  const decided = entailConsistency(IMPORTING_PREMISE, iris, documents, [], 0, 0, "unlimited");
   assert.equal(decided.answer, "consistency false\n");
   assert.ok(decided.certificate.includes("\nboundary ontology-import-resolved "));
-  assert.throws(() => entailConsistency(IMPORTED_FACTS, iris, documents, [], 0, 0), /example\.org\/lib/);
-  assert.equal(entailConsistency(IMPORTED_FACTS, [], [], [], 0, 0).answer, "consistency true\n");
+  assert.throws(() => entailConsistency(IMPORTED_FACTS, iris, documents, [], 0, 0, "unlimited"), /example\.org\/lib/);
+  assert.equal(entailConsistency(IMPORTED_FACTS, [], [], [], 0, 0, "unlimited").answer, "consistency true\n");
 });
 
 test("the conclusion-directed services take the evaluation limits, naming this host's argument", () => {
@@ -324,7 +324,7 @@ test("the conclusion-directed services take the evaluation limits, naming this h
 });
 
 test("entailMaterialize closes under rdfs and always returns a report", () => {
-  const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], []);
+  const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited");
   assert.match(
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
@@ -345,7 +345,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
 });
 
 test("entailMaterialize under simple is the identity closure", () => {
-  const closed = entailMaterialize(SCHEMA, "simple", "", [], [], []);
+  const closed = entailMaterialize(SCHEMA, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited");
   assert.ok(
     !closed.nquads.includes(
       "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .",
@@ -355,18 +355,18 @@ test("entailMaterialize under simple is the identity closure", () => {
 });
 
 test("entailMaterialize is byte-stable across repeated calls", () => {
-  const first = entailMaterialize(SCHEMA, "owl-rl", "", [], [], []);
+  const first = entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, undefined, undefined, "unlimited");
   for (let i = 0; i < 5; i += 1) {
-    const again = entailMaterialize(SCHEMA, "owl-rl", "", [], [], []);
+    const again = entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, undefined, undefined, "unlimited");
     assert.equal(again.nquads, first.nquads);
     assert.equal(again.report, first.report);
   }
 });
 
 test("entailMaterialize rejects an unknown regime, naming the accepted set", () => {
-  assert.throws(() => entailMaterialize(SCHEMA, "rdfs-plus", "", [], [], []), /accepted: simple, rdf, rdfs/);
+  assert.throws(() => entailMaterialize(SCHEMA, "rdfs-plus", "", [], [], [], undefined, undefined, undefined, "unlimited"), /accepted: simple, rdf, rdfs/);
   // The spellings are case-sensitive, exactly as the CLI writes them.
-  assert.throws(() => entailMaterialize(SCHEMA, "RDFS", "", [], [], []), /accepted:/);
+  assert.throws(() => entailMaterialize(SCHEMA, "RDFS", "", [], [], [], undefined, undefined, undefined, "unlimited"), /accepted:/);
 });
 
 // A normative RIF-in-XML rule document: `?x a ex:A` => `?x a ex:B`. `rif` is the
@@ -387,7 +387,7 @@ test("entailMaterialize materializes every regime spelling", () => {
     ["rif", RIF_PROGRAM],
     ["d", ""],
   ]) {
-    const closed = entailMaterialize(SCHEMA, regime, program, [], [], []);
+    const closed = entailMaterialize(SCHEMA, regime, program, [], [], [], undefined, undefined, undefined, "unlimited");
     assert.match(closed.report, /^purrdf-reasoning-report 4\n/);
     assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
     assert.ok(closed.report.includes("\nwithheld-surrogates "), regime);
@@ -397,13 +397,13 @@ test("entailMaterialize materializes every regime spelling", () => {
 
 test("a rule document belongs to rif alone and is refused elsewhere", () => {
   assert.throws(
-    () => entailMaterialize(SCHEMA, "rdfs", RIF_PROGRAM, [], [], []),
+    () => entailMaterialize(SCHEMA, "rdfs", RIF_PROGRAM, [], [], [], undefined, undefined, undefined, "unlimited"),
     /takes no rule document/,
   );
 });
 
 test("entailMaterialize rejects a malformed document (never a silent empty closure)", () => {
-  assert.throws(() => entailMaterialize("this is not n-quads\n", "rdfs", "", [], [], []));
+  assert.throws(() => entailMaterialize("this is not n-quads\n", "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited"));
 });
 
 // ── A reserved-vocabulary closure is refused as a value, never a process abort ──
@@ -427,13 +427,13 @@ const NEIGHBOURING_ORDINARY_PREDICATE =
 
 test("entailMaterialize throws on a reserved-vocabulary closure, naming it", () => {
   assert.throws(
-    () => entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", "", [], [], []),
+    () => entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited"),
     /urn:purrdf:rdfc:reifies/,
   );
 });
 
 test("entailMaterialize still closes an ordinary document neighbouring the reserved one", () => {
-  const closed = entailMaterialize(NEIGHBOURING_ORDINARY_PREDICATE, "simple", "", [], [], []);
+  const closed = entailMaterialize(NEIGHBOURING_ORDINARY_PREDICATE, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited");
   assert.ok(closed.nquads.includes("urn:purrdf:other:annotation"), closed.nquads);
 });
 
@@ -456,7 +456,7 @@ test("the rule inventories are the specification tables, and the gap is measurab
   }
 
   // …and the difference is exactly what the report's `missing` lines name.
-  const missing = entailMaterialize(SCHEMA, "rdfs", "", [], [], [])
+  const missing = entailMaterialize(SCHEMA, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited")
     .report.split("\n")
     .filter((line) => line.startsWith("missing "))
     .map((line) => line.slice("missing ".length));
@@ -500,7 +500,7 @@ test("entailExtensions names what this build adds beyond the specification table
 
   // And the report's `extension` line names the same rules the inventory does,
   // so the two disclosures cannot drift apart.
-  const reported = entailMaterialize(SCHEMA, "owl-rl", "", [], [], [])
+  const reported = entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, undefined, undefined, "unlimited")
     .report.split("\n")
     .filter((line) => line.startsWith("extension "))
     .map((line) => line.slice("extension ".length));
@@ -530,7 +530,7 @@ const CHAIN_AXIOM =
   "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
 
 test("entailConsistency decides consistency ON WASM, with its certificate", () => {
-  const decided = entailConsistency(TAXONOMY, [], [], [], 0, 0);
+  const decided = entailConsistency(TAXONOMY, [], [], [], 0, 0, "unlimited");
   assert.equal(decided.answer, "consistency true\n");
   // Never optional. `completeness decided` is reported only because the boundary
   // list beside it is, in fact, empty — the DL certificate's own honesty gate.
@@ -541,7 +541,7 @@ test("entailConsistency decides consistency ON WASM, with its certificate", () =
 });
 
 test("entailClassify reaches the full subsumption hierarchy ON WASM", () => {
-  const classified = entailClassify(TAXONOMY, 0, 0);
+  const classified = entailClassify(TAXONOMY, 0, 0, "unlimited");
   // Direct: only the asserted edges. Transitive: also the chain A -> C.
   assert.ok(
     classified.answer.includes(
@@ -565,7 +565,7 @@ test("entailClassify reaches the full subsumption hierarchy ON WASM", () => {
 });
 
 test("entailRealize reaches the individuals' entailed types ON WASM", () => {
-  const realized = entailRealize(TAXONOMY, 0, 0);
+  const realized = entailRealize(TAXONOMY, 0, 0, "unlimited");
   assert.ok(
     realized.answer.includes(
       "type <http://example.org/x> <http://example.org/C>\n",
@@ -582,7 +582,7 @@ test("entailRealize reaches the individuals' entailed types ON WASM", () => {
 });
 
 test("entailInstances retrieves instances for a class the schema never asserts them of ON WASM", () => {
-  const instances = entailInstances(TAXONOMY, "<http://example.org/C>", 0, 0);
+  const instances = entailInstances(TAXONOMY, "<http://example.org/C>", 0, 0, "unlimited");
   assert.ok(
     instances.answer.includes("instance <http://example.org/x>\n"),
     instances.answer,
@@ -591,7 +591,7 @@ test("entailInstances retrieves instances for a class the schema never asserts t
 });
 
 test("entailEntails decides an axiom entailed nowhere by assertion ON WASM", () => {
-  const decided = entailEntails(TAXONOMY, CHAIN_AXIOM, 0, 0);
+  const decided = entailEntails(TAXONOMY, CHAIN_AXIOM, 0, 0, "unlimited");
   assert.ok(decided.answer.startsWith("entails true\n"), decided.answer);
   assert.ok(decided.answer.includes("\naxiom SubClassOf\n"));
   assert.ok(decided.answer.includes("\nterm <http://example.org/A>\n"));
@@ -600,14 +600,14 @@ test("entailEntails decides an axiom entailed nowhere by assertion ON WASM", () 
 });
 
 test("entailEntails answers unknown (never false) on an exhausted budget ON WASM", () => {
-  const starved = entailEntails(TAXONOMY, CHAIN_AXIOM, 1, 0);
+  const starved = entailEntails(TAXONOMY, CHAIN_AXIOM, 1, 0, "unlimited");
   assert.equal(starved.answer.split("\n")[0], "entails unknown");
   assert.ok(starved.certificate.includes("\ncompleteness budget-exhausted\n"));
 
   // The SECOND budget, narrowed on its own. A round is a pass rather than a unit of
   // cost, so this cap bounds the work done INSIDE a round — the quantity a rounds cap
   // structurally cannot see — and it reaches the same three-valued answer here.
-  const overworked = entailEntails(TAXONOMY, CHAIN_AXIOM, 0, 1);
+  const overworked = entailEntails(TAXONOMY, CHAIN_AXIOM, 0, 1, "unlimited");
   assert.equal(overworked.answer.split("\n")[0], "entails unknown");
   assert.ok(overworked.certificate.includes("\ncompleteness budget-exhausted\n"));
   assert.ok(overworked.certificate.includes("\nwork-budget 1\n"), overworked.certificate);
@@ -623,7 +623,7 @@ test("entailProfile certifies the most restrictive profile first ON WASM", () =>
 });
 
 test("entailExtractModule extracts a locality module as canonical N-Quads ON WASM", () => {
-  const extracted = entailExtractModule(TAXONOMY, "<http://example.org/A>\n", "star");
+  const extracted = entailExtractModule(TAXONOMY, "<http://example.org/A>\n", "star", "unlimited");
   assert.ok(
     extracted.answer.includes(
       "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .",
@@ -637,13 +637,13 @@ test("entailExtractModule extracts a locality module as canonical N-Quads ON WAS
 
 test("entailExtractModule rejects an unknown method, naming the accepted set", () => {
   assert.throws(
-    () => entailExtractModule(TAXONOMY, "<http://example.org/A>\n", "nested"),
+    () => entailExtractModule(TAXONOMY, "<http://example.org/A>\n", "nested", "unlimited"),
     /bot, top, star/,
   );
 });
 
 test("entailJustify finds a minimal entailing subset ON WASM", () => {
-  const why = entailJustify(TAXONOMY, CHAIN_AXIOM);
+  const why = entailJustify(TAXONOMY, CHAIN_AXIOM, "unlimited");
   // The chain (A ⊑ B ⊑ C) — and NOT the irrelevant D ⊑ C axiom.
   assert.ok(
     why.answer.includes(

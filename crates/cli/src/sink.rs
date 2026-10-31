@@ -78,6 +78,15 @@ pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
     }
 }
 
+pub(crate) fn write_out_with_request(
+    out: &str,
+    bytes: &[u8],
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
+    canonical.before_output()?;
+    write_out(out, bytes)
+}
+
 /// Where a command's bytes go, as a writer a serializer can stream into.
 ///
 /// The whole-buffer spelling above is this type with one `write_all`; the streaming
@@ -290,7 +299,9 @@ pub(crate) fn write_results(
     format: purrdf_sparql_results::SparqlResultsFormat,
     provenance: &purrdf_sparql_results::ResultProvenance,
     namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    canonical.before_output()?;
     let mut target = OutTarget::open(out)?;
     match purrdf_sparql_results::serialize_into(
         result,
@@ -315,10 +326,12 @@ pub(crate) fn write_rdf<D: DatasetView>(
     base: Option<&str>,
     src_codec: Option<&str>,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<LossLedger, CliError> {
     validate_jsonld_options(target, jsonld_options)?;
     match target {
         SourceFormat::Native(format) => {
+            canonical.before_output()?;
             // Read before the first byte is written, so a refused read leaves no
             // partial document behind. Empty for every target that spells an empty
             // graph, and for a dataset that declares none.
@@ -362,8 +375,8 @@ pub(crate) fn write_rdf<D: DatasetView>(
         }
         SourceFormat::Pack => {
             let dataset = dataset_from_view(view)?;
-            let bytes = PackBuilder::build_bytes(&dataset)?;
-            write_out(out, &bytes)?;
+            let bytes = PackBuilder::build_bytes(&dataset, canonical.control()?)?;
+            write_out_with_request(out, &bytes, canonical)?;
             // A pack is a lossless RDF-1.2 container — base quads, the statement layer
             // and declared empty named graphs (zero-row partitions) alike: no ledger
             // entries.

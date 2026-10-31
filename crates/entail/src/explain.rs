@@ -895,21 +895,25 @@ impl Justification {
     ///
     /// # Errors
     /// Returns the original canonicalization refusal without minting an identity.
-    pub fn digest(&self) -> Result<[u8; 32], purrdf_core::CanonError> {
-        Ok(*purrdf_hash::blake3::hash(
-            purrdf_core::try_canonicalize(&self.ontology)?
-                .nquads
-                .as_bytes(),
+    pub fn digest(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<[u8; 32], purrdf_core::CanonError> {
+        purrdf_core::try_canonical_blake3_view(
+            &*self.ontology,
+            purrdf_core::CanonHash::Sha256,
+            control,
         )
-        .as_bytes())
     }
 
-    /// [`Self::digest`] as lowercase hex.
-    ///
+    /// The justification identity as lowercase hexadecimal, retaining execution evidence.
     /// # Errors
     /// Returns the original canonicalization refusal from [`Self::digest`].
-    pub fn digest_hex(&self) -> Result<String, purrdf_core::CanonError> {
-        Ok(purrdf_hash::hex::encode(&self.digest()?))
+    pub fn digest_hex(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<String, purrdf_core::CanonError> {
+        Ok(purrdf_hash::hex::encode(&self.digest(control)?))
     }
 
     /// SUFFICIENCY, re-decided: does the justification alone still entail the axiom?
@@ -1290,12 +1294,18 @@ mod tests {
         assert!(justification.is_minimal().expect("well formed"));
 
         // Named, not merely counted: the chain, and not the sibling or the instance.
-        let lines: BTreeSet<String> = purrdf_core::try_canonicalize(justification.ontology())
-            .unwrap()
-            .nquads
-            .lines()
-            .map(ToOwned::to_owned)
-            .collect();
+        let lines: BTreeSet<String> = purrdf_core::try_canonicalize(
+            justification.ontology(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect();
         assert_eq!(
             lines,
             [
@@ -1492,7 +1502,14 @@ mod tests {
             sup: TermValue::iri(purrdf_core::RESERVED_NAMESPACE),
         };
         let justification = justify(&ontology, &axiom).expect("the stated axiom is entailed");
-        let original = purrdf_core::try_canonicalize(justification.ontology()).unwrap_err();
+        let original = purrdf_core::try_canonicalize(
+            justification.ontology(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
         assert!(matches!(
             &original,
             purrdf_core::CanonError::ReservedVocabulary(_)

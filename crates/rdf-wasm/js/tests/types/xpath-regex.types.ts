@@ -70,7 +70,7 @@ const entailed = shaclEntail(
   undefined,
   undefined,
   "xpath-3.1-2017-03-21",
-);
+ undefined, undefined, "unlimited");
 const inferred = shaclApplyRules(
   "",
   "",
@@ -101,7 +101,7 @@ const evaluated = shaclEvalNodeExpr(
   undefined,
   "xpath-3.1-2017-03-21",
 );
-const asyncEntailed = shaclEntailAsync("", "", null, null, null, null, null, null, null, null, { xpathRegex: validation.xpathRegex });
+const asyncEntailed = shaclEntailAsync("", "", null, null, null, null, null, null, null, null, "unlimited", { xpathRegex: validation.xpathRegex });
 const asyncInferred = shaclApplyRulesAsync(
   "",
   null,
@@ -133,7 +133,7 @@ const asyncEvaluated = shaclEvalNodeExprAsync(
   validation,
 );
 // @ts-expect-error the tools' law is a dated name too
-shaclEntail("", "", undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "xpath-3.1");
+shaclEntail("", "", undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "xpath-3.1", undefined, undefined, "unlimited");
 
 // @ts-expect-error an undated name selects no law
 const undated: QueryOptions = { xpathRegex: "xpath-3.1" };

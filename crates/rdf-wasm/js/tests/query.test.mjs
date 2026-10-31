@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
 import { EVALUATION_STACK_REFUSAL_EXACT, HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 // One-time wasm instantiation before any test runs.
 await ready();
 
@@ -172,7 +172,7 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
     "@prefix ex: <https://example.org/> . ex:a ex:p ex:b .",
     "turtle",
   );
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
 
   assert.equal(
     engine.update(
@@ -183,15 +183,15 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
   );
   assert.equal(ds.size, 2);
 
-  const stable = ds.canonicalize();
+  const stable = canonicalValue(ds.canonicalize("unlimited"));
   assert.throws(() =>
     engine.update(
       ds,
       "INSERT DATA { <https://example.org/x> <https://example.org/p> <https://example.org/y> } ; LOAD <https://example.org/doc>",
     ).dataset,
   );
-  assert.equal(ds.canonicalize(), stable);
-  assert.notEqual(ds.canonicalize(), before);
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), stable);
+  assert.notEqual(canonicalValue(ds.canonicalize("unlimited")), before);
 });
 
 test("queryRaw provenanceNamespace populates and round-trips through JSON", () => {
@@ -473,10 +473,10 @@ test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
   assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
 
   const engine = new QueryEngine();
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>").dataset);
   engine.update(ds, "LOAD SILENT <https://example.org/doc>").dataset;
-  assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before, "LOAD SILENT must leave the dataset untouched");
 });
 
 // How deep a request may nest is bounded by what it builds, not by how it is written.
@@ -600,7 +600,7 @@ const subjectsOf = (result) =>
 test("nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards", () => {
   const ds = Dataset.parse(NEST_DATA, "nquads");
   const engine = new QueryEngine();
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   /** `{ rows }` for an answer, `{ refused }` for a typed stack refusal; anything else fails. */
   const lateral = (depth) => {
     try {
@@ -640,7 +640,7 @@ test("nested LATERAL answers on the synchronous lane as deep as the lane holds i
   assert.ok(deepest >= 281, `${deepest} levels answer; 282 did on the build measured`);
   // No memory was overwritten: the dataset's canonical form is byte-identical, and
   // queries over it and over a freshly parsed one answer exactly.
-  assert.equal(ds.canonicalize(), before);
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before);
   assert.deepEqual(subjectsOf(engine.select(ds, "SELECT ?s WHERE { ?s <https://example.org/q> ?o }")), ["s1"]);
   const names = engine
     .select(Dataset.parse(TRIG, "trig"), "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
@@ -793,7 +793,7 @@ test("inserting a triple term past the dataset's limit is the dataset's typed re
     assert.match(error.message, /^error rdf-ir-triple-nesting-limit: /);
     return true;
   });
-  assert.equal(ds.canonicalize(), "", "the refusal wrote nothing");
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), "", "the refusal wrote nothing");
   engine.update(ds, insert(16)).dataset;
   const rows = engine
     .select(ds, `SELECT ?o WHERE { <${TT}b> <${TT}q> ${tripleChain(16, "?o")} }`)
@@ -862,7 +862,7 @@ test("a snapshot is an independent dataset with its own identity", () => {
   const copy = ds.snapshot();
   assert.notEqual(copy.id, ds.id);
   assert.equal(copy.generation, 0n);
-  assert.equal(copy.canonicalize(), ds.canonicalize());
+  assert.equal(canonicalValue(copy.canonicalize("unlimited")), canonicalValue(ds.canonicalize("unlimited")));
   copy.add(Dataset.parse("<https://example.org/x> <https://example.org/y> <https://example.org/z> .\n", "nquads").quads()[0]);
   assert.equal(copy.size, ds.size + 1, "the copy changed alone");
   assert.equal(ds.generation, 0n);

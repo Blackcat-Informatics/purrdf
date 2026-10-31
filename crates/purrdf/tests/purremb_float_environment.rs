@@ -57,7 +57,11 @@ const FX: Identities = Identities::at("https://example.org/");
 /// Build the one-row double precision artifact whose only projection has `postprocessing`.
 fn build(postprocessing: PrefixPostprocessing) -> Result<Vec<u8>, EmbeddingError> {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
     let target = source.dataset_target(true).expect("dataset target");
     let target_id = target.id;
     let set = TargetSet::new(vec![target_id]).expect("target set");

@@ -880,7 +880,17 @@ mod tests {
                 project_archive(dataset.as_ref(), project_profile, &config).expect("second");
             assert_eq!(first.archive, second.archive);
             let lifted = lift_archive(&first.archive, lift_profile, &config).expect("lift");
-            assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+            assert!(
+                datasets_isomorphic(
+                    &dataset,
+                    &lifted.dataset,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
         }
 
         let config = csvw_config();
@@ -888,7 +898,17 @@ mod tests {
             .expect("CSVW project");
         let lifted =
             lift_archive(&projected.archive, LiftProfile::CsvwExact, &config).expect("CSVW lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &lifted.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert!(projected.loss_ledger.is_empty());
         assert!(lifted.loss_ledger.is_empty());
     }

@@ -1392,7 +1392,16 @@ fn a_module_entails_everything_the_full_ontology_entails_over_its_signature() {
     ] {
         for method in purrdf_entail::ModuleMethod::ALL {
             let terms: Vec<TermValue> = seed.iter().map(|local| iri(local)).collect();
-            let extracted = purrdf_entail::extract_module(&full, &terms, method).expect("extract");
+            let extracted = purrdf_entail::extract_module(
+                &full,
+                &terms,
+                method,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("extract");
             module_preserves_entailments(&full, extracted.module(), &seed);
             assert!(
                 extracted.module().quads().count() <= full.quads().count(),
@@ -1410,9 +1419,13 @@ fn an_axiom_whose_only_signature_contact_is_inside_its_complex_left_side_is_kept
     // `∃eats.⊤ ⊑ Predator`: the seed names only `eats`, which occurs nowhere in the axiom
     // except INSIDE the blank-node class expression on its left. An extractor that tested
     // the object endpoint alone would drop it.
-    let extracted =
-        purrdf_entail::extract_module(&zoo(), &[iri("eats")], purrdf_entail::ModuleMethod::Bot)
-            .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &zoo(),
+        &[iri("eats")],
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let module = extracted.module();
     let kept_lhs = module.quads().any(|quad| {
         matches!(module.term_value(quad.s), TermValue::Blank { .. })
@@ -1439,8 +1452,13 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
     let full = zoo();
     let seed = [iri("Mammal")];
 
-    let bot = purrdf_entail::extract_module(&full, &seed, purrdf_entail::ModuleMethod::Bot)
-        .expect("extract");
+    let bot = purrdf_entail::extract_module(
+        &full,
+        &seed,
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let bot_signature: Vec<String> = bot.signature().iter().map(show).collect();
     assert!(
         bot_signature.contains(&ex("Animal")),
@@ -1451,8 +1469,13 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
         "…and does not reach a sibling of `Mammal`: {bot_signature:?}"
     );
 
-    let top = purrdf_entail::extract_module(&full, &seed, purrdf_entail::ModuleMethod::Top)
-        .expect("extract");
+    let top = purrdf_entail::extract_module(
+        &full,
+        &seed,
+        purrdf_entail::ModuleMethod::Top,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let top_signature: Vec<String> = top.signature().iter().map(show).collect();
     assert!(
         top_signature.contains(&ex("Cat")),
@@ -1468,8 +1491,13 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
 fn a_module_carries_the_whole_class_expression_under_a_kept_axiom() {
     let full = zoo();
     let seed = [iri("Cat")];
-    let extracted = purrdf_entail::extract_module(&full, &seed, purrdf_entail::ModuleMethod::Bot)
-        .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &full,
+        &seed,
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     // `Cat ⊑ ∃eats.Fish` is kept, so the restriction's THREE defining triples must all be
     // in the module — a class expression truncated halfway is not a class expression.
     let module = extracted.module();
@@ -1506,9 +1534,13 @@ fn a_construct_locality_does_not_decide_is_kept_conservatively_and_reported() {
         (N::B("cell0"), N::V(FIRST), N::E("chipId")),
         (N::B("cell0"), N::V(REST), N::V(NIL)),
     ]);
-    let extracted =
-        purrdf_entail::extract_module(&full, &[iri("Cat")], purrdf_entail::ModuleMethod::Bot)
-            .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &full,
+        &[iri("Cat")],
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let reported: Vec<(String, String)> = extracted
         .conservative_keeps()
         .iter()
@@ -1531,8 +1563,13 @@ fn a_construct_locality_does_not_decide_is_kept_conservatively_and_reported() {
 
 #[test]
 fn an_empty_seed_extracts_an_empty_module() {
-    let extracted = purrdf_entail::extract_module(&zoo(), &[], purrdf_entail::ModuleMethod::Star)
-        .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &zoo(),
+        &[],
+        purrdf_entail::ModuleMethod::Star,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     assert_eq!(extracted.axioms(), 0);
     assert_eq!(extracted.module().quads().count(), 0);
     assert_eq!(extracted.conservative_keeps(), []);
@@ -1543,8 +1580,26 @@ fn module_extraction_is_reproducible() {
     let full = zoo();
     let seed = [iri("Cat"), iri("Plant")];
     for method in purrdf_entail::ModuleMethod::ALL {
-        let one = purrdf_entail::extract_module(&full, &seed, method).expect("extract");
-        let two = purrdf_entail::extract_module(&full, &seed, method).expect("extract");
+        let one = purrdf_entail::extract_module(
+            &full,
+            &seed,
+            method,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("extract");
+        let two = purrdf_entail::extract_module(
+            &full,
+            &seed,
+            method,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("extract");
         assert_eq!(one.signature(), two.signature());
         assert_eq!(one.conservative_keeps(), two.conservative_keeps());
         assert_eq!(one.axioms(), two.axioms());
@@ -2199,19 +2254,39 @@ fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
                 Verdict::False,
             ),
         ] {
-            let mut producer = Reasoner::with_proofs(&input).expect("ontology prepares");
+            let mut producer = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("ontology prepares");
             let answer = producer.entails(&axiom).expect("bottom property query");
             honest(&answer);
             assert_eq!(*answer.answer(), expected);
             let question = Question::AxiomEntailment {
                 axiom: Box::new(axiom),
             };
-            let original_input = Reasoner::with_proofs(&input)
-                .expect("original source")
-                .proof_context()
-                .expect("recording")
-                .input();
-            let mut consumer = Reasoner::with_proofs(&input).expect("independent consumer");
+            let original_input = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("original source")
+            .proof_context()
+            .expect("recording")
+            .input();
+            let mut consumer = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("independent consumer");
             consumer
                 .prepare(&question)
                 .expect("consumer prepares query");
@@ -2609,7 +2684,11 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
         typed(N::E("p"), N::V(OBJECT_PROPERTY)),
         (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
     ]);
-    let mut producer = Reasoner::with_proofs(&input).unwrap();
+    let mut producer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let question = producer.object_property_classification_question().unwrap();
     let answer = producer.classify_object_properties().unwrap();
     let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
@@ -2618,7 +2697,11 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
             answer.answer(),
         ))
         .unwrap();
-    let mut consumer = Reasoner::with_proofs(&input).unwrap();
+    let mut consumer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     consumer.prepare(&question).unwrap();
     proof
         .verify(
@@ -2628,7 +2711,11 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
             &consumer.proof_context().unwrap(),
         )
         .unwrap();
-    let mut wrong = Reasoner::with_proofs(&input).unwrap();
+    let mut wrong = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert!(
         wrong
             .prepare(&Question::ObjectPropertyClassification {
@@ -2732,7 +2819,14 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
                         answer.answer(),
                     ))
                     .unwrap();
-                let mut consumer = Reasoner::with_proofs(&input).unwrap();
+                let mut consumer = Reasoner::with_proofs(
+                    &input,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
                 consumer.prepare(&question).unwrap();
                 proof
                     .verify(
@@ -2892,7 +2986,14 @@ fn class_analysis_shares_classification_without_changing_native_answers() {
 fn class_analysis_proof_binds_both_source_universes() {
     use purrdf_entail::{ClaimBasis, Question, ServiceProof};
     for (residual, input) in [(false, kittens()), (true, class_analysis_nominal())] {
-        let producer = Reasoner::with_proofs(&input).unwrap();
+        let producer = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let question = producer.class_analysis_question();
         let answer = producer.classify_and_realize().unwrap();
         let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
@@ -2901,7 +3002,14 @@ fn class_analysis_proof_binds_both_source_universes() {
                 answer.answer(),
             ))
             .unwrap();
-        let mut consumer = Reasoner::with_proofs(&input).unwrap();
+        let mut consumer = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         consumer.prepare(&question).unwrap();
         proof
             .verify(
@@ -2911,7 +3019,14 @@ fn class_analysis_proof_binds_both_source_universes() {
                 &consumer.proof_context().unwrap(),
             )
             .unwrap();
-        let mut wrong = Reasoner::with_proofs(&input).unwrap();
+        let mut wrong = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert!(
             wrong
                 .prepare(&Question::ClassAnalysis {
@@ -2968,7 +3083,12 @@ fn class_analysis_retains_native_refusals_and_joint_directness() {
     assert!(answer.direct_subsumptions().is_err());
     assert!(answer.direct_types().is_err());
     let input = class_analysis_nominal();
-    let producer = Reasoner::with_proofs(&input).unwrap().with_work_cap(1);
+    let producer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .with_work_cap(1);
     let answer = producer.classify_and_realize().unwrap();
     assert_eq!(
         honest(&answer).completeness(),
@@ -2976,7 +3096,11 @@ fn class_analysis_retains_native_refusals_and_joint_directness() {
     );
     assert!(answer.direct_subsumptions().is_err());
     assert!(answer.direct_types().is_err());
-    let mut consumer = Reasoner::with_proofs(&input).unwrap();
+    let mut consumer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let question = producer.class_analysis_question();
     consumer.prepare(&question).unwrap();
     answer
@@ -3030,7 +3154,14 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
                     answer.answer(),
                 ))
                 .unwrap();
-            let mut consumer = Reasoner::with_proofs(&input).unwrap();
+            let mut consumer = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
             consumer.prepare(&question).unwrap();
             proof
                 .verify(

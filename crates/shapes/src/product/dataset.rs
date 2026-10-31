@@ -207,7 +207,12 @@ fn refuse(error: &PackError) -> ShapesProductError {
         ),
     };
 
-    ShapesProductError::new(dimension, format!("{fix} (container reported: {error})"))
+    let refusal =
+        ShapesProductError::new(dimension, format!("{fix} (container reported: {error})"));
+    match error {
+        PackError::CanonRefused(cause) => refusal.with_canonical_refusal(cause.clone()),
+        _ => refusal,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +232,11 @@ fn refuse(error: &PackError) -> ShapesProductError {
 /// graph, or an IRI in the canonicalization profile's reserved namespace), so the
 /// section's identity claim cannot be established. Every other container failure
 /// is mapped by [`refuse`].
-pub(crate) fn encode_dataset(dataset: &Arc<RdfDataset>) -> Result<Vec<u8>, ShapesProductError> {
-    PackBuilder::build_bytes(dataset.as_ref()).map_err(|error| refuse(&error))
+pub(crate) fn encode_dataset(
+    dataset: &Arc<RdfDataset>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Vec<u8>, ShapesProductError> {
+    PackBuilder::build_bytes(dataset.as_ref(), control).map_err(|error| refuse(&error))
 }
 
 /// Restore the shapes dataset from the product's dataset section — the COMMON
@@ -277,8 +285,11 @@ pub(crate) fn open_dataset(bytes: &[u8]) -> Result<Arc<RdfDataset>, ShapesProduc
 /// Everything [`open_dataset`] can return, plus
 /// [`ProductDimension::DatasetIdentity`] when canonicalization refuses the
 /// reconstruction or when the recomputed digest disagrees with the stored one.
-pub(crate) fn certify_dataset(bytes: &[u8]) -> Result<PackDigest, ShapesProductError> {
-    verify_pack(bytes).map_err(|error| refuse(&error))
+pub(crate) fn certify_dataset(
+    bytes: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<PackDigest, ShapesProductError> {
+    verify_pack(bytes, control).map_err(|error| refuse(&error))
 }
 
 // ---------------------------------------------------------------------------
@@ -424,9 +435,15 @@ mod tests {
     /// The canonical N-Quads of a dataset — the value-level witness of equality
     /// the RDF types themselves do not provide.
     fn canonical(dataset: &RdfDataset) -> String {
-        try_canonicalize(dataset)
-            .expect("fixture datasets canonicalize")
-            .nquads
+        try_canonicalize(
+            dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture datasets canonicalize")
+        .nquads
     }
 
     // ── Round trip ──────────────────────────────────────────────────────────────

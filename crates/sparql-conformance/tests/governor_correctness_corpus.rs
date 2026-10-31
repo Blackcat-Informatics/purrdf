@@ -110,7 +110,15 @@ fn render(result: &SparqlResult) -> String {
         SparqlResult::Graph(graph) => {
             format!(
                 "graph\n{}",
-                purrdf_core::try_canonicalize(graph).unwrap().nquads
+                purrdf_core::try_canonicalize(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads
             )
         }
         SparqlResult::Solutions {
@@ -125,7 +133,15 @@ fn render(result: &SparqlResult) -> String {
             write!(
                 out,
                 "aux\n{}",
-                purrdf_core::try_canonicalize(aux).unwrap().nquads
+                purrdf_core::try_canonicalize(
+                    aux,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads
             )
             .expect("writing to a String cannot fail");
             out

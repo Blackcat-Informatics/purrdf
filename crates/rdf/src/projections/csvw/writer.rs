@@ -704,7 +704,17 @@ mod tests {
             first.package.to_ustar().expect("archive"),
             second.package.to_ustar().expect("archive")
         );
-        assert!(datasets_isomorphic(&original.dataset, &decoded.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &original.dataset,
+                &decoded.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert!(first.loss_ledger.is_empty());
         assert_eq!(
             first.package.get("tables/data.csv"),

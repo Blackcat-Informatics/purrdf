@@ -39,8 +39,12 @@ use crate::vocab::SliceVocab;
 /// Returns [`SliceError`] on any missing/unparsable required source (no degraded
 /// fallback): a `<vocab>TermEquivalence` cell with no `<vocab>sssomFile` is a
 /// hard error, matching the DSL equivalence-cell contract.
-pub fn emit_dsl_stats(root: &Path, vocab: &SliceVocab) -> Result<String, SliceError> {
-    let store = collect_dsl_store(root, vocab)?;
+pub fn emit_dsl_stats(
+    root: &Path,
+    vocab: &SliceVocab,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, SliceError> {
+    let store = collect_dsl_store(root, vocab, control)?;
     let sssom_file_iri = vocab.sssom_file();
 
     // cells_by_set + equivalences: every <vocab>TermEquivalence keyed by sssomFile.

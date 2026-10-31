@@ -1166,15 +1166,35 @@ fn construct_answer_cap_counts_rdf12_statements_not_solution_rows() {
 /// report are byte-identical to the text source's.
 #[test]
 fn a_governed_query_over_a_pack_trips_identically() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let pack = write_file(dir, "data.purrpck", "");
-    let build = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let build = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&build), 0, "stderr:\n{}", stderr(&build));
 
-    let capped = |data: &str| {
-        run(&[
+    let capped = |data: &str, canonical_search: Option<&str>| {
+        let mut arguments = vec![
             "query",
             "--data",
             data,
@@ -1183,10 +1203,21 @@ fn a_governed_query_over_a_pack_trips_identically() {
             "--max-answers",
             "2",
             KNOWS,
-        ])
+        ];
+        if let Some(policy) = canonical_search {
+            arguments.extend([
+                "--canonical-search",
+                policy,
+                "--canonicalization-receipts",
+                canonical_conditional_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
+            ]);
+        }
+        run(&arguments)
     };
-    let text = capped(&ttl);
-    let packed = capped(&pack);
+    let text = capped(&ttl, None);
+    let packed = capped(&pack, Some("unlimited"));
     assert_eq!(code(&text), 3, "stderr:\n{}", stderr(&text));
     assert_eq!(code(&packed), 3, "stderr:\n{}", stderr(&packed));
     assert_eq!(text.stdout, packed.stdout, "the certified rows must match");

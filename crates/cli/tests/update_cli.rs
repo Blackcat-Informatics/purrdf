@@ -13,12 +13,32 @@ const INSERT: &str =
 /// advances across the request's operations instead of restarting each WHERE.
 #[test]
 fn supplied_update_coordinates_replay_across_operations_and_routes() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     use support::{code, pipe, stderr, stdout, write_file};
     let dir = purrdf_testkit::temp_dir!().unwrap();
     let text = "<http://example.org/old> <http://example.org/p> <http://example.org/value> .";
     let input = write_file(dir.path(), "coordinates.ttl", text);
     let pack = write_file(dir.path(), "coordinates.purrpck", "");
-    let built = run(&["convert", "--from", "turtle", "--to", "pack", &input, &pack]);
+    let built = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &input,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&built), 0, "{}", stderr(&built));
     let update = ["a", "b"]
         .map(|subject| {
@@ -33,8 +53,22 @@ fn supplied_update_coordinates_replay_across_operations_and_routes() {
         .join("; ");
     let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
     let other = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
-    let answer = |source: &str, now: Option<&str>, seed: Option<&str>, lane: &[&str]| {
+    let answer = |source: &str,
+                  now: Option<&str>,
+                  seed: Option<&str>,
+                  lane: &[&str],
+                  canonical_search: Option<&str>| {
         let mut args = vec!["update", "--data", source, "--to", "ntriples"];
+        if let Some(policy) = canonical_search {
+            args.extend([
+                "--canonical-search",
+                policy,
+                "--canonicalization-receipts",
+                canonical_conditional_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
+            ]);
+        }
         if source == "-" {
             args.extend(["--from", "turtle"]);
         }
@@ -68,27 +102,34 @@ fn supplied_update_coordinates_replay_across_operations_and_routes() {
         }
         cells
     };
-    let first = answer(&input, Some(time), Some("0"), &[]);
+    let first = answer(&input, Some(time), Some("0"), &[], None);
     assert!(first[0].contains(time));
     assert_eq!(first[0], first[4]);
     for index in 1..4 {
         assert_ne!(first[index], first[index + 4]);
     }
-    for source in [&input[..], &pack[..], "-"] {
+    for (source, canonical_search) in [
+        (&input[..], None),
+        (&pack[..], Some("unlimited")),
+        ("-", None),
+    ] {
         for lane in [
             &[][..],
             &["--fuel", "1000000"][..],
             &["--no-ceiling"][..],
             &["--xpath-regex", "xpath-3.1-2017-03-21"][..],
         ] {
-            assert_eq!(answer(source, Some(time), Some("0"), lane), first);
+            assert_eq!(
+                answer(source, Some(time), Some("0"), lane, canonical_search),
+                first
+            );
         }
     }
-    let later = answer(&input, Some(other), Some("0"), &[]);
-    let seeded = answer(&input, Some(time), Some("1"), &[]);
-    let time_only = answer(&input, Some(time), None, &[]);
-    let seed_only = answer(&input, None, Some("0"), &[]);
-    assert_eq!(answer(&input, None, None, &[]).len(), 8);
+    let later = answer(&input, Some(other), Some("0"), &[], None);
+    let seeded = answer(&input, Some(time), Some("1"), &[], None);
+    let time_only = answer(&input, Some(time), None, &[], None);
+    let seed_only = answer(&input, None, Some("0"), &[], None);
+    assert_eq!(answer(&input, None, None, &[], None).len(), 8);
     for index in 0..8 {
         if index % 4 == 0 {
             assert!(later[index].contains(other));

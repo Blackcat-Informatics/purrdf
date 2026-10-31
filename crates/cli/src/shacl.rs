@@ -139,6 +139,10 @@ use crate::{sink, source};
 /// closure; [`CliError::Runtime`] when a document cannot be read, is not UTF-8, does not
 /// parse, an `owl:imports` is unresolved, or the shapes graph declares a capability the
 /// product format cannot carry.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "existing command inputs plus explicit canonical request"
+)]
 pub(crate) fn pack(
     shapes: &str,
     shapes_format: SourceFormat,
@@ -147,6 +151,7 @@ pub(crate) fn pack(
     shapes_graph: Option<&str>,
     box_role_vocab: Option<&str>,
     out: &str,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let effective_base = source::effective_base(shapes, NativeRdfFormat::Turtle, base)?;
     if effective_base.is_none() {
@@ -173,8 +178,9 @@ pub(crate) fn pack(
         shapes_format,
         effective_base.as_deref(),
         "--shapes",
+        canonical,
     )?;
-    let table = crate::shapes_source::shapes_imports(&root, imports)?;
+    let table = crate::shapes_source::shapes_imports(&root, imports, canonical)?;
 
     let product = purrdf_validate::pack_shapes_product_from_dataset(
         &root.dataset,
@@ -183,21 +189,26 @@ pub(crate) fn pack(
         shapes_graph,
         box_role_vocab,
         &table,
+        canonical.control()?,
     )
-    .map_err(|refusal| match refusal {
-        purrdf_validate::ShapesProductRefusal::Shapes(error) => crate::shapes_source::shapes_error(
-            error,
-            &format!("--shapes {shapes}"),
-            &root,
-            "--base",
-        ),
-        refusal @ purrdf_validate::ShapesProductRefusal::Admission(_) => {
-            refusal_error(&format!("--shapes {shapes}"), &refusal)
-        }
+    .map_err(|refusal| {
+        crate::canonical::map_error(refusal, |refusal| match refusal {
+            purrdf_validate::ShapesProductRefusal::Shapes(error) => {
+                crate::shapes_source::shapes_error(
+                    error,
+                    &format!("--shapes {shapes}"),
+                    &root,
+                    "--base",
+                )
+            }
+            refusal @ purrdf_validate::ShapesProductRefusal::Admission(_) => {
+                refusal_error(&format!("--shapes {shapes}"), &refusal)
+            }
+        })
     })?;
 
     let written = product.len();
-    sink::write_out(out, &product)?;
+    sink::write_out_with_request(out, &product, canonical)?;
     // The receipt AFTER the artifact, so a `> file` redirect has the product on disk by
     // the time the operator reads the line describing it — the same ordering `validate`
     // uses for its verdict.
@@ -217,10 +228,14 @@ pub(crate) fn pack(
 /// [`CliError::Runtime`] naming the refused `ProductDimension` when the product is not
 /// a well-formed product of this format, or when its shapes dataset does not canonicalize
 /// to the digest its binding claims.
-pub(crate) fn verify(product: &str) -> Result<(), CliError> {
+pub(crate) fn verify(
+    product: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     let owner = source::acquire_product_input(product)?;
-    purrdf_validate::certify_shapes_product(owner.as_bytes())
-        .map_err(|error| admission_error(product, &error))?;
+    purrdf_validate::certify_shapes_product(owner.as_bytes(), canonical.control()?).map_err(
+        |error| crate::canonical::map_error(error, |error| admission_error(product, &error)),
+    )?;
     // `explain` already renders the identity digest; reading it back from the same
     // rendering is what keeps the two verbs from reporting two independently-derived
     // answers about one product.
@@ -228,6 +243,7 @@ pub(crate) fn verify(product: &str) -> Result<(), CliError> {
         .map_err(|error| admission_error(product, &error))?;
     for line in explained.lines() {
         if let Some(digest) = line.strip_prefix("identity-digest ") {
+            canonical.before_output()?;
             println!("{digest}");
             return Ok(());
         }
@@ -251,11 +267,14 @@ pub(crate) fn verify(product: &str) -> Result<(), CliError> {
 ///
 /// [`CliError::Runtime`] naming the refused dimension when the bytes are not a
 /// well-formed product of this format.
-pub(crate) fn explain(product: &str) -> Result<(), CliError> {
+pub(crate) fn explain(
+    product: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     let owner = source::acquire_product_input(product)?;
     let explained = purrdf_validate::explain_shapes_product(owner.as_bytes())
         .map_err(|error| admission_error(product, &error))?;
-    sink::write_out("-", explained.as_bytes())
+    sink::write_out_with_request("-", explained.as_bytes(), canonical)
 }
 
 /// Run `shacl diff`: open the products at `a` and `b` and print every identity component
@@ -280,7 +299,11 @@ pub(crate) fn explain(product: &str) -> Result<(), CliError> {
 /// [`CliError::Runtime`] naming the refused dimension when either side is not a
 /// well-formed product of this format, or — when both open cleanly — naming how many
 /// identity components differ.
-pub(crate) fn diff(a: &str, b: &str) -> Result<(), CliError> {
+pub(crate) fn diff(
+    a: &str,
+    b: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     if a == "-" && b == "-" {
         return Err(CliError::Usage(
             "A and B both read standard input, and there is only one: a process has a single \
@@ -293,7 +316,7 @@ pub(crate) fn diff(a: &str, b: &str) -> Result<(), CliError> {
     let owner_b = source::acquire_product_input(b)?;
     let diff = purrdf_validate::diff_shapes_products(owner_a.as_bytes(), owner_b.as_bytes())
         .map_err(|error| admission_error(&format!("{a} {b}"), &error))?;
-    sink::write_out("-", diff.to_string().as_bytes())?;
+    sink::write_out_with_request("-", diff.to_string().as_bytes(), canonical)?;
     if diff.identical() {
         return Ok(());
     }

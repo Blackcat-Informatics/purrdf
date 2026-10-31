@@ -164,7 +164,11 @@ fn rdf_12_dataset() -> Arc<RdfDataset> {
 
 /// Report `open`, `materialize` and the whole `restore_pack` over one fixture.
 fn probe(label: &str, dataset: &Arc<RdfDataset>) {
-    let bytes = PackBuilder::build_bytes(dataset.as_ref()).expect("the fixture packs");
+    let bytes = PackBuilder::build_bytes(
+        dataset.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture packs");
     println!(
         "[pack_restore_alloc] {label}: pack_bytes={} quads={} terms={}",
         bytes.len(),

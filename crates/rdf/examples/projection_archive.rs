@@ -35,7 +35,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let projected = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
     fs::write(&output, &projected.archive)?;
     let lifted = lift_archive(&projected.archive, LiftProfile::LpgCsv, &config)?;
-    if !datasets_isomorphic(&dataset, &lifted.dataset)? {
+    if !datasets_isomorphic(
+        &dataset,
+        &lifted.dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )? {
         return Err("projection round trip changed the RDF dataset".into());
     }
 

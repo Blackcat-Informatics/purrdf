@@ -173,6 +173,10 @@ fn benches(c: &mut Bench) {
         purrdf_core::datasets_isomorphic(
             &scoped_blanks(16, BlankScope::DEFAULT),
             &scoped_blanks(16, BlankScope(17)),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ),
         )
         .unwrap()
     );
@@ -715,7 +719,11 @@ fn run_pack_flat(shape: &PackShape) -> Observation {
         .composite
         .materialize()
         .expect("the composed shape materializes");
-    let bytes = PackBuilder::build_bytes(&frozen).expect("the frozen dataset packs");
+    let bytes = PackBuilder::build_bytes(
+        &frozen,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the frozen dataset packs");
     let after = shape.composite.stats().work;
     black_box(bytes.len());
     let retained = frozen.rdf_payload_bytes();
@@ -741,7 +749,11 @@ fn run_pack_view(view: &CompositeDatasetView, owners: &[DatasetHandle]) -> Obser
         .map(|owner| ledger.retain_dataset_handle(owner))
         .collect::<Vec<_>>();
     let before = view.stats().work;
-    let bytes = PackBuilder::build_view_bytes(view).expect("the view packs without materializing");
+    let bytes = PackBuilder::build_view_bytes(
+        view,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the view packs without materializing");
     let after = view.stats().work;
     black_box(bytes.len());
     let observed = from_report_with_work_delta(&ledger.report(&view.stats()), before, after);
@@ -767,15 +779,36 @@ fn pack_output(c: &mut Bench) {
             .composite
             .materialize()
             .expect("the composed shape materializes");
-        let flat = PackBuilder::build_bytes(&frozen).expect("the frozen dataset packs");
+        let flat = PackBuilder::build_bytes(
+            &frozen,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the frozen dataset packs");
         assert_eq!(
-            PackBuilder::build_view_bytes(shape.composite.as_ref()).expect("the composite packs"),
+            PackBuilder::build_view_bytes(
+                shape.composite.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("the composite packs"),
             flat,
             "{}: view and flat pack bytes must be byte-identical",
             shape.name
         );
         assert_eq!(
-            PackBuilder::build_view_bytes(&shape.delta).expect("the delta composite packs"),
+            PackBuilder::build_view_bytes(
+                &shape.delta,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("the delta composite packs"),
             flat,
             "{}: delta and flat pack bytes must be byte-identical",
             shape.name
@@ -786,10 +819,22 @@ fn pack_output(c: &mut Bench) {
             .selection
             .materialize()
             .expect("the selection materializes");
-        let selected_flat =
-            PackBuilder::build_bytes(&selected_frozen).expect("the selected dataset packs");
-        let selected =
-            PackBuilder::build_view_bytes(&shape.selection).expect("the selection packs");
+        let selected_flat = PackBuilder::build_bytes(
+            &selected_frozen,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the selected dataset packs");
+        let selected = PackBuilder::build_view_bytes(
+            &shape.selection,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the selection packs");
         assert_eq!(
             selected, selected_flat,
             "{}: selection and flat pack bytes must be byte-identical",

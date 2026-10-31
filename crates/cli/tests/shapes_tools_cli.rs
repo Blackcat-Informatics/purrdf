@@ -1160,6 +1160,9 @@ const PERSON: &str = "<http://example.org/alice> \
 /// expression reads its scope, the lint certifies, and the product carries the shape.
 #[test]
 fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "importer.ttl", IMPORTER);
     let lib = write_file(dir.path(), "lib.ttl", IMPORTED);
@@ -1203,7 +1206,20 @@ fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
         run(&args)
     };
     let pack = |import: Option<&str>| {
-        let mut args = vec!["shacl", "pack", "--shapes", &shapes, "--out", &product];
+        let mut args = vec![
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--out",
+            &product,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ];
         args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
         run(&args)
     };

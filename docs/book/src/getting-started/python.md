@@ -59,7 +59,9 @@ from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
 closure, report = entail.materialize(dataset, "rdfs", "", [], [])
-print(closure.to_nquads())
+canonical = closure.to_nquads(canonical_search="unlimited")
+print(canonical.value)
+print(canonical.canonicalization_json)
 print(report)          # what fired, what did not, boundaries, budget, contract hash
 ```
 
@@ -67,9 +69,16 @@ The report is the second return value and is never optional — the same
 discipline the Rust, WebAssembly, and C surfaces enforce. The two `[]` arguments are
 the dataset's `owl:imports` table — `(ontology_iri, nquads)` pairs — and the IRIs it was
 read from: a dataset that imports a document is closed over the merge, and an import the
-table does not resolve raises `ValueError` naming it. `entail.materialize_nt(text, regime,
-program, imports, premise_iris)` is the text-in/text-out twin for callers holding an
-N-Triples/N-Quads document.
+table does not resolve raises `ValueError` naming it.
+
+`entail.materialize_nt(text, regime, program, imports, premise_iris,
+canonical_search="unlimited")` is the text-in/text-out twin for callers holding an
+N-Triples/N-Quads document. Its `CanonicalResult.value` contains the canonical
+closure text and report tuple. Canonicalizing calls require `canonical_search`: use
+`"unlimited"` or a canonical unsigned decimal `u64` string for a finite per-run
+search limit. They accept an optional `cancel` token and return immutable receipt
+JSON in `canonicalization_json`. The in-memory `entail.materialize` call does not
+canonicalize and takes no search policy.
 
 Coverage is measurable rather than asserted: `entail.rules(regime)` is the rule
 table the specification defines the regime by, and

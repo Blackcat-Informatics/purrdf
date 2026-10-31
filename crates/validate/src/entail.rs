@@ -97,8 +97,16 @@ pub struct EntailOutcome {
 ///
 /// Everything [`entail_to_ntriples_string_with_shapes_graph`] refuses, and
 /// [`ShapesError::Invalid`] naming the host's knob for a passed rule-evaluation limit.
-pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, ShapesError> {
-    entail_with(request, CoordinateInputs::default(), run_rules_with_options)
+pub fn entail_to_ntriples(
+    request: &EntailRequest<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<EntailOutcome, ShapesError> {
+    entail_with(
+        request,
+        CoordinateInputs::default(),
+        run_rules_with_options,
+        control,
+    )
 }
 
 /// [`entail_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the
@@ -115,8 +123,9 @@ pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, 
 pub fn entail_to_ntriples_with_xpath_regex(
     request: &EntailRequest<'_>,
     xpath_regex: Option<Profile>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<EntailOutcome, XPathValidationError> {
-    entail_to_ntriples_with_coordinates(request, xpath_regex, CoordinateInputs::default())
+    entail_to_ntriples_with_coordinates(request, xpath_regex, CoordinateInputs::default(), control)
 }
 
 /// Execute with owned exact coordinates and an optional dated XPath law.
@@ -129,10 +138,14 @@ pub fn entail_to_ntriples_with_coordinates(
     request: &EntailRequest<'_>,
     xpath_regex: Option<Profile>,
     coordinates: CoordinateInputs,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<EntailOutcome, XPathValidationError> {
-    entail_with(request, coordinates, |source, data, options| {
-        run_configured_rules(source, data, options, xpath_regex)
-    })
+    entail_with(
+        request,
+        coordinates,
+        |source, data, options| run_configured_rules(source, data, options, xpath_regex),
+        control,
+    )
 }
 
 /// The one entailment body under either law: `run` is the rules dispatch it runs.
@@ -144,6 +157,7 @@ fn entail_with<E: From<ShapesError>>(
         &purrdf_core::RdfDataset,
         &RuleOptions,
     ) -> Result<purrdf_shapes::Inference, E>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<EntailOutcome, E> {
     let data = parse_ntriples_to_dataset(request.data_nt)
         .map_err(|errors| ShapesError::from(errors.join("\n")))?;
@@ -164,7 +178,7 @@ fn entail_with<E: From<ShapesError>>(
     let inference = run(RuleSource::Shapes(&shapes), data.as_ref(), &options)?;
     Ok(EntailOutcome {
         coordinates: inference.coordinates().clone(),
-        ntriples: canonical_ntriples(inference.dataset())?,
+        ntriples: canonical_ntriples(inference.dataset(), control)?,
         diagnostics: shapes.mandatory_diagnostics().to_vec(),
     })
 }
@@ -233,8 +247,16 @@ pub fn entail_to_ntriples_string(
     shapes_base: Option<&str>,
     data_nt: &str,
     imports: &ShapesImportList<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<String, ShapesError> {
-    entail_to_ntriples_string_with_shapes_graph(shapes_ttl, shapes_base, None, data_nt, imports)
+    entail_to_ntriples_string_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        None,
+        data_nt,
+        imports,
+        control,
+    )
 }
 
 /// [`entail_to_ntriples_string`] with the shapes-graph IRI the SHACL-SPARQL rules see the
@@ -256,35 +278,41 @@ pub fn entail_to_ntriples_string_with_shapes_graph(
     shapes_graph: Option<&str>,
     data_nt: &str,
     imports: &ShapesImportList<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<String, ShapesError> {
-    entail_to_ntriples(&EntailRequest {
-        shapes_ttl,
-        shapes_base,
-        shapes_graph,
-        data_nt,
-        imports,
-        max_term_generating_rounds: None,
-        max_generated_terms: None,
-        max_stored_facts: None,
-        max_join_steps: None,
-        host: RulesHost::Rust,
-    })
+    entail_to_ntriples(
+        &EntailRequest {
+            shapes_ttl,
+            shapes_base,
+            shapes_graph,
+            data_nt,
+            imports,
+            max_term_generating_rounds: None,
+            max_generated_terms: None,
+            max_stored_facts: None,
+            max_join_steps: None,
+            host: RulesHost::Rust,
+        },
+        control,
+    )
     .map(|outcome| outcome.ntriples)
 }
 
 /// The materialized dataset as canonical N-Triples.
-fn canonical_ntriples(dataset: &purrdf_core::RdfDataset) -> Result<String, ShapesError> {
+fn canonical_ntriples(
+    dataset: &purrdf_core::RdfDataset,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, ShapesError> {
     // The materialized dataset is wholly caller-supplied (both `data_nt` and
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
     // reserved-vocabulary or budget-exhausting document must come back as an `Err`
     // value, not abort the process.
-    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256) {
+    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256, control)
+    {
         Ok(canonicalized) => Ok(canonicalized.nquads),
-        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Invalid(format!(
-            "SHACL-AF entailment: the materialized dataset was refused canonicalization: {err}"
-        ))),
+        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Canonical(err)),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
             // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — the
             // frozen dataset never faults, so this arm is unreachable by construction
@@ -346,7 +374,11 @@ mod tests {
 
     #[test]
     fn entail_materializes_the_inferred_triple() {
-        let nt = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        let nt = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
+            .expect("entailment produced");
         // The inferred head triple appears.
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> \
@@ -372,19 +404,26 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     const COUNTER_DATA: &str = "<http://example.org/ns#a> <http://example.org/ns#n> \
         \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
 
-    fn counter(limits: RuleLimits, host: RulesHost) -> Result<EntailOutcome, ShapesError> {
-        entail_to_ntriples(&EntailRequest {
-            shapes_ttl: COUNTER_SHAPES,
-            shapes_base: None,
-            shapes_graph: None,
-            data_nt: COUNTER_DATA,
-            imports: &[],
-            max_term_generating_rounds: limits.max_term_generating_rounds,
-            max_generated_terms: limits.max_generated_terms,
-            max_stored_facts: limits.max_stored_facts,
-            max_join_steps: limits.max_join_steps,
-            host,
-        })
+    fn counter(
+        limits: RuleLimits,
+        host: RulesHost,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<EntailOutcome, ShapesError> {
+        entail_to_ntriples(
+            &EntailRequest {
+                shapes_ttl: COUNTER_SHAPES,
+                shapes_base: None,
+                shapes_graph: None,
+                data_nt: COUNTER_DATA,
+                imports: &[],
+                max_term_generating_rounds: limits.max_term_generating_rounds,
+                max_generated_terms: limits.max_generated_terms,
+                max_stored_facts: limits.max_stored_facts,
+                max_join_steps: limits.max_join_steps,
+                host,
+            },
+            control,
+        )
     }
 
     /// Every one of the four limits bounds an entailment run exactly as it bounds a rules
@@ -393,6 +432,9 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     /// closure, so the refusal is the limit's, not the rule set's.
     #[test]
     fn entail_is_bounded_by_the_four_limits_named_in_each_hosts_terms() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let one = |pick: usize| {
             let mut limits = RuleLimits::default();
             match pick {
@@ -423,13 +465,14 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 knobs.join_steps(),
             ];
             for (pick, knob) in names.iter().enumerate() {
-                let refused = counter(one(pick), host)
+                let refused = counter(one(pick), host, &mut control)
                     .expect_err("a limit of one refuses the counter")
                     .to_string();
                 assert!(refused.ends_with(knob), "{host:?} {pick}: {refused}");
                 assert!(!refused.contains("RuleOptions::"), "{refused}");
             }
-            let closed = counter(raised, host).expect("raised limits admit the counter");
+            let closed =
+                counter(raised, host, &mut control).expect("raised limits admit the counter");
             assert!(
                 closed.ntriples.contains(
                     "<http://example.org/ns#a> <http://example.org/ns#n> \
@@ -440,24 +483,34 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             );
         }
         assert_eq!(
-            counter(RuleLimits::default(), RulesHost::Rust)
+            counter(RuleLimits::default(), RulesHost::Rust, &mut control)
                 .expect("the defaults admit it")
                 .ntriples,
-            entail_to_ntriples_string(COUNTER_SHAPES, None, COUNTER_DATA, &[])
+            entail_to_ntriples_string(COUNTER_SHAPES, None, COUNTER_DATA, &[], &mut control)
                 .expect("the unbounded-by-default form"),
         );
     }
 
     #[test]
     fn entail_is_deterministic() {
-        let a = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
-        let b = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        let a = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
+            .expect("entailment produced");
+        let b = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
+            .expect("entailment produced");
         assert_eq!(a, b, "entailment serialization must be byte-stable");
     }
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_string("@@@ not turtle", None, DATA, &[]).is_err());
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        assert!(
+            entail_to_ntriples_string("@@@ not turtle", None, DATA, &[], &mut control).is_err()
+        );
     }
 
     /// Both `shapes_ttl` and `data_nt` are wholly caller-supplied (they cross the
@@ -468,9 +521,12 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     /// wrapper closes.
     #[test]
     fn entail_refuses_a_reserved_vocabulary_dataset_as_a_value_not_a_panic() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data, &[])
+        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control)
             .expect_err(
                 "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
              as a value, not panic",
@@ -484,9 +540,12 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     /// refusal above is not an over-refusal of ordinary documents.
     #[test]
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_entails() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <http://example.org/bad> .\n";
-        let nt = entail_to_ntriples_string(SHAPES, None, data, &[])
+        let nt = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control)
             .expect("an ordinary dataset must still entail");
         assert!(nt.contains("http://example.org/bad"));
     }
@@ -502,11 +561,15 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     /// a later refactor of either spelling has to keep satisfying.
     #[test]
     fn the_python_binding_repoint_is_byte_identical() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let produced = entail_to_ntriples_string(
             PYTHON_BINDING_GOLDEN_SHAPES,
             None,
             PYTHON_BINDING_GOLDEN_DATA,
             &[],
+            &mut control,
         )
         .expect("entailment produced");
         assert_eq!(produced, PYTHON_BINDING_GOLDEN);

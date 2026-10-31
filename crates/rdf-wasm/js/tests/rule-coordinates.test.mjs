@@ -30,12 +30,12 @@ const routes = [
   [shaclApplyRules, raw.shaclApplyRules, shaclApplyRulesAsync, "applyRules", "takeShaclRulesInference", apply(undefined, SRL)],
 ];
 function value(result) {
-  try { const receipt = JSON.parse(result.executionReceiptJson); assert.ok(Array.isArray(receipt.executions)); return { text: result.ntriples ?? result.inferred, diagnostics: result.diagnostics, proof: result.proof }; }
+  try { const receipt = JSON.parse(result.executionReceiptJson); assert.ok(Array.isArray(receipt.executions) && (result.ntriples === undefined || Array.isArray(JSON.parse(result.canonicalizationJson)))); return { text: result.ntriples ?? result.inferred, diagnostics: result.diagnostics, proof: result.proof }; }
   finally { result.free(); }
 }
 function begin(route, controls) {
   const options = raw.AsyncJobOptions.fromJs(raw.AsyncOperationKind.Shacl, controls, undefined, false, undefined);
-  try { return raw.AsyncJob.beginShacl(options, raw.ShaclJobRequest[route[3]](...route[5])); }
+  try { return raw.AsyncJob.beginShacl(options, raw.ShaclJobRequest[route[3]](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []))); }
   finally { options.free(); }
 }
 async function low(route, controls) {
@@ -45,15 +45,15 @@ async function low(route, controls) {
 }
 
 test("rule coordinates cross synchronous async and low-level positional routes", async () => {
-  assert.equal(raw.ShaclJobRequest.entail.length, 10);
+  assert.equal(raw.ShaclJobRequest.entail.length, 11);
   assert.equal(raw.ShaclJobRequest.applyRules.length, 13);
   for (const route of routes) for (const xpathRegex of [undefined, "xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21"]) {
     for (const entropySeed of [0n, 18446744073709551615n]) {
       const controls = { now: NOW, entropySeed, xpathRegex };
-      const expected = value(route[0](...route[5], xpathRegex, NOW, entropySeed));
+      const expected = value(route[0](...route[5], xpathRegex, NOW, entropySeed, ...(route[3] === "entail" ? ["unlimited"] : [])));
       assert.ok(expected.text.includes(NOW));
-      assert.deepEqual(value(route[1](...route[5], xpathRegex, NOW, entropySeed)), expected);
-      assert.deepEqual(value(await route[2](...route[5], controls)), expected);
+      assert.deepEqual(value(route[1](...route[5], xpathRegex, NOW, entropySeed, ...(route[3] === "entail" ? ["unlimited"] : []))), expected);
+      assert.deepEqual(value(await route[2](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []), controls)), expected);
       assert.deepEqual(await low(route, controls), expected);
     }
   }
@@ -64,10 +64,10 @@ test("rule host coordinate refusals precede document parsing and preserve reuse"
     const invalid = [...route[5]];
     invalid[0] = "invalid document";
     for (const controls of [{ now: 7 }, { now: "not a date" }, { entropySeed: -1n }, { entropySeed: 18446744073709551616n }, { entropySeed: Number.MAX_SAFE_INTEGER + 1 }, { entropySeed: "7" }]) {
-      assert.throws(() => route[0](...invalid, undefined, controls.now, controls.entropySeed), /now|entropySeed/);
-      await assert.rejects(route[2](...invalid, controls), /now|entropySeed/);
+      assert.throws(() => route[0](...invalid, undefined, controls.now, controls.entropySeed, ...(route[3] === "entail" ? ["unlimited"] : [])), /now|entropySeed/);
+      await assert.rejects(route[2](...invalid, ...(route[3] === "entail" ? ["unlimited"] : []), controls), /now|entropySeed/);
     }
-    assert.ok(value(await route[2](...route[5], { now: NOW, entropySeed: 0 })).text.includes(NOW));
+    assert.ok(value(await route[2](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []), { now: NOW, entropySeed: 0 })).text.includes(NOW));
   }
   for (const request of [
     () => raw.ShaclJobRequest.validateToSarif("", ""),
@@ -83,7 +83,7 @@ test("rule host coordinate refusals precede document parsing and preserve reuse"
 test("rule coordinate owners survive actual JSPI yields and interleaving", async () => {
   for (const route of routes) {
     const controls = { now: NOW, entropySeed: 0n, yieldEveryPolls: 0 };
-    const expected = value(route[0](...route[5], undefined, NOW, 0n));
+    const expected = value(route[0](...route[5], undefined, NOW, 0n, ...(route[3] === "entail" ? ["unlimited"] : [])));
     const job = begin(route, controls);
     controls.now = "2000-01-01T00:00:00Z";
     controls.entropySeed = 99n;
@@ -92,7 +92,7 @@ test("rule coordinate owners survive actual JSPI yields and interleaving", async
     try {
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal(settled, false, "the first job is suspended when the other job starts");
-      const other = value(await route[2](...route[5], controls));
+      const other = value(await route[2](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []), controls));
       assert.ok(other.text.includes(controls.now));
       assert.notEqual(other.text, expected.text);
       assert.equal(await pending, raw.RunStatus.Outcome);
@@ -113,8 +113,8 @@ test("rule omitted coordinates retain independent host defaults", async () => {
   try {
     for (const route of routes) for (const asynchronous of [false, true]) {
       const run = async (now, entropySeed) => value(asynchronous
-        ? await route[2](...route[5], { now, entropySeed })
-        : route[0](...route[5], undefined, now, entropySeed));
+        ? await route[2](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []), { now, entropySeed })
+        : route[0](...route[5], undefined, now, entropySeed, ...(route[3] === "entail" ? ["unlimited"] : [])));
       draws = 0;
       assert.ok((await run(NOW, 0n)).text.includes(NOW));
       assert.equal(draws, 0);
@@ -135,8 +135,8 @@ test("rule supplied coordinates preserve signal cancellation and subsequent reus
     const reason = new Error("stop rule execution");
     const timer = setTimeout(() => controller.abort(reason), 0);
     try {
-      await assert.rejects(route[2](...route[5], { now: NOW, entropySeed: 0n, signal: controller.signal, yieldEveryPolls: 0 }), (error) => error.cause === reason);
+      await assert.rejects(route[2](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []), { now: NOW, entropySeed: 0n, signal: controller.signal, yieldEveryPolls: 0 }), (error) => error.cause === reason);
     } finally { clearTimeout(timer); }
-    assert.ok(value(await route[2](...route[5], { now: NOW, entropySeed: 0n })).text.includes(NOW));
+    assert.ok(value(await route[2](...route[5], ...(route[3] === "entail" ? ["unlimited"] : []), { now: NOW, entropySeed: 0n })).text.includes(NOW));
   }
 });

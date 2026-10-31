@@ -316,7 +316,11 @@ fn build_fixture() -> Arc<RdfDataset> {
 #[test]
 fn quads_set_equal_source() {
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     assert_eq!(
@@ -331,7 +335,11 @@ fn quads_set_equal_source() {
 #[test]
 fn pattern_shapes_set_equal_source_including_predicate_that_is_also_subject() {
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     let alice = iri("alice");
@@ -426,7 +434,11 @@ fn pattern_shapes_set_equal_source_including_predicate_that_is_also_subject() {
 #[test]
 fn resolve_and_quad_refs_match_source() {
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     // `resolve` parity: every value the source view can resolve is reachable and
@@ -519,7 +531,11 @@ fn resolve_and_quad_refs_match_source() {
 #[test]
 fn side_table_views_set_equal_source() {
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     assert_eq!(
@@ -552,7 +568,11 @@ fn side_table_views_set_equal_source() {
 #[test]
 fn collection_members_match_source() {
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     let single_members = walk_members(&*single, &iri("c1"), &GraphSpec::Default);
@@ -593,7 +613,11 @@ fn collection_members_match_source() {
 #[test]
 fn term_id_by_value_absent_capabilities_and_term_count() {
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     // Absence is an empty match, never an error.
@@ -656,7 +680,11 @@ fn pack_view_is_dataset_view_send_sync() {
 
     // And a live instance actually behaves as one (not just type-checks).
     let single = build_fixture();
-    let bytes = build_pack_bytes(&single);
+    let bytes = build_pack_bytes(
+        &single,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
     fn use_as_dataset_view<V: DatasetView>(v: &V) -> u64 {
         v.term_count()

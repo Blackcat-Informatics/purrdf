@@ -148,16 +148,16 @@ pub fn build_page(triples: &[Triple]) -> Result<Arc<RdfDataset>, RdfDiagnostic> 
     builder.freeze()
 }
 
-/// The pack bytes of `dataset`: the fixture-to-pack path every pack test builds
-/// its `PackView` from.
+/// The fixture-to-pack path, retaining the original native policy or source failure.
 ///
-/// # Panics
-///
-/// If the dataset does not pack, which a well-formed fixture always does.
-#[must_use]
-pub fn pack_bytes(dataset: &RdfDataset) -> Vec<u8> {
-    crate::PackBuilder::build_bytes(dataset)
-        .expect("pack build must succeed for a well-formed fixture")
+/// # Errors
+/// Returns the actual [`crate::PackError`] without asserting that a well-formed
+/// fixture necessarily fits the caller's selected search policy.
+pub fn pack_bytes(
+    dataset: &RdfDataset,
+    control: &mut crate::CanonicalizationControl<'_>,
+) -> Result<Vec<u8>, crate::PackError> {
+    crate::PackBuilder::build_bytes(dataset, control)
 }
 
 /// The empty dataset: no quad, no graph — the dataset a query answered entirely by

@@ -8,12 +8,75 @@ use purrdf_core::{BlankScope, GraphMatch, RdfDatasetBuilder, TermValue};
 use purrdf_iri::vocab::{earl, mf, rdf, rs, sh};
 
 fn empty_and_unbound_rows_are_observable() {
-    assert!(bag::compare_solutions(&[], &[vec![]], &[], &[], false).is_err());
-    assert!(bag::compare_solutions(&[], &[vec![], vec![]], &[], &[vec![]], false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &[],
+            &[vec![]],
+            &[],
+            &[],
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        bag::compare_solutions(
+            &[],
+            &[vec![], vec![]],
+            &[],
+            &[vec![]],
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
     let vars = vec!["x".to_owned()];
-    assert!(bag::compare_solutions(&vars, &[vec![None]], &vars, &[], false).is_err());
-    assert!(bag::compare_solutions(&vars, &[vec![]], &vars, &[vec![None]], false).is_err());
-    assert!(bag::canonical_solutions(&["x".into(), "x".into()], &[], false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &vars,
+            &[vec![None]],
+            &vars,
+            &[],
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        bag::compare_solutions(
+            &vars,
+            &[vec![]],
+            &vars,
+            &[vec![None]],
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        bag::canonical_solutions(
+            &["x".into(), "x".into()],
+            &[],
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 fn scope_partition_and_global_row_links_are_observable() {
@@ -38,15 +101,49 @@ fn scope_partition_and_global_row_links_are_observable() {
             scope: BlankScope::DEFAULT,
         })],
     ];
-    bag::compare_solutions(&vars, &expected, &vars, &renamed, false).unwrap();
+    bag::compare_solutions(
+        &vars,
+        &expected,
+        &vars,
+        &renamed,
+        false,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let collapsed = vec![renamed[0].clone(), renamed[0].clone()];
-    assert!(bag::compare_solutions(&vars, &expected, &vars, &collapsed, false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &vars,
+            &expected,
+            &vars,
+            &collapsed,
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
     let vars = vec!["left".into(), "right".into()];
     let a = renamed[0][0].clone();
     let b = renamed[1][0].clone();
     let cycle = vec![vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]];
     let broken = vec![vec![a.clone(), b.clone()], vec![a, b]];
-    assert!(bag::compare_solutions(&vars, &cycle, &vars, &broken, false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &vars,
+            &cycle,
+            &vars,
+            &broken,
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 fn nested_triples_share_the_same_global_bijection() {
@@ -68,7 +165,20 @@ fn nested_triples_share_the_same_global_bijection() {
         }),
         Some(triple),
     ]];
-    assert!(bag::compare_solutions(&vars, &good, &vars, &bad, false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &vars,
+            &good,
+            &vars,
+            &bad,
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 fn header_order_is_metadata_and_row_order_is_explicit() {
@@ -76,19 +186,39 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
     let b = TermValue::Iri("http://example.org/b".into());
     let left = vec![vec![Some(a.clone()), Some(b.clone())]];
     let right = vec![vec![Some(b.clone()), Some(a.clone())]];
-    bag::compare_solutions(
+    (
         &["a".into(), "b".into()],
         &left,
         &["b".into(), "a".into()],
         &right,
         false,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap();
+        .unwrap();
     let sequence = vec![vec![Some(a)], vec![Some(b)]];
     let reversed = vec![sequence[1].clone(), sequence[0].clone()];
-    bag::compare_solutions(&["x".into()], &sequence, &["x".into()], &reversed, false).unwrap();
+    bag::compare_solutions(
+        &["x".into()],
+        &sequence,
+        &["x".into()],
+        &reversed,
+        false,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert!(
-        bag::compare_solutions(&["x".into()], &sequence, &["x".into()], &reversed, true).is_err()
+        bag::compare_solutions(
+            &["x".into()],
+            &sequence,
+            &["x".into()],
+            &reversed,
+            true,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
     );
 }
 
@@ -132,7 +262,12 @@ fn report_only_relabelling_cannot_excuse_a_wrong_source_focus() {
         b.push_quad(result, p, focus, None).unwrap();
         reports.push(b.freeze().unwrap());
     }
-    report::compare_graphs(&reports[0], &reports[1]).unwrap();
+    report::compare_graphs(
+        &reports[0],
+        &reports[1],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let sources = [report::SourceContext {
         dataset: &source,
         domain: "data",
@@ -170,8 +305,23 @@ fn report_only_relabelling_cannot_excuse_a_wrong_source_focus() {
         sources: &sources,
         correspondence: links,
     };
-    report::compare_contextual(ctx(0, &expected), ctx(1, &good)).unwrap();
-    assert!(report::compare_contextual(ctx(0, &expected), ctx(1, &wrong)).is_err());
+    report::compare_contextual(
+        ctx(0, &expected),
+        ctx(1, &good),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    assert!(
+        report::compare_contextual(
+            ctx(0, &expected),
+            ctx(1, &wrong),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 fn expected_rejection_does_not_accept_environmental_failures() {
@@ -314,8 +464,13 @@ fn report_policy_preserves_obligations_and_path_topology() {
         format: report::ReportFormat::Recommendation2017,
         allow_unstated_source_constraint: false,
     };
-    report::compare_with_policy(unlinked_context(&expected), unlinked_context(&good), policy)
-        .unwrap();
+    report::compare_with_policy(
+        unlinked_context(&expected),
+        unlinked_context(&good),
+        policy,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     for replacement in ["sh:resultPath (ex:q ex:p)", "sh:resultPath (ex:p ex:p)"] {
         let bad = parsed_report(&format!(
             "_:report a sh:ValidationReport; sh:conforms false; sh:result _:r . _:r a sh:ValidationResult; sh:focusNode ex:a; sh:sourceShape ex:Shape; sh:sourceConstraint ex:Constraint; sh:sourceConstraintComponent sh:SPARQLConstraintComponent; sh:resultSeverity sh:Violation; {replacement} ."
@@ -324,7 +479,11 @@ fn report_policy_preserves_obligations_and_path_topology() {
             report::compare_with_policy(
                 unlinked_context(&expected),
                 unlinked_context(&bad),
-                policy
+                policy,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             )
             .is_err()
         );
@@ -339,7 +498,11 @@ fn report_policy_preserves_obligations_and_path_topology() {
             report::ReportPolicy {
                 allow_unstated_source_constraint: true,
                 ..policy
-            }
+            },
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .is_err()
     );
@@ -350,7 +513,11 @@ fn report_policy_preserves_obligations_and_path_topology() {
         report::compare_with_policy(
             unlinked_context(&expected),
             unlinked_context(&duplicate),
-            policy
+            policy,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .is_err()
     );
@@ -367,8 +534,13 @@ fn optional_details_are_selected_per_corresponding_result() {
         format: report::ReportFormat::Draft20260918,
         allow_unstated_source_constraint: false,
     };
-    report::compare_with_policy(unlinked_context(&expected), unlinked_context(&good), policy)
-        .unwrap();
+    report::compare_with_policy(
+        unlinked_context(&expected),
+        unlinked_context(&good),
+        policy,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let missing = parsed_report(
         "_:report a sh:ValidationReport; sh:conforms false; sh:result _:a, _:b . _:a a sh:ValidationResult; sh:focusNode ex:a . _:b a sh:ValidationResult; sh:focusNode ex:b; sh:detail _:detail . _:detail a sh:ValidationResult; sh:focusNode ex:c .",
     );
@@ -376,7 +548,11 @@ fn optional_details_are_selected_per_corresponding_result() {
         report::compare_with_policy(
             unlinked_context(&expected),
             unlinked_context(&missing),
-            policy
+            policy,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .is_err()
     );
@@ -431,17 +607,22 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
         sources: &sources,
         correspondence,
     };
-    report::compare_contextual(
+    (
         context(&expected, &expected_links),
         context(&actual, &actual_links),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap();
+        .unwrap();
     let mut wrong = actual_links.clone();
     wrong[1].source_role = report::SourceRole::DataGraph;
     assert!(
         report::compare_contextual(
             context(&expected, &expected_links),
-            context(&actual, &wrong)
+            context(&actual, &wrong),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .is_err()
     );
@@ -458,7 +639,11 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
             report::ReportContext {
                 sources: &separate,
                 ..context(&actual, &actual_links)
-            }
+            },
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .is_err()
     );
@@ -466,7 +651,11 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
     assert!(
         report::compare_contextual(
             context(&expected, &expected_links),
-            context(&actual, &duplicate)
+            context(&actual, &duplicate),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .is_err()
     );
@@ -496,7 +685,20 @@ fn composite_literals_share_direct_and_nested_blank_identity() {
         }),
         Some(literal),
     ]];
-    assert!(bag::compare_solutions(&header, &expected, &header, &different, false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &header,
+            &expected,
+            &header,
+            &different,
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 fn composite_blank_renaming_is_global_across_permuted_rows() {
@@ -520,14 +722,15 @@ fn composite_blank_renaming_is_global_across_permuted_rows() {
     };
     let expected = [row("same", BlankScope(11)), row("same", BlankScope(12))];
     let renamed = [row("second", BlankScope(2)), row("first", BlankScope(2))];
-    bag::compare_solutions(
+    (
         &["direct".into(), "list".into()],
         &expected,
         &["direct".into(), "list".into()],
         &renamed,
         false,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap();
+        .unwrap();
 }
 
 fn source_metadata_and_empty_graph_declarations_are_observable() {
@@ -536,11 +739,26 @@ fn source_metadata_and_empty_graph_declarations_are_observable() {
     let graph = b.intern_blank("empty", BlankScope(4)).unwrap();
     b.declare_named_graph(graph).unwrap();
     let declared = b.freeze().unwrap();
-    assert!(report::compare_graphs(&empty, &declared).is_err());
+    assert!(
+        report::compare_graphs(
+            &empty,
+            &declared,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
     let mut b = RdfDatasetBuilder::new();
     let graph = b.intern_blank("renamed", BlankScope(9)).unwrap();
     b.declare_named_graph(graph).unwrap();
-    report::compare_graphs(&declared, &b.freeze().unwrap()).unwrap();
+    report::compare_graphs(
+        &declared,
+        &b.freeze().unwrap(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let source = report::SourceContext {
         dataset: &empty,
         domain: "source",
@@ -955,17 +1173,46 @@ fn deep_terms_respect_kernel_admission_without_stack_recursion() {
     let variables = ["direct".into(), "quoted".into()];
     let deep = [nested("source", BlankScope(11), 100_000)];
     assert!(matches!(
-        bag::canonical_solutions(&variables, &deep, false),
+        bag::canonical_solutions(
+            &variables,
+            &deep,
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(purrdf_conformance_kit::GradeError::Malformed(_))
     ));
     let expected = [nested("source", BlankScope(11), 16)];
     let mut actual = [nested("renamed", BlankScope(2), 16)];
-    bag::compare_solutions(&variables, &expected, &variables, &actual, false).unwrap();
+    bag::compare_solutions(
+        &variables,
+        &expected,
+        &variables,
+        &actual,
+        false,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     actual[0][0] = Some(TermValue::Blank {
         label: "renamed".into(),
         scope: BlankScope(3),
     });
-    assert!(bag::compare_solutions(&variables, &expected, &variables, &actual, false).is_err());
+    assert!(
+        bag::compare_solutions(
+            &variables,
+            &expected,
+            &variables,
+            &actual,
+            false,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 fn malformed_result_set_bindings_and_partial_indices_are_refused() {
@@ -1214,10 +1461,10 @@ purrdf_testkit::prop_test! {
             TermValue::Blank { scope, .. } => TermValue::Blank { label: format!("renamed{}", scope.ordinal()), scope: BlankScope(offset) },
             value => value.clone(),
         })).collect::<Vec<_>>()).collect();
-        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &renamed, false).is_ok());
+        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &renamed, false, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).is_ok());
         let mut lost = renamed;
         lost.pop();
-        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &lost, false).is_err());
+        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &lost, false, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).is_err());
     }
 }
 

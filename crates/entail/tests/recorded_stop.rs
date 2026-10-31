@@ -87,7 +87,15 @@ fn bounded_schema() -> Arc<RdfDataset> {
 fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
     for inconsistent in [false, true] {
         let dataset = taxonomy(inconsistent);
-        let plain = Reasoner::with_proofs(&dataset).unwrap().consistency();
+        let plain = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .consistency();
         let signal = Arc::new(Signal::after(usize::MAX));
         let mut reasoner =
             Reasoner::with_proofs_and_stop(&dataset, SchemaPreparationBudget::default(), signal)
@@ -118,7 +126,14 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
         assert_eq!(
             purrdf_entail::try_ontology_identity_with_stop(&dataset, &Signal::after(usize::MAX))
                 .unwrap(),
-            purrdf_entail::try_ontology_identity(&dataset).unwrap(),
+            purrdf_entail::try_ontology_identity(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
         );
     }
 }
@@ -155,7 +170,15 @@ fn recorded_stop_retains_the_signal_after_identity() {
 fn recorded_stop_covers_identity_digest_streaming() {
     let dataset = taxonomy(false);
     let counter = Signal::after(usize::MAX);
-    purrdf_core::try_canonicalize_view_with_stop(&*dataset, CanonHash::Sha256, &counter).unwrap();
+    purrdf_core::try_canonicalize_view(
+        &*dataset,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            Some(&counter),
+        ),
+    )
+    .unwrap();
     let canonical_polls = counter.calls.load(Ordering::Relaxed);
     let signal = Signal::after(canonical_polls + 1);
     assert!(matches!(
@@ -199,7 +222,12 @@ fn recorded_stop_preserves_preparation_budget_selection() {
         work: Some(0),
         bytes: None,
     };
-    let plain = Reasoner::with_proofs_and_preparation_budget(&dataset, budget).unwrap();
+    let plain = Reasoner::with_proofs_and_preparation_budget(
+        &dataset,
+        budget,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let controlled =
         Reasoner::with_proofs_and_stop(&dataset, budget, Arc::new(Signal::after(usize::MAX)))
             .unwrap();

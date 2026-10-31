@@ -324,7 +324,10 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
     let reserve = purrdf_stack::reserve(purrdf_stack::remaining());
     let refused = PreparedShapes::new(Arc::clone(&shapes));
     let bound = refused.bind_shared_dataset(Arc::clone(&data)).err();
-    let product = refused.to_product(&ShapesProfile::CORE);
+    let product = refused.to_product(
+        &ShapesProfile::CORE,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let terms = purrdf_shapes::path::eval(data.as_ref(), &focus, &path);
     let ids = purrdf_shapes::path::eval_ids(data.as_ref(), &focus, &path);
     drop(reserve);
@@ -354,7 +357,17 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
         purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
     ));
     // A refused preparation cannot later publish a made-up empty class catalog.
-    assert!(refused.to_product(&ShapesProfile::CORE).is_err());
+    assert!(
+        refused
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .is_err()
+    );
     let fresh = PreparedShapes::new(shapes);
     assert!(
         fresh
@@ -364,7 +377,17 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
             .unwrap()
             .conforms
     );
-    assert!(fresh.to_product(&ShapesProfile::CORE).is_ok());
+    assert!(
+        fresh
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .is_ok()
+    );
     assert_eq!(
         purrdf_shapes::path::eval(data.as_ref(), &focus, &path)
             .unwrap()

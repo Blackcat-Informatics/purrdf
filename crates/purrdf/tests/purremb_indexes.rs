@@ -54,8 +54,11 @@ fn context() -> Context {
 
 fn context_with_metric(metric: DistanceMetric) -> Context {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, source_bytes) =
-        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
     let target = source.dataset_target(true).expect("dataset target");
     let target_set = TargetSet::new(vec![target.id]).expect("target set");
     let contract = EmbeddingFamilyContract {

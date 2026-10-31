@@ -100,7 +100,13 @@ fn bench_product_reuse(c: &mut Bench) {
         b.iter(|| {
             black_box(
                 black_box(&prepared)
-                    .to_product(&ShapesProfile::CORE)
+                    .to_product(
+                        &ShapesProfile::CORE,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
                     .expect("the preparation is representable"),
             )
         });

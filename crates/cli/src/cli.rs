@@ -3,8 +3,8 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline of subcommands ([`Command`]), and three global flags
-//! (`--loss-ledger`, `--jsonld-options`, `--geo-profile`). The format / regime / results-format
+//! One pipeline of subcommands ([`Command`]), with global document, geographic and
+//! explicit canonical-search policy/receipt flags. The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -202,6 +202,17 @@ pub(crate) struct Cli {
     /// The subcommand to run.
     #[command(subcommand)]
     pub(crate) cmd: Command,
+    /// Exact RDFC search policy: unlimited or canonical unsigned decimal u64, with no default.
+    #[arg(long, global = true, requires = "canonicalization_receipts")]
+    pub(crate) canonical_search: Option<String>,
+    /// Required canonical-search evidence destination; '-' writes stderr.
+    #[arg(
+        long,
+        global = true,
+        requires = "canonical_search",
+        value_name = "DEST"
+    )]
+    pub(crate) canonicalization_receipts: Option<PathBuf>,
 
     /// Surface the conversion/projection loss ledger: bare writes it to stderr,
     /// `--loss-ledger=PATH` writes it to PATH.
@@ -2795,5 +2806,323 @@ mod tests {
             refuse(&LedgerTarget::Silent, Some(&options)),
             Err("no JSON-LD here".to_owned())
         );
+    }
+}
+
+impl Cli {
+    /// Known input, import, artifact and report paths, before any canonical operation starts.
+    pub(crate) fn canonical_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        paths.extend(self.jsonld_options.iter().cloned());
+        paths.extend(self.geo_profile.iter().cloned());
+        if let Some(Some(path)) = &self.loss_ledger {
+            paths.push(path.clone());
+        }
+        match &self.cmd {
+            Command::Glob { pattern, .. } => {
+                paths.push(PathBuf::from(pattern));
+            }
+            Command::Geo { input, output, .. } => {
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Convert {
+                inputs,
+                rules,
+                report,
+                imports,
+                input,
+                output,
+                ..
+            } => {
+                paths.extend(inputs.iter().map(PathBuf::from));
+                if let Some(path) = rules {
+                    paths.push(path.clone());
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Query {
+                data,
+                rules,
+                report,
+                imports,
+                query,
+                ..
+            } => {
+                paths.push(PathBuf::from(data));
+                if let Some(path) = rules {
+                    paths.push(path.clone());
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(path) = query.strip_prefix('@') {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            Command::Update {
+                data,
+                output,
+                update,
+                ..
+            } => {
+                paths.push(PathBuf::from(data));
+                paths.push(PathBuf::from(output));
+                if let Some(path) = update.strip_prefix('@') {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            Command::Reason {
+                rules,
+                report,
+                imports,
+                input,
+                output,
+                ..
+            } => {
+                if let Some(path) = rules {
+                    paths.push(path.clone());
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Entails {
+                premise,
+                conclusion,
+                pattern,
+                imports,
+                report,
+                output,
+                ..
+            } => {
+                paths.push(PathBuf::from(premise));
+                if let Some(path) = conclusion {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = pattern {
+                    paths.push(PathBuf::from(path));
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                paths.push(PathBuf::from(output));
+            }
+            Command::Consistency {
+                check_proof,
+                imports,
+                input,
+                ..
+            } => {
+                if let Some(path) = check_proof {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(input));
+            }
+            Command::Project {
+                config,
+                assets,
+                input,
+                output,
+                ..
+            } => {
+                paths.push(PathBuf::from(config));
+                if let Some(path) = assets {
+                    paths.push(PathBuf::from(path));
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Lift {
+                config,
+                input,
+                output,
+                ..
+            } => {
+                paths.push(PathBuf::from(config));
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Validate {
+                shapes,
+                shapes_product,
+                import,
+                changes,
+                changes_removed,
+                input,
+                output,
+                ..
+            } => {
+                if let Some(path) = shapes {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = shapes_product {
+                    paths.push(PathBuf::from(path));
+                }
+                for pair in import {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(path) = changes {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = changes_removed {
+                    paths.push(PathBuf::from(path));
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Shex {
+                schema,
+                imports,
+                data,
+                output,
+                ..
+            } => {
+                paths.push(PathBuf::from(schema));
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(data));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Describe { input, output, .. } => {
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Rules {
+                shapes,
+                srl,
+                import,
+                explain,
+                input,
+                output,
+                ..
+            } => {
+                if let Some(path) = shapes {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = srl {
+                    paths.push(PathBuf::from(path));
+                }
+                for pair in import {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(Some(path)) = explain {
+                    paths.push(path.clone());
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::NodeExpr {
+                shapes,
+                import,
+                expr_turtle_file,
+                input,
+                output,
+                ..
+            } => {
+                paths.push(PathBuf::from(shapes));
+                for pair in import {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(path) = expr_turtle_file {
+                    paths.push(PathBuf::from(path));
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Pack { command } => match command {
+                PackCommand::Verify { input, .. } => {
+                    paths.push(PathBuf::from(input));
+                }
+            },
+            Command::Shacl { command } => match command {
+                ShaclCommand::Pack {
+                    shapes,
+                    import,
+                    out,
+                    ..
+                } => {
+                    paths.push(PathBuf::from(shapes));
+                    for pair in import {
+                        if let Some((_, path)) = pair.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                    paths.push(PathBuf::from(out));
+                }
+                ShaclCommand::Verify { input, .. } => {
+                    paths.push(PathBuf::from(input));
+                }
+                ShaclCommand::Explain { input, .. } => {
+                    paths.push(PathBuf::from(input));
+                }
+                ShaclCommand::Diff { a, b, .. } => {
+                    paths.push(PathBuf::from(a));
+                    paths.push(PathBuf::from(b));
+                }
+            },
+            Command::Shapes { command } => match command {
+                ShapesCommand::Lint {
+                    import,
+                    input,
+                    output,
+                    ..
+                } => {
+                    for pair in import {
+                        if let Some((_, path)) = pair.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                    paths.push(PathBuf::from(input));
+                    paths.push(PathBuf::from(output));
+                }
+            },
+            Command::GlobRdf(args) => {
+                paths.push(PathBuf::from(&args.plan));
+                paths.push(PathBuf::from(&args.input));
+            }
+            _ => {}
+        }
+        paths
     }
 }

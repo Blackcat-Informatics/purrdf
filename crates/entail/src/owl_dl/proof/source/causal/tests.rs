@@ -22,10 +22,18 @@ fn public_causal_counting_checks_reachable_merge_closure_and_generated_inequalit
     let unrelated = f.name("unrelated");
     f.edge(root, "https://example.org/p", unrelated);
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let proof = answer.proof().unwrap();
     let checked = proof
@@ -146,10 +154,24 @@ fn public_causal_counting_retains_original_head_and_generated_births() {
         f.edge(filler, owl::DISJOINT_WITH, forbidden);
         f.instance("subject", class);
         let source = f.freeze();
-        let producer = Reasoner::with_proofs(&source).unwrap();
+        let producer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
-        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let ctx = consumer.borrowed_proof_context().unwrap();
         let checked = answer
             .proof()
@@ -233,11 +255,25 @@ fn reserved_source(named_partner: bool, blank: bool) -> (Arc<RdfDataset>, purrdf
 fn public_causal_reserved_birth_retains_native_predecessor_and_original_descriptor() {
     for (named_partner, blank) in [(false, false), (true, false), (false, true)] {
         let (source, spy) = reserved_source(named_partner, blank);
-        let producer = Reasoner::with_proofs(&source).unwrap();
+        let producer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
         let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let ctx = consumer.borrowed_proof_context().unwrap();
         let checked = proof
             .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -326,14 +362,22 @@ fn nested_reserved_source() -> (Arc<RdfDataset>, purrdf_core::TermId) {
 #[test]
 fn public_causal_reserved_nested_origin_retains_original_parent_descriptor() {
     let (source, spy) = nested_reserved_source();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     // Two distinct Middle witnesses must reach one shared Leaf through r:
     // every Leaf points to spy, whose inverse-p bound is one. That Leaf's
     // inverse-r bound then identifies the two Middle witnesses: contradiction.
     assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
     let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -380,7 +424,11 @@ fn public_causal_reserved_rejects_unsaturated_blocked_completion() {
         graph::{Assumptions, Graph},
     };
     let (source, _) = nested_reserved_source();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let kb = &ctx.kb;
     let term = |name: &str| {
@@ -441,7 +489,11 @@ fn public_causal_reserved_rejects_unsaturated_blocked_completion() {
 fn public_causal_reserved_rejects_malformed_introduction_inventory() {
     use crate::owl_dl::proof::{NodeRef, ProofGround};
     let (source, _) = reserved_source(false, false);
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     let ctx = producer.borrowed_proof_context().unwrap();
     let native = answer.proof().unwrap().runs()[0].proof().unwrap();
@@ -494,9 +546,17 @@ fn public_causal_reserved_rejects_malformed_introduction_inventory() {
 #[test]
 fn public_causal_reserved_introduction_rejects_forged_nonblockable_target() {
     let (source, _) = reserved_source(false, false);
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let forged = rewrite(answer.proof().unwrap(), |native| {
         for branch in &mut native.branches {
@@ -583,11 +643,19 @@ fn public_causal_merge_closes_every_nominal_branch_and_rejects_wrong_prefix() {
     f.edge(filler, rdfs::SUB_CLASS_OF, nominal);
     f.instance("subject", class);
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
     let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -655,13 +723,20 @@ fn rewrite(proof: &ServiceProof, edit: impl Fn(&mut DlProof)) -> ServiceProof {
 #[test]
 fn public_causal_refuses_missing_and_unclosed_support_with_original_native_errors() {
     let source = contradiction();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     let proof = answer.proof().unwrap();
-    let mut ctx = Reasoner::with_proofs(&source)
-        .unwrap()
-        .proof_context()
-        .unwrap();
+    let mut ctx = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .proof_context()
+    .unwrap();
     let missing = ServiceProof::new(
         proof.input(),
         proof.question().clone(),
@@ -802,7 +877,11 @@ fn public_causal_cancellation_preserves_the_original_native_refusal() {
         }
     }
     let source = contradiction();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     let proof = answer.proof().unwrap();
     let stop = Arc::new(Stop::default());
@@ -850,10 +929,18 @@ fn public_causal_branches_bind_original_alternatives_and_keep_node_scopes_separa
     let individual = f.instance("i", a);
     f.edge(individual, rdf::TYPE, d);
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     let proof = answer.proof().unwrap();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let causal = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -945,9 +1032,17 @@ fn public_causal_key_memberships_retain_original_branch_graphs_and_source_scope(
     f.builder.push_quad(left, property, value, None).unwrap();
     f.builder.push_quad(right, property, value, None).unwrap();
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let causal = answer
         .proof()
@@ -1048,9 +1143,17 @@ fn public_causal_schema_excludes_unused_checked_implications() {
     f.bounds(class, property, filler, 1, false, false);
     f.instance("i", class);
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let inclusion = ctx.kb.tbox.iter().position(|&(_, sup)| matches!(ctx.kb.table.concept(sup),
         Concept::Named(term) if matches!(ctx.kb.interner.value(*term), purrdf_core::TermValue::Iri(iri) if iri == "https://example.org/Unused"))).unwrap();

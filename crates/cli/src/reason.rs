@@ -180,6 +180,7 @@ pub(crate) fn run(
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let plan = EntailmentPlan::resolve(regime, rules)?;
 
@@ -205,7 +206,8 @@ pub(crate) fn run(
     sink::validate_jsonld_options(target_format, jsonld_options)?;
     // The premise's `owl:imports` closure: every pair decided and read before the reasoner
     // runs, so an unreadable or malformed pair fails against the command line.
-    let premise_imports = PremiseImports::read(imports, from, base, &[(input, source_format)])?;
+    let premise_imports =
+        PremiseImports::read(imports, from, base, &[(input, source_format)], canonical)?;
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
     // and the evidence of what produced it is a second output rather than a discarded one.
@@ -221,6 +223,7 @@ pub(crate) fn run(
         &premise_imports,
         limits,
         report_target,
+        canonical,
     )?;
 
     let src_codec = source_format.loss_codec_name();
@@ -231,6 +234,7 @@ pub(crate) fn run(
         base,
         src_codec,
         jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }

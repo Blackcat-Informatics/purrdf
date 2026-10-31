@@ -9,28 +9,10 @@
 //! compatibility, but both variants resolve to the one native canonicalizer
 //! (greenfield: a single canonicalization algorithm).
 
-use pyo3::prelude::*;
-
 use purrdf_core::{CanonError, Canonicalized, FastHasher, FastMap, TermRef, try_canonicalize};
 
 use super::term::quad_to_string;
 use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
-
-/// The graph canonicalization algorithms, exposed to Python as
-/// `CanonicalizationAlgorithm`.
-#[pyclass(name = "CanonicalizationAlgorithm", eq, eq_int)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-#[allow(
-    clippy::upper_case_acronyms,
-    reason = "the variant spellings ARE the Python-visible enum members, so they must not be renamed"
-)]
-pub(super) enum PyCanonicalizationAlgorithm {
-    /// The standard RDF Canonicalization 1.0 algorithm (SHA-256).
-    RDFC_1_0,
-    /// Retained for API compatibility; now an alias of the native RDFC-1.0 engine.
-    UNSTABLE,
-}
 
 /// Canonicalize a quad set's blank-node labels under native RDFC-1.0, returning the
 /// quads with canonical (`_:c14nN`) blanks, sorted by their N-Quads string. The
@@ -49,10 +31,10 @@ pub(super) enum PyCanonicalizationAlgorithm {
 /// call/permutation budget is exhausted first.
 pub(super) fn canonicalize_quads(
     quads: &[RdfQuad],
-    _algorithm: PyCanonicalizationAlgorithm,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<Vec<RdfQuad>, CanonError> {
     let ds = flat_dataset_from_quads(quads).expect("native RDFC-1.0: flat freeze of valid quads");
-    let canon = try_canonicalize(&ds)?;
+    let canon = try_canonicalize(&ds, control)?;
     let map = label_map(&ds, &canon);
     let mut out: Vec<RdfQuad> = quads.iter().map(|q| relabel_quad(q, &map)).collect();
     out.sort_by_key(quad_to_string);
@@ -101,5 +83,3 @@ fn relabel_term(term: &RdfTerm, map: &FastMap<String, String>) -> RdfTerm {
         )),
     }
 }
-
-copy_pyclass_from_py_object!(PyCanonicalizationAlgorithm);

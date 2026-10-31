@@ -94,6 +94,9 @@ const PACK_IMPORT_DATA: &str = concat!(
 /// product that validated `conforms true / results 0` against no shapes.
 #[test]
 fn packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_import() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", PACK_IMPORT_ROOT);
     let lib = write_file(dir.path(), "lib.ttl", PACK_IMPORT_LIB);
@@ -111,6 +114,12 @@ fn packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_im
         &import_pair,
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(
         code(&packed),
@@ -165,13 +174,30 @@ fn packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_im
 /// enforces the shape.
 #[test]
 fn packing_an_unresolved_import_is_refused_and_an_in_graph_one_packs() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", PACK_IMPORT_ROOT);
     let data = write_file(dir.path(), "data.ttl", PACK_IMPORT_DATA);
     let product = dir.path().join("root.purrshp");
     let product_path = product.to_str().expect("utf8 path");
 
-    let packed = run(&["shacl", "pack", "--shapes", &root, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &root,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     let err = stderr(&packed);
     assert_eq!(
         code(&packed),
@@ -198,7 +224,20 @@ fn packing_an_unresolved_import_is_refused_and_an_in_graph_one_packs() {
              <http://www.w3.org/2002/07/owl#Ontology> .\n{PACK_IMPORT_LIB}"
         ),
     );
-    let packed = run(&["shacl", "pack", "--shapes", &merged, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &merged,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     let err = stderr(&packed);
     assert_eq!(code(&packed), 0, "an import resolved in place packs: {err}");
     assert!(
@@ -220,6 +259,10 @@ fn packing_an_unresolved_import_is_refused_and_an_in_graph_one_packs() {
 /// document never described.
 #[test]
 fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     // `SHAPES` has no `owl:imports` at all.
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
@@ -236,6 +279,12 @@ fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
         &format!("http://example.org/lib={lib}"),
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     let err = stderr(&out);
     assert_eq!(code(&out), 2, "a usage error, not a runtime one: {err}");
@@ -247,7 +296,20 @@ fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
     // The neighbouring VALID case: the very same shapes graph, with no --import at all,
     // still packs — the refusal above is triggered by the UNUSED pair, never by the
     // shapes graph simply having no owl:imports.
-    let plain = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let plain = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         code(&plain),
         0,
@@ -261,6 +323,11 @@ fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
 /// with a case that must still succeed.
 #[test]
 fn valid_import_configurations_still_pack_and_round_trip() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
 
     // 1. A shapes graph with NO imports at all packs exactly as it always did — `--import`
@@ -275,7 +342,13 @@ fn valid_import_configurations_still_pack_and_round_trip() {
             "--shapes",
             &plain,
             "--out",
-            plain_product_path
+            plain_product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0,
         "a graph with no imports still packs"
@@ -300,13 +373,29 @@ fn valid_import_configurations_still_pack_and_round_trip() {
             "--import",
             &import_pair,
             "--out",
-            product_path
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0,
         "a fully-resolved import table still packs"
     );
     assert_eq!(
-        code(&run(&["shacl", "verify", product_path])),
+        code(&run(&[
+            "shacl",
+            "verify",
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_3
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])),
         0,
         "the packed product verifies"
     );
@@ -374,6 +463,10 @@ const SPARQL_FN_DATA_FLIPPED: &str = concat!(
 /// decides the verdict, and on data where it decides it the other way.
 #[test]
 fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_FN_SHAPES);
     let data = write_file(dir.path(), "data.ttl", SPARQL_FN_DATA);
@@ -381,7 +474,20 @@ fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document()
     let product = dir.path().join("shapes.purrshp");
     let product_path = product.to_str().expect("utf8 path");
 
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         code(&packed),
         0,
@@ -389,7 +495,17 @@ fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document()
         stderr(&packed)
     );
     assert_eq!(
-        code(&run(&["shacl", "verify", product_path])),
+        code(&run(&[
+            "shacl",
+            "verify",
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])),
         0,
         "the packed product verifies"
     );
@@ -432,6 +548,11 @@ fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document()
 
 #[test]
 fn a_packed_product_verifies_explains_and_validates_identically() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = dir.path().join("shapes.ttl");
     let data = dir.path().join("data.ttl");
@@ -450,6 +571,12 @@ fn a_packed_product_verifies_explains_and_validates_identically() {
         shapes_path,
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "pack failed: {}", stderr(&packed));
     assert!(
@@ -468,7 +595,13 @@ fn a_packed_product_verifies_explains_and_validates_identically() {
             "--shapes",
             shapes_path,
             "--out",
-            again_path
+            again_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0
     );
@@ -478,7 +611,17 @@ fn a_packed_product_verifies_explains_and_validates_identically() {
         "two packs of one document produce identical bytes",
     );
 
-    let verified = run(&["shacl", "verify", product_path]);
+    let verified = run(&[
+        "shacl",
+        "verify",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&verified), 0, "verify failed: {}", stderr(&verified));
     assert_eq!(
         stdout(&verified).trim().len(),
@@ -532,6 +675,11 @@ fn a_packed_product_verifies_explains_and_validates_identically() {
 
 #[test]
 fn a_corrupt_product_is_refused_with_its_dimension() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = dir.path().join("shapes.ttl");
     let data = dir.path().join("data.ttl");
@@ -548,7 +696,13 @@ fn a_corrupt_product_is_refused_with_its_dimension() {
             "--shapes",
             shapes_path,
             "--out",
-            product_path
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0
     );
@@ -561,7 +715,17 @@ fn a_corrupt_product_is_refused_with_its_dimension() {
     let corrupt_path = corrupt.to_str().expect("utf8 path");
 
     for args in [
-        vec!["shacl", "verify", corrupt_path],
+        vec![
+            "shacl",
+            "verify",
+            corrupt_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ],
         vec!["shacl", "explain", corrupt_path],
         vec!["validate", "--shapes-product", corrupt_path, data_path],
     ] {
@@ -575,7 +739,20 @@ fn a_corrupt_product_is_refused_with_its_dimension() {
     }
 
     // The neighbouring VALID case still succeeds — a refusal is a claim too.
-    assert_eq!(code(&run(&["shacl", "verify", product_path])), 0);
+    assert_eq!(
+        code(&run(&[
+            "shacl",
+            "verify",
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_3
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])),
+        0
+    );
     assert_eq!(
         code(&run(&[
             "validate",
@@ -589,6 +766,9 @@ fn a_corrupt_product_is_refused_with_its_dimension() {
 
 #[test]
 fn the_shapes_parse_flags_are_refused_against_a_product() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = dir.path().join("shapes.ttl");
     let data = dir.path().join("data.ttl");
@@ -605,7 +785,13 @@ fn the_shapes_parse_flags_are_refused_against_a_product() {
             "--shapes",
             shapes_path,
             "--out",
-            product_path
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0
     );
@@ -675,10 +861,26 @@ const OTHER_SHAPES: &str = concat!(
 
 /// Pack `shapes` into `dir/name`, returning the product path.
 fn pack(dir: &Path, name: &str, shapes: &str) -> String {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let source = write_file(dir, &format!("{name}.ttl"), shapes);
     let product = dir.join(name);
     let product_path = product.to_str().expect("utf8 path").to_owned();
-    let out = run(&["shacl", "pack", "--shapes", &source, "--out", &product_path]);
+    let out = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &source,
+        "--out",
+        &product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 0, "pack failed: {}", stderr(&out));
     product_path
 }
@@ -783,6 +985,9 @@ fn validating_a_product_against_its_own_identity_changes_nothing() {
 /// A selector nobody can read off the artifact is not a mechanism.
 #[test]
 fn the_identity_explain_prints_is_the_identity_expect_identity_accepts() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let a = pack(dir.path(), "a.purrshp", SHAPES);
@@ -812,7 +1017,17 @@ fn the_identity_explain_prints_is_the_identity_expect_identity_accepts() {
 
     // `shacl verify` prints the same one fact about the same product, so a manifest
     // built from either verb names the same artifact.
-    let verified = run(&["shacl", "verify", &a]);
+    let verified = run(&[
+        "shacl",
+        "verify",
+        &a,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&verified), 0, "{}", stderr(&verified));
     assert_eq!(stdout(&verified).trim_end(), printed);
 }
@@ -930,6 +1145,9 @@ const SHAPES_GRAPH_IRI: &str = "http://example.org/sg";
 /// fires it.
 #[test]
 fn packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_with_shapes_graph() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", SHAPES_GRAPH_DATA);
@@ -945,6 +1163,12 @@ fn packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_w
         SHAPES_GRAPH_IRI,
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(
         code(&packed),
@@ -1012,6 +1236,9 @@ fn packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_w
 /// that no shipped tool could ever populate before this flag existed.
 #[test]
 fn explain_reports_the_shapes_graph_pack_recorded() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
     let product = dir.path().join("shapes.purrshp");
@@ -1027,6 +1254,12 @@ fn explain_reports_the_shapes_graph_pack_recorded() {
             SHAPES_GRAPH_IRI,
             "--out",
             product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0
     );
@@ -1052,13 +1285,29 @@ fn explain_reports_the_shapes_graph_pack_recorded() {
 /// it was before this flag existed.
 #[test]
 fn accepts_pack_without_shapes_graph_neighbour() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", SHAPES_GRAPH_DATA);
     let product = dir.path().join("shapes.purrshp");
     let product_path = product.to_str().expect("utf8 path");
 
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
     let explained = run(&["shacl", "explain", product_path]);
@@ -1137,6 +1386,9 @@ const BOX_ROLE_DATA: &str = concat!(
 /// as anything but `0x00` from any shipped command line before this flag existed.
 #[test]
 fn explain_reports_the_box_role_vocab_pack_recorded() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let product = dir.path().join("shapes.purrshp");
@@ -1152,6 +1404,12 @@ fn explain_reports_the_box_role_vocab_pack_recorded() {
             BOX_ROLE_NS,
             "--out",
             product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0
     );
@@ -1175,12 +1433,28 @@ fn explain_reports_the_box_role_vocab_pack_recorded() {
 /// has been on every CLI-produced product until now).
 #[test]
 fn accepts_pack_without_box_role_vocab_neighbour() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let product = dir.path().join("shapes.purrshp");
     let product_path = product.to_str().expect("utf8 path");
 
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
     let explained = run(&["shacl", "explain", product_path]);
@@ -1199,6 +1473,9 @@ fn accepts_pack_without_box_role_vocab_neighbour() {
 /// that silently claims to be the right one.
 #[test]
 fn different_box_role_vocab_namespaces_pack_to_different_identities() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let a = dir.path().join("a.purrshp");
@@ -1220,6 +1497,12 @@ fn different_box_role_vocab_namespaces_pack_to_different_identities() {
                 ns,
                 "--out",
                 out,
+                "--canonical-search",
+                "unlimited",
+                "--canonicalization-receipts",
+                canonical_receipt_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
             ])),
             0
         );
@@ -1257,6 +1540,9 @@ fn different_box_role_vocab_namespaces_pack_to_different_identities() {
 /// --shapes` directly, which is exactly what makes the two lanes agree at all.
 #[test]
 fn packing_with_box_role_vocab_agrees_with_validating_the_document_with_box_role_vocab() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let data = write_file(dir.path(), "data.nt", BOX_ROLE_DATA);
@@ -1272,6 +1558,12 @@ fn packing_with_box_role_vocab_agrees_with_validating_the_document_with_box_role
         BOX_ROLE_NS,
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
@@ -1352,7 +1644,11 @@ const SECTION_AST: u32 = 2;
 /// [`foreign_stage_product`] tampers with, and the fixture the `shacl diff` tests
 /// compare a foreign stage id against, base for base.
 fn foreign_stage_product_source(shapes_ttl: &str) -> Vec<u8> {
-    purrdf_shapes::product_fixture::core_product(shapes_ttl)
+    purrdf_shapes::product_fixture::core_product(
+        shapes_ttl,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit corpus policy")
 }
 
 /// Parse `shapes_ttl`, prepare and pack it exactly as `shacl pack` does, then splice
@@ -1628,6 +1924,9 @@ fn rebuild_is_refused_against_a_shapes_document() {
 /// receipt is that the value on it can be handed straight back to `--expect-identity`.
 #[test]
 fn a_validate_run_says_where_its_shapes_came_from() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data_path = write_file(dir.path(), "data.ttl", DATA);
@@ -1641,6 +1940,12 @@ fn a_validate_run_says_where_its_shapes_came_from() {
         &shapes_path,
         "--out",
         &product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
@@ -1726,18 +2031,44 @@ fn pack_twice(
     extra_a: &[&str],
     extra_b: &[&str],
 ) -> (String, String) {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let shapes = write_file(dir, "shapes.ttl", shapes_ttl);
     let a = dir.join("a.purrshp");
     let a_path = a.to_str().expect("utf8 path").to_owned();
     let b = dir.join("b.purrshp");
     let b_path = b.to_str().expect("utf8 path").to_owned();
 
-    let mut args_a = vec!["shacl", "pack", "--shapes", shapes.as_str()];
+    let mut args_a = vec![
+        "shacl",
+        "pack",
+        "--shapes",
+        shapes.as_str(),
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ];
     args_a.extend_from_slice(extra_a);
     args_a.extend_from_slice(&["--out", &a_path]);
     assert_eq!(code(&run(&args_a)), 0, "pack a failed");
 
-    let mut args_b = vec!["shacl", "pack", "--shapes", shapes.as_str()];
+    let mut args_b = vec![
+        "shacl",
+        "pack",
+        "--shapes",
+        shapes.as_str(),
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ];
     args_b.extend_from_slice(extra_b);
     args_b.extend_from_slice(&["--out", &b_path]);
     assert_eq!(code(&run(&args_b)), 0, "pack b failed");
@@ -1874,6 +2205,9 @@ fn diff_refuses_two_stdins() {
 /// added after the cache existed is exactly where that would first show.
 #[test]
 fn a_restored_product_reaches_the_same_change_verdict_as_a_parsed_document() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     // A conforming base, so everything reported below came out of the CHANGE.
@@ -1896,7 +2230,13 @@ fn a_restored_product_reaches_the_same_change_verdict_as_a_parsed_document() {
             "--shapes",
             &shapes,
             "--out",
-            product_path
+            product_path,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])),
         0,
         "the fixture must pack"

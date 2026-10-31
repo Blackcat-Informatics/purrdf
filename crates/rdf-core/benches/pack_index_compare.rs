@@ -124,7 +124,11 @@ fn bench_pack_index_hypothesis(c: &mut Bench) {
     let foq = FoqIndexes::build(&adjacency);
     let wavelet = WaveletIndexes::build(&adjacency);
     let dataset = build_dataset(&triples);
-    let pack_bytes = PackBuilder::build_bytes(&dataset).expect("reference dataset packs");
+    let pack_bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("reference dataset packs");
     let pack = PackView::from_bytes(&pack_bytes).expect("reference pack opens");
 
     let dense_predicate = 0;
@@ -258,7 +262,14 @@ fn bench_pack_index_hypothesis(c: &mut Bench) {
         build.bench_function("production_pack", |b| {
             b.iter(|| {
                 std::hint::black_box(
-                    PackBuilder::build_bytes(&dataset).expect("reference dataset packs"),
+                    PackBuilder::build_bytes(
+                        &dataset,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("reference dataset packs"),
                 )
             });
         });

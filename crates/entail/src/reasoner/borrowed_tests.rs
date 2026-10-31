@@ -24,10 +24,31 @@ impl purrdf_datalog::StopSignal for Stop {
 fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
     for contradictory in [false, true] {
         let dataset = shared_schema(2, 3, contradictory);
-        let bytes = purrdf_core::PackBuilder::build_bytes(&dataset).unwrap();
+        let bytes = purrdf_core::PackBuilder::build_bytes(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
-        let shared = Reasoner::with_proofs(&dataset).unwrap();
-        let packed = Reasoner::with_proofs(&view).unwrap();
+        let shared = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let packed = Reasoner::with_proofs(
+            &view,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let plain = Reasoner::new(&view).unwrap();
         let answer = packed.consistency();
         let expected = if contradictory {
@@ -45,7 +66,14 @@ fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
 
         // An independent consumer parses the same shared carrier directly; it
         // does not borrow any prepared state from the proof producer.
-        let consumer = Reasoner::with_proofs(&view).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &view,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
         let replay = answer
             .proof()
@@ -78,7 +106,11 @@ fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
 #[test]
 fn dataset_views_preserve_constructor_cancellation() {
     let dataset = shared_schema(1, 1, false);
-    let bytes = purrdf_core::PackBuilder::build_bytes(&dataset).unwrap();
+    let bytes = purrdf_core::PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
     let stopped = Arc::new(Stop(AtomicBool::new(true)));
     assert!(matches!(
@@ -95,7 +127,11 @@ fn dataset_views_preserve_constructor_cancellation() {
 #[test]
 fn borrowed_context_shares_prepared_source_and_releases_the_reasoner() {
     let dataset = shared_schema(2, 3, false);
-    let consumer = Reasoner::with_proofs(&dataset).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let before = consumer.schema_preparation();
     {
         let borrowed = consumer.borrowed_proof_context().unwrap();
@@ -117,14 +153,34 @@ fn borrowed_context_shares_prepared_source_and_releases_the_reasoner() {
 fn borrowed_context_matches_owned_replay_without_producer_state() {
     for contradictory in [false, true] {
         let dataset = shared_schema(2, 3, contradictory);
-        let producer = Reasoner::with_proofs(&dataset).unwrap();
+        let producer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         let proof = answer.proof().unwrap();
-        let owned = Reasoner::with_proofs(&dataset)
-            .unwrap()
-            .proof_context()
-            .unwrap();
-        let consumer = Reasoner::with_proofs(&dataset).unwrap();
+        let owned = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .proof_context()
+        .unwrap();
+        let consumer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let borrowed = consumer.borrowed_proof_context().unwrap();
         assert_eq!(borrowed.input(), owned.input());
         assert_eq!(borrowed.contract(), owned.contract());
@@ -159,10 +215,18 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     let question = Question::ClassSatisfiability {
         class: class.clone(),
     };
-    let mut producer = Reasoner::with_proofs(&dataset).unwrap();
+    let mut producer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.class_satisfiability(&class).unwrap();
     let proof = answer.proof().unwrap();
-    let mut consumer = Reasoner::with_proofs(&dataset).unwrap();
+    let mut consumer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let unprepared = consumer.borrowed_proof_context().unwrap();
     assert!(
         proof
@@ -177,7 +241,11 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     drop(unprepared);
     consumer.prepare(&question).unwrap();
     let borrowed = consumer.borrowed_proof_context().unwrap();
-    let mut owner = Reasoner::with_proofs(&dataset).unwrap();
+    let mut owner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     owner.prepare(&question).unwrap();
     let owned = owner.proof_context().unwrap();
     assert_eq!(borrowed.contract(), owned.contract());
@@ -215,7 +283,11 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
             .verify(&changed, &question, Some(answer.certificate()), &borrowed)
             .is_err()
     );
-    let mut changed_consumer = Reasoner::with_proofs(&changed).unwrap();
+    let mut changed_consumer = Reasoner::with_proofs(
+        &changed,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     changed_consumer.prepare(&question).unwrap();
     let wrong = changed_consumer.borrowed_proof_context().unwrap();
     assert!(matches!(
@@ -237,7 +309,11 @@ fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
         plain.borrowed_proof_context(),
         Err(EntailError::ProofsNotRecorded)
     ));
-    let producer = Reasoner::with_proofs(&dataset).unwrap();
+    let producer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     let stop = Arc::new(Stop(AtomicBool::new(false)));
     let consumer =

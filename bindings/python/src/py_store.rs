@@ -59,6 +59,7 @@ mod xsd;
 
 pub(crate) use env::query_coordinates;
 pub(crate) use io::{PyRdfFormat, parse_quads};
+pub(crate) use query::PyCancellationToken;
 /// The mutable quad store itself, re-exported for the SHACL surface.
 ///
 /// `purrdf.shapes`'s incremental lane takes a `Store` and reads the copy-on-write
@@ -103,9 +104,10 @@ fn load_value_error(error: load::LoadError) -> PyErr {
 
 /// Register the native Store / term / SPARQL surface on the `purrdf` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<crate::py_canonical::PyCanonicalResult>()?;
+    m.add_class::<crate::py_canonical::PyCanonicalCause>()?;
     m.add_class::<PyRdfFormat>()?;
     m.add_class::<prepared::PyPreparedQuery>()?;
-    m.add_class::<canon::PyCanonicalizationAlgorithm>()?;
     m.add_class::<term::PyNamedNode>()?;
     m.add_class::<term::PyBlankNode>()?;
     m.add_class::<term::PyLiteral>()?;
@@ -119,7 +121,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<query::PyQueryQuads>()?;
     m.add_class::<io::PySerializeLoss>()?;
     m.add_class::<query::PyQueryBoolean>()?;
-    m.add_class::<query::PyCancellationToken>()?;
+    m.add_class::<PyCancellationToken>()?;
     m.add_class::<query::PyTrippedGovernor>()?;
     m.add_class::<query::PyGovernorEvidence>()?;
     m.add_class::<query::PyPartialAnswers>()?;

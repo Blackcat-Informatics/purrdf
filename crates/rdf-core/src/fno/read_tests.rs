@@ -27,7 +27,14 @@ fn roundtrip(catalog: &FnoCatalog) {
     let read = FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap();
     assert_eq!(&read, catalog);
     let emitted = dataset(&to_quads(&read));
-    assert!(crate::datasets_isomorphic(&source, &emitted).unwrap());
+    assert!(
+        crate::datasets_isomorphic(
+            &source,
+            &emitted,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+        )
+        .unwrap()
+    );
 }
 
 #[test]

@@ -83,13 +83,16 @@ pub use canon::{
     BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
     CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, CanonPresentation, CanonicalRelabeling, Canonicalized, DatasetStateDigest,
-    DatasetStateError, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, ReservedVocabulary, TermPosition,
-    ViewCanonError, blank_count_view, canonical_relabel, canonical_relabel_with_mapping,
-    check_admissible, check_admissible_flat_view, check_admissible_view, try_blank_count_view,
-    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_view_with_stop,
-    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+    CanonHash, CanonOutput, CanonPhase, CanonPresentation, CanonSelection, CanonicalRelabeling,
+    CanonicalizationControl, Canonicalized, DatasetStateDigest, DatasetStateError,
+    RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, ReservedVocabulary, SearchConfiguration,
+    SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
+    TermPosition, ViewCanonError, blank_count_view, canonical_relabel,
+    canonical_relabel_with_mapping, check_admissible, check_admissible_flat_view,
+    check_admissible_view, try_blank_count_view, try_canonical_blake3_view,
+    try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_sha256_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{

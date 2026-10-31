@@ -3046,6 +3046,7 @@ fn proof_source_error<E: std::fmt::Display>(error: EntailError<E>) -> DlProofErr
         }
         EntailError::Stopped => DlProofError::Stopped,
         EntailError::SourceRead(cause) => DlProofError::SourceRead(cause),
+        EntailError::Canonicalization(cause) => DlProofError::Canonicalization(cause),
         error => DlProofError::Ontology {
             detail: error.to_string(),
         },
@@ -3066,8 +3067,14 @@ impl DlProofContext<'static> {
     /// `ontology` is wholly caller-supplied here, so its original refusal is retained.
     pub fn of_ontology<D: purrdf_core::DatasetView>(
         ontology: &D,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, DlProofError<D::ReadError>> {
-        let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
+        let input = purrdf_core::try_canonical_blake3_view(
+            ontology,
+            purrdf_core::CanonHash::Sha256,
+            control,
+        )
+        .map_err(DlProofError::Canonicalization)?;
         let mut kb = Kb::from_dataset_recording(
             ontology,
             None,
@@ -4808,8 +4815,11 @@ impl DlProof {
 /// `ontology` is wholly caller-supplied here, so its original refusal is retained.
 pub fn prove_consistency<D: purrdf_core::DatasetView>(
     ontology: &D,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(ProofAnswer, DlProof), EntailError<D::ReadError>> {
-    let input = try_input_digest(ontology, None).map_err(EntailError::Canonicalization)?;
+    let input =
+        purrdf_core::try_canonical_blake3_view(ontology, purrdf_core::CanonHash::Sha256, control)
+            .map_err(EntailError::Canonicalization)?;
     let mut kb = Kb::from_dataset_recording(
         ontology,
         None,
@@ -5977,31 +5987,6 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 /// that read the same graph, in any order, with any blank-node labelling, compute the same 32
 /// bytes. The same shape [`Justification::digest`](crate::explain::Justification::digest)
 /// already uses.
-fn try_input_digest<D: purrdf_core::DatasetView>(
-    ontology: &D,
-    stop: Option<&dyn purrdf_core::StopSignal>,
-) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
-    let canonical = match stop {
-        Some(stop) => purrdf_core::try_canonicalize_view_with_stop(
-            ontology,
-            purrdf_core::CanonHash::Sha256,
-            stop,
-        )?,
-        None => purrdf_core::try_canonicalize_view(ontology, purrdf_core::CanonHash::Sha256)?,
-    };
-    let mut hash = purrdf_hash::blake3::Hasher::new();
-    for chunk in canonical.nquads.as_bytes().chunks(64 * 1024) {
-        if purrdf_core::governor::is_stopped(stop) {
-            return Err(purrdf_core::CanonError::Stopped);
-        }
-        hash.update(chunk);
-    }
-    if purrdf_core::governor::is_stopped(stop) {
-        return Err(purrdf_core::CanonError::Stopped);
-    }
-    Ok(*hash.finalize().as_bytes())
-}
-
 /// The PRODUCER-INDEPENDENT identity of an ontology, returning a typed
 /// [`purrdf_core::CanonError`] on refusal.
 ///
@@ -6018,21 +6003,9 @@ fn try_input_digest<D: purrdf_core::DatasetView>(
 /// [`purrdf_core::CanonError::Read`] if the view refuses a source read.
 pub fn try_ontology_identity<D: purrdf_core::DatasetView>(
     ontology: &D,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
-    try_input_digest(ontology, None)
-}
-
-/// Compute the same producer-independent ontology identity with cooperative
-/// cancellation during canonicalization and digest streaming.
-///
-/// # Errors
-/// The source/profile refusals of [`try_ontology_identity`], or
-/// [`purrdf_core::CanonError::Stopped`]. No partial digest is returned.
-pub fn try_ontology_identity_with_stop<D: purrdf_core::DatasetView>(
-    ontology: &D,
-    stop: &dyn purrdf_core::StopSignal,
-) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
-    try_input_digest(ontology, Some(stop))
+    purrdf_core::try_canonical_blake3_view(ontology, purrdf_core::CanonHash::Sha256, control)
 }
 
 /// The calculus/clausification contract: BLAKE3 over [`CALCULUS_VERSION`] and the canonical
@@ -6783,9 +6756,23 @@ mod tests {
     /// independently of it.
     fn refutation() -> (Arc<RdfDataset>, DlProof, DlProofContext<'static>) {
         let ontology = disjoint_classes();
-        let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the fixture reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "C ⊓ D ⊑ ⊥ with a : C, D");
-        let ctx = DlProofContext::of_ontology(&ontology).expect("the fixture reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the fixture reverse-maps");
         (ontology, proof, ctx)
     }
 
@@ -6805,8 +6792,14 @@ mod tests {
         let p = f.iri(EX_P);
         f.quad(a, p, reserved);
         let ontology = f.freeze();
-        let error = DlProofContext::of_ontology(&ontology)
-            .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        let error = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
         assert!(
             matches!(error, DlProofError::Canonicalization(_)),
             "{error}"
@@ -6829,8 +6822,14 @@ mod tests {
         let p = f.iri(EX_P);
         f.quad(a, p, reserved);
         let ontology = f.freeze();
-        let error = prove_consistency(&ontology)
-            .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        let error = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
         assert!(
             error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
@@ -6873,11 +6872,25 @@ mod tests {
     fn the_checker_consumes_only_an_ontology_and_a_byte_string() {
         let ontology = disjoint_classes();
         let bytes = {
-            let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
+            let (_, proof) = prove_consistency(
+                &ontology,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("reverse-maps");
             proof.encode()
         };
         // Everything the producer held is dropped at this brace; only `bytes` survives.
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         let proof = DlProof::decode(&bytes).expect("its own encoding decodes");
         let replay = proof
             .replay_clash(0, &ctx)
@@ -6890,9 +6903,23 @@ mod tests {
     #[test]
     fn a_derived_witness_atom_is_supported_without_becoming_an_assertion() {
         let ontology = derived_clash();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent);
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         let replay = proof
             .replay_clash(0, &ctx)
             .expect("a genuine clash replays");
@@ -6916,8 +6943,22 @@ mod tests {
     #[test]
     fn ordinary_current_support_rejects_missing_heads_frames_and_predecessors() {
         let ontology = derived_clash();
-        let (_, proof) = prove_consistency(&ontology).unwrap();
-        let ctx = DlProofContext::of_ontology(&ontology).unwrap();
+        let (_, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_ne!(proof.support, []);
         for tamper in 0..5 {
             let mut forged = proof.clone();
@@ -6940,7 +6981,14 @@ mod tests {
         use crate::Reasoner;
         let ontology = derived_clash();
         let plain = Reasoner::new(&ontology).unwrap().consistency();
-        let mut reasoner = Reasoner::with_proofs(&ontology).unwrap();
+        let mut reasoner = Reasoner::with_proofs(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         reasoner.set_schema_recording_budget(crate::reasoner::SchemaPreparationBudget {
             bytes: Some(0),
             work: None,
@@ -7001,7 +7049,14 @@ mod tests {
     #[test]
     fn a_consistent_answer_carries_no_clash_and_says_so() {
         let ontology = consistent_ontology();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Consistent);
         assert_eq!(proof.answer(), ProofAnswer::Consistent);
         assert!(proof.clashes().is_empty(), "{:?}", proof.clashes());
@@ -7018,8 +7073,22 @@ mod tests {
     #[test]
     fn a_proof_term_is_byte_identical_run_to_run() {
         let ontology = disjoint_classes();
-        let (_, first) = prove_consistency(&ontology).expect("reverse-maps");
-        let (_, again) = prove_consistency(&ontology).expect("reverse-maps");
+        let (_, first) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
+        let (_, again) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(first.encode(), again.encode(), "two runs, one proof");
         assert_eq!(first.digest(), again.digest());
         assert_eq!(first.digest_hex().len(), 64);
@@ -7073,10 +7142,16 @@ mod tests {
     fn the_input_identity_is_the_canonical_ontology_and_not_the_clause_set() {
         let (ontology, proof, ctx) = refutation();
         let canonical = *purrdf_hash::blake3::hash(
-            purrdf_core::try_canonicalize(&ontology)
-                .unwrap()
-                .nquads
-                .as_bytes(),
+            purrdf_core::try_canonicalize(
+                &ontology,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads
+            .as_bytes(),
         )
         .as_bytes();
         assert_eq!(proof.input(), canonical, "the input digest is RDFC-1.0's");
@@ -7095,7 +7170,14 @@ mod tests {
     fn a_proof_does_not_check_against_a_different_ontology() {
         let (_, proof, _) = refutation();
         let other = consistent_ontology();
-        let ctx = DlProofContext::of_ontology(&other).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &other,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert!(matches!(
             proof.replay_clash(0, &ctx),
             Err(DlProofError::InputMismatch { .. })
@@ -7108,7 +7190,14 @@ mod tests {
     fn forging_the_input_identity_still_fails_the_contract() {
         let (_, mut proof, _) = refutation();
         let other = consistent_ontology();
-        let ctx = DlProofContext::of_ontology(&other).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &other,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         proof.input = ctx.input();
         assert!(matches!(
             proof.replay_clash(0, &ctx),
@@ -7270,8 +7359,22 @@ mod tests {
     /// independently of it.
     fn nominal_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = merge_bearing_ontology();
-        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let (_, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         (proof, ctx)
     }
 
@@ -7511,9 +7614,23 @@ mod tests {
     /// That ontology's proof, and a context built independently over it.
     fn at_most_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = functional_clash();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "b ≠ c under `≤1 p`");
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         (proof, ctx)
     }
 
@@ -7645,7 +7762,14 @@ mod tests {
     #[test]
     fn a_concrete_domain_closure_is_a_record_and_does_not_close_a_refutation() {
         let ontology = data_range_clash();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "\"abc\" is no integer");
         assert_eq!(
             proof.data_clashes().len(),
@@ -7658,7 +7782,14 @@ mod tests {
             "and on no clause instance at all: {:?}",
             proof.clashes()
         );
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         let replay = proof
             .replay_refutation(&ctx)
             .expect("the tree walks: the root reached a recorded closure");
@@ -7725,13 +7856,27 @@ mod tests {
     /// That ontology's proof, and a context built independently over it.
     fn wide_at_most_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = wide_at_most_clash();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(
             answer,
             ProofAnswer::Inconsistent,
             "three pairwise-distinct successors under `≤2 p`"
         );
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         (proof, ctx)
     }
 
@@ -7782,7 +7927,14 @@ mod tests {
     /// record has something in it.
     fn merge_bearing_proof() -> DlProof {
         let ontology = merge_bearing_ontology();
-        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (_, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         proof
     }
 
@@ -8058,13 +8210,27 @@ mod tests {
     #[test]
     fn a_clash_whose_body_is_asserted_attests_every_atom_of_it() {
         let ontology = asymmetric_clash();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(
             answer,
             ProofAnswer::Inconsistent,
             "an asymmetric role's own pair"
         );
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         let replay = proof
             .replay_clash(0, &ctx)
             .expect("a genuine clash replays");
@@ -8396,8 +8562,22 @@ mod tests {
             })
         ));
         let ontology = consistent_ontology();
-        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let (_, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert!(matches!(
             proof.replay_refutation(&ctx),
             Err(DlProofError::WrongAnswer {
@@ -8686,7 +8866,14 @@ mod tests {
     fn a_completion_does_not_check_against_a_different_ontology() {
         let (proof, _) = subclass_completion();
         let other = consistent_ontology();
-        let ctx = DlProofContext::of_ontology(&other).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &other,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert!(matches!(
             proof.replay_completion(&ctx),
             Err(DlProofError::InputMismatch { .. })
@@ -8773,8 +8960,22 @@ mod tests {
         let ontologies = [closing_disjunction(), subclass_consistent()];
         kb.finalize().expect("fixture preparation");
         for ontology in ontologies {
-            let (_, first) = prove_consistency(&ontology).expect("reverse-maps");
-            let (_, again) = prove_consistency(&ontology).expect("reverse-maps");
+            let (_, first) = prove_consistency(
+                &ontology,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("reverse-maps");
+            let (_, again) = prove_consistency(
+                &ontology,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("reverse-maps");
             assert_eq!(first.encode(), again.encode(), "two runs, one proof");
             let decoded = DlProof::decode(&first.encode()).expect("its own encoding decodes");
             assert_eq!(decoded, first);
@@ -8826,13 +9027,27 @@ mod tests {
     /// ontology.
     fn branching_refutation() -> (DlProof, DlProofContext<'static>) {
         let ontology = closing_disjunction();
-        let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the fixture reverse-maps");
         assert_eq!(
             answer,
             ProofAnswer::Inconsistent,
             "a : (C ⊔ D), C ⊑ ⊥, D ⊑ ⊥"
         );
-        let ctx = DlProofContext::of_ontology(&ontology).expect("the fixture reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the fixture reverse-maps");
         (proof, ctx)
     }
 
@@ -8872,9 +9087,23 @@ mod tests {
     /// That ontology's consistency proof, and a context built independently over it.
     fn subclass_completion() -> (DlProof, DlProofContext<'static>) {
         let ontology = subclass_consistent();
-        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let (answer, proof) = prove_consistency(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Consistent);
-        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("reverse-maps");
         (proof, ctx)
     }
 
@@ -8982,7 +9211,14 @@ mod tests {
         // A well-formed but empty dataset reverse-maps; this pins the ERROR SHAPE exists and
         // is reachable through the public constructor rather than through a private path.
         let empty = RdfDatasetBuilder::new().freeze().expect("empty freezes");
-        let ctx = DlProofContext::of_ontology(&empty).expect("an empty graph is an OWL graph");
+        let ctx = DlProofContext::of_ontology(
+            &empty,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("an empty graph is an OWL graph");
         assert_eq!(ctx.clause_count(), ctx.clause_count());
     }
 

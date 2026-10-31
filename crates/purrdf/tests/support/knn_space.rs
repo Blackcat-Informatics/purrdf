@@ -34,7 +34,11 @@ pub const FX: Identities = Identities::at("https://example.org/");
 pub fn space<L: Display>(rows: &[(L, Vec<f64>)], metric: DistanceMetric) -> EmbeddingSpace {
     let dimension = u32::try_from(rows[0].1.len()).expect("small");
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let mut targets = Vec::with_capacity(rows.len());
     let mut bindings = Vec::with_capacity(rows.len());

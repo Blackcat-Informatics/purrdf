@@ -433,6 +433,7 @@ fn validation_options(
 pub(crate) fn run(
     options: &ValidateOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     // IN, the shapes input in either spelling and the two halves of a change set may each
     // be `-`, and at most one of them may be.
@@ -475,7 +476,7 @@ pub(crate) fn run(
     // Decided off the command line too: an IRI that is not one is a malformed request.
     let validation = validation_options(options)?;
 
-    let data = source::load_dataset(options.input, data_format, options.base)?;
+    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
     // The graph this run VALIDATES: `IN` itself, or `IN` with the change applied. Built
     // before the shapes are read, because its `sh:shapesGraph` links (SHACL 1.2 Core
     // section 6.4) decide what the shapes graph is — and a change may add or retract a
@@ -483,7 +484,7 @@ pub(crate) fn run(
     let snapshot = match change_plan {
         ChangePlan::WholeGraph => None,
         ChangePlan::Incremental { added, removed } => Some(Arc::new(
-            apply_changes(&data, options.base, added, removed)?
+            apply_changes(&data, options.base, added, removed, canonical)?
                 .snapshot_view()
                 .map_err(|error| CliError::Runtime(error.to_string()))?,
         )),
@@ -491,8 +492,14 @@ pub(crate) fn run(
     let data_iris = data_graph_iris(options, data_format)?;
     let data_iris: Vec<&str> = data_iris.iter().map(String::as_str).collect();
     let source = match &snapshot {
-        None => plan.load(options, &validation, data.as_ref(), &data_iris)?,
-        Some(snapshot) => plan.load(options, &validation, snapshot.as_ref(), &data_iris)?,
+        None => plan.load(options, &validation, data.as_ref(), &data_iris, canonical)?,
+        Some(snapshot) => plan.load(
+            options,
+            &validation,
+            snapshot.as_ref(),
+            &data_iris,
+            canonical,
+        )?,
     }
     .with_validation_options(validation);
     // Before the verdict, because it describes the INPUT rather than the outcome and an
@@ -523,7 +530,7 @@ pub(crate) fn run(
         return Ok(CliOutcome::BudgetExhausted);
     };
 
-    emit(&report, options, ledger_target)?;
+    emit(&report, options, ledger_target, canonical)?;
     // The verdict AFTER the artifact, so a `> file` redirect has the report on disk by the
     // time the operator reads the line that describes it.
     eprintln!("shacl conforms {}", report.conforms);
@@ -830,10 +837,11 @@ fn apply_changes(
     base_iri: Option<&str>,
     added: Option<(&str, SourceFormat)>,
     removed: Option<(&str, SourceFormat)>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<MutableDataset, CliError> {
     let mut mutation = MutableDataset::new(Arc::clone(base));
     if let Some((path, format)) = added {
-        let document = source::load_dataset(path, format, base_iri)?;
+        let document = source::load_dataset(path, format, base_iri, canonical)?;
         for row in QuadValues::surface_of(&document) {
             mutation.insert(row).map_err(|error| {
                 CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
@@ -841,7 +849,7 @@ fn apply_changes(
         }
     }
     if let Some((path, format)) = removed {
-        let document = source::load_dataset(path, format, base_iri)?;
+        let document = source::load_dataset(path, format, base_iri, canonical)?;
         for row in QuadValues::surface_of(&document) {
             // A row the data graph does not carry retracts nothing. That is the
             // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right
@@ -871,11 +879,12 @@ fn emit(
     report: &ValidationReport,
     options: &ValidateOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let Some(target) = options.format.to_rdf_format() else {
         // SARIF: not RDF, so no sink, no ledger, no serializer configuration.
         let sarif = purrdf_validate::report_to_sarif_string(report, &SarifOptions::default());
-        return sink::write_out(options.output, sarif.as_bytes());
+        return sink::write_out_with_request(options.output, sarif.as_bytes(), canonical);
     };
 
     let graph = report.to_dataset()?;
@@ -890,6 +899,7 @@ fn emit(
         // quads come from, not what they can express.
         NativeRdfFormat::NTriples.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }
@@ -933,9 +943,11 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     base: Option<&str>,
     data: &D,
     data_iris: &[&str],
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Shapes, CliError> {
-    let root = crate::shapes_source::read_shapes_document(path, format, base, "--shapes")?;
-    let mut table = crate::shapes_source::shapes_imports(&root, options.imports)?;
+    let root =
+        crate::shapes_source::read_shapes_document(path, format, base, "--shapes", canonical)?;
+    let mut table = crate::shapes_source::shapes_imports(&root, options.imports, canonical)?;
     table.link_data_graph(data, data_iris).map_err(|error| {
         crate::shapes_source::shapes_error(
             ShapesError::Imports(error),
@@ -1120,6 +1132,7 @@ impl<'a> ShapesPlan<'a> {
         validation: &engine::ValidationOptions,
         data: &D,
         data_iris: &[&str],
+        canonical: &mut crate::canonical::Request,
     ) -> Result<ShapesSource, CliError> {
         match *self {
             Self::Document {
@@ -1135,6 +1148,7 @@ impl<'a> ShapesPlan<'a> {
                 base.as_deref(),
                 data,
                 data_iris,
+                canonical,
             )
             .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
             Self::Product {

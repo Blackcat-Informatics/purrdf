@@ -27,7 +27,6 @@
 //! of this crate's in-memory shape.
 
 use purrdf_lex::cbor::{Integer, Value};
-use sha2::{Digest, Sha256};
 
 use purrdf_gts::compact::{self, CompactionParams, DictPlan, PackagingSigner};
 use purrdf_gts::cose::{self, SigStatus};
@@ -38,13 +37,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{CanonError, CanonHash, RdfDiagnostic, try_canonicalize_with};
-
-/// Blank-node count above which [`refold_digest`] refuses to canonicalize the
-/// content projection (a cheap structural pre-reject; RDFC-1.0's n-degree
-/// search is combinatorial in pathologically symmetric blank graphs, and a
-/// certificate/verification path must never be a resource-exhaustion vector).
-pub const POISON_BLANK_LIMIT: usize = 100_000;
+use crate::{CanonError, CanonHash, RdfDiagnostic, try_canonical_sha256_view};
 
 /// Errors from certificate authoring, verification, and (de)serialization.
 #[derive(Debug)]
@@ -54,16 +47,7 @@ pub enum CertifyError {
     Refused(String),
     /// The GTS→dataset bridge, or a fold, reported a diagnostic.
     Dataset(RdfDiagnostic),
-    /// The content projection's blank-node count exceeds [`POISON_BLANK_LIMIT`]
-    /// — refused rather than risking a non-terminating RDFC-1.0 run.
-    Poison(usize),
-    /// An UNTRUSTED (verification-path) canonicalization exceeded RDFC-1.0's
-    /// n-degree search call budget — a pathologically symmetric blank graph
-    /// that [`Self::Poison`]'s cheap blank-node-COUNT pre-reject did not catch
-    /// (a small but highly symmetric graph can blow the call budget while
-    /// staying far under [`POISON_BLANK_LIMIT`]). [`verify_compaction`] routes
-    /// through the fallible canonicalizer and surfaces this instead of letting
-    /// the RDFC-1.0 engine panic on adversarial verifier input.
+    /// The original canonicalization source/profile/search-control refusal.
     CanonRefused(CanonError),
     /// The certificate's canonical CBOR encoding is malformed.
     Cbor(String),
@@ -78,11 +62,6 @@ impl std::fmt::Display for CertifyError {
         match self {
             Self::Refused(msg) => write!(f, "compaction refused: {msg}"),
             Self::Dataset(diag) => write!(f, "GTS dataset bridge failed: {diag}"),
-            Self::Poison(count) => write!(
-                f,
-                "refusing to canonicalize a content projection with {count} blank node(s) \
-                 (exceeds the {POISON_BLANK_LIMIT} poison guard)"
-            ),
             Self::CanonRefused(err) => write!(f, "compaction verification failed: {err}"),
             Self::Cbor(msg) => write!(f, "compaction certificate CBOR error: {msg}"),
             Self::Invariant(msg) => {
@@ -97,7 +76,7 @@ impl std::error::Error for CertifyError {
         match self {
             Self::Dataset(diag) => Some(diag),
             Self::CanonRefused(err) => Some(err),
-            Self::Refused(_) | Self::Poison(_) | Self::Cbor(_) | Self::Invariant(_) => None,
+            Self::Refused(_) | Self::Cbor(_) | Self::Invariant(_) => None,
         }
     }
 }
@@ -171,8 +150,11 @@ pub fn content_projection(g: &Graph) -> Graph {
 /// count exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
 /// attempted. Returns [`CertifyError::CanonRefused`] when canonicalization
 /// refuses the admitted projection.
-pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
-    canonical_digest(&content_projection(g))
+pub fn refold_digest(
+    g: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
+    canonical_digest(&content_projection(g), control)
 }
 
 /// The RDFC-1.0 (SHA-256) digest of an already-projected graph, as lowercase hex.
@@ -187,16 +169,14 @@ pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
 /// exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
 /// attempted. Returns [`CertifyError::CanonRefused`] when canonicalization
 /// refuses the admitted projection.
-fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
+fn canonical_digest(
+    projected: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
     let dataset = dataset_from_gts_graph(projected)?;
-    let blanks = crate::ir::canon::blank_count(&dataset);
-    if blanks > POISON_BLANK_LIMIT {
-        return Err(CertifyError::Poison(blanks));
-    }
-    let canonical =
-        try_canonicalize_with(&dataset, CanonHash::Sha256).map_err(CertifyError::CanonRefused)?;
-    let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(purrdf_hash::hex::encode(digest.as_slice()))
+    let canonical = try_canonical_sha256_view(&*dataset, CanonHash::Sha256, control)
+        .map_err(CertifyError::CanonRefused)?;
+    Ok(canonical.to_hex())
 }
 
 /// A term-id resolved to its own `value` string, or `None` when the id is
@@ -349,8 +329,11 @@ pub fn effective_projection(g: &Graph) -> Graph {
 /// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
 /// count exceeds [`POISON_BLANK_LIMIT`]. Canonicalization refusals retain their
 /// original cause in [`CertifyError::CanonRefused`].
-pub fn effective_digest(g: &Graph) -> Result<String, CertifyError> {
-    canonical_digest(&effective_projection(g))
+pub fn effective_digest(
+    g: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
+    canonical_digest(&effective_projection(g), control)
 }
 
 // ---------------------------------------------------------------------------
@@ -604,9 +587,13 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// cannot be canonicalized (dataset bridge failure, the blank-count poison
 /// guard, or RDFC-1.0 call-budget exhaustion) — never for a suppression
 /// mismatch, which surfaces as `Ok(false)`.
-fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
+fn suppressions_ok(
+    pre: &Graph,
+    post: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<bool, CertifyError> {
     let retained = suppression_retention_ok(pre, post);
-    let effective_equivalent = effective_digest(pre)? == effective_digest(post)?;
+    let effective_equivalent = effective_digest(pre, control)? == effective_digest(post, control)?;
     Ok(retained && effective_equivalent)
 }
 
@@ -641,16 +628,17 @@ pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     pre_bytes: &[u8],
     post_bytes: &[u8],
     keyring: &K,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<CompactionReport, CertifyError> {
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
 
-    let refold_equivalent = refold_digest(&pre)? == refold_digest(&post)?;
+    let refold_equivalent = refold_digest(&pre, control)? == refold_digest(&post, control)?;
     let seam_chain_ok = post.diagnostics.is_empty();
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);
     let packaging_sig_ok = packaging_signature_ok(post_bytes, &post, keyring);
-    let suppressions_ok = suppressions_ok(&pre, &post)?;
+    let suppressions_ok = suppressions_ok(&pre, &post, control)?;
 
     Ok(CompactionReport {
         refold_equivalent,
@@ -860,12 +848,13 @@ pub fn compact_and_certify<S: PackagingSigner>(
     timestamp: &str,
     seal_original: bool,
     packaging_signer: S,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(Vec<u8>, CompactionCertificate), CertifyError> {
     let pre_fold = read(pre_bytes, true, None);
     if !pre_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&pre_fold).into());
     }
-    let digest = refold_digest(&pre_fold)?;
+    let digest = refold_digest(&pre_fold, control)?;
 
     let kid = packaging_signer.kid().to_string();
     let post_bytes = compact::compact_streamable(
@@ -883,7 +872,7 @@ pub fn compact_and_certify<S: PackagingSigner>(
     if !post_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&post_fold).into());
     }
-    let post_digest = refold_digest(&post_fold)?;
+    let post_digest = refold_digest(&post_fold, control)?;
     if post_digest != digest {
         return Err(CertifyError::Invariant(format!(
             "compaction changed the content-refold digest: pre={digest} post={post_digest}"

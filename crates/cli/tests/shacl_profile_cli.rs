@@ -193,11 +193,27 @@ fn a_governed_run_takes_the_law_from_the_request() {
 
 #[test]
 fn a_product_restore_takes_the_law_from_the_request() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let file = suite_file("sparql/node/prefixes-003.ttl");
     let product = dir.path().join("prefixes-003.purrshp");
     let product = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &file, "--out", product]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &file,
+        "--out",
+        product,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
     let restore = |extra: &[&str]| {

@@ -1237,12 +1237,39 @@ mod tests {
         let reversed = project_construct_view(reordered.as_ref(), &config).expect("reordered");
         assert_eq!(resident.input_records, 3);
         assert_eq!(resident.output_records, 2);
-        assert!(datasets_isomorphic(resident.dataset.as_ref(), reversed.dataset.as_ref()).unwrap());
+        assert!(
+            datasets_isomorphic(
+                resident.dataset.as_ref(),
+                reversed.dataset.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
 
-        let bytes = PackBuilder::build_bytes(&source).expect("pack");
+        let bytes = PackBuilder::build_bytes(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let view = PackView::from_bytes(&bytes).expect("pack view");
         let packed = project_construct_view(&view, &config).expect("packed");
-        assert!(datasets_isomorphic(resident.dataset.as_ref(), packed.dataset.as_ref()).unwrap());
+        assert!(
+            datasets_isomorphic(
+                resident.dataset.as_ref(),
+                packed.dataset.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert_eq!(resident.input_records, packed.input_records);
         assert_eq!(resident.output_records, packed.output_records);
     }

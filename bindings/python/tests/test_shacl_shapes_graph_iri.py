@@ -60,9 +60,9 @@ def test_py_shapes_prepared_and_product_carry_the_shapes_graph() -> None:
         assert len(shapes.validate_nt(data_nt).results) == expected
         prepared = shapes.prepare()
         assert len(prepared.validate_nt(data_nt).results) == expected
-        restored = purrdf.shapes.ShapesProduct.open(prepared.to_product()).admit()
+        restored = purrdf.shapes.ShapesProduct.open(prepared.to_product(canonical_search="1000000").value).admit()
         assert len(restored.validate_nt(data_nt).results) == expected
-        packed = purrdf.shapes.pack_product(shapes_ttl, shapes_base=base, shapes_graph=graph)
+        packed = purrdf.shapes.pack_product(shapes_ttl, shapes_base=base, shapes_graph=graph, canonical_search="1000000").value
         admitted = purrdf.shapes.ShapesProduct.open(packed).admit()
         assert len(admitted.validate_nt(data_nt).results) == expected
         store = purrdf.Store()
@@ -87,7 +87,7 @@ def test_py_relative_shapes_graph_without_a_base_is_refused() -> None:
         # The absolute neighbour needs no base.
         call("http://example.org/shapes")
     with pytest.raises(purrdf.shapes.ShapesProductError, match="iri-relative-no-base"):
-        purrdf.shapes.pack_product(shapes_ttl, shapes_graph="shapes")
-    assert purrdf.shapes.pack_product(shapes_ttl, shapes_graph="http://example.org/shapes")
+        purrdf.shapes.pack_product(shapes_ttl, shapes_graph="shapes", canonical_search="1000000").value
+    assert purrdf.shapes.pack_product(shapes_ttl, shapes_graph="http://example.org/shapes", canonical_search="1000000").value
     report = purrdf.shapes.validate(shapes_ttl, "", shapes_graph="http://example.org/shapes")
     assert report["conforms"] is False

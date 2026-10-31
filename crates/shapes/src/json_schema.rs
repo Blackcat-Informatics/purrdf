@@ -877,12 +877,12 @@ pub enum SchemaCompileError {
         /// Precise source or translation failure.
         reason: String,
     },
-    /// RDFC-1.0 canonicalization exceeded its fixed safety budget.
+    /// Original native failure while canonicalizing a compilation input.
     Canonicalization {
         /// Graph that could not be canonicalized.
         input: SchemaCompilationInput,
-        /// Stable diagnostic from the canonicalizer.
-        message: String,
+        /// Original typed canonicalizer failure.
+        cause: purrdf_core::CanonError,
     },
     /// A shared depth guard or input-derived schema-surface bound was exceeded.
     LimitExceeded {
@@ -939,8 +939,8 @@ impl std::fmt::Display for SchemaCompileError {
                     "cannot emit sh:pattern at {shape} property {property}: {reason}"
                 )
             }
-            Self::Canonicalization { input, message } => {
-                write!(f, "failed to canonicalize {input:?} graph: {message}")
+            Self::Canonicalization { input, cause } => {
+                write!(f, "failed to canonicalize {input:?} graph: {cause}")
             }
             Self::LimitExceeded {
                 resource,
@@ -972,6 +972,7 @@ impl std::error::Error for SchemaCompileError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Materialization(error) => Some(error),
+            Self::Canonicalization { cause, .. } => Some(cause),
             _ => None,
         }
     }
@@ -1070,8 +1071,11 @@ impl<'a> SchemaCompileRequest<'a> {
     ///
     /// Returns [`SchemaCompileError::Canonicalization`] if either graph exceeds
     /// the canonicalizer's fixed safety budget.
-    pub fn compilation_key(&self) -> Result<SchemaCompilationKey, SchemaCompileError> {
-        schema_compilation_key(self)
+    pub fn compilation_key(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<SchemaCompilationKey, SchemaCompileError> {
+        schema_compilation_key(self, control)
     }
 
     /// Derive the deterministic ontology property coverage manifest without
@@ -1126,17 +1130,17 @@ pub(crate) const MAX_OWL_EXPRESSION_NODES: usize = 1_048_576;
 
 fn schema_compilation_key(
     request: &SchemaCompileRequest<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<SchemaCompilationKey, SchemaCompileError> {
-    let shapes = ::purrdf_rdf::try_canonicalize(request.shapes.shapes_dataset.as_ref()).map_err(
-        |error| SchemaCompileError::Canonicalization {
+    let shapes = ::purrdf_rdf::try_canonicalize(request.shapes.shapes_dataset.as_ref(), control)
+        .map_err(|error| SchemaCompileError::Canonicalization {
             input: SchemaCompilationInput::Shapes,
-            message: error.to_string(),
-        },
-    )?;
-    let ontology = ::purrdf_rdf::try_canonicalize(request.ontology).map_err(|error| {
+            cause: error,
+        })?;
+    let ontology = ::purrdf_rdf::try_canonicalize(request.ontology, control).map_err(|error| {
         SchemaCompileError::Canonicalization {
             input: SchemaCompilationInput::Ontology,
-            message: error.to_string(),
+            cause: error,
         }
     })?;
 
@@ -1496,8 +1500,9 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> Result<CompiledSchema, Schem
 /// a pattern that cannot be emitted faithfully.
 pub fn compile_schema(
     request: &SchemaCompileRequest<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<SchemaCompilation, SchemaCompileError> {
-    compile_schema_with_class_expressions(request).map(|(compilation, _)| compilation)
+    compile_schema_with_class_expressions(request, control).map(|(compilation, _)| compilation)
 }
 
 /// Compile an explicit ontology-aware schema request and return the anonymous
@@ -1511,8 +1516,9 @@ pub fn compile_schema(
 /// As [`compile_schema`].
 pub fn compile_schema_with_class_expressions(
     request: &SchemaCompileRequest<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> {
-    let key = request.compilation_key()?;
+    let key = request.compilation_key(control)?;
     let surface = crate::schema_surface::build(request)?;
     let projection = request.value_vocab().map(|vocab| ValueVocabProjection {
         vocab,

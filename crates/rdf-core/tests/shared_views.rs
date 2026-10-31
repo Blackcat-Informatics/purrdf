@@ -187,7 +187,11 @@ fn independent_occurrences_and_shared_contributions_have_explicit_blank_identity
     assert!(
         datasets_isomorphic(
             &native.freeze().unwrap(),
-            &independent.materialize().unwrap()
+            &independent.materialize().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap()
     );
@@ -435,7 +439,17 @@ fn composite_literals_rebind_external_nested_and_triple_term_references() {
     native.push_dataset(&source).unwrap();
     native.push_dataset(&source).unwrap();
     let materialized = view.materialize().unwrap();
-    assert!(datasets_isomorphic(&native.freeze().unwrap(), &materialized).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &native.freeze().unwrap(),
+            &materialized,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     let mut scopes = BTreeSet::new();
     for id in view.term_ids() {
         let TermRef::Literal {
@@ -999,7 +1013,17 @@ fn blanks_referenced_only_inside_composite_literals_stay_independent() {
     let mut native = RdfDatasetBuilder::new();
     native.push_dataset(&source).unwrap();
     native.push_dataset(&source).unwrap();
-    assert!(datasets_isomorphic(&native.freeze().unwrap(), &view.materialize().unwrap()).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &native.freeze().unwrap(),
+            &view.materialize().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 /// The pre-freeze check charges exactly what the frozen delta retains, so an
@@ -1400,12 +1424,23 @@ fn materialized_bytes_ignore_operational_counter_changes() {
     )
     .unwrap();
     let first = view.materialize().unwrap();
-    let first_bytes = purrdf_core::ir::pack::PackBuilder::build_bytes(&first).unwrap();
+    let first_bytes = purrdf_core::ir::pack::PackBuilder::build_bytes(
+        &first,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let second = view.materialize().unwrap();
     assert_eq!(view.stats().work.materializations, 2);
     assert_eq!(
         first_bytes,
-        purrdf_core::ir::pack::PackBuilder::build_bytes(&second).unwrap()
+        purrdf_core::ir::pack::PackBuilder::build_bytes(
+            &second,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
 }
 
@@ -1511,9 +1546,13 @@ fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
             .unwrap();
     let delta = delta_of(&flat);
 
-    let expected = try_canonicalize_view(&*flat, CanonHash::Sha256)
-        .unwrap()
-        .nquads;
+    let expected = try_canonicalize_view(
+        &*flat,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     // The fixture really does exercise what it claims; a parity assertion over
     // bytes that happened to omit the overlay would prove nothing.
     for fragment in [
@@ -1534,27 +1573,59 @@ fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
     }
 
     // The `&RdfDataset` entry point is the same core, not a second one.
-    assert_eq!(try_canonicalize(&flat).unwrap().nquads, expected);
+    assert_eq!(
+        try_canonicalize(
+            &flat,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
+        expected
+    );
 
     let digest = ContentDigest::of(expected.as_bytes());
     for (name, actual) in [
         (
             "independent composite",
-            try_canonicalize_view(&independent, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
+            try_canonicalize_view(
+                &independent,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads,
         ),
         (
             "shared-scope composite",
-            try_canonicalize_view(&shared, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
+            try_canonicalize_view(
+                &shared,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads,
         ),
         (
             "delta",
-            try_canonicalize_view(&delta, CanonHash::Sha256)
-                .unwrap()
-                .nquads,
+            try_canonicalize_view(
+                &delta,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads,
         ),
     ] {
         assert_eq!(
@@ -1583,7 +1654,17 @@ fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
     // refused.
     assert!(check_admissible_view(&independent).is_ok());
     assert!(check_admissible_view(&delta).is_ok());
-    assert!(try_canonicalize_view(&independent, CanonHash::Sha256).is_ok());
+    assert!(
+        try_canonicalize_view(
+            &independent,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
+    );
 
     let mut inadmissible = RdfDatasetBuilder::new();
     let s = inadmissible.intern_iri("http://example.org/s").unwrap();
@@ -1596,7 +1677,17 @@ fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
         CompositeDatasetView::new(vec![inadmissible.freeze().unwrap()], ViewLimits::default())
             .unwrap();
     assert!(check_admissible_view(&inadmissible).is_err());
-    assert!(try_canonicalize_view(&inadmissible, CanonHash::Sha256).is_err());
+    assert!(
+        try_canonicalize_view(
+            &inadmissible,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1606,16 +1697,56 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
     let delta = delta_of(&flat);
 
     // Cross-type, both directions, with nothing materialized on either side.
-    assert!(datasets_isomorphic(&*flat, &independent).unwrap());
-    assert!(datasets_isomorphic(&independent, &*flat).unwrap());
-    assert!(datasets_isomorphic(&delta, &independent).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &*flat,
+            &independent,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    assert!(
+        datasets_isomorphic(
+            &independent,
+            &*flat,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    assert!(
+        datasets_isomorphic(
+            &delta,
+            &independent,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     // Two independent occurrences of one source are TWO occurrences: the same
     // local blank label in two sources stays two distinct nodes, so the doubled
     // view is not isomorphic to the single one …
     let doubled =
         CompositeDatasetView::new(vec![flat.clone(), flat.clone()], ViewLimits::default()).unwrap();
-    assert!(!datasets_isomorphic(&*flat, &doubled).unwrap());
+    assert!(
+        !datasets_isomorphic(
+            &*flat,
+            &doubled,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     assert_eq!(blank_count_view(&doubled), 2 * blank_count_view(&*flat));
 
     // … and it IS isomorphic to the flat dataset built by appending the source
@@ -1626,7 +1757,17 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
     native.push_dataset(&flat).unwrap();
     native.push_dataset(&flat).unwrap();
     let native = native.freeze().unwrap();
-    assert!(datasets_isomorphic(&native, &doubled).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &native,
+            &doubled,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     // Sharing scopes instead collapses the two occurrences back to one.
     let shared = CompositeDatasetView::with_shared_scopes(
@@ -1634,7 +1775,17 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
         ViewLimits::default(),
     )
     .unwrap();
-    assert!(datasets_isomorphic(&*flat, &shared).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &*flat,
+            &shared,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     // A negative that is not about counts: same shape, one different ground IRI.
     let mut altered = RdfDatasetBuilder::new();
@@ -1646,7 +1797,17 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
     let p = altered.intern_iri(P).unwrap();
     altered.push_quad(s, p, s, None).unwrap();
     let altered = altered.freeze().unwrap();
-    assert!(!datasets_isomorphic(&altered, &independent).unwrap());
+    assert!(
+        !datasets_isomorphic(
+            &altered,
+            &independent,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -1662,6 +1823,10 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
             &flat
                 .project_graph(Some(&purrdf_core::RdfTerm::iri(graph)))
                 .unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap()
         .nquads;
@@ -1674,24 +1839,72 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
         for (name, view_bytes, view_digest) in [
             (
                 "flat",
-                try_canonicalize_graph_view(&*flat, graph, CanonHash::Sha256)
-                    .unwrap()
-                    .nquads,
-                try_graph_digest_view(&*flat, graph).unwrap(),
+                try_canonicalize_graph_view(
+                    &*flat,
+                    graph,
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                .nquads,
+                try_graph_digest_view(
+                    &*flat,
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap(),
             ),
             (
                 "composite",
-                try_canonicalize_graph_view(&independent, graph, CanonHash::Sha256)
-                    .unwrap()
-                    .nquads,
-                try_graph_digest_view(&independent, graph).unwrap(),
+                try_canonicalize_graph_view(
+                    &independent,
+                    graph,
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                .nquads,
+                try_graph_digest_view(
+                    &independent,
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap(),
             ),
             (
                 "delta",
-                try_canonicalize_graph_view(&delta, graph, CanonHash::Sha256)
-                    .unwrap()
-                    .nquads,
-                try_graph_digest_view(&delta, graph).unwrap(),
+                try_canonicalize_graph_view(
+                    &delta,
+                    graph,
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                .nquads,
+                try_graph_digest_view(
+                    &delta,
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap(),
             ),
         ] {
             assert_eq!(
@@ -1713,20 +1926,52 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     // carries the statement layer, `<other>` does not, and the default graph's
     // reifier over the SAME triple term belongs to neither.
     assert_ne!(
-        try_graph_digest_view(&*flat, GRAPH).unwrap(),
-        try_graph_digest_view(&*flat, OTHER_GRAPH).unwrap()
+        try_graph_digest_view(
+            &*flat,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        try_graph_digest_view(
+            &*flat,
+            OTHER_GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
     assert!(
-        try_canonicalize_graph_view(&*flat, GRAPH, CanonHash::Sha256)
-            .unwrap()
-            .nquads
-            .contains("<urn:purrdf:rdfc:reifies>")
+        try_canonicalize_graph_view(
+            &*flat,
+            GRAPH,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads
+        .contains("<urn:purrdf:rdfc:reifies>")
     );
     assert!(
-        !try_canonicalize_graph_view(&*flat, OTHER_GRAPH, CanonHash::Sha256)
-            .unwrap()
-            .nquads
-            .contains("<urn:purrdf:rdfc:reifies>"),
+        !try_canonicalize_graph_view(
+            &*flat,
+            OTHER_GRAPH,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads
+        .contains("<urn:purrdf:rdfc:reifies>"),
         "one graph's statement layer must not leak into another's projection"
     );
 
@@ -1737,22 +1982,50 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
         try_canonicalize(
             &flat
                 .project_graph(Some(&purrdf_core::RdfTerm::iri(absent)))
-                .unwrap()
+                .unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap()
         .nquads,
         ""
     );
     for empty in [
-        try_canonicalize_graph_view(&*flat, absent, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_graph_view(&independent, absent, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_graph_view(&delta, absent, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_graph_view(
+            &*flat,
+            absent,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads,
+        try_canonicalize_graph_view(
+            &independent,
+            absent,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads,
+        try_canonicalize_graph_view(
+            &delta,
+            absent,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads,
     ] {
         assert_eq!(empty, "");
     }
@@ -1772,8 +2045,28 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     poisoned.push_quad(s, p, o, Some(clean_graph)).unwrap();
     let poisoned =
         CompositeDatasetView::new(vec![poisoned.freeze().unwrap()], ViewLimits::default()).unwrap();
-    assert!(try_graph_digest_view(&poisoned, GRAPH).is_err());
-    assert!(try_graph_digest_view(&poisoned, OTHER_GRAPH).is_ok());
+    assert!(
+        try_graph_digest_view(
+            &poisoned,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        try_graph_digest_view(
+            &poisoned,
+            OTHER_GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .is_ok()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1825,24 +2118,42 @@ fn value_probe<D: DatasetView>(
 /// which may have been reached by appending. Everything a consumer can OBSERVE of
 /// the two must be identical; only the work counters are one-sided (see below).
 fn assert_same_view(left: &CompositeDatasetView, right: &CompositeDatasetView) {
-    let bytes = try_canonicalize_view(left, CanonHash::Sha256)
-        .unwrap()
-        .nquads;
+    let bytes = try_canonicalize_view(
+        left,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     assert!(!bytes.is_empty(), "an empty canonical form proves nothing");
     assert_eq!(
         bytes,
-        try_canonicalize_view(right, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_view(
+            right,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         "canonical bytes"
     );
     assert_eq!(
         ContentDigest::of(bytes.as_bytes()),
         ContentDigest::of(
-            try_canonicalize_view(right, CanonHash::Sha256)
-                .unwrap()
-                .nquads
-                .as_bytes()
+            try_canonicalize_view(
+                right,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads
+            .as_bytes()
         )
     );
 
@@ -1852,8 +2163,24 @@ fn assert_same_view(left: &CompositeDatasetView, right: &CompositeDatasetView) {
     for graph in &graphs {
         let TermValue::Iri(iri) = graph else { continue };
         assert_eq!(
-            try_graph_digest_view(left, iri).unwrap(),
-            try_graph_digest_view(right, iri).unwrap(),
+            try_graph_digest_view(
+                left,
+                iri,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            try_graph_digest_view(
+                right,
+                iri,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "per-graph digest of {iri}"
         );
     }
@@ -2189,16 +2516,25 @@ fn the_modal_constructors_are_the_endpoints_of_the_per_source_binding() {
 fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart() {
     let base = identity_fixture();
     let delta = Arc::new(delta_of(&base));
-    let alone = try_canonicalize_view(&*base, CanonHash::Sha256)
-        .unwrap()
-        .nquads;
+    let alone = try_canonicalize_view(
+        &*base,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
 
     // The reference for "two independent occurrences": the flat dataset built by
     // appending the source to itself.
     let mut doubled = RdfDatasetBuilder::new();
     doubled.push_dataset(&base).unwrap();
     doubled.push_dataset(&base).unwrap();
-    let doubled = try_canonicalize(&doubled.freeze().unwrap()).unwrap().nquads;
+    let doubled = try_canonicalize(
+        &doubled.freeze().unwrap(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     assert_ne!(alone, doubled, "the fixture must carry blanks to separate");
 
     let native = |binding| CompositeSource::new(base.clone()).with_scope_binding(binding);
@@ -2211,9 +2547,16 @@ fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart
     )
     .unwrap();
     assert_eq!(
-        try_canonicalize_view(&co_referent, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_view(
+            &co_referent,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         alone
     );
 
@@ -2227,9 +2570,16 @@ fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart
     )
     .unwrap();
     assert_eq!(
-        try_canonicalize_view(&apart, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_view(
+            &apart,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         doubled
     );
 
@@ -2246,9 +2596,13 @@ fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart
         ViewLimits::default(),
     )
     .unwrap();
-    let mixed_bytes = try_canonicalize_view(&mixed, CanonHash::Sha256)
-        .unwrap()
-        .nquads;
+    let mixed_bytes = try_canonicalize_view(
+        &mixed,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     assert_eq!(mixed_bytes, doubled, "co-referent pair plus one occurrence");
     assert_ne!(
         mixed_bytes, alone,
@@ -2269,9 +2623,16 @@ fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart
     )
     .unwrap();
     assert_eq!(
-        try_canonicalize_view(&all_shared, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_view(
+            &all_shared,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         alone
     );
 
@@ -2412,9 +2773,29 @@ fn retention_is_released_by_the_last_reader_under_either_drop_order() {
         let cloned = first.clone();
         let third = ledger.retain_dataset(&base);
         // Put something in the memo too, so its release is proved as well.
-        let digest =
-            first.memoized_graph_digest(GRAPH, || try_graph_digest_view(&*base, GRAPH).unwrap());
-        assert_eq!(digest, try_graph_digest_view(&*base, GRAPH).unwrap());
+        let digest = first.memoized_graph_digest(GRAPH, || {
+            try_graph_digest_view(
+                &*base,
+                GRAPH,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            digest,
+            try_graph_digest_view(
+                &*base,
+                GRAPH,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
 
         let full = ledger.snapshot();
         assert_eq!(full.distinct_owners, 1);
@@ -2465,8 +2846,24 @@ fn two_distinct_bases_each_report_their_own_retention() {
     let guard_two = ledger.retain_dataset(&two);
     assert_ne!(guard_one.owner_key(), guard_two.owner_key());
     assert_eq!(
-        try_graph_digest_view(&*one, GRAPH).unwrap(),
-        try_graph_digest_view(&*two, GRAPH).unwrap(),
+        try_graph_digest_view(
+            &*one,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        try_graph_digest_view(
+            &*two,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "the two bases are RDF-identical, and are still two residents"
     );
 
@@ -2489,10 +2886,27 @@ fn two_distinct_bases_each_report_their_own_retention() {
 
     // Each keeps its own memo slot: the same graph name under two owners is two
     // entries, and dropping one owner leaves the other's analysis alone.
-    let digest =
-        guard_one.memoized_graph_digest(GRAPH, || try_graph_digest_view(&*one, GRAPH).unwrap());
+    let digest = guard_one.memoized_graph_digest(GRAPH, || {
+        try_graph_digest_view(
+            &*one,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+    });
     assert_eq!(
-        guard_two.memoized_graph_digest(GRAPH, || try_graph_digest_view(&*two, GRAPH).unwrap()),
+        guard_two.memoized_graph_digest(GRAPH, || try_graph_digest_view(
+            &*two,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()),
         digest
     );
     assert_eq!(ledger.snapshot().memo_entries, 2);
@@ -2517,7 +2931,12 @@ fn a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers() {
     assert_eq!(reader_a.mutability(), OwnerMutability::Frozen);
     assert_eq!(reader_a.charge(), RetainedCharge::of_dataset(&base));
 
-    let direct = try_graph_digest_view(&*base, GRAPH).unwrap();
+    let direct = try_graph_digest_view(
+        &*base,
+        GRAPH,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let cold = ledger.snapshot();
     assert_eq!(
         (cold.memo_entries, cold.memo_hits, cold.memo_misses),
@@ -2525,8 +2944,17 @@ fn a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers() {
     );
 
     // Miss: the closure runs, the digest is stored, and its bytes are accounted.
-    let computed =
-        reader_a.memoized_graph_digest(GRAPH, || try_graph_digest_view(&*base, GRAPH).unwrap());
+    let computed = reader_a.memoized_graph_digest(GRAPH, || {
+        try_graph_digest_view(
+            &*base,
+            GRAPH,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+    });
     assert_eq!(computed, direct);
     let warm = ledger.snapshot();
     assert_eq!(
@@ -2547,9 +2975,23 @@ fn a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers() {
     assert_eq!(hot.memo_bytes, warm.memo_bytes);
 
     // A second graph is a second entry, and the fallible spelling agrees.
-    let other_direct = try_graph_digest_view(&*base, OTHER_GRAPH).unwrap();
+    let other_direct = try_graph_digest_view(
+        &*base,
+        OTHER_GRAPH,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let other = reader_b
-        .try_memoized_graph_digest(OTHER_GRAPH, || try_graph_digest_view(&*base, OTHER_GRAPH))
+        .try_memoized_graph_digest(OTHER_GRAPH, || {
+            try_graph_digest_view(
+                &*base,
+                OTHER_GRAPH,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+        })
         .unwrap();
     assert_eq!(other, other_direct);
     assert_ne!(other, direct);
@@ -2575,8 +3017,15 @@ fn a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers() {
     );
     for _ in 0..2 {
         assert_eq!(
-            live_reader
-                .memoized_graph_digest(GRAPH, || try_graph_digest_view(&*live, GRAPH).unwrap()),
+            live_reader.memoized_graph_digest(GRAPH, || try_graph_digest_view(
+                &*live,
+                GRAPH,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()),
             direct
         );
     }
@@ -2641,7 +3090,11 @@ fn a_shared_ledger_does_not_move_per_view_admission() {
     assert!(
         datasets_isomorphic(
             &*base,
-            &CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap()
+            &CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap(),
         "and a single-source composite still reads exactly its base"
@@ -2885,10 +3338,18 @@ fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
     );
     assert_ne!(flat.digest().unwrap(), flat.pipeline_root().unwrap());
     assert!(
-        try_canonicalize_graph_view(&*base, CG1, CanonHash::Sha256)
-            .unwrap()
-            .nquads
-            .contains("<urn:purrdf:rdfc:reifies>"),
+        try_canonicalize_graph_view(
+            &*base,
+            CG1,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads
+        .contains("<urn:purrdf:rdfc:reifies>"),
         "the fixture's statement layer must actually reach the per-graph identity"
     );
 }
@@ -3878,12 +4339,26 @@ fn a_graph_selection_filters_every_layer_and_keeps_the_names_it_chose() {
     let expectation = selection_expectation();
     assert_eq!(surface(&selected), surface(&expectation));
     assert_eq!(
-        try_canonicalize_view(&selected, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_view(&expectation, CanonHash::Sha256)
-            .unwrap()
-            .nquads
+        try_canonicalize_view(
+            &selected,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
+        try_canonicalize_view(
+            &expectation,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads
     );
     // The retained source reports the selection back, in canonical name order.
     let (retained, names) = selected.sources()[0]
@@ -4012,12 +4487,26 @@ fn a_selection_places_binds_and_retains_like_any_other_source() {
     )
     .unwrap();
     assert_eq!(
-        try_canonicalize_view(&rejoined, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_view(&source, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_view(
+            &rejoined,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
+        try_canonicalize_view(
+            &source,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         "a shared selection adds no occurrence its source did not already have"
     );
     assert_eq!(blank_count_view(&rejoined), blank_count_view(&*source));
@@ -4176,9 +4665,13 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
             .expect("a single retained source seals into one page");
     let paged_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
 
-    let expected = try_canonicalize_flat_view(&*flat, CanonHash::Sha256)
-        .expect("the fixture is admissible")
-        .nquads;
+    let expected = try_canonicalize_flat_view(
+        &*flat,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admissible")
+    .nquads;
     assert!(
         expected.contains(&format!("<{REIFIES}>")),
         "the fixture must actually carry a real rdf:reifies row under the flat \
@@ -4192,27 +4685,55 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
     for (name, view_bytes) in [
         (
             "independent composite",
-            try_canonicalize_flat_view(&composite, CanonHash::Sha256)
-                .expect("composite is admissible")
-                .nquads,
+            try_canonicalize_flat_view(
+                &composite,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("composite is admissible")
+            .nquads,
         ),
         (
             "delta",
-            try_canonicalize_flat_view(&delta, CanonHash::Sha256)
-                .expect("delta is admissible")
-                .nquads,
+            try_canonicalize_flat_view(
+                &delta,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("delta is admissible")
+            .nquads,
         ),
         (
             "paged (single page)",
-            try_canonicalize_flat_view(&paged_view, CanonHash::Sha256)
-                .expect("paged view is admissible and ready")
-                .nquads,
+            try_canonicalize_flat_view(
+                &paged_view,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("paged view is admissible and ready")
+            .nquads,
         ),
         (
             "shared Arc<RdfDataset>",
-            try_canonicalize_flat_view(&flat, CanonHash::Sha256)
-                .expect("shared handle is admissible")
-                .nquads,
+            try_canonicalize_flat_view(
+                &flat,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("shared handle is admissible")
+            .nquads,
         ),
     ] {
         assert_eq!(
@@ -4227,22 +4748,50 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
     // ancestor both sides could have coincidentally matched.
     let composite_materialized = composite.materialize().expect("composite materializes");
     assert_eq!(
-        try_canonicalize_flat_view(&*composite_materialized, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_flat_view(&composite, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_flat_view(
+            &*composite_materialized,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
+        try_canonicalize_flat_view(
+            &composite,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         "composite view flat canon must equal its own materialized dataset's flat canon"
     );
     let delta_materialized = delta.materialize().expect("delta materializes");
     assert_eq!(
-        try_canonicalize_flat_view(&*delta_materialized, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
-        try_canonicalize_flat_view(&delta, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_flat_view(
+            &*delta_materialized,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
+        try_canonicalize_flat_view(
+            &delta,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         "delta view flat canon must equal its own materialized dataset's flat canon"
     );
     // `PagedQueryView` offers no `materialize()` of its own: it is a fallible READ

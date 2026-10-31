@@ -150,7 +150,11 @@ pub(crate) fn checked(dataset: &RdfDataset, answer: &Certified<Verdict>) -> Serv
     let encoded = proof.encode();
     let decoded = ServiceProof::decode(&encoded).expect("native canonical proof");
     assert_eq!(decoded.encode(), encoded);
-    let mut checker = Reasoner::with_proofs(dataset).expect("consumer-owned source");
+    let mut checker = Reasoner::with_proofs(
+        dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("consumer-owned source");
     checker
         .prepare(decoded.question())
         .expect("query preparation");
@@ -194,7 +198,11 @@ fn shared_instances_prepare_once_and_warm_no_clash_calls_do_not_copy_proofs() {
 #[test]
 fn a_class_name_does_not_assert_an_inhabitant_but_the_question_supplies_one() {
     let dataset = shared_schema(2, 0, true);
-    let mut reasoner = Reasoner::with_proofs(&dataset).unwrap();
+    let mut reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert!(reasoner.schema_bounds(&term("A")).is_some());
     assert_eq!(*reasoner.consistency().answer(), Verdict::True);
     let answer = reasoner.class_satisfiability(&term("A")).unwrap();
@@ -261,7 +269,14 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
             }
         }
         let dataset = fixture.freeze();
-        let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+        let reasoner = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = reasoner.consistency();
         assert_eq!(
             *answer.answer(),
@@ -320,7 +335,14 @@ fn qualified_containment_is_directional_and_has_no_unrelated_transfer() {
         }
         fixture.instance("i", class);
         let dataset = fixture.freeze();
-        let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+        let reasoner = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let expected = if relation == 1 || relation == 2 {
             Verdict::False
         } else {
@@ -358,7 +380,14 @@ fn exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer() {
         }
         fixture.instance("i", class);
         let dataset = fixture.freeze();
-        let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+        let reasoner = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let evidence = reasoner
             .schema_bounds(&term("A"))
             .expect("exact supported datatype");
@@ -419,7 +448,14 @@ fn exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges() {
         );
         fixture.instance("i", class);
         let dataset = fixture.freeze();
-        let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+        let reasoner = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = reasoner.consistency();
         assert_eq!(
             *answer.answer(),
@@ -508,7 +544,11 @@ fn actual_long_datatype_temporaries_share_the_preparation_owner() {
     fixture.bounds(class, role, range, 2, true, true);
     fixture.instance("i", class);
     let dataset = fixture.freeze();
-    let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+    let reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         reasoner.schema_bounds(&term("A")).unwrap().upper_bound(),
         super::SchemaUpperBound::DataExtent(1)
@@ -596,7 +636,11 @@ fn nominal_identification_and_distinct_successors_remain_per_individual() {
 #[test]
 fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
     let original = shared_schema(1, 1, true);
-    let original_reasoner = Reasoner::with_proofs(&original).unwrap();
+    let original_reasoner = Reasoner::with_proofs(
+        &original,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let original_answer = original_reasoner.consistency();
     let proof = checked(&original, &original_answer);
     for revised in [
@@ -604,7 +648,14 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
         shared_schema(1, 1, false),
         shared_schema(0, 1, false),
     ] {
-        let checker = Reasoner::with_proofs(&revised).unwrap();
+        let checker = Reasoner::with_proofs(
+            &revised,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(*checker.consistency().answer(), Verdict::True);
         let context = checker.proof_context().unwrap();
         assert!(
@@ -651,7 +702,15 @@ fn refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_s
             bytes: Some(0),
         },
     ] {
-        let mut reasoner = Reasoner::with_proofs_and_preparation_budget(&dataset, budget).unwrap();
+        let mut reasoner = Reasoner::with_proofs_and_preparation_budget(
+            &dataset,
+            budget,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert!(reasoner.schema_preparation().obstruction.is_some());
         assert!(match reasoner.schema_preparation().obstruction.unwrap() {
             SchemaObstruction::Work { .. } => budget.work.is_some(),
@@ -745,8 +804,22 @@ fn stopping_an_existing_owner_does_not_publish_clear_or_detach_pins() {
 fn cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises() {
     for contradictory in [false, true] {
         let dataset = shared_schema(4, 16, contradictory);
-        let prepared = Reasoner::with_proofs(&dataset).unwrap();
-        let mut reference = Reasoner::with_proofs(&dataset).unwrap();
+        let prepared = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let mut reference = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         reference.kb.schema_reference = true;
         let actual = prepared.consistency();
         let expected = reference.consistency();

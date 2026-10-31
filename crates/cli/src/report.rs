@@ -77,6 +77,7 @@ pub(crate) fn materialize_reported<D: DatasetView>(
     plan: Materialization<'_>,
     limits: &MaterializeLimits,
     target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     let regime = regime_name(plan.regime());
     reported(
@@ -84,6 +85,7 @@ pub(crate) fn materialize_reported<D: DatasetView>(
         materialize_with(dataset, plan, &limits.eval_options(), None),
         limits,
         target,
+        canonical,
     )
 }
 
@@ -101,6 +103,7 @@ pub(crate) fn materialize_reported_with_imports(
     imports: &ImportMap,
     limits: &MaterializeLimits,
     target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     let regime = regime_name(plan.regime());
     reported(
@@ -108,6 +111,7 @@ pub(crate) fn materialize_reported_with_imports(
         materialize_with_imports(premise, plan, imports, &limits.eval_options(), None),
         limits,
         target,
+        canonical,
     )
 }
 
@@ -153,14 +157,15 @@ fn reported<E: std::fmt::Display>(
     outcome: Result<(Arc<RdfDataset>, ReasoningReport), EntailError<E>>,
     limits: &MaterializeLimits,
     target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     match outcome {
         Ok((closure, report)) => {
-            surface(target, &report)?;
+            surface(target, &report, canonical)?;
             Ok(closure)
         }
         Err(EntailError::Inconsistent(run)) => {
-            surface(target, run.report())?;
+            surface(target, run.report(), canonical)?;
             let error: EntailError<E> = EntailError::Inconsistent(run);
             Err(CliError::Runtime(error.to_string()))
         }
@@ -243,6 +248,7 @@ pub(crate) fn materialize_reported_over_input(
     imports: &crate::premise_imports::PremiseImports,
     limits: &MaterializeLimits,
     target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     struct Op<'a> {
         plan: Materialization<'a>,
@@ -257,9 +263,10 @@ pub(crate) fn materialize_reported_over_input(
         fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
             self,
             view: &D,
+            canonical: &mut crate::canonical::Request,
         ) -> Result<Self::Output, CliError> {
             self.imports
-                .materialize(view, self.plan, self.limits, self.target)
+                .materialize(view, self.plan, self.limits, self.target, canonical)
         }
     }
 
@@ -274,6 +281,7 @@ pub(crate) fn materialize_reported_over_input(
             limits,
             target,
         },
+        canonical,
     )
 }
 
@@ -290,8 +298,12 @@ pub(crate) fn materialize_reported_over_input(
 /// it here, and it surfaces it through this one function so the two lanes cannot render
 /// differently. A run a stop signal ended computed no closure and so holds no report; that
 /// lane surfaces nothing rather than an empty one.
-pub(crate) fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
-    surface_rendered(target, &render_reasoning_report(report))
+pub(crate) fn surface(
+    target: &ReportTarget,
+    report: &ReasoningReport,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
+    surface_rendered(target, &render_reasoning_report(report), canonical)
 }
 
 /// Surface an ALREADY-RENDERED certificate per the decoded `--report` target.
@@ -301,11 +313,23 @@ pub(crate) fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result
 /// they already rendered — the `entails` lane never holds a [`ReasoningReport`] value at all
 /// — and the alternative was a second `--report` convention for one subcommand. There is one
 /// convention, and both lanes end here.
-pub(crate) fn surface_rendered(target: &ReportTarget, rendered: &str) -> Result<(), CliError> {
+pub(crate) fn surface_rendered(
+    target: &ReportTarget,
+    rendered: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
+    canonical.defer_report(target, rendered)
+}
+
+/// Publish an already-finalized report only after the request's receipt succeeds.
+pub(crate) fn publish_rendered(target: &ReportTarget, rendered: &str) -> Result<(), CliError> {
+    use std::io::Write as _;
     match target {
         ReportTarget::Silent => Ok(()),
         ReportTarget::Stderr => {
-            eprint!("{rendered}");
+            let mut stderr = std::io::stderr().lock();
+            stderr.write_all(rendered.as_bytes())?;
+            stderr.flush()?;
             Ok(())
         }
         ReportTarget::File(path) => {
@@ -399,13 +423,16 @@ mod tests {
     fn an_inconsistent_run_still_writes_its_report() {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("report.txt");
-        let error = materialize_reported(
+        let mut canonical =
+            crate::canonical::Request::new(None, None).expect("native-only report request");
+        let result = materialize_reported(
             &inconsistent(),
             Materialization::OwlRl,
             &MaterializeLimits::default(),
             &ReportTarget::File(path.clone()),
-        )
-        .expect_err("cax-dw refuses");
+            &mut canonical,
+        );
+        let error = canonical.finish(result).expect_err("cax-dw refuses");
         assert!(error.to_string().contains("cax-dw"), "{error}");
         let written = std::fs::read_to_string(&path).expect("the report was written");
         assert!(written.starts_with(REPORT_FORMAT_BANNER), "{written}");

@@ -631,9 +631,14 @@ impl Corpus {
     /// # Errors
     /// Refuses an unreadable or unparseable input artifact; engine outcomes,
     /// including failures, are records rather than errors.
-    pub fn execute(&self, case: &Case<'_>, profile: &str) -> Result<Execution, String> {
+    pub fn execute(
+        &self,
+        case: &Case<'_>,
+        profile: &str,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Execution, String> {
         let selection = self.select(profile)?;
-        self.execute_selected(case, profile, &selection)
+        self.execute_selected(case, profile, &selection, control)
     }
 
     /// Execute one case under an already resolved selection.
@@ -645,6 +650,7 @@ impl Corpus {
         case: &Case<'_>,
         profile: &str,
         selection: &Selection,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Execution, String> {
         let expected = expected_observation(case.case);
         let record = |surface: &str, observed: Observation| {
@@ -706,7 +712,7 @@ impl Corpus {
                 &purrdf_shapes::rules::RuleLimits::default(),
                 purrdf_shapes::rules::LimitKnobs::new("rounds", "terms", "facts", "joins"),
             ) {
-                Ok(inference) => self.grade_inferences(case, &inference),
+                Ok(inference) => self.grade_inferences(case, &inference, control),
                 Err(error) => Observation {
                     kind: if matches!(error, purrdf_shapes::ShapesError::Storage(_)) {
                         OutcomeKind::ResourceExhausted
@@ -719,8 +725,8 @@ impl Corpus {
             };
             records.push(record("native/rules", observed));
         } else {
-            let grade = |outcome: Result<CompleteValidationReport, CompleteValidationError>| {
-                self.observe(case, law, &shapes_dataset, outcome)
+            let mut grade = |outcome: Result<CompleteValidationReport, CompleteValidationError>| {
+                self.observe(case, law, &shapes_dataset, outcome, control)
             };
             records.push(record(
                 "native/fresh",
@@ -783,9 +789,10 @@ impl Corpus {
         law: ShaclProfile,
         shapes: &RdfDataset,
         outcome: Result<CompleteValidationReport, CompleteValidationError>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Observation {
         match outcome {
-            Ok(report) => match compare_report(case, law, shapes, &report) {
+            Ok(report) => match compare_report(case, law, shapes, &report, control) {
                 Ok(()) => Observation {
                     kind: OutcomeKind::Compared,
                     reason: None,
@@ -796,7 +803,12 @@ impl Corpus {
                     reason: None,
                     message,
                 },
-                Err(GradeError::Canonicalization(message)) => Observation {
+                Err(GradeError::Canonicalization(cause)) => Observation {
+                    kind: OutcomeKind::ResourceExhausted,
+                    reason: None,
+                    message: cause.to_string(),
+                },
+                Err(GradeError::ProjectionLimit(message)) => Observation {
                     kind: OutcomeKind::ResourceExhausted,
                     reason: None,
                     message,
@@ -827,6 +839,7 @@ impl Corpus {
         &self,
         case: &Case<'_>,
         inference: &purrdf_shapes::srl::Inference,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Observation {
         let graded = (|| {
             let inventory::Expected::Outcome(spec) = &case.case.expected else {
@@ -853,14 +866,14 @@ impl Corpus {
                     manifest::inference_triples(reader, reader.one(case.entry, mf::RESULT)?)?;
                 triples_dataset(&triples)?
             };
-            report::compare_graphs(&expected, &inline).map_err(|error| match error {
+            report::compare_graphs(&expected, &inline, control).map_err(|error| match error {
                 GradeError::Mismatch(_) => {
                     malformed("the inline mf:result list and the expected graph disagree")
                 }
                 other => other,
             })?;
             let actual = inference.inferred_dataset().map_err(shapes_grade_error)?;
-            report::compare_graphs(&expected, &actual)
+            report::compare_graphs(&expected, &actual, control)
         })();
         match graded {
             Ok(()) => Observation {
@@ -873,7 +886,12 @@ impl Corpus {
                 reason: None,
                 message,
             },
-            Err(GradeError::Canonicalization(message)) => Observation {
+            Err(GradeError::Canonicalization(cause)) => Observation {
+                kind: OutcomeKind::ResourceExhausted,
+                reason: None,
+                message: cause.to_string(),
+            },
+            Err(GradeError::ProjectionLimit(message)) => Observation {
                 kind: OutcomeKind::ResourceExhausted,
                 reason: None,
                 message,
@@ -900,7 +918,10 @@ impl Corpus {
     ///
     /// # Errors
     /// As [`Self::cases`] and [`Self::execute`].
-    pub fn run(&self) -> Result<(Totals, Vec<Execution>), String> {
+    pub fn run(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<(Totals, Vec<Execution>), String> {
         let cases = self.cases()?;
         let mut executions = Vec::new();
         for case in &cases {
@@ -909,7 +930,7 @@ impl Corpus {
                 .selected_profiles()
                 .map_err(|error| error.to_string())?
             {
-                executions.push(self.execute(case, profile)?);
+                executions.push(self.execute(case, profile, control)?);
             }
         }
         Ok((Totals::of(cases.len(), &executions), executions))
@@ -1095,6 +1116,7 @@ fn compare_report(
     law: ShaclProfile,
     shapes: &RdfDataset,
     actual: &CompleteValidationReport,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), GradeError> {
     let manifest_dataset = &case.document.dataset;
     let reader = Reader {
@@ -1196,6 +1218,7 @@ fn compare_report(
             correspondence: &actual_links,
         },
         policy,
+        control,
     )
 }
 

@@ -11,7 +11,11 @@ use purrdf_iri::vocab::{owl, rdf, rdfs};
 
 /// Independent preparation for a tiny authored input; no corpus factory is involved.
 fn checked_fixture(input: &purrdf_core::RdfDataset) -> (DlProof, DlProofContext<'static>) {
-    let producer = Reasoner::with_proofs(input).unwrap();
+    let producer = Reasoner::with_proofs(
+        input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let result = producer.consistency();
     assert_eq!(*result.answer(), Verdict::False);
     let proof = result
@@ -23,7 +27,11 @@ fn checked_fixture(input: &purrdf_core::RdfDataset) -> (DlProof, DlProofContext<
         .proof()
         .unwrap()
         .clone();
-    let consumer = Reasoner::with_proofs(input).unwrap();
+    let consumer = Reasoner::with_proofs(
+        input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     (proof, consumer.proof_context().unwrap())
 }
 
@@ -308,10 +316,13 @@ fn checked_schema_recording_refuses_other_owner_tampering_legacy_and_storage_fai
             .is_ok(),
         "the producer proof is checked against an independently prepared consumer"
     );
-    let wrong = Reasoner::with_proofs(&Fixture::default().freeze())
-        .unwrap()
-        .proof_context()
-        .unwrap();
+    let wrong = Reasoner::with_proofs(
+        &Fixture::default().freeze(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .proof_context()
+    .unwrap();
     assert!(
         proof
             .replay_clash_recording(index, &wrong, Journal::default())
@@ -1427,10 +1438,13 @@ fn checked_clash_resolves_actual_derived_source_membership_without_copying() {
 #[test]
 fn source_resolution_refuses_wrong_source_and_absent_current_support() {
     let (mut proof, context) = derived();
-    let wrong = Reasoner::with_proofs(&Fixture::default().freeze())
-        .unwrap()
-        .proof_context()
-        .unwrap();
+    let wrong = Reasoner::with_proofs(
+        &Fixture::default().freeze(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .proof_context()
+    .unwrap();
     assert!(proof.resolve_clash(0, &wrong).is_err());
     assert!(proof.resolve_clash(proof.clashes.len(), &context).is_err());
     for step in &mut proof.clashes {

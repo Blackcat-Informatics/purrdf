@@ -803,7 +803,14 @@ mod tests {
         // The supported umbrella also exposes the succinct dataset-pack cache
         // boundary; downstreams never need to depend on purrdf-core directly.
         let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-        let pack = PackBuilder::build_bytes(&empty).expect("pack empty dataset");
+        let pack = PackBuilder::build_bytes(
+            &empty,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack empty dataset");
         let restored = restore_pack(&pack).expect("restore empty dataset");
         assert_eq!(restored.quad_count(), 0);
 
@@ -813,7 +820,15 @@ mod tests {
         let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
 
         let page_rows = std::num::NonZeroUsize::new(1).expect("positive canonical bound");
-        let base = canonical_paged_seal(restored.as_ref(), page_rows).expect("empty paged base");
+        let base = canonical_paged_seal(
+            restored.as_ref(),
+            page_rows,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("empty paged base");
         let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
         let value = TermValue::iri("https://example.org/value");
         stack

@@ -617,9 +617,13 @@ impl PagedStack {
     ///
     /// # Errors
     /// Source drift or head encoding failures publish no layer and retain the head.
-    pub fn seal_head(&mut self, page_rows: NonZeroUsize) -> Result<(), PagedStackError> {
+    pub fn seal_head(
+        &mut self,
+        page_rows: NonZeroUsize,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<(), PagedStackError> {
         Self::check_sources(&self.layers)?;
-        let dataset = canonical_paged_seal(self.frozen_head()?.as_ref(), page_rows)
+        let dataset = canonical_paged_seal(self.frozen_head()?.as_ref(), page_rows, control)
             .map_err(PagedStackError::Seal)?;
         Self::check_sources(&self.layers)?;
         self.layers
@@ -645,11 +649,12 @@ impl PagedStack {
         &self,
         limits: PagedQueryLimits,
         page_rows: NonZeroUsize,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
         let snapshot = self
             .snapshot()
             .map_err(|error| CanonicalPagedError::Construction(Box::new(error)))?;
-        snapshot.compact(limits, page_rows)
+        snapshot.compact(limits, page_rows, control)
     }
 }
 
@@ -815,8 +820,9 @@ impl PagedStackSnapshot {
         &self,
         limits: PagedQueryLimits,
         page_rows: NonZeroUsize,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
-        canonical_paged_seal(&self.query_view(limits), page_rows)
+        canonical_paged_seal(&self.query_view(limits), page_rows, control)
     }
 }
 
@@ -1287,6 +1293,7 @@ impl CanonicalRecord {
 pub fn canonical_paged_seal<D: FallibleDatasetView>(
     view: &D,
     page_rows: NonZeroUsize,
+    control: &mut crate::CanonicalizationControl<'_>,
 ) -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
     checkpoint(view)?;
     let mut records = BTreeSet::new();
@@ -1339,7 +1346,7 @@ pub fn canonical_paged_seal<D: FallibleDatasetView>(
             record.replay(&mut builder)?;
         }
         let page = builder.freeze().map_err(CanonicalPagedError::Invalid)?;
-        let bytes = PackBuilder::build_bytes(&page).map_err(CanonicalPagedError::Pack)?;
+        let bytes = PackBuilder::build_bytes(&page, control).map_err(CanonicalPagedError::Pack)?;
         pages
             .try_reserve(1)
             .map_err(|_| CanonicalPagedError::Capacity)?;

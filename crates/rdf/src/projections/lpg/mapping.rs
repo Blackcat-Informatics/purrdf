@@ -838,7 +838,17 @@ mod tests {
         );
 
         let lifted = lift_lpg(&projected.graph, &config(1_000)).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &lifted.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert_ledger_complete(
             &lifted.loss_ledger,
             &[
@@ -886,7 +896,14 @@ mod tests {
                 .expect("JSON")
         );
 
-        let pack = PackBuilder::build_bytes(&first).expect("pack");
+        let pack = PackBuilder::build_bytes(
+            &first,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let view = PackView::from_bytes(&pack).expect("pack view");
         let packed_projection = project_lpg(&view, &config).expect("pack projection");
         assert_eq!(first_projection.graph, packed_projection.graph);
@@ -1145,7 +1162,17 @@ mod tests {
         padded.push(b'\n');
         assert!(LpgGraph::from_canonical_json(&padded, &config).is_err());
         let lifted = lift_lpg(&graph, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &lifted.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert_eq!(lifted.dataset.named_graphs().count(), 2);
     }
 
@@ -1179,7 +1206,7 @@ mod tests {
             let config = config(1_000);
             let first = project_lpg(dataset.as_ref(), &config).expect("project");
             let lifted = lift_lpg(&first.graph, &config).expect("lift");
-            prop_assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+            prop_assert!(datasets_isomorphic(&dataset, &lifted.dataset, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).unwrap());
             let second = project_lpg(lifted.dataset.as_ref(), &config).expect("reproject");
             prop_assert_eq!(first.graph, second.graph);
         }

@@ -143,7 +143,13 @@ impl Prepared<'_> {
 
 /// The canonical rendering of a result, one line per canonical N-Quad under a `|`
 /// margin. Shape only when `volatile`.
-fn render_result(result: &SparqlResult, ordered: bool, volatile: bool, out: &mut String) {
+fn render_result(
+    result: &SparqlResult,
+    ordered: bool,
+    volatile: bool,
+    out: &mut String,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
     match result {
         SparqlResult::Boolean(value) => {
             if volatile {
@@ -153,7 +159,9 @@ fn render_result(result: &SparqlResult, ordered: bool, volatile: bool, out: &mut
             }
         }
         SparqlResult::Graph(graph) => {
-            let nquads = purrdf_core::try_canonicalize(graph).unwrap().nquads;
+            let nquads = purrdf_core::try_canonicalize(graph, control)
+                .unwrap()
+                .nquads;
             writeln!(out, "graph quads={}", nquads.lines().count()).expect("write");
             if !volatile {
                 margin(&nquads, out);
@@ -173,13 +181,16 @@ fn render_result(result: &SparqlResult, ordered: bool, volatile: bool, out: &mut
             if volatile {
                 return;
             }
-            match canonical_solutions(variables, rows, ordered) {
+            match canonical_solutions(variables, rows, ordered, control) {
                 Ok(nquads) => margin(&nquads, out),
                 Err(_) => out.push_str("unencodable\n"),
             }
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
-                margin(&purrdf_core::try_canonicalize(aux).unwrap().nquads, out);
+                margin(
+                    &purrdf_core::try_canonicalize(aux, control).unwrap().nquads,
+                    out,
+                );
             }
         }
     }
@@ -235,7 +246,11 @@ fn render_ledger(ledger: &[NodeCharges], out: &mut String) {
 
 /// One sweep point's observation, without the ceiling itself, so adjacent points that
 /// observed the same thing render identically.
-fn render_point(prepared: &Prepared<'_>, fuel: u64) -> String {
+fn render_point(
+    prepared: &Prepared<'_>,
+    fuel: u64,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> String {
     let outcome = match prepared.governed(&QueryGovernors::UNBOUNDED.with_fuel(fuel)) {
         Ok(outcome) => outcome,
         Err(error) => return format!("error {}", error.code),
@@ -244,7 +259,7 @@ fn render_point(prepared: &Prepared<'_>, fuel: u64) -> String {
     match &outcome {
         GovernedOutcome::Complete { result, .. } => {
             out.push_str("complete");
-            write_rows(result, prepared, &mut out);
+            write_rows(result, prepared, &mut out, control);
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {
             write!(out, "tripped {}", render_tripped(exhausted.tripped)).expect("write");
@@ -257,7 +272,7 @@ fn render_point(prepared: &Prepared<'_>, fuel: u64) -> String {
                     };
                     write!(out, " {class} prefix={}", partial.is_positional_prefix())
                         .expect("write");
-                    write_rows(partial.result(), prepared, &mut out);
+                    write_rows(partial.result(), prepared, &mut out, control);
                 }
                 PartialAnswers::Unknown(barrier) => {
                     write!(out, " unknown barrier={}", barrier.operator()).expect("write");
@@ -289,7 +304,12 @@ fn render_tripped(tripped: TrippedGovernor) -> String {
 }
 
 /// The row count and — unless the case is volatile — the digest of the canonical form.
-fn write_rows(result: &SparqlResult, prepared: &Prepared<'_>, out: &mut String) {
+fn write_rows(
+    result: &SparqlResult,
+    prepared: &Prepared<'_>,
+    out: &mut String,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
     let count = match result {
         SparqlResult::Boolean(_) => 1,
         SparqlResult::Graph(graph) => graph.quad_count(),
@@ -298,7 +318,7 @@ fn write_rows(result: &SparqlResult, prepared: &Prepared<'_>, out: &mut String) 
     write!(out, " rows={count}").expect("write");
     if !prepared.volatile {
         let mut canonical = String::new();
-        render_result(result, prepared.ordered, false, &mut canonical);
+        render_result(result, prepared.ordered, false, &mut canonical, control);
         write!(out, " digest={}", stable_hash_hex(&canonical)).expect("write");
     }
 }
@@ -349,15 +369,25 @@ fn flush_run(run: &mut Option<(u64, u64, usize, String)>, out: &mut String) {
     }
 }
 
-fn render_sweep(prepared: &Prepared<'_>, total: u64, out: &mut String) {
+fn render_sweep(
+    prepared: &Prepared<'_>,
+    total: u64,
+    out: &mut String,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
     let mut run = None;
     for fuel in sweep_points(total) {
-        fold_point(&mut run, fuel, render_point(prepared, fuel), out);
+        fold_point(&mut run, fuel, render_point(prepared, fuel, control), out);
     }
     flush_run(&mut run, out);
 }
 
-fn render_case(case: &SparqlTestCase, header: &str, out: &mut String) {
+fn render_case(
+    case: &SparqlTestCase,
+    header: &str,
+    out: &mut String,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
     writeln!(out, "== {header}").expect("write");
     let query = std::fs::read_to_string(&case.query)
         .unwrap_or_else(|error| panic!("read query {}: {error}", case.query.display()));
@@ -393,7 +423,7 @@ fn render_case(case: &SparqlTestCase, header: &str, out: &mut String) {
         &prepared.remote,
         QueryOptions::new().with_env(&prepared.env),
     ) {
-        Ok(result) => render_result(&result, prepared.ordered, prepared.volatile, out),
+        Ok(result) => render_result(&result, prepared.ordered, prepared.volatile, out, control),
         Err(error) => writeln!(out, "error {}", error.code).expect("write"),
     }
 
@@ -436,13 +466,20 @@ fn render_case(case: &SparqlTestCase, header: &str, out: &mut String) {
     }
 
     // 3. The fuel sweep.
-    render_sweep(&prepared, total, out);
+    render_sweep(&prepared, total, out, control);
 }
 
 /// The canonical rendering of a graph store — default and named graphs — in the form
 /// the conformance comparer compares update post-states in: RDFC-1.0 canonical N-Quads.
-fn render_store(store: &RdfDataset, volatile: bool, out: &mut String) {
-    let nquads = purrdf_core::try_canonicalize(store).unwrap().nquads;
+fn render_store(
+    store: &RdfDataset,
+    volatile: bool,
+    out: &mut String,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
+    let nquads = purrdf_core::try_canonicalize(store, control)
+        .unwrap()
+        .nquads;
     writeln!(out, "store quads={}", nquads.lines().count()).expect("write");
     if !volatile {
         margin(&nquads, out);
@@ -450,8 +487,14 @@ fn render_store(store: &RdfDataset, volatile: bool, out: &mut String) {
 }
 
 /// The store's quad count and — unless volatile — the digest of its canonical form.
-fn store_digest(store: &RdfDataset, volatile: bool) -> String {
-    let nquads = purrdf_core::try_canonicalize(store).unwrap().nquads;
+fn store_digest(
+    store: &RdfDataset,
+    volatile: bool,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> String {
+    let nquads = purrdf_core::try_canonicalize(store, control)
+        .unwrap()
+        .nquads;
     let quads = nquads.lines().count();
     if volatile {
         format!("quads={quads}")
@@ -464,7 +507,12 @@ fn store_digest(store: &RdfDataset, volatile: bool) -> String {
 /// governed application's consumption, and the governed application under the same fuel
 /// sweep a query gets. A governed update that trips applies nothing, so a tripped point
 /// records whether the store it left is the pre-state.
-fn render_update_case(case: &SparqlTestCase, header: &str, out: &mut String) {
+fn render_update_case(
+    case: &SparqlTestCase,
+    header: &str,
+    out: &mut String,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) {
     writeln!(out, "== {header}").expect("write");
     let request_text = std::fs::read_to_string(&case.query)
         .unwrap_or_else(|error| panic!("read update {}: {error}", case.query.display()));
@@ -487,7 +535,7 @@ fn render_update_case(case: &SparqlTestCase, header: &str, out: &mut String) {
         base_iri: Some(&case.base),
         substitutions: &[],
     };
-    let pre_digest = store_digest(&pre, volatile);
+    let pre_digest = store_digest(&pre, volatile, control);
 
     // 1. The post-state, through the ungoverned entry the conformance run uses.
     let mut store = Arc::clone(&pre);
@@ -496,7 +544,7 @@ fn render_update_case(case: &SparqlTestCase, header: &str, out: &mut String) {
         request(),
         update_eval_options(&env),
     ) {
-        Ok(()) => render_store(&store, volatile, out),
+        Ok(()) => render_store(&store, volatile, out, control),
         Err(error) => writeln!(out, "error {}", error.code).expect("write"),
     }
 
@@ -533,7 +581,7 @@ fn render_update_case(case: &SparqlTestCase, header: &str, out: &mut String) {
         let observed = match governed(&QueryGovernors::UNBOUNDED.with_fuel(fuel)) {
             Err(error) => format!("error {}", error.code),
             Ok((outcome, store)) => {
-                let after = store_digest(&store, volatile);
+                let after = store_digest(&store, volatile, control);
                 let head = match outcome.tripped() {
                     None => format!("applied {after}"),
                     Some(tripped) if after == pre_digest => {
@@ -596,7 +644,7 @@ impl Corpus {
     }
 }
 
-fn render_trace(corpus: Corpus) -> String {
+fn render_trace(corpus: Corpus, control: &mut purrdf_core::CanonicalizationControl<'_>) -> String {
     let root = suite_root();
     // The group manifests the conformance runner executes, through its own
     // discovery: an index is never traced through its members.
@@ -633,8 +681,8 @@ fn render_trace(corpus: Corpus) -> String {
                  reported against the other"
             );
             match corpus {
-                Corpus::Query => render_case(case, &header, &mut out),
-                Corpus::Update => render_update_case(case, &header, &mut out),
+                Corpus::Query => render_case(case, &header, &mut out, control),
+                Corpus::Update => render_update_case(case, &header, &mut out, control),
             }
         }
     }
@@ -679,8 +727,8 @@ fn first_difference(golden: &str, actual: &str) -> String {
 
 /// Compare a freshly rendered trace against its committed golden, reporting the first
 /// cases whose block moved.
-fn assert_matches_golden(corpus: Corpus) {
-    let actual = render_trace(corpus);
+fn assert_matches_golden(corpus: Corpus, control: &mut purrdf_core::CanonicalizationControl<'_>) {
+    let actual = render_trace(corpus, control);
     let path = corpus.golden_path();
     let regenerate = format!(
         "cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored {}",
@@ -730,22 +778,28 @@ fn assert_matches_golden(corpus: Corpus) {
     );
 }
 
-fn write_golden(corpus: Corpus) {
+fn write_golden(corpus: Corpus, control: &mut purrdf_core::CanonicalizationControl<'_>) {
     let path = corpus.golden_path();
     std::fs::create_dir_all(path.parent().expect("the golden has a parent directory"))
         .expect("create the golden directory");
-    std::fs::write(&path, render_trace(corpus)).expect("write the golden");
+    std::fs::write(&path, render_trace(corpus, control)).expect("write the golden");
     println!("wrote {}", path.display());
 }
 
 #[test]
 fn the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden() {
-    assert_matches_golden(Corpus::Query);
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    assert_matches_golden(Corpus::Query, &mut control);
 }
 
 #[test]
 fn the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden() {
-    assert_matches_golden(Corpus::Update);
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    assert_matches_golden(Corpus::Update, &mut control);
 }
 
 /// Regeneration path for the query trace. Ignored by default because it WRITES the
@@ -753,7 +807,10 @@ fn the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden() {
 #[test]
 #[ignore = "regeneration path: writes the committed golden"]
 fn regenerate_evaluator_trace() {
-    write_golden(Corpus::Query);
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    write_golden(Corpus::Query, &mut control);
 }
 
 /// Regeneration path for the update trace. Ignored by default because it WRITES the
@@ -761,5 +818,8 @@ fn regenerate_evaluator_trace() {
 #[test]
 #[ignore = "regeneration path: writes the committed golden"]
 fn regenerate_update_trace() {
-    write_golden(Corpus::Update);
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    write_golden(Corpus::Update, &mut control);
 }

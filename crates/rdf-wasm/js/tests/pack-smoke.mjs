@@ -75,8 +75,8 @@ const nquads = dataset.serialize("nquads");
 const reparsed = Dataset.parse(nquads, "nquads");
 assert.equal(reparsed.size, 2);
 assert.equal(reparsed.quads().some((quad) => quad.object.direction === "rtl"), true);
-assert.equal(dataset.isomorphic(reparsed), true);
-assert.equal(dataset.canonicalize(), reparsed.canonicalize());
+const equal = dataset.isomorphic(reparsed, "unlimited"); assert.equal(equal.value, true); equal.free();
+const left = dataset.canonicalize("unlimited"), right = reparsed.canonicalize("unlimited"); assert.equal(left.value, right.value); left.free(); right.free();
 
 const engine = new QueryEngine();
 const select = engine.select(
@@ -107,14 +107,14 @@ engine.update(
   "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
 ).dataset;
 assert.equal(mutable.size, 1);
-const beforeFailedUpdate = mutable.canonicalize();
+const beforeFailedUpdate = mutable.canonicalize("unlimited");
 assert.throws(() =>
   engine.update(
     mutable,
     "INSERT DATA { <https://example.org/x> <https://example.org/p> <https://example.org/y> } ; LOAD <https://example.org/doc>",
   ).dataset,
 );
-assert.equal(mutable.canonicalize(), beforeFailedUpdate);
+const afterFailedUpdate = mutable.canonicalize("unlimited"); assert.equal(afterFailedUpdate.value, beforeFailedUpdate.value); afterFailedUpdate.free(); beforeFailedUpdate.free();
 
 const shapes = [
   "@prefix sh: <http://www.w3.org/ns/shacl#> .",

@@ -299,6 +299,7 @@ impl ViewOp for QueryOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<SparqlResult, CliError> {
         let (relations, prepared) =
             self.relations
@@ -365,6 +366,7 @@ impl ViewOp for GovernedQueryOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors()?;
         let (relations, prepared) =
@@ -418,6 +420,7 @@ impl ViewOp for ExplainOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<QueryExplanation, CliError> {
         // Routed through the one options-carrying explain entry rather than a
         // narrower per-registry explain entry (none exist any more; see
@@ -455,6 +458,7 @@ fn emit_result(
     provenance_namespace: Option<&ProvenanceNamespace>,
     query: &str,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     match result {
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
@@ -485,7 +489,14 @@ fn emit_result(
             // results serializers' sink a caller in the shipped binary at all, and it is
             // what makes `purrdf query … | head -1` stop within a row instead of
             // formatting every row of an answer nobody is reading.
-            sink::write_results("-", result, fmt, &provenance, provenance_namespace)?;
+            sink::write_results(
+                "-",
+                result,
+                fmt,
+                &provenance,
+                provenance_namespace,
+                canonical,
+            )?;
             // A tabular/boolean result performs no lossy transcode; honor the flag
             // uniformly with an empty ledger.
             ledger::surface(ledger_target, &LossLedger::new())
@@ -523,6 +534,7 @@ fn emit_result(
                 base,
                 None,
                 jsonld_options,
+                canonical,
             )?;
             ledger::surface(ledger_target, &ledger)
         }
@@ -672,6 +684,7 @@ fn entailed_query<D: DatasetView>(
     options: EngineQueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
         query,
@@ -687,12 +700,12 @@ fn entailed_query<D: DatasetView>(
             // written — `--report` is refused without `--entailment` for the same reason a
             // report of a run that did not happen is not printed here.
             if let Some(report) = answered.report() {
-                report::surface(report_target, report)?;
+                report::surface(report_target, report, canonical)?;
             }
             Ok(answered)
         }
         Err(purrdf::ReasoningError::Entailment(EntailError::Inconsistent(run))) => {
-            report::surface(report_target, run.report())?;
+            report::surface(report_target, run.report(), canonical)?;
             let error: EntailError = EntailError::Inconsistent(run);
             Err(CliError::Runtime(error.to_string()))
         }
@@ -764,6 +777,7 @@ impl ViewOp for EntailedQueryOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError> {
         let specs = self.relations.specs;
         let admitted = path_relation::build_registry(view, specs)?;
@@ -795,6 +809,7 @@ impl ViewOp for EntailedQueryOp<'_> {
                 .with_coordinate_observer(capture),
                 &relations,
                 self.report_target,
+                canonical,
             )
         })
     }
@@ -876,6 +891,7 @@ pub(crate) fn run(
     options: &QueryOptions<'_>,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     let coordinates =
         CoordinateInputs::from_parts(options.now, options.entropy_seed).map_err(|error| {
@@ -952,8 +968,9 @@ pub(crate) fn run(
                 division: options.division,
                 coordinates: &coordinates,
             },
+            canonical,
         )?;
-        sink::write_out("-", explanation.render().as_bytes())?;
+        sink::write_out_with_request("-", explanation.render().as_bytes(), canonical)?;
         return Ok(CliOutcome::Complete);
     }
 
@@ -987,6 +1004,7 @@ pub(crate) fn run(
             None,
             options.base,
             &[(options.data, data_format)],
+            canonical,
         )?;
         // Built HERE, with the source already read and the closure not yet started, for the
         // reason `GovernedQueryOp` states: a `--deadline` is a budget for the work the flag
@@ -1012,12 +1030,14 @@ pub(crate) fn run(
                 division: options.division,
                 coordinates: &coordinates,
             },
+            canonical,
         )?;
         return emit_entailed(
             options,
             provenance_namespace.as_ref(),
             answered,
             ledger_target,
+            canonical,
         );
     }
 
@@ -1035,12 +1055,14 @@ pub(crate) fn run(
                 division: options.division,
                 coordinates: &coordinates,
             },
+            canonical,
         )?;
         return emit_governed(
             options,
             provenance_namespace.as_ref(),
             &outcome,
             ledger_target,
+            canonical,
         );
     }
 
@@ -1059,6 +1081,7 @@ pub(crate) fn run(
             division: options.division,
             coordinates: &coordinates,
         },
+        canonical,
     )?;
     emit_result(
         &result,
@@ -1068,6 +1091,7 @@ pub(crate) fn run(
         provenance_namespace.as_ref(),
         options.query,
         ledger_target,
+        canonical,
     )?;
     Ok(CliOutcome::Complete)
 }
@@ -1247,11 +1271,16 @@ fn emit_entailed(
     provenance_namespace: Option<&ProvenanceNamespace>,
     answered: GovernedEntailment,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     match answered {
-        GovernedEntailment::Answered { outcome, .. } => {
-            emit_governed(options, provenance_namespace, &outcome, ledger_target)
-        }
+        GovernedEntailment::Answered { outcome, .. } => emit_governed(
+            options,
+            provenance_namespace,
+            &outcome,
+            ledger_target,
+            canonical,
+        ),
         GovernedEntailment::ClosureStopped { tripped } => {
             eprint!("{}", governors::render_closure_stop(tripped));
             Ok(CliOutcome::BudgetExhausted)
@@ -1274,8 +1303,9 @@ fn emit_governed(
     provenance_namespace: Option<&ProvenanceNamespace>,
     outcome: &GovernedOutcome,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
-    let emit = |result: &SparqlResult| {
+    let mut emit = |result: &SparqlResult| {
         emit_result(
             result,
             options.results_format.unwrap_or(QueryFormat::DEFAULT),
@@ -1284,6 +1314,7 @@ fn emit_governed(
             provenance_namespace,
             options.query,
             ledger_target,
+            canonical,
         )
     };
     match outcome {
