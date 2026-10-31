@@ -25,6 +25,23 @@ pub enum CodecError {
     },
 }
 
+impl CodecError {
+    /// A known missing capability, as distinct from corrupt bytes, failed
+    /// authentication, storage refusal or a malformed codec configuration.
+    #[must_use]
+    pub fn is_capability_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::Unavailable {
+                detail: CodecUnavailable::MissingKey(_)
+                    | CodecUnavailable::UnknownCodec(_)
+                    | CodecUnavailable::NoDecryptor(_),
+                ..
+            }
+        )
+    }
+}
+
 impl fmt::Display for CodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

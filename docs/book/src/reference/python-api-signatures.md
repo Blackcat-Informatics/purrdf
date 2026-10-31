@@ -974,19 +974,154 @@ class ColumnarRows(TypedDict):
     annotations: list[tuple[int | str | bytes | None, ...]]
     blobs: list[tuple[int | str | bytes | None, ...]]
 
-def gts_columnar_rows_from_bytes(data: bytes) -> ColumnarRows:
+class NativeErrorValue(TypedDict):
+    kind: str
+    value: int | bool | str | bytes | None | NativeErrorRecord | tuple[NativeErrorValue, ...]
+
+class NativeErrorRecord(TypedDict):
+    code: str
+    fields: dict[str, NativeErrorValue]
+    items: tuple[NativeErrorValue, ...]
+
+class GtsBlobLimits:
+
+    def __init__(self, *, max_encoded_bytes: int | None, max_decoded_bytes: int | None, max_total_decoded_bytes: int | None, max_metadata_bytes: int | None, max_frame_decoded_bytes: int | None) -> None:
+        ...
+
+    @staticmethod
+    def unbounded() -> GtsBlobLimits:
+        ...
+
+    @property
+    def max_encoded_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_decoded_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_total_decoded_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_metadata_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_frame_decoded_bytes(self) -> int | None:
+        ...
+
+class GtsBlobUsage:
+
+    @property
+    def retained_payload_bytes(self) -> int:
+        ...
+
+    @property
+    def retained_refusal_metadata_bytes(self) -> int:
+        ...
+
+    @property
+    def peak_payload_bytes(self) -> int:
+        ...
+
+    @property
+    def peak_retained_bytes(self) -> int:
+        ...
+
+    @property
+    def peak_selected_digests(self) -> int:
+        ...
+
+class GtsBlobOmission:
+
+    @property
+    def reason(self) -> str:
+        ...
+
+    @property
+    def digest(self) -> str | None:
+        ...
+
+    @property
+    def digest_computed(self) -> bool:
+        ...
+
+    @property
+    def encoded_bytes(self) -> int:
+        ...
+
+    @property
+    def segment_index(self) -> int:
+        ...
+
+    @property
+    def frame_index(self) -> int:
+        ...
+
+    @property
+    def frame_range(self) -> tuple[int, int]:
+        ...
+
+    @property
+    def frame_id(self) -> bytes:
+        ...
+
+    @property
+    def segment_head(self) -> bytes:
+        ...
+
+    @property
+    def limits(self) -> GtsBlobLimits:
+        ...
+
+    @property
+    def usage(self) -> GtsBlobUsage:
+        ...
+
+    @property
+    def native_cause(self) -> NativeErrorRecord | None:
+        ...
+
+class GtsBlobExportReport:
+
+    @property
+    def losses(self) -> list[ProjectionLoss]:
+        ...
+
+    @property
+    def omissions(self) -> list[GtsBlobOmission]:
+        ...
+
+    @property
+    def usage(self) -> GtsBlobUsage:
+        ...
+
+class GtsExportResult:
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        ...
+
+    @property
+    def report(self) -> GtsBlobExportReport:
+        ...
+_GtsBlobPolicy: TypeAlias = GtsBlobLimits | TypingLiteral['unbounded']
+
+def gts_columnar_rows_from_bytes(data: bytes, *, blob_limits: _GtsBlobPolicy) -> tuple[ColumnarRows, GtsBlobExportReport]:
     ...
 
-def gts_columnar_parquet_from_bytes(data: bytes) -> dict[str, bytes]:
+def gts_columnar_parquet_from_bytes(data: bytes, *, blob_limits: _GtsBlobPolicy) -> tuple[dict[str, bytes], GtsBlobExportReport]:
     ...
 
-def gts_to_sqlite(data: bytes, path: str) -> str:
+def gts_to_sqlite(data: bytes, path: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
 
-def gts_to_duckdb(data: bytes, path: str) -> str:
+def gts_to_duckdb(data: bytes, path: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
 
-def gts_to_parquet(data: bytes, out_dir: str) -> list[str]:
+def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
 
 class RdfDataset:
@@ -1401,13 +1536,25 @@ _from_json_ld = from_json_ld
 _to_rdf_xml = to_rdf_xml
 _from_rdf_xml = from_rdf_xml
 _gts_relational_rows_from_bytes = gts_relational_rows_from_bytes
+_gts_columnar_rows_from_bytes = gts_columnar_rows_from_bytes
+_gts_columnar_parquet_from_bytes = gts_columnar_parquet_from_bytes
 _gts_to_sqlite = gts_to_sqlite
 _gts_to_duckdb = gts_to_duckdb
 _gts_to_parquet = gts_to_parquet
 _RdfDataset = RdfDataset
 _GtsFoldViewNative = GtsFoldViewNative
+_gts_GtsBlobLimits = GtsBlobLimits
+_gts_GtsBlobUsage = GtsBlobUsage
+_gts_GtsBlobOmission = GtsBlobOmission
+_gts_GtsBlobExportReport = GtsBlobExportReport
+_gts_GtsExportResult = GtsExportResult
 
 class gts:
+    GtsBlobLimits = _gts_GtsBlobLimits
+    GtsBlobUsage = _gts_GtsBlobUsage
+    GtsBlobOmission = _gts_GtsBlobOmission
+    GtsBlobExportReport = _gts_GtsBlobExportReport
+    GtsExportResult = _gts_GtsExportResult
     gts_from_quads = _gts_from_quads
     gts_from_rdf12_bytes = _gts_from_rdf12_bytes
     compile_gts_native = _compile_gts_native
@@ -1420,6 +1567,8 @@ class gts:
     to_rdf_xml = _to_rdf_xml
     from_rdf_xml = _from_rdf_xml
     gts_relational_rows_from_bytes = _gts_relational_rows_from_bytes
+    gts_columnar_rows_from_bytes = _gts_columnar_rows_from_bytes
+    gts_columnar_parquet_from_bytes = _gts_columnar_parquet_from_bytes
     gts_to_sqlite = _gts_to_sqlite
     gts_to_duckdb = _gts_to_duckdb
     gts_to_parquet = _gts_to_parquet

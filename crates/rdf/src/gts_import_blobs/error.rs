@@ -39,17 +39,22 @@ impl StructuredError for MetadataBudgetRefusal {
     } }
 }
 
+impl MetadataBudgetRefusal {
+    pub(super) fn into_diagnostic(self) -> Result<crate::RdfDiagnostic, crate::RdfDiagnostic> {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        let message = memory.format(&self)?;
+        let cause = purrdf_gts::model::retain_native_cause(self)?;
+        Ok(
+            crate::RdfDiagnostic::error("rdf-ir-gts-blob-limit", message)
+                .with_native_cause(cause, &mut memory)?,
+        )
+    }
+}
+
 impl From<MetadataBudgetRefusal> for crate::RdfDiagnostic {
     fn from(failure: MetadataBudgetRefusal) -> Self {
-        let attach = || -> Result<Self, Self> {
-            let mut resident = purrdf_lex::allocation::Resident;
-            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-            let message = memory.format(&failure)?;
-            let cause = purrdf_gts::model::retain_native_cause(failure)?;
-            Ok(Self::error("rdf-ir-gts-blob-limit", message)
-                .with_native_cause(cause, &mut memory)?)
-        };
-        match attach() {
+        match failure.into_diagnostic() {
             Ok(error) | Err(error) => error,
         }
     }

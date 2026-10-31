@@ -66,6 +66,11 @@ _gts.__doc__ = (
 # The GTS entry points are registered natively onto the root `rdf` module; gather
 # them under `purrdf.gts` for discoverability. Names absent at runtime are skipped.
 _GTS_EXPORTS = (
+    "GtsBlobLimits",
+    "GtsBlobUsage",
+    "GtsBlobOmission",
+    "GtsBlobExportReport",
+    "GtsExportResult",
     "gts_from_quads",
     "gts_from_rdf12_bytes",
     "compile_gts_native",
@@ -93,14 +98,14 @@ for _name in _GTS_EXPORTS:
 
 # Relational host I/O uses the Rust-owned canonical native v1 projection.
 # The public writer names remain available at the root and under purrdf.gts.
-from . import _gts_export as _gts_export_impl  # noqa: E402
+from . import _gts_export as _gts_export_impl
 
-for _name in ("gts_to_sqlite", "gts_to_duckdb", "gts_to_parquet"):
+for _name in ("GtsExportResult", "gts_to_sqlite", "gts_to_duckdb", "gts_to_parquet"):
     _value = getattr(_gts_export_impl, _name)
     setattr(_module, _name, _value)
     setattr(_gts, _name, _value)
 
-setattr(_gts, "__all__", [n for n in _GTS_EXPORTS if hasattr(_gts, n)])
+_gts.__all__ = [n for n in _GTS_EXPORTS if hasattr(_gts, n)]
 
 # Attach every engine to the swapped module by attribute access …
 _module.shapes = _shacl

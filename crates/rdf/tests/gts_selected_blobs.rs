@@ -484,9 +484,18 @@ fn malformed_selected_metadata_and_declared_lengths_fail() {
             None,
             Some(Value::Map(fields)),
         );
+        let bytes = writer.into_bytes();
+        let mut policy = GtsBlobLimits::UNBOUNDED;
+        policy.max_metadata_bytes = 0;
+        assert_eq!(
+            purrdf_rdf::import_gts_inline_for_export(&bytes, policy)
+                .unwrap_err()
+                .code,
+            expected
+        );
         assert_eq!(
             import_gts_events_with_blobs(
-                &writer.into_bytes(),
+                &bytes,
                 &[GtsBlobSelector::Representation("wanted")],
                 limits()
             )
@@ -805,10 +814,7 @@ fn malformed_payload_cannot_masquerade_as_a_metadata_only_update() {
         Some(meta(&digest_str(data), "wanted")),
     );
     let bytes = writer.into_bytes();
-    assert!(
-        import_gts_events(&bytes).is_ok(),
-        "legacy metadata observation remains compatible"
-    );
+    assert!(import_gts_events(&bytes).is_err());
     assert_eq!(
         import_gts_events_with_blobs(
             &bytes,
@@ -817,7 +823,7 @@ fn malformed_payload_cannot_masquerade_as_a_metadata_only_update() {
         )
         .unwrap_err()
         .code,
-        "rdf-ir-gts-blob-payload"
+        "rdf-ir-gts-fold-diagnostic"
     );
 }
 
@@ -908,28 +914,41 @@ fn eager_digest_resolution_enforces_the_original_encoded_length() {
 }
 
 #[test]
-fn malformed_public_metadata_is_not_silently_treated_as_absent() {
+fn opaque_public_metadata_is_preserved_within_its_byte_ceiling() {
     let data = b"native";
+    let metadata = Value::from("opaque profile metadata");
     let mut writer = Writer::new("generic");
     writer.add_frame(
         "blob",
         None,
         Some(data.to_vec()),
         None,
-        Some(Value::from("not a map")),
+        Some(metadata.clone()),
     );
     let bytes = writer.into_bytes();
-    assert!(
-        import_gts_events(&bytes).is_ok(),
-        "legacy importer behavior remains unchanged"
-    );
-    let error = import_gts_events_with_blobs(
+    let selected = import_gts_events_with_blobs(
         &bytes,
         &[GtsBlobSelector::Digest(&digest_str(data))],
         limits(),
     )
-    .unwrap_err();
-    assert_eq!(error.code, "rdf-ir-gts-blob-metadata");
+    .unwrap();
+    assert_eq!(selected.blobs[0].metadata.as_ref(), Some(&metadata));
+    let (_, blobs, omissions, _) =
+        purrdf_rdf::import_gts_inline_for_export(&bytes, GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert_eq!(&*blobs[0].bytes, data);
+    assert!(omissions.is_empty());
+    let mut policy = GtsBlobLimits::UNBOUNDED;
+    policy.max_metadata_bytes = 0;
+    let (_, blobs, omissions, _) = purrdf_rdf::import_gts_inline_for_export(&bytes, policy)
+        .unwrap()
+        .into_parts();
+    assert!(blobs.is_empty());
+    assert_eq!(
+        omissions[0].kind(),
+        purrdf_rdf::GtsBlobOmissionKind::MetadataBudget
+    );
 }
 
 /// A byte budget bounds retention; it must never decide selection.
@@ -2290,4 +2309,254 @@ fn externality_is_not_asserted_over_an_unidentified_refusal() {
         !withheld.message.contains("held elsewhere"),
         "externality is not assertable here: {withheld:?}"
     );
+}
+
+#[test]
+fn inline_export_reports_each_caller_ceiling_without_losing_rdf() {
+    use purrdf_rdf::{GtsBlobOmissionKind, import_gts_inline_for_export};
+    let mut writer = Writer::new("generic");
+    writer.add_blob(b"first", None, Some("a"));
+    writer.add_blob(b"second", None, Some("b"));
+    writer.add_terms(&[
+        term(TermKind::Iri, "http://example.org/s"),
+        term(TermKind::Iri, "http://example.org/p"),
+        term(TermKind::Literal, "kept"),
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    let bytes = writer.into_bytes();
+    for field in 0..5 {
+        let mut policy = GtsBlobLimits::UNBOUNDED;
+        match field {
+            0 => policy.max_encoded_bytes = 0,
+            1 => policy.max_decoded_bytes = 0,
+            2 => policy.max_total_decoded_bytes = 0,
+            3 => policy.max_metadata_bytes = 0,
+            _ => policy.max_frame_decoded_bytes = 0,
+        }
+        // This ceiling governs transformed frame decoding, not direct RDF rows.
+        if field == 4 {
+            let mut framed = Writer::new("generic");
+            framed.add_frame(
+                "quads",
+                Some(Value::Array(vec![])),
+                None,
+                Some(&["identity".into()]),
+                None,
+            );
+            assert!(import_gts_inline_for_export(&framed.into_bytes(), policy).is_err());
+            continue;
+        }
+        let (dataset, blobs, omissions, _) = import_gts_inline_for_export(&bytes, policy)
+            .unwrap()
+            .into_parts();
+        assert_eq!(dataset.quad_count(), 1);
+        assert!(blobs.is_empty());
+        assert_eq!(omissions.len(), 2, "ceiling {field}");
+        for omission in omissions {
+            assert_eq!(
+                omission.kind(),
+                if field == 3 {
+                    GtsBlobOmissionKind::MetadataBudget
+                } else {
+                    GtsBlobOmissionKind::ByteBudget
+                }
+            );
+            assert!(omission.native_cause().is_some());
+            assert_eq!(omission.source().segment_head.len(), 32);
+        }
+    }
+}
+
+#[test]
+fn inline_export_is_unbounded_in_count_and_payload_policy() {
+    let mut writer = Writer::new("generic");
+    for index in 0_u32..1025 {
+        writer.add_blob(&index.to_be_bytes(), None, None);
+    }
+    let (_, blobs, omissions, usage) =
+        purrdf_rdf::import_gts_inline_for_export(&writer.into_bytes(), GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert_eq!(blobs.len(), 1025);
+    assert!(omissions.is_empty());
+    assert_eq!(usage.retained_payload_bytes, 4100);
+}
+
+#[test]
+fn inline_export_keeps_malformed_and_integrity_failures_hard() {
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        Some(b"wrong digest".to_vec()),
+        None,
+        Some(meta(&digest_str(b"other bytes"), "unused")),
+    );
+    let bytes = writer.into_bytes();
+    let mut policy = GtsBlobLimits::UNBOUNDED;
+    policy.max_encoded_bytes = 0;
+    assert!(purrdf_rdf::import_gts_inline_for_export(&bytes, policy).is_err());
+    let error =
+        purrdf_rdf::import_gts_inline_for_export(&bytes, GtsBlobLimits::UNBOUNDED).unwrap_err();
+    assert_eq!(error.code, "rdf-ir-gts-blob-digest");
+    for (payload, metadata) in [
+        (Some(Value::Text("not bytes".into())), None),
+        (None, Some(Value::Text("not a reference map".into()))),
+        (None, Some(meta("blake3:not-hex", "invalid identity"))),
+    ] {
+        let mut writer = Writer::new("generic");
+        writer.add_frame("blob", payload, None, None, metadata);
+        let bytes = writer.into_bytes();
+        for policy in [GtsBlobLimits::UNBOUNDED, GtsBlobLimits::new(0, 0)] {
+            assert!(purrdf_rdf::import_gts_inline_for_export(&bytes, policy).is_err());
+        }
+    }
+}
+
+#[test]
+fn inline_export_reports_final_missing_references_and_recovers_proved_payloads() {
+    let digest = digest_str(b"payload");
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, None, None, Some(meta(&digest, "wanted")));
+    let bytes = writer.into_bytes();
+    let (_, blobs, omissions, _) =
+        purrdf_rdf::import_gts_inline_for_export(&bytes, GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert!(blobs.is_empty());
+    assert_eq!(omissions.len(), 1);
+    assert_eq!(
+        omissions[0].kind(),
+        purrdf_rdf::GtsBlobOmissionKind::MissingInlinePayload
+    );
+    let mut later = Writer::new("generic");
+    later.add_blob(b"payload", None, Some("wanted"));
+    let mut combined = bytes;
+    combined.extend(later.into_bytes());
+    let (_, blobs, omissions, _) =
+        purrdf_rdf::import_gts_inline_for_export(&combined, GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert_eq!(blobs.len(), 1);
+    assert!(omissions.is_empty());
+}
+
+#[test]
+fn inline_export_retains_missing_codec_cause_but_nonblob_refusal_is_hard() {
+    let bytes = include_bytes!("../../../vectors/03-unknown-codec.gts");
+    assert!(purrdf_rdf::import_gts_inline_for_export(bytes, GtsBlobLimits::UNBOUNDED).is_err());
+    let (mut items, torn) = purrdf_gts::wire::iter_items(bytes);
+    assert!(torn.is_none());
+    let Value::Map(frame) = &mut items[1].1 else {
+        panic!("frame map")
+    };
+    frame
+        .iter_mut()
+        .find(|(key, _)| key.as_text() == Some("t"))
+        .unwrap()
+        .1 = "blob".into();
+    let id = purrdf_gts::wire::content_id(frame);
+    frame
+        .iter_mut()
+        .find(|(key, _)| key.as_text() == Some("id"))
+        .unwrap()
+        .1 = Value::Bytes(id);
+    let bytes: Vec<u8> = items
+        .into_iter()
+        .flat_map(|(_, item)| purrdf_gts::wire::canonical(&item))
+        .collect();
+    let (_, blobs, omissions, _) =
+        purrdf_rdf::import_gts_inline_for_export(&bytes, GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert!(blobs.is_empty());
+    assert_eq!(omissions.len(), 1);
+    assert_eq!(
+        omissions[0].kind(),
+        purrdf_rdf::GtsBlobOmissionKind::UnavailableCapability
+    );
+    let inspected = Capture::read(omissions[0].native_cause().unwrap());
+    assert_eq!(
+        inspected.child("cause").child("detail").child("cause").code,
+        "gts-codec-unavailable"
+    );
+    drop(inspected);
+    // The lazy public-digest path returns the original codec error directly.
+    let (mut items, _) = purrdf_gts::wire::iter_items(&bytes);
+    let Value::Map(frame) = &mut items[1].1 else {
+        panic!("frame map")
+    };
+    frame.push((
+        "pub".into(),
+        meta(&digest_str(b"later verified"), "claimed"),
+    ));
+    let id = purrdf_gts::wire::content_id(frame);
+    frame
+        .iter_mut()
+        .find(|(key, _)| key.as_text() == Some("id"))
+        .unwrap()
+        .1 = Value::Bytes(id);
+    let bytes: Vec<u8> = items
+        .into_iter()
+        .flat_map(|(_, item)| purrdf_gts::wire::canonical(&item))
+        .collect();
+    let (_, _, direct, _) =
+        purrdf_rdf::import_gts_inline_for_export(&bytes, GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert_eq!(
+        Capture::read(direct[0].native_cause().unwrap())
+            .child("cause")
+            .code,
+        "gts-codec-unavailable"
+    );
+    let mut later = Writer::new("generic");
+    later.add_blob(b"later verified", None, None);
+    let mut combined = bytes;
+    combined.extend(later.into_bytes());
+    let (_, blobs, omissions, _) =
+        purrdf_rdf::import_gts_inline_for_export(&combined, GtsBlobLimits::UNBOUNDED)
+            .unwrap()
+            .into_parts();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(
+        omissions.len(),
+        1,
+        "an unproved claim cannot alias verified content"
+    );
+    assert!(!omissions[0].digest_computed());
+}
+
+#[test]
+fn inline_export_drops_proved_provisional_omission_after_later_admission() {
+    let data = vec![b'x'; 4096];
+    let mut writer = Writer::new("generic");
+    writer.add_blob(&data, None, None);
+    writer.add_frame(
+        "blob",
+        None,
+        Some(data.clone()),
+        Some(&["zstd".into()]),
+        None,
+    );
+    writer.add_frame(
+        "blob",
+        None,
+        Some(data.clone()),
+        None,
+        Some(Value::Map(vec![(
+            "rep".into(),
+            Value::Text("large".repeat(100)),
+        )])),
+    );
+    let mut policy = GtsBlobLimits::UNBOUNDED;
+    policy.max_encoded_bytes = 1024;
+    policy.max_metadata_bytes = 128;
+    let (_, blobs, omissions, _) =
+        purrdf_rdf::import_gts_inline_for_export(&writer.into_bytes(), policy)
+            .unwrap()
+            .into_parts();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(&*blobs[0].bytes, &data);
+    assert!(omissions.is_empty());
 }
