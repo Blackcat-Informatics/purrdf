@@ -1368,6 +1368,7 @@ fn resolution_preserves_the_consumers_typed_stop() {
         &input,
         crate::reasoner::SchemaPreparationBudget::default(),
         stop.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap();
     let context = consumer.borrowed_proof_context().unwrap();

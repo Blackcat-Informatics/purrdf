@@ -169,9 +169,11 @@ mod tests {
             assert_eq!(status, PurrdfStatus::Ok as i32);
             assert!(error.is_null());
             assert!(!document.0.is_null() && !report.0.is_null() && !evidence.0.is_null());
-            let document = std::str::from_utf8(&(*document.0).0).unwrap();
-            assert!(document.starts_with("_:c14n"), "{document}");
-            let receipts = std::str::from_utf8(&(*evidence.0).0).unwrap();
+            let document_buffer = document.0.as_ref().expect("successful document output");
+            let document_text = std::str::from_utf8(&document_buffer.0).unwrap();
+            assert!(document_text.starts_with("_:c14n"), "{document_text}");
+            let evidence_buffer = evidence.0.as_ref().expect("successful receipt output");
+            let receipts = std::str::from_utf8(&evidence_buffer.0).unwrap();
             assert!(
                 receipts.contains("unlimited") && receipts.contains("\"completed\":true"),
                 "{receipts}"
@@ -215,8 +217,9 @@ mod tests {
                 .to_str()
                 .unwrap();
             assert!(native.contains("urn:purrdf:rdfc:private"), "{native}");
+            let error_ref = error.as_ref().expect("native canonical refusal");
             assert!(matches!(
-                std::error::Error::source(&*error)
+                std::error::Error::source(error_ref)
                     .and_then(|cause| cause.downcast_ref::<purrdf_core::CanonError>()),
                 Some(purrdf_core::CanonError::ReservedVocabulary(_))
             ));

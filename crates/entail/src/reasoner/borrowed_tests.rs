@@ -90,6 +90,10 @@ fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
                     &Question::Consistency,
                     Some(answer.certificate()),
                     &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .unwrap()
         );
@@ -118,7 +122,15 @@ fn dataset_views_preserve_constructor_cancellation() {
         Err(EntailError::Stopped)
     ));
     assert!(matches!(
-        Reasoner::with_proofs_and_stop(&view, SchemaPreparationBudget::default(), stopped),
+        Reasoner::with_proofs_and_stop(
+            &view,
+            SchemaPreparationBudget::default(),
+            stopped,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(EntailError::Stopped)
     ));
 }
@@ -192,6 +204,10 @@ fn borrowed_context_matches_owned_replay_without_producer_state() {
                     &Question::Consistency,
                     Some(answer.certificate()),
                     context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
                 )
                 .unwrap();
             assert_eq!(
@@ -230,7 +246,16 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     let unprepared = consumer.borrowed_proof_context().unwrap();
     assert!(
         proof
-            .verify(&dataset, &question, Some(answer.certificate()), &unprepared)
+            .verify(
+                &dataset,
+                &question,
+                Some(answer.certificate()),
+                &unprepared,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
             .is_err()
     );
     assert!(
@@ -261,26 +286,71 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     assert_eq!(
         prepared,
         proof
-            .verify(&dataset, &question, Some(answer.certificate()), &borrowed)
+            .verify(
+                &dataset,
+                &question,
+                Some(answer.certificate()),
+                &borrowed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
             .unwrap()
     );
     assert_eq!(
         proof
-            .verify(&dataset, &question, Some(answer.certificate()), &borrowed)
+            .verify(
+                &dataset,
+                &question,
+                Some(answer.certificate()),
+                &borrowed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
             .unwrap(),
         proof
-            .verify(&dataset, &question, Some(answer.certificate()), &owned)
+            .verify(
+                &dataset,
+                &question,
+                Some(answer.certificate()),
+                &owned,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
             .unwrap()
     );
     assert!(
         proof
-            .verify(&dataset, &Question::Consistency, None, &borrowed)
+            .verify(
+                &dataset,
+                &Question::Consistency,
+                None,
+                &borrowed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
             .is_err()
     );
     let changed = shared_schema(1, 2, false);
     assert!(
         proof
-            .verify(&changed, &question, Some(answer.certificate()), &borrowed)
+            .verify(
+                &changed,
+                &question,
+                Some(answer.certificate()),
+                &borrowed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
             .is_err()
     );
     let mut changed_consumer = Reasoner::with_proofs(
@@ -316,9 +386,13 @@ fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
     .unwrap();
     let answer = producer.consistency();
     let stop = Arc::new(Stop(AtomicBool::new(false)));
-    let consumer =
-        Reasoner::with_proofs_and_stop(&dataset, SchemaPreparationBudget::default(), stop.clone())
-            .unwrap();
+    let consumer = Reasoner::with_proofs_and_stop(
+        &dataset,
+        SchemaPreparationBudget::default(),
+        stop.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let borrowed = consumer.borrowed_proof_context().unwrap();
     stop.0.store(true, Ordering::Relaxed);
     assert!(matches!(
@@ -334,7 +408,11 @@ fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
             &dataset,
             &Question::Consistency,
             Some(answer.certificate()),
-            &borrowed
+            &borrowed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         ),
         Err(DlProofError::Stopped)
     ));

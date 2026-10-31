@@ -286,7 +286,7 @@ const DERIVED_B =
 test("entailMaterialize and entailConsistency close over the import table", () => {
   const iris = [IMPORT_LIB];
   const documents = [IMPORTED_LIB];
-  assert.throws(() => entailMaterialize(IMPORTING_PREMISE, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited"), (error) => error instanceof Error && error.message.includes(IMPORT_LIB));
+  assert.throws(() => entailMaterialize(IMPORTING_PREMISE, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited"), (error) => error instanceof Error && error.message === `entailment regime "rdfs": the premise owl:imports <${IMPORT_LIB}>, which the supplied import map does not resolve and the premise does not contain`);
   const closed = entailMaterialize(IMPORTING_PREMISE, "rdfs", "", iris, documents, [], undefined, undefined, undefined, "unlimited");
   assert.ok(closed.nquads.includes(DERIVED_B), closed.nquads);
   assert.ok(closed.report.includes("\nboundary ontology-import-resolved "), closed.report);
@@ -296,11 +296,11 @@ test("entailMaterialize and entailConsistency close over the import table", () =
   );
   assert.ok(!entailMaterialize(IMPORTED_FACTS, "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited").nquads.includes(DERIVED_B));
 
-  assert.throws(() => entailConsistency(IMPORTING_PREMISE, [], [], [], 0, 0, "unlimited"), (error) => error instanceof Error && error.message.includes(IMPORT_LIB));
+  assert.throws(() => entailConsistency(IMPORTING_PREMISE, [], [], [], 0, 0, "unlimited"), (error) => error instanceof Error && error.message === `the premise owl:imports <${IMPORT_LIB}>, which the supplied import map does not resolve and the premise does not contain`);
   const decided = entailConsistency(IMPORTING_PREMISE, iris, documents, [], 0, 0, "unlimited");
   assert.equal(decided.answer, "consistency false\n");
   assert.ok(decided.certificate.includes("\nboundary ontology-import-resolved "));
-  assert.throws(() => entailConsistency(IMPORTED_FACTS, iris, documents, [], 0, 0, "unlimited"), (error) => error instanceof Error && error.message.includes(IMPORT_LIB));
+  assert.throws(() => entailConsistency(IMPORTED_FACTS, iris, documents, [], 0, 0, "unlimited"), (error) => error instanceof Error && error.message === `the supplied import map resolves <${IMPORT_LIB}>, which no owl:imports in the premise's closure names, so it would be read and never used; remove the entry, or import the IRI from the premise's ontology header`);
   assert.equal(entailConsistency(IMPORTED_FACTS, [], [], [], 0, 0, "unlimited").answer, "consistency true\n");
 });
 

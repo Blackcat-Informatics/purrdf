@@ -309,7 +309,16 @@ mod tests {
         .unwrap();
         assert!(
             forged
-                .verify(&dataset, &Question::Consistency, None, &context)
+                .verify(
+                    &dataset,
+                    &Question::Consistency,
+                    None,
+                    &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .is_err()
         );
     }
@@ -366,7 +375,16 @@ mod tests {
         checker.prepare(&question).expect("query preparation");
         assert!(
             forged
-                .verify(&dataset, &question, None, &checker.proof_context().unwrap())
+                .verify(
+                    &dataset,
+                    &question,
+                    None,
+                    &checker.proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .is_err()
         );
     }

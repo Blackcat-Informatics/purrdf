@@ -2633,7 +2633,16 @@ mod tests {
         for (question, proof, certificate) in questions {
             let ctx = context(&ontology, &question);
             let replay = proof
-                .verify(&ontology, &question, Some(&certificate), &ctx)
+                .verify(
+                    &ontology,
+                    &question,
+                    Some(&certificate),
+                    &ctx,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
                 .unwrap_or_else(|error| {
                     panic!("{} must verify: {error}", question.service().as_str())
                 });
@@ -2891,7 +2900,11 @@ mod tests {
                 &ontology,
                 &question,
                 Some(answer.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::WrongQuestion { .. })
         ));
@@ -2918,7 +2931,11 @@ mod tests {
                 &ontology,
                 &question,
                 Some(consistency.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::WrongQuestion { .. })
         ));
@@ -2966,7 +2983,11 @@ mod tests {
                     &ontology,
                     &question,
                     Some(answer.certificate()),
-                    &consumer.proof_context().unwrap()
+                    &consumer.proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .is_err()
         );
@@ -3000,7 +3021,11 @@ mod tests {
                     &ontology,
                     &question,
                     Some(answer.certificate()),
-                    &context(&ontology, &question)
+                    &context(&ontology, &question),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .is_err()
         );
@@ -3126,7 +3151,11 @@ mod tests {
                 &other,
                 &Question::Consistency,
                 Some(answer.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::InputMismatch { .. })
         ));
@@ -3163,6 +3192,10 @@ mod tests {
                 &Question::Consistency,
                 Some(answer.certificate()),
                 &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .expect_err(
                 "a reserved-vocabulary checking ontology must refuse canonicalization, not \
@@ -3204,7 +3237,16 @@ mod tests {
             ClaimBasis::ClosedRefutation { runs: vec![0] },
         );
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::AnswerNotCovered { .. }) => {}
             other => panic!("a countermodel cannot stand in for a refutation: {other:?}"),
         }
@@ -3236,7 +3278,11 @@ mod tests {
                 &ontology,
                 &Question::Consistency,
                 Some(answer.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::AnswerNotCovered { .. })
         ));
@@ -3266,7 +3312,11 @@ mod tests {
                 &ontology,
                 &Question::Consistency,
                 Some(answer.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::AnswerNotCovered { .. })
         ));
@@ -3300,7 +3350,11 @@ mod tests {
                 &ontology,
                 &Question::Consistency,
                 Some(answer.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::AnswerNotCovered { .. })
         ));
@@ -3341,7 +3395,16 @@ mod tests {
             ClaimBasis::ExhibitedModel { run: closed },
         );
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::AnswerNotCovered { .. }) => {}
             other => panic!("a closed refutation exhibits no model: {other:?}"),
         }
@@ -3376,11 +3439,16 @@ mod tests {
             method: ModuleMethod::Bot,
         };
         let ctx = context(&other, &question);
-        match extracted
-            .proof()
-            .expect(RECORDED)
-            .verify(&other, &question, None, &ctx)
-        {
+        match extracted.proof().expect(RECORDED).verify(
+            &other,
+            &question,
+            None,
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::InputMismatch { .. }) => {}
             other => panic!("a proof for another ontology: {other:?}"),
         }
@@ -3423,7 +3491,16 @@ mod tests {
         let replay = answer
             .proof()
             .expect(RECORDED)
-            .verify(&ontology, &question, Some(answer.certificate()), &ctx)
+            .verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect("an undecided proof's partial trace still replays");
         assert_eq!(replay.runs(), 1);
     }
@@ -3474,7 +3551,16 @@ mod tests {
         receipt.budget = 4_096;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("an unreached cap is not a stopping reason: {other:?}"),
         }
@@ -3503,7 +3589,16 @@ mod tests {
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            proof.verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(DlProofError::ReceiptMismatch { .. })
         ));
         // …and the same from the clash side.
@@ -3511,7 +3606,16 @@ mod tests {
         let receipt = proof.receipt.as_mut().expect("undecided");
         receipt.clashes_found += 1;
         assert!(matches!(
-            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            proof.verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(DlProofError::ReceiptMismatch { .. })
         ));
     }
@@ -3546,7 +3650,16 @@ mod tests {
         let question = Question::ClassSatisfiability { class: cat };
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            proof.verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(DlProofError::ReceiptMismatch { .. })
         ));
     }
@@ -3571,7 +3684,16 @@ mod tests {
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            proof.verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(DlProofError::ReceiptMismatch { .. })
         ));
     }
@@ -3596,7 +3718,16 @@ mod tests {
         proof.truncated = true;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a partial trace beside a decided answer: {other:?}"),
         }
@@ -3620,7 +3751,16 @@ mod tests {
         proof.receipt.as_mut().expect("undecided").run = usize::MAX;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt for a run nobody made: {other:?}"),
         }
@@ -3661,7 +3801,16 @@ mod tests {
         proof.receipt.as_mut().expect("undecided").run = 1;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(undecided.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(undecided.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a run that decided did not stop: {other:?}"),
         }
@@ -3684,11 +3833,16 @@ mod tests {
         let answer = reasoner.consistency();
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match answer
-            .proof()
-            .expect(RECORDED)
-            .verify(&ontology, &question, None, &ctx)
-        {
+        match answer.proof().expect(RECORDED).verify(
+            &ontology,
+            &question,
+            None,
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt with nothing to be a receipt of: {other:?}"),
         }
@@ -3726,6 +3880,10 @@ mod tests {
             &question,
             Some(decided.certificate()),
             &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a stopping receipt beside a decided certificate: {other:?}"),
@@ -3759,7 +3917,16 @@ mod tests {
             .push("property-chain".to_owned());
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("an invented boundary is not a boundary: {other:?}"),
         }
@@ -3791,7 +3958,16 @@ mod tests {
         );
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("an invented cancellation: {other:?}"),
         }
@@ -3816,7 +3992,16 @@ mod tests {
         proof.receipt.as_mut().expect("undecided").work = u64::MAX;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            Some(answer.certificate()),
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a term larger than its own sum: {other:?}"),
         }
@@ -3914,7 +4099,16 @@ mod tests {
         let replay = extracted
             .proof()
             .expect(RECORDED)
-            .verify(&ontology, &question, None, &ctx)
+            .verify(
+                &ontology,
+                &question,
+                None,
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect("a genuine extraction's proof checks");
         assert_eq!(
             replay.runs(),
@@ -3999,9 +4193,16 @@ mod tests {
         };
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            bot.proof()
-                .expect(RECORDED)
-                .verify(&ontology, &question, None, &ctx),
+            bot.proof().expect(RECORDED).verify(
+                &ontology,
+                &question,
+                None,
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(DlProofError::WrongQuestion { .. })
         ));
     }
@@ -4057,7 +4258,16 @@ mod tests {
             &proof.runs,
         ));
         let ctx = context(&ontology, &question);
-        match proof.verify(&ontology, &question, None, &ctx) {
+        match proof.verify(
+            &ontology,
+            &question,
+            None,
+            &ctx,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt for a stop that did not happen: {other:?}"),
         }
@@ -4196,7 +4406,11 @@ mod tests {
                 &ontology,
                 &Question::Consistency,
                 Some(answer.certificate()),
-                &ctx
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             ),
             Err(DlProofError::TrustBaseMismatch { .. })
         ));
@@ -4358,7 +4572,16 @@ mod tests {
         recorded
             .proof()
             .expect(RECORDED)
-            .verify(&ontology, &question, Some(recorded.certificate()), &ctx)
+            .verify(
+                &ontology,
+                &question,
+                Some(recorded.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect("a recorded consistency proof checks");
     }
 
@@ -4398,7 +4621,16 @@ mod tests {
         };
         let ctx = context(&ontology, &question);
         let replay = proof
-            .verify(&ontology, &question, None, &ctx)
+            .verify(
+                &ontology,
+                &question,
+                None,
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect("a genuine extraction's proof checks");
         assert_eq!(
             replay.runs(),
@@ -4692,7 +4924,16 @@ mod tests {
             .expect("its own encoding decodes");
         let ctx = context(&ontology, &question);
         let replay = shipped
-            .verify(&ontology, &question, Some(answer.certificate()), &ctx)
+            .verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect("a proof that crossed a wire is still a proof");
         assert_eq!(replay.runs(), replay.replayed());
         assert!(replay.runs() > 0, "the fixture ran a tableau: {replay:?}");

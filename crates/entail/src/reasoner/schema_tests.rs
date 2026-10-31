@@ -145,16 +145,16 @@ pub(crate) fn shared_schema(
     fixture.freeze()
 }
 
-pub(crate) fn checked(dataset: &RdfDataset, answer: &Certified<Verdict>) -> ServiceProof {
+pub(crate) fn checked(
+    dataset: &RdfDataset,
+    answer: &Certified<Verdict>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> ServiceProof {
     let proof = answer.proof().expect("opt-in recording");
     let encoded = proof.encode();
     let decoded = ServiceProof::decode(&encoded).expect("native canonical proof");
     assert_eq!(decoded.encode(), encoded);
-    let mut checker = Reasoner::with_proofs(
-        dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
-    )
-    .expect("consumer-owned source");
+    let mut checker = Reasoner::with_proofs(dataset, control).expect("consumer-owned source");
     checker
         .prepare(decoded.question())
         .expect("query preparation");
@@ -165,6 +165,7 @@ pub(crate) fn checked(dataset: &RdfDataset, answer: &Certified<Verdict>) -> Serv
             decoded.question(),
             Some(answer.certificate()),
             &context,
+            control,
         )
         .expect("every necessary prepared-clash premise is independently checked");
     assert_eq!(replay.checks().unattested(), 0);
@@ -207,7 +208,11 @@ fn a_class_name_does_not_assert_an_inhabitant_but_the_question_supplies_one() {
     assert_eq!(*reasoner.consistency().answer(), Verdict::True);
     let answer = reasoner.class_satisfiability(&term("A")).unwrap();
     assert_eq!(*answer.answer(), Verdict::False);
-    let proof = checked(&dataset, &answer);
+    let proof = checked(
+        &dataset,
+        &answer,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     assert!(
         proof
             .runs()
@@ -283,7 +288,14 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
             Verdict::False,
             "actual inhabitance derivation {derivation}"
         );
-        let proof = checked(&dataset, &answer);
+        let proof = checked(
+            &dataset,
+            &answer,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let (run, step) = proof
             .runs()
             .iter()
@@ -355,7 +367,14 @@ fn qualified_containment_is_directional_and_has_no_unrelated_transfer() {
         let answer = reasoner.consistency();
         assert_eq!(*answer.answer(), expected);
         if expected == Verdict::False {
-            checked(&dataset, &answer);
+            checked(
+                &dataset,
+                &answer,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
         }
     }
 }
@@ -399,7 +418,14 @@ fn exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer() {
         }
         let answer = reasoner.consistency();
         assert_eq!(*answer.answer(), Verdict::False);
-        checked(&dataset, &answer);
+        checked(
+            &dataset,
+            &answer,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
     }
     let mut fixture = Fixture::default();
     let class = fixture.name("A");
@@ -467,7 +493,14 @@ fn exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges() {
         );
         assert_eq!(reasoner.schema_bounds(&term("A")).is_some(), !inverted);
         if !inverted {
-            checked(&dataset, &answer);
+            checked(
+                &dataset,
+                &answer,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
         }
     }
 }
@@ -555,7 +588,11 @@ fn actual_long_datatype_temporaries_share_the_preparation_owner() {
     );
     let answer = reasoner.consistency();
     assert_eq!(*answer.answer(), Verdict::False);
-    checked(&dataset, &answer);
+    checked(
+        &dataset,
+        &answer,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let window = CurrentThreadWindow::open();
     let mut preparation = crate::owl_dl::bounds::Preparation::default();
     preparation
@@ -642,7 +679,11 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
     )
     .unwrap();
     let original_answer = original_reasoner.consistency();
-    let proof = checked(&original, &original_answer);
+    let proof = checked(
+        &original,
+        &original_answer,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     for revised in [
         shared_schema(1, 0, true),
         shared_schema(1, 1, false),
@@ -664,7 +705,11 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
                     &revised,
                     proof.question(),
                     Some(original_answer.certificate()),
-                    &context
+                    &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .is_err()
         );
@@ -757,7 +802,14 @@ fn refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_s
         assert!(reasoner.schema_preparation().obstruction.is_none());
         let completed = reasoner.consistency();
         assert_eq!(*completed.answer(), Verdict::False);
-        checked(&dataset, &completed);
+        checked(
+            &dataset,
+            &completed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
     }
 }
 
@@ -831,8 +883,22 @@ fn cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises
         );
         assert!(reference.kb.schema_reference_stats.get().classes > 0);
         if contradictory {
-            checked(&dataset, &actual);
-            checked(&dataset, &expected);
+            checked(
+                &dataset,
+                &actual,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
+            checked(
+                &dataset,
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
         } else {
             assert_eq!(reference.kb.schema_reference_stats.get().contradictions, 0);
         }

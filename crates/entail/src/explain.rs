@@ -1464,11 +1464,45 @@ mod tests {
     fn the_justification_digest_addresses_its_content() {
         let first = justify(&chain(), &cat_is_an_animal()).expect("entailed");
         let second = justify(&chain(), &cat_is_an_animal()).expect("entailed");
-        assert_eq!(first.digest().unwrap(), second.digest().unwrap());
-        assert_eq!(first.digest_hex().unwrap().len(), 64);
         assert_eq!(
-            purrdf_hash::hex::encode(&first.digest().unwrap()),
-            first.digest_hex().unwrap()
+            first
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            second
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
+        assert_eq!(
+            first
+                .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            purrdf_hash::hex::encode(
+                &first
+                    .digest(&mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    ))
+                    .unwrap()
+            ),
+            first
+                .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
         );
 
         // The SAME two axioms reached from a different ontology digest identically: the
@@ -1480,7 +1514,20 @@ mod tests {
             (MAMMAL, SUB, ANIMAL),
         ]);
         let other = justify(&bigger, &cat_is_an_animal()).expect("entailed");
-        assert_eq!(other.digest().unwrap(), first.digest().unwrap());
+        assert_eq!(
+            other
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            first
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
 
         // A DIFFERENT justification digests differently.
         let assertion = justify(
@@ -1491,7 +1538,20 @@ mod tests {
             },
         )
         .expect("entailed");
-        assert_ne!(assertion.digest().unwrap(), first.digest().unwrap());
+        assert_ne!(
+            assertion
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            first
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1514,8 +1574,18 @@ mod tests {
             &original,
             purrdf_core::CanonError::ReservedVocabulary(_)
         ));
-        let digest_refusal = justification.digest().unwrap_err();
-        let text_refusal = justification.digest_hex().unwrap_err();
+        let digest_refusal = justification
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap_err();
+        let text_refusal = justification
+            .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap_err();
         drop(justification);
         drop(ontology);
         assert_eq!(digest_refusal, original);

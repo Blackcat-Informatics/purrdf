@@ -889,6 +889,7 @@ fn public_causal_cancellation_preserves_the_original_native_refusal() {
         &source,
         crate::owl_dl::bounds::SchemaPreparationBudget::default(),
         stop.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();

@@ -357,6 +357,10 @@ fn retained_schema_proof_clones_release_their_original_allocations_after_the_con
                 proof.question(),
                 Some(answer.certificate()),
                 &context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         drop(context);
