@@ -3471,7 +3471,7 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 27] = [
+const OPTION_SHAPES: [(&str, OptionShape); 29] = [
     ("now", OptionShape::Text),
     ("entropySeed", OptionShape::Limit),
     ("base", OptionShape::Text),
@@ -3491,6 +3491,8 @@ const OPTION_SHAPES: [(&str, OptionShape); 27] = [
     ("maxIntermediateCells", OptionShape::Ceiling),
     ("maxScratchBytes", OptionShape::Ceiling),
     ("maxRemoteRequests", OptionShape::Ceiling),
+    ("maxUdfDepth", OptionShape::Ceiling),
+    ("unlimitedUdfDepth", OptionShape::Boolean),
     ("yieldEveryPolls", OptionShape::Count),
     ("catalog", OptionShape::Catalog),
     ("importIris", OptionShape::TextList),
@@ -3520,18 +3522,20 @@ const HOST_KEYS: [&str; 3] = ["yieldEveryPolls", "catalog", "localServices"];
 const PACKAGE_KEYS: [&str; 3] = ["resolveService", "resolveLoad", "signal"];
 
 /// The governor ceilings, in the order the synchronous governed entries name them.
-const CEILING_KEYS: [&str; 6] = [
+const CEILING_KEYS: [&str; 7] = [
     "fuel",
     "deadlineMs",
     "maxAnswers",
     "maxIntermediateCells",
     "maxScratchBytes",
     "maxRemoteRequests",
+    "maxUdfDepth",
 ];
 
 /// The keys every governed operation accepts.
-const GOVERNED_KEYS: [&str; 10] = [
+const GOVERNED_KEYS: [&str; 12] = [
     "noCeiling",
+    "unlimitedUdfDepth",
     "base",
     "xpathRegex",
     "aggregateNamespace",
@@ -3541,6 +3545,7 @@ const GOVERNED_KEYS: [&str; 10] = [
     "maxIntermediateCells",
     "maxScratchBytes",
     "maxRemoteRequests",
+    "maxUdfDepth",
 ];
 
 /// One operation kind's options: the keys it accepts beside [`HOST_KEYS`], whether it
@@ -3608,6 +3613,8 @@ impl AsyncOperationKind {
                     "maxIntermediateCells",
                     "maxScratchBytes",
                     "maxRemoteRequests",
+                    "maxUdfDepth",
+                    "unlimitedUdfDepth",
                     "program",
                     "importIris",
                     "importDocuments",
@@ -3636,6 +3643,8 @@ impl AsyncOperationKind {
                     "maxIntermediateCells",
                     "maxScratchBytes",
                     "maxRemoteRequests",
+                    "maxUdfDepth",
+                    "unlimitedUdfDepth",
                     "accept",
                 ],
                 true,
@@ -4032,7 +4041,10 @@ impl AsyncJobOptions {
             let value = reflect_get(options, &key).map_err(|_| {
                 OptionsError::type_error(format!("query option {key} could not be read"))
             })?;
-            if is_unset(&value) && (key != "noCeiling" || value.is_undefined()) {
+            if is_unset(&value)
+                && (!matches!(option_shape(&key), Some(OptionShape::Boolean))
+                    || value.is_undefined())
+            {
                 continue;
             }
             let read = match option_shape(&key) {
@@ -4118,11 +4130,13 @@ impl AsyncJobOptions {
             None => {}
         }
         let mut no_ceiling = false;
+        let mut unlimited_udf_depth = false;
         let mut ceilings: BTreeMap<&str, i64> = BTreeMap::new();
         let mut counts: BTreeMap<&str, f64> = BTreeMap::new();
         for (key, value) in entries {
             match (key.as_str(), value) {
                 ("noCeiling", OptionValue::Boolean(value)) => no_ceiling = value,
+                ("unlimitedUdfDepth", OptionValue::Boolean(value)) => unlimited_udf_depth = value,
                 ("base", OptionValue::Text(text)) => options.base = Some(text),
                 ("now", OptionValue::Text(text)) => options.now = Some(text),
                 ("entropySeed", OptionValue::Limit(seed)) => options.entropy_seed = Some(seed),
@@ -4196,6 +4210,8 @@ impl AsyncJobOptions {
             ceilings.get("maxIntermediateCells").copied(),
             ceilings.get("maxScratchBytes").copied(),
             ceilings.get("maxRemoteRequests").copied(),
+            ceilings.get("maxUdfDepth").copied(),
+            Some(unlimited_udf_depth),
         )
         .map_err(OptionsError::refused)?
         .with_no_ceiling(no_ceiling);
@@ -5003,6 +5019,7 @@ mod tests {
                         "maxIntermediateCells",
                         "maxScratchBytes",
                         "maxRemoteRequests",
+                        "maxUdfDepth",
                     ] {
                         assert!(
                             input.clone().ceiling(key, 0).validate(kind).is_err(),
@@ -7381,7 +7398,7 @@ mod tests {
                 .query_governed(
                     &frozen,
                     sparql_request(&query, None),
-                    QueryOptions::new().with_remote(Some(&source)),
+                    &QueryOptions::new().with_remote(Some(&source)),
                     &governors,
                 )
                 .expect("the outer query evaluates");

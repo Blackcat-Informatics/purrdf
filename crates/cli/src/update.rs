@@ -121,7 +121,7 @@ pub(crate) fn run(
             Ok(engine.update_governed(
                 &mut dataset,
                 request,
-                query_options.with_coordinate_observer(capture),
+                &query_options.with_coordinate_observer(capture),
                 &governors,
             )?)
         })?;
@@ -148,7 +148,7 @@ pub(crate) fn run(
             Ok(engine.update_with_options(
                 &mut dataset,
                 request,
-                query_options.with_coordinate_observer(capture),
+                &query_options.with_coordinate_observer(capture),
             )?)
         })?;
     }

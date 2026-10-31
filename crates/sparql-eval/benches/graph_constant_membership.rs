@@ -46,7 +46,7 @@ where
     D: DatasetView<ReadError = Infallible> + Sync,
 {
     match engine
-        .query_prepared_view(view, plan, &[], QueryOptions::EMPTY)
+        .query_prepared_view(view, plan, &[], &QueryOptions::EMPTY)
         .expect("the membership query evaluates")
     {
         SparqlResult::Solutions { rows, .. } => rows.len(),

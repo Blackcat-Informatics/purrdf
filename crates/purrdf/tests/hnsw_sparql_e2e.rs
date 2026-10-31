@@ -74,7 +74,7 @@ fn answer(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),
@@ -248,7 +248,7 @@ mod bounded_native_workspace {
         source: &SegmentedSession,
         query: &str,
         prepared: &PreparedQuery,
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         route: Route,
     ) -> RetainedSparqlResult {
         match route {
@@ -332,14 +332,14 @@ mod bounded_native_workspace {
             let env = ExtensionEnv::over_relations(registry.clone()).unwrap();
             let options = QueryOptions::new().with_env(&env);
             let prepared = engine
-                .prepare_query_with_options(query, None, options)
+                .prepare_query_with_options(query, None, &options)
                 .unwrap();
             for route in ROUTES {
                 let window = CurrentThreadWindow::open();
                 let source = image
                     .open_session(SegmentedReadLimits::new(CEILING, 2, 32, 1_000_000, 8))
                     .unwrap();
-                let result = run(&engine, &source, query, &prepared, options, route);
+                let result = run(&engine, &source, query, &prepared, &options, route);
                 let measured = window.close();
                 let peak = source.evidence().peak_bytes();
                 assert!(
@@ -376,14 +376,14 @@ mod bounded_native_workspace {
         let env = ExtensionEnv::over_relations(registry.clone()).unwrap();
         let options = QueryOptions::new().with_env(&env);
         let prepared = engine
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
         let result = run(
             &engine,
             &source,
             &query,
             &prepared,
-            options,
+            &options,
             Route::Prepared,
         );
         let window = CurrentThreadWindow::open();
@@ -429,7 +429,7 @@ mod bounded_native_workspace {
         let env = ExtensionEnv::over_relations(registry).unwrap();
         let options = QueryOptions::new().with_env(&env);
         let prepared = engine
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
         let healthy = image
             .open_session(SegmentedReadLimits::new(CEILING, 2, 32, 1_000_000, 8))
@@ -441,7 +441,7 @@ mod bounded_native_workspace {
             &healthy,
             &query,
             &prepared,
-            options,
+            &options,
             Route::Prepared,
         );
         assert_eq!(observations.searches(), before + 1);
@@ -461,7 +461,7 @@ mod bounded_native_workspace {
                 .open_session(SegmentedReadLimits::new(ceiling, 2, 32, 1_000_000, 8))
                 .unwrap();
             let before = observations.searches();
-            let outcome = engine.query_prepared_fallible_view(&source, &prepared, &[], options);
+            let outcome = engine.query_prepared_fallible_view(&source, &prepared, &[], &options);
             let entered = observations.searches() != before;
             match &outcome {
                 Ok(_) => {}
@@ -494,7 +494,7 @@ mod bounded_native_workspace {
         let before_searches = observations.searches();
         let before_candidates = observations.graph_candidates();
         let error = engine
-            .query_prepared_fallible_view(&source, &prepared, &[], options)
+            .query_prepared_fallible_view(&source, &prepared, &[], &options)
             .unwrap_err();
         let measured = window.close();
         assert_eq!(observations.searches(), before_searches + 1);

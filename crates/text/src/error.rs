@@ -468,7 +468,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::new()
+                    &QueryOptions::new()
                         .with_env(env)
                         .with_functions(&functions)
                         .with_focus_graph(Some(&focus)),

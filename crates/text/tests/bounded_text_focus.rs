@@ -163,7 +163,7 @@ fn run_text_focus(wide: bool) {
             substitutions: &[],
         };
         let expected = binding_engine
-            .query_with_options_view(&*resident, request(), options)
+            .query_with_options_view(&*resident, request(), &options)
             .unwrap();
         let expected_rows = expected.solutions().unwrap().1;
         assert_eq!(expected_rows.len(), count);
@@ -175,7 +175,7 @@ fn run_text_focus(wide: bool) {
         for route in 0..4 {
             let engine = NativeSparqlEngine::new();
             let prepared = engine
-                .prepare_query_with_options(&query, None, options)
+                .prepare_query_with_options(&query, None, &options)
                 .unwrap();
             let source = image
                 .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
@@ -186,13 +186,13 @@ fn run_text_focus(wide: bool) {
             let found = match route {
                 0 => {
                     engine
-                        .query_fallible_view(&source, request(), options)
+                        .query_fallible_view(&source, request(), &options)
                         .unwrap()
                         .result
                 }
                 1 => {
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], options)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &options)
                         .unwrap()
                         .result
                 }
@@ -201,7 +201,7 @@ fn run_text_focus(wide: bool) {
                         .query_governed_fallible_view(
                             &source,
                             request(),
-                            options,
+                            &options,
                             &QueryGovernors::METERED,
                         )
                         .unwrap()
@@ -213,7 +213,7 @@ fn run_text_focus(wide: bool) {
                             &source,
                             &prepared,
                             &[],
-                            options,
+                            &options,
                             &QueryGovernors::METERED,
                         )
                         .unwrap()
@@ -263,7 +263,7 @@ fn run_text_focus(wide: bool) {
             let baseline = non_cache_live(&source);
             let engine = NativeSparqlEngine::new();
             let prepared = engine
-                .prepare_query_with_options(&query, None, options)
+                .prepare_query_with_options(&query, None, &options)
                 .unwrap();
             let before_requests = source.evidence().request_count();
             macro_rules! physical {
@@ -279,21 +279,26 @@ fn run_text_focus(wide: bool) {
             }
             let window = CurrentThreadWindow::open();
             let refused = match route {
-                0 => physical!(engine.query_fallible_view(&source, request(), options)),
+                0 => physical!(engine.query_fallible_view(&source, request(), &options)),
                 1 => {
-                    physical!(engine.query_prepared_fallible_view(&source, &prepared, &[], options))
+                    physical!(engine.query_prepared_fallible_view(
+                        &source,
+                        &prepared,
+                        &[],
+                        &options
+                    ))
                 }
                 2 => physical!(engine.query_governed_fallible_view(
                     &source,
                     request(),
-                    options,
+                    &options,
                     &QueryGovernors::METERED
                 )),
                 _ => physical!(engine.query_prepared_governed_fallible_view(
                     &source,
                     &prepared,
                     &[],
-                    options,
+                    &options,
                     &QueryGovernors::METERED
                 )),
             };

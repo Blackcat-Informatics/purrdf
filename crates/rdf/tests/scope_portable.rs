@@ -122,7 +122,7 @@ fn portable_inventory_preserves_scope_bags_columns_and_carrier_identity() {
             .expect("source witness observer admission");
         let prepared = engine.prepare_query(&text, None).expect("text preparation");
         let raw = engine
-            .prepare_algebra(parsed.clone(), QueryOptions::EMPTY)
+            .prepare_algebra(parsed.clone(), &QueryOptions::EMPTY)
             .expect("compiler-algebra preparation");
         let carrier = try_pattern_to_select_query(parsed.pattern()).expect("legal carrier");
         let reparsed = SparqlParser::new()
@@ -152,7 +152,7 @@ fn portable_inventory_preserves_scope_bags_columns_and_carrier_identity() {
             for plan in [&prepared, &raw] {
                 assert_solution_bag(
                     engine
-                        .query_prepared(&dataset, plan, &[], QueryOptions::EMPTY)
+                        .query_prepared(&dataset, plan, &[], &QueryOptions::EMPTY)
                         .expect("retained query executes"),
                     &expected,
                     &format!("{id}, retained execution {repetition}"),

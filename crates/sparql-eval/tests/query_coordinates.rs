@@ -38,7 +38,7 @@ fn supplied_inputs_repeat_complete_results_without_host_reads() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                options,
+                &options,
             )
             .unwrap()
     };
@@ -87,7 +87,7 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
         .query_governed_view(
             &dataset,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -100,7 +100,7 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
         .with_now(actual.effective_now())
         .with_entropy_seed(actual.effective_entropy_seed());
     let replay = without_host_clock_or_entropy(|| {
-        engine.query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
+        engine.query_governed_view(&dataset, request, &options, &QueryGovernors::METERED)
     })
     .unwrap();
     let QueryCoordinates::Started(replayed) = replay.coordinates() else {
@@ -121,7 +121,7 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
                 query: "SELECT (NOW() AS ?time) (RAND() AS ?random) WHERE {}",
                 ..request
             },
-            options,
+            &options,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -137,11 +137,11 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
                 query: "INSERT DATA { <https://example.org/s> <https://example.org/p> 1 }",
                 ..request
             },
-            options,
+            &options,
         )
         .unwrap();
     let changed_source = engine
-        .query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
+        .query_governed_view(&dataset, request, &options, &QueryGovernors::METERED)
         .unwrap();
     let QueryCoordinates::Started(changed) = changed_source.coordinates() else {
         panic!("changed source")
@@ -174,7 +174,7 @@ fn supplied_large_fraction_and_timezone_survive_repeated_now() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                &QueryOptions::new().with_now(&now).with_entropy_seed(7),
             )
             .unwrap()
     });
@@ -217,7 +217,7 @@ fn prepared_executions_select_fresh_inputs_without_changing_the_plan() {
                         &dataset,
                         &prepared,
                         &[],
-                        QueryOptions::new().with_now(now).with_entropy_seed(seed),
+                        &QueryOptions::new().with_now(now).with_entropy_seed(seed),
                         &QueryGovernors::METERED,
                     )
                     .unwrap();
@@ -231,7 +231,7 @@ fn prepared_executions_select_fresh_inputs_without_changing_the_plan() {
                     &dataset,
                     &prepared,
                     &[],
-                    QueryOptions::new().with_now(now).with_entropy_seed(seed),
+                    &QueryOptions::new().with_now(now).with_entropy_seed(seed),
                 )
                 .unwrap()
         });
@@ -297,7 +297,7 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
                 &source,
                 &prepared,
                 &[],
-                QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                &QueryOptions::new().with_now(&now).with_entropy_seed(7),
                 &QueryGovernors::METERED,
             )
             .unwrap()
@@ -354,7 +354,7 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
                 &source,
                 &prepared,
                 &[],
-                QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                &QueryOptions::new().with_now(&now).with_entropy_seed(7),
                 &governors,
             )
             .unwrap_err()
@@ -408,7 +408,7 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
              <http://example.org/str> ?v } ORDER BY ?s",
                     ..request
                 },
-                options,
+                &options,
             )
             .unwrap();
         result.solutions().unwrap().1.to_vec()
@@ -427,11 +427,11 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
             let mut dataset = Arc::clone(&original);
             without_host_clock_or_entropy(|| match lane {
                 0 => engine
-                    .update_with_options(&mut dataset, request, options)
+                    .update_with_options(&mut dataset, request, &options)
                     .unwrap(),
                 1 => check_receipt(
                     engine
-                        .update_governed(&mut dataset, request, options, &QueryGovernors::METERED)
+                        .update_governed(&mut dataset, request, &options, &QueryGovernors::METERED)
                         .unwrap(),
                 ),
                 _ => {
@@ -441,7 +441,7 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
                             .update_governed_handle(
                                 &mut handle,
                                 request,
-                                options,
+                                &options,
                                 &QueryGovernors::METERED,
                             )
                             .unwrap(),
@@ -488,7 +488,7 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
                             query: &failing,
                             ..request
                         },
-                        options,
+                        &options,
                         &QueryGovernors::METERED,
                     )
                     .map(|_| ())
@@ -499,7 +499,7 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
                         query: &failing,
                         ..request
                     },
-                    options,
+                    &options,
                 )
             }
         });
@@ -513,7 +513,7 @@ fn supplied_update_coordinates_replay_and_preserve_atomic_publication() {
         engine.update_governed(
             &mut dataset,
             request,
-            options,
+            &options,
             &QueryGovernors::METERED.with_stop_signal(cancelled),
         )
     })
@@ -567,7 +567,7 @@ fn update_receipts_distinguish_contexts_and_independent_inputs() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    options,
+                    &options,
                     &QueryGovernors::METERED,
                 )
                 .unwrap();
@@ -607,7 +607,7 @@ fn update_receipts_release_the_resident_owner_after_the_last_clone() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0),
+            &QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0),
             &QueryGovernors::METERED,
         )).unwrap();
         let coordinates = outcome.coordinates().clone();
@@ -662,7 +662,7 @@ fn snapshot_identity_binds_unused_blank_mint_reservations() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                options,
+                &options,
                 &QueryGovernors::METERED,
             )
             .unwrap();

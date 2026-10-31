@@ -280,13 +280,13 @@ unsafe fn run_query(
         ));
         let engine = sparql_engine(regex);
         let result = engine
-            .prepare_query_with_options(query, base_iri, options)
+            .prepare_query_with_options(query, base_iri, &options)
             .and_then(|prepared| {
                 engine.query_prepared_view(
                     PurrdfDataset::handle(dataset).as_ref(),
                     &prepared,
                     &[],
-                    options,
+                    &options,
                 )
             })
             .map_err(|diagnostic| query_error(&diagnostic));
@@ -1069,7 +1069,7 @@ unsafe fn query_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                coordinates.apply(query_options(
+                &coordinates.apply(query_options(
                     QueryOptions::new()
                         .with_coordinate_observer(&capture)
                         .with_geo(geo)
@@ -1391,7 +1391,7 @@ unsafe fn query_entailment_governed_entry(
                 substitutions: &[],
             },
             &EntailmentClosure::new(plan.entailment(), &imports).with_limits(limits.eval_options()),
-            coordinates.apply(query_options(
+            &coordinates.apply(query_options(
                 QueryOptions::new()
                     .with_coordinate_observer(&capture)
                     .with_geo(geo)
@@ -1651,7 +1651,7 @@ unsafe fn update_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                coordinates.apply(query_options(
+                &coordinates.apply(query_options(
                     QueryOptions::new()
                         .with_coordinate_observer(&capture)
                         .with_geo(geo)
@@ -2913,7 +2913,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("check query evaluates");
         let SparqlResult::Solutions { rows, .. } = check else {

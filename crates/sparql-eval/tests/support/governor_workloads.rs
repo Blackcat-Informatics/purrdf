@@ -138,7 +138,7 @@ pub fn grouped_answer(
         None => engine.query(ds, request).expect("plain group query"),
         Some(governors) => {
             let outcome = engine
-                .query_governed(ds, request, QueryOptions::EMPTY, governors)
+                .query_governed(ds, request, &QueryOptions::EMPTY, governors)
                 .expect("governed group query");
             let GovernedOutcome::Complete { result, .. } = outcome else {
                 panic!("the grouped fold must complete: {outcome:?}");

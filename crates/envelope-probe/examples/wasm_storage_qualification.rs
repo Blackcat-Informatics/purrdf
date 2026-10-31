@@ -69,7 +69,7 @@ fn qualify(source: Vec<u8>, encoded_receipt: &[u8], trusted_pin: &str) -> Result
         return Err(format!("expected 1000000 source rows, found {source_rows}"));
     }
     let answer = engine
-        .query_prepared_fallible_view(&session, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&session, &prepared, &[], &QueryOptions::EMPTY)
         .map_err(|error| error.to_string())?;
     let Some((_, rows)) = answer.result.solutions() else {
         return Err("SELECT did not return solutions".to_owned());

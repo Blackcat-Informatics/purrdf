@@ -98,7 +98,7 @@ use purrdf_core::{
 };
 use sha2::Digest;
 
-use crate::eval::MAX_UDF_DEPTH;
+use crate::eval::DEFAULT_UDF_DEPTH;
 
 // ---------------------------------------------------------------------------
 // Stop signals
@@ -446,48 +446,55 @@ impl ScriptedClock {
 
 /// The dimensions a caller may set a ceiling on.
 ///
-/// Every other dimension either carries a fixed build ceiling that a caller must not be
-/// able to relax ([`ResourceDimension::UdfDepth`]) or belongs to the demand-paging tier,
-/// which is configured through
-/// [`PagedQueryLimits`](purrdf_core::ir::PagedQueryLimits) instead
-/// ([`ResourceDimension::Pages`], [`ResourceDimension::Bytes`]).
-pub(crate) const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 5] = [
+/// Demand-paging ceilings are configured through
+/// [`PagedQueryLimits`](purrdf_core::ir::PagedQueryLimits) instead.
+pub(crate) const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 6] = [
     ResourceDimension::Fuel,
     ResourceDimension::AnswerRows,
     ResourceDimension::IntermediateCells,
     ResourceDimension::ScratchBytes,
     ResourceDimension::RemoteRequests,
+    ResourceDimension::UdfDepth,
 ];
 
-/// The ceiling [`QueryGovernors::METERED`] puts on every caller-settable dimension:
+/// The ceiling [`QueryGovernors::METERED`] uses for ordinary metered dimensions:
 /// engaged, so the counter runs, and one below the largest representable, so nothing an
 /// execution can actually consume reaches it.
 const METERING_CEILING: u64 = u64::MAX - 1;
 
-/// [`QueryGovernors::METERED`]'s ceiling vector.
-///
-/// Derived from [`CALLER_SETTABLE_DIMENSIONS`] rather than written out, so a dimension
-/// added to that table is metered automatically instead of being silently left
-/// unmeasurable — the failure mode would be a consumer sizing a budget from evidence with
-/// a hole in it, which is worse than no evidence at all. Fixed-ceiling dimensions are
-/// untouched: this starts from [`QueryGovernors::UNBOUNDED`]'s vector, so the recursion
-/// guard survives.
+/// Meter every ordinary dimension and retain the default logical UDF depth.
+/// The depth default is a configurable policy, not a physical stack guarantee.
 const fn metering_limits() -> ResourceVector {
-    let mut limits = QueryGovernors::UNBOUNDED.limits;
+    let mut limits = ResourceVector::UNBOUNDED;
     let mut index = 0;
     while index < CALLER_SETTABLE_DIMENSIONS.len() {
         limits.set(CALLER_SETTABLE_DIMENSIONS[index], METERING_CEILING);
         index += 1;
     }
+    limits.set(ResourceDimension::UdfDepth, DEFAULT_UDF_DEPTH);
     limits
 }
 
+/// Depth has a deliberate default limit, not the generic metering sentinel.
+/// Preserve an explicit `u64::MAX - 1` depth ceiling; `u64::MAX` removes it.
+const fn effective_udf_depth_limit(limits: &ResourceVector) -> Option<u64> {
+    if limits.is_bounded(ResourceDimension::UdfDepth) {
+        Some(limits.get(ResourceDimension::UdfDepth))
+    } else {
+        None
+    }
+}
+
 /// The ceiling a caller actually configured for `dimension` in `limits`: `None` for an
-/// unbounded dimension and for one bounded only by [`METERING_CEILING`], which is not a
-/// bound anyone asked for. The one reading behind [`QueryGovernors::caller_ceiling`]
+/// unbounded dimension and for an ordinary dimension bounded only by
+/// [`METERING_CEILING`]. UDF depth always reports its effective logical policy.
+/// The one reading behind [`QueryGovernors::caller_ceiling`]
 /// and [`GovernorState::caller_ceiling`], so a configuration and the execution built
 /// from it cannot disagree about what the caller set.
 const fn caller_ceiling_in(limits: &ResourceVector, dimension: ResourceDimension) -> Option<u64> {
+    if matches!(dimension, ResourceDimension::UdfDepth) {
+        return effective_udf_depth_limit(limits);
+    }
     if !limits.is_bounded(dimension) {
         return None;
     }
@@ -500,8 +507,7 @@ const fn caller_ceiling_in(limits: &ResourceVector, dimension: ResourceDimension
 }
 
 /// Whether any caller-settable governor is engaged: a stop signal is attached, or a
-/// caller-settable dimension carries a ceiling. Fixed-ceiling dimensions are excluded:
-/// they hold on every query, so counting them would make every execution look governed.
+/// caller-settable dimension carries a ceiling, including logical UDF depth.
 /// The one reading behind [`QueryGovernors::is_engaged`] and
 /// [`GovernorState::is_engaged`].
 fn caller_engaged(limits: &ResourceVector, has_stop: bool) -> bool {
@@ -573,51 +579,18 @@ pub struct QueryGovernors {
 }
 
 impl QueryGovernors {
-    /// No caller-settable ceiling and no stop signal.
-    ///
-    /// "Unbounded" means unbounded on every **caller-settable** dimension. Dimensions
-    /// with a fixed build ceiling keep it and gain only *reporting* through
-    /// [`GovernorEvidence`]: [`ResourceDimension::UdfDepth`] stays pinned at the
-    /// evaluator's recursion guard here, exactly as it is on every ungoverned query. A
-    /// caller cannot raise or remove that guard through this type, because a
-    /// caller-relaxable stack-recursion bound is not a bound.
-    ///
-    /// This is an associated const rather than a constructor function, mirroring
-    /// [`PagedQueryLimits::UNBOUNDED`](purrdf_core::ir::PagedQueryLimits::UNBOUNDED).
+    /// Remove every caller-settable ceiling, including logical UDF depth,
+    /// and attach no stop signal. Physical host stack guards remain independent.
     pub const UNBOUNDED: Self = Self {
-        limits: ResourceVector::UNBOUNDED.with(ResourceDimension::UdfDepth, MAX_UDF_DEPTH as u64),
+        limits: ResourceVector::UNBOUNDED,
         stop: None,
     };
 
-    /// **Measure** this query's cost without bounding it: every caller-settable dimension
-    /// is engaged, at a ceiling no query can reach.
+    /// Meter ordinary dimensions while retaining the default logical UDF depth.
     ///
-    /// Run a query under this, read [`GovernorEvidence`] off the completed result, and use
-    /// the numbers to choose the real ceilings. That is the intended way to size a budget,
-    /// and it is why evidence is returned on the *complete* path at all.
-    ///
-    /// # Why [`Self::UNBOUNDED`] does not do this
-    ///
-    /// [`Self::UNBOUNDED`] reports **nothing**, because it charges nothing: every charge
-    /// site short-circuits on [`GovernorState::is_engaged_in`] before it touches a
-    /// counter, which is precisely what makes an ungoverned query cost exactly what it
-    /// cost before governors existed. That is a deliberate trade, not an oversight — you
-    /// cannot have a meter that is free and also a meter that reads. So the two are
-    /// separate, named states: `UNBOUNDED` declines both the ceilings and the accounting;
-    /// `METERED` takes the accounting and declines the ceilings.
-    ///
-    /// # The ceiling is high, not absent
-    ///
-    /// "Engaged" *means* "carries a ceiling" — an absent ceiling is exactly what the
-    /// charge sites short-circuit on — so metering requires a finite number. It is one
-    /// below the largest representable, so a query would have to consume `u64::MAX` units
-    /// of a dimension to trip it, which no execution that fits in memory can do.
-    /// Charging saturates rather than overflowing, so even the impossible case fails
-    /// closed with a typed budget trip instead of a panic.
-    ///
-    /// Fixed-ceiling dimensions are **not** relaxed by this door either:
-    /// [`ResourceDimension::UdfDepth`] keeps the evaluator's recursion guard, exactly as
-    /// it does under [`Self::UNBOUNDED`].
+    /// Fuel, answer rows, intermediate cells, scratch bytes and remote requests
+    /// use the metering ceiling. UDF depth deliberately starts at
+    /// `DEFAULT_UDF_DEPTH` and can be raised or removed by the caller.
     pub const METERED: Self = Self {
         limits: metering_limits(),
         stop: None,
@@ -683,6 +656,27 @@ impl QueryGovernors {
         self
     }
 
+    /// Set the inclusive logical UDF depth ceiling. Zero refuses the first call.
+    /// `u64::MAX` removes this ceiling, following [`ResourceVector`]'s convention.
+    /// Physical host stack guards are independent of this logical policy.
+    #[must_use]
+    pub fn with_max_udf_depth(mut self, limit: u64) -> Self {
+        self.limits.set(ResourceDimension::UdfDepth, limit);
+        self
+    }
+
+    /// Remove the logical UDF depth ceiling while retaining every other governor.
+    #[must_use]
+    pub fn without_udf_depth_limit(self) -> Self {
+        self.with_max_udf_depth(u64::MAX)
+    }
+
+    /// The effective logical depth policy, independent of metering engagement.
+    #[must_use]
+    pub const fn max_udf_depth(&self) -> Option<u64> {
+        effective_udf_depth_limit(&self.limits)
+    }
+
     /// Attach a host-supplied stop signal (a deadline, a cancellation, or both composed
     /// by the host).
     ///
@@ -709,9 +703,7 @@ impl QueryGovernors {
     ///
     /// `false` means the execution is ungoverned in the sense that matters for cost: no
     /// caller ceiling and no stop signal, so no charge site has anything to enforce.
-    /// Fixed-ceiling dimensions are excluded deliberately — they are enforced on every
-    /// query, governed or not, so counting them here would make every execution look
-    /// governed and defeat the short-circuit.
+    /// Logical UDF depth is caller-settable and participates in this decision.
     #[must_use]
     pub fn is_engaged(&self) -> bool {
         caller_engaged(&self.limits, self.stop.is_some())
@@ -723,8 +715,7 @@ impl QueryGovernors {
     /// fuel-charge overhead onto the query: the fuel charge site asks this question about
     /// [`ResourceDimension::Fuel`] alone and short-circuits before touching a counter.
     ///
-    /// [`ResourceDimension::UdfDepth`] answers `true` even under [`Self::UNBOUNDED`],
-    /// because its fixed build ceiling is always in force.
+    /// Logical UDF depth is disengaged under [`Self::UNBOUNDED`].
     #[must_use]
     pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
         self.limits.is_bounded(dimension)
@@ -732,7 +723,8 @@ impl QueryGovernors {
 
     /// The ceiling a caller actually configured for `dimension`, as opposed to the
     /// bookkeeping ceiling [`Self::METERED`] installs on every caller-settable dimension
-    /// purely to keep its counter running.
+    /// purely to keep its counter running. UDF depth reports its effective logical
+    /// policy, including the default retained by [`Self::METERED`].
     ///
     /// A seam that leaves the evaluator and hands a ceiling to something outside it — a
     /// `SERVICE` resolver sizing a remote `LIMIT`, for instance — must never see
@@ -1265,13 +1257,17 @@ impl GovernorState {
         caller_ceiling_in(&self.limits, dimension)
     }
 
+    /// The captured logical depth policy, including when metering is disengaged.
+    #[must_use]
+    pub const fn max_udf_depth(&self) -> Option<u64> {
+        effective_udf_depth_limit(&self.limits)
+    }
+
     /// Whether **any** caller-settable governor is engaged in this execution.
     ///
     /// The per-execution twin of [`Self::is_engaged_in`], and the same question
     /// [`QueryGovernors::is_engaged`] answers about the configuration this state was
-    /// built from. Fixed-ceiling dimensions are excluded for the same reason they are
-    /// there: they hold on every query, so counting them would make every execution look
-    /// governed.
+    /// built from. Logical UDF depth participates like every caller-settable dimension.
     ///
     /// The evaluator asks this to decide whether a per-row expression loop may be forked
     /// across workers at all — see `EvalCtx::may_fork_row_loop`.
@@ -1932,7 +1928,15 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// representation prices the emitted text including its `.0`, two bytes more than
 /// before. Even when a query's answer is unchanged, its fuel and scratch cut points
 /// can move; consumers must remeasure those ceilings.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 22;
+///
+/// # v23
+///
+/// The point schedule stays unchanged. SPARQL function bodies retain their
+/// continuations in admitted heap frames. Logical UDF depth defaults to 32 and
+/// can be raised or removed; metering keeps the default, while `UNBOUNDED`
+/// removes it. Retained frame storage and the caller's depth policy can move
+/// refusal points, so consumers must remeasure their actual query ceilings.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 23;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2321,7 +2325,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "d8dba125e92664037fdc00ef736906cb04bdfd4345bbfb4c0e6958c50204c4ac";
+    "37f39553602ecd25cd6da06d4b602dd443369f349fc2e58636a810e840df6186";
 
 #[cfg(test)]
 mod tests {
@@ -2461,45 +2465,49 @@ mod tests {
     }
 
     #[test]
-    fn unbounded_still_bounds_udf_depth() {
+    fn udf_depth_policy_can_be_set_and_removed() {
         let governors = QueryGovernors::UNBOUNDED;
-        assert_eq!(
-            governors.limits().get(ResourceDimension::UdfDepth),
-            u64::from(MAX_UDF_DEPTH),
-            "the recursion guard is a fixed build ceiling, not an opt-in"
-        );
-        assert!(
-            governors.is_engaged_in(ResourceDimension::UdfDepth),
-            "the recursion guard is enforced on every execution"
-        );
+        assert_eq!(governors.max_udf_depth(), None);
+        assert!(!governors.is_engaged_in(ResourceDimension::UdfDepth));
 
-        // There is no caller-facing setter that could raise or remove it, so the ceiling
-        // survives every builder.
-        let configured = QueryGovernors::UNBOUNDED
+        let configured = governors
             .with_fuel(1)
             .with_max_answers(2)
             .with_max_intermediate_cells(3)
             .with_max_scratch_bytes(4)
             .with_max_remote_requests(5)
             .with_stop_signal(Arc::new(CancellationFlag::new()));
+        assert_eq!(configured.max_udf_depth(), None);
         assert_eq!(
-            configured.limits().get(ResourceDimension::UdfDepth),
-            u64::from(MAX_UDF_DEPTH)
+            QueryGovernors::METERED.max_udf_depth(),
+            Some(DEFAULT_UDF_DEPTH)
         );
-
-        // And it is actually enforced by the live state.
-        let state = GovernorState::new(&QueryGovernors::UNBOUNDED);
+        let finite = configured.with_max_udf_depth(DEFAULT_UDF_DEPTH);
+        let state = GovernorState::new(&finite);
         assert_eq!(
-            state.charge(ResourceDimension::UdfDepth, u64::from(MAX_UDF_DEPTH)),
+            state.observe_peak(ResourceDimension::UdfDepth, DEFAULT_UDF_DEPTH),
             Ok(())
         );
         assert_eq!(
-            state.charge(ResourceDimension::UdfDepth, 1),
+            state.observe_peak(ResourceDimension::UdfDepth, DEFAULT_UDF_DEPTH + 1),
             Err(TrippedGovernor::Budget {
                 dimension: ResourceDimension::UdfDepth,
-                limit: u64::from(MAX_UDF_DEPTH),
-                consumed: u64::from(MAX_UDF_DEPTH) + 1,
+                limit: DEFAULT_UDF_DEPTH,
+                consumed: DEFAULT_UDF_DEPTH + 1,
             })
+        );
+        let removed = finite.without_udf_depth_limit();
+        assert_eq!(removed.max_udf_depth(), None);
+        assert_eq!(
+            GovernorState::new(&removed)
+                .observe_peak(ResourceDimension::UdfDepth, DEFAULT_UDF_DEPTH + 1),
+            Ok(())
+        );
+        let large = QueryGovernors::UNBOUNDED.with_max_udf_depth(u64::MAX - 1);
+        assert_eq!(large.max_udf_depth(), Some(u64::MAX - 1));
+        assert_eq!(
+            large.caller_ceiling(ResourceDimension::UdfDepth),
+            Some(u64::MAX - 1)
         );
     }
 

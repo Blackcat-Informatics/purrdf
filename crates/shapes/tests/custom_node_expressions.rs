@@ -450,7 +450,7 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new()
+            &QueryOptions::new()
                 .with_functions(
                     &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
@@ -486,7 +486,7 @@ fn sparql_column(data_ttl: &str, shapes_ttl: &str, query: &str) -> Vec<Option<St
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new()
+            &QueryOptions::new()
                 .with_functions(
                     &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
@@ -1092,7 +1092,7 @@ fn a_registered_function_without_a_focus_graph_refuses_rather_than_answering() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_functions(
+            &QueryOptions::new().with_functions(
                 &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                     .expect("the fixture's bodies parse and admit"),
             ),
@@ -1131,7 +1131,7 @@ fn the_focus_node_of_a_sparql_call_is_the_function_s_own_iri() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new()
+            &QueryOptions::new()
                 .with_functions(
                     &purrdf_shapes::sparql::bind_in_current_env(&shapes, None)
                         .expect("the fixture's bodies parse and admit"),
@@ -1576,7 +1576,7 @@ fn registered_requests_survive_input_drop_and_keep_independent_graphs_and_polici
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::new()
+                    &QueryOptions::new()
                         .with_functions(functions)
                         .with_focus_graph(Some(&data)),
                 )
@@ -1851,7 +1851,7 @@ fn callback_allocation_does_not_scale_with_retained_request_payloads() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new()
+                &QueryOptions::new()
                     .with_functions(&functions)
                     .with_focus_graph(Some(&data)),
             )
@@ -1969,7 +1969,7 @@ fn scoped_bindings_share_work_without_reusing_another_model_or_request() {
             query: "PREFIX ex: <http://example.org/ns#> SELECT ?v WHERE { BIND(ex:value() AS ?v) }",
             base_iri: None, substitutions: &[],
         },
-        QueryOptions::new().with_functions(&foreign_functions).with_focus_graph(Some(&data)),
+        &QueryOptions::new().with_functions(&foreign_functions).with_focus_graph(Some(&data)),
     ).unwrap();
     let SparqlResult::Solutions { rows, .. } = result else {
         panic!("solutions")
@@ -2008,7 +2008,7 @@ fn callback_allocation_does_not_copy_static_class_dictionary_payloads() {
                 query: "PREFIX ex: <http://example.org/ns#> SELECT ?v WHERE { BIND(ex:constant() AS ?v) }",
                 base_iri: None, substitutions: &[],
             },
-            QueryOptions::new().with_functions(&functions).with_focus_graph(Some(&data)),
+            &QueryOptions::new().with_functions(&functions).with_focus_graph(Some(&data)),
         )
         };
         evaluate().unwrap();
@@ -2085,7 +2085,7 @@ fn a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbou
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new()
+                &QueryOptions::new()
                     .with_functions(&functions)
                     .with_focus_graph(Some(&data)),
             )

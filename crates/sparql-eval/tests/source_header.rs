@@ -55,9 +55,9 @@ fn compiler_and_rewritten_plans_preserve_source_columns_and_duplicate_bags() {
     ]);
     let engine = NativeSparqlEngine::new();
     let typed = engine
-        .prepare_algebra(projectless(TEXT), QueryOptions::EMPTY)
+        .prepare_algebra(projectless(TEXT), &QueryOptions::EMPTY)
         .unwrap();
-    let rewritten = PreparedQuery::rewritten(projectless(TEXT), QueryOptions::EMPTY).unwrap();
+    let rewritten = PreparedQuery::rewritten(projectless(TEXT), &QueryOptions::EMPTY).unwrap();
     assert_ne!(
         typed.query(),
         &projectless(TEXT),
@@ -75,14 +75,14 @@ fn compiler_and_rewritten_plans_preserve_source_columns_and_duplicate_bags() {
     );
     let control = engine.prepare_query(TEXT, None).unwrap();
     let control = engine
-        .query_prepared(&data, &control, &[], QueryOptions::EMPTY)
+        .query_prepared(&data, &control, &[], &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(header(&control), HEADER);
     assert_eq!(sorted_rows(&control, render_cell).len(), 4);
     for prepared in [&*typed, &rewritten] {
         for _ in 0..3 {
             let result = engine
-                .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
+                .query_prepared(&data, prepared, &[], &QueryOptions::EMPTY)
                 .unwrap();
             assert_eq!(header(&result), HEADER);
             assert_eq!(
@@ -95,7 +95,7 @@ fn compiler_and_rewritten_plans_preserve_source_columns_and_duplicate_bags() {
                 &data,
                 prepared,
                 &[("s".into(), iri("s")), ("extra".into(), iri("extra"))],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap();
         assert_eq!(header(&result), ["s", "a", "x", "z", "b", "extra"]);
@@ -105,7 +105,7 @@ fn compiler_and_rewritten_plans_preserve_source_columns_and_duplicate_bags() {
                 &data,
                 prepared,
                 &[("s".into(), iri("s"))],
-                QueryOptions::EMPTY.with_prebinding(ShaclPrebinding::Applied),
+                &QueryOptions::EMPTY.with_prebinding(ShaclPrebinding::Applied),
             )
             .unwrap();
         assert_eq!(header(&shacl), HEADER);
@@ -126,11 +126,11 @@ fn empty_and_governed_results_keep_the_compiler_header() {
     ]);
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_algebra(projectless(TEXT), QueryOptions::EMPTY)
+        .prepare_algebra(projectless(TEXT), &QueryOptions::EMPTY)
         .unwrap();
     let empty = RdfDatasetBuilder::new().freeze().unwrap();
     let result = engine
-        .query_prepared(&empty, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&empty, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(header(&result), HEADER);
     assert_eq!(sorted_rows(&result, render_cell), Vec::new());
@@ -142,7 +142,7 @@ fn empty_and_governed_results_keep_the_compiler_header() {
                 &*data,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state,
             )
             .unwrap()
@@ -172,7 +172,7 @@ fn retained_source_header_is_charged_once_and_released_with_the_plan() {
     }
     let text = TEXT.replace("?x ex:t ?z .", &format!("?x ex:t ?z{extra} ."));
     let prepared = engine
-        .prepare_algebra(projectless(&text), QueryOptions::EMPTY)
+        .prepare_algebra(projectless(&text), &QueryOptions::EMPTY)
         .unwrap();
     let bytes = prepared.retained_size_bytes();
     assert!(bytes > prepared.query().retained_size_bytes());
@@ -196,12 +196,12 @@ fn parameterized_interned_egress_keeps_textual_projection_order() {
         ("x", "t", "z"),
     ]);
     let mut execution = engine
-        .prepare_execution(TEXT, None, &["s"], QueryOptions::EMPTY)
+        .prepare_execution(TEXT, None, &["s"], &QueryOptions::EMPTY)
         .unwrap();
     execution.bind_named("s", iri("s")).unwrap();
     for _ in 0..3 {
         engine
-            .execute(&mut execution, &*data, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut execution, &*data, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
                     panic!("solutions");
                 };

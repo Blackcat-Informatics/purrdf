@@ -716,6 +716,33 @@ impl<I: ViewTermId> RetainedRow<I> {
     }
 
     /// Worker transport moves cells and evidence together, never detaching ids.
+    /// Finish a uniquely owned row before its evidence attachment or publication.
+    pub(crate) fn set_unpublished_cell_unique(
+        &mut self,
+        index: usize,
+        value: Option<SolutionTerm<I>>,
+    ) -> Result<(), crate::EvalError> {
+        let cells = match &mut self.storage {
+            RowStorage::Resident(cells) => cells,
+            RowStorage::Owned(RowOwner::Shared(payload)) => {
+                &mut payload
+                    .get_mut()
+                    .ok_or_else(|| crate::EvalError::internal("unpublished row has another owner"))?
+                    .cells
+            }
+            RowStorage::Owned(RowOwner::Tracked(_)) => {
+                return Err(crate::EvalError::internal(
+                    "unpublished row already carries evidence",
+                ));
+            }
+        };
+        let cell = cells
+            .get_mut(index)
+            .ok_or_else(|| crate::EvalError::internal("unpublished row column is absent"))?;
+        *cell = value;
+        Ok(())
+    }
+
     pub(crate) fn into_resident_parts(
         mut self,
     ) -> Result<(Solution<I>, crate::evidence_exec::RowEvidence), Self> {

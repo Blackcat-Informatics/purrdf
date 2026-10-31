@@ -742,7 +742,7 @@ fn sparql_traverses_parent_paths_sizes_and_distinct_raw_values() {
     let SparqlResult::Solutions {
         variables, rows, ..
     } = engine
-        .query_prepared_view(&*dataset, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&*dataset, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap()
     else {
         panic!("SELECT returns solutions")

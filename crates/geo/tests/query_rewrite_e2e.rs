@@ -318,7 +318,7 @@ fn run(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::new(
                     options,
                     registry.clone(),

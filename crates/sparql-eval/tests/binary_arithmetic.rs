@@ -29,7 +29,7 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const STAT_NS: &str = "http://example.org/agg/";
 
 /// Every row of `query`, over the empty dataset, under `options`.
-fn run(query: &str, options: QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
+fn run(query: &str, options: &QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
     let dataset = empty();
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
@@ -63,7 +63,7 @@ fn lexical(cell: Option<&TermValue>) -> (String, String) {
 fn select(expression: &str) -> (String, String) {
     let rows = run(
         &format!("SELECT ({expression} AS ?y) WHERE {{}}"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
     assert_eq!(rows.len(), 1, "{expression}");
     lexical(rows[0][0].as_ref())
@@ -232,7 +232,7 @@ fn integer_and_decimal_operands_promote_into_the_same_correctly_rounded_double()
         &format!(
             "SELECT (AVG(?x) AS ?y) WHERE {{ VALUES ?x {{ \"1.0E0\"^^<{XSD}double> {little} }} }}"
         ),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
     assert_eq!(
         lexical(rows[0][0].as_ref()),
@@ -272,7 +272,7 @@ fn stddev_is_the_correctly_rounded_square_root_of_the_variance() {
         "SELECT ?g (AGG(<{STAT_NS}VAR_POP>, ?v) AS ?var) (AGG(<{STAT_NS}STDDEV_POP>, ?v) AS ?sd) \
          WHERE {{ VALUES (?g ?v) {{ {values} }} }} GROUP BY ?g ORDER BY ?g"
     );
-    let rows = run(&query, options);
+    let rows = run(&query, &options);
     assert_eq!(rows.len(), groups.clone().count());
     let mut witnesses = 0;
     for (row, k) in rows.iter().zip(groups) {

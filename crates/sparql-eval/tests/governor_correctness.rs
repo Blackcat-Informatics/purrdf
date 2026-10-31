@@ -499,7 +499,7 @@ fn governed(
     governors: &QueryGovernors,
 ) -> Result<GovernedOutcome, String> {
     NativeSparqlEngine::new()
-        .query_governed(dataset, request(query), QueryOptions::EMPTY, governors)
+        .query_governed(dataset, request(query), &QueryOptions::EMPTY, governors)
         .map_err(|diagnostic| diagnostic.to_string())
 }
 

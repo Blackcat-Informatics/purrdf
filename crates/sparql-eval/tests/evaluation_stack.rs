@@ -163,7 +163,7 @@ fn evaluate(prepared: &Arc<PreparedQuery>, bytes: usize) -> Result<Vec<String>, 
             &dataset(),
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ))
     })
 }
@@ -179,7 +179,7 @@ fn request(query: &str, bytes: usize) -> Result<Vec<String>, RdfDiagnostic> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ))
     })
 }
@@ -282,7 +282,7 @@ fn the_small_stack_still_answers_a_shallow_request_after_a_deep_one() {
     let (refused, shallow) = on_stack(SMALL, move || {
         let engine = NativeSparqlEngine::new();
         let refused =
-            subjects(engine.query_prepared(&dataset(), &prepared, &[], QueryOptions::EMPTY));
+            subjects(engine.query_prepared(&dataset(), &prepared, &[], &QueryOptions::EMPTY));
         let shallow = subjects(engine.query_with_options_view(
             &*dataset(),
             SparqlRequest {
@@ -290,7 +290,7 @@ fn the_small_stack_still_answers_a_shallow_request_after_a_deep_one() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ));
         (refused, shallow)
     });
@@ -320,7 +320,7 @@ fn an_update_on_a_small_stack_applies_whole_or_is_refused_and_applies_nothing() 
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             );
             (outcome, data.quad_count())
         })
@@ -371,7 +371,7 @@ fn an_in_process_service_on_a_small_stack_answers_or_its_refusal_is_not_silenced
                     substitutions: &[],
                 },
                 &resolver,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             ))
         })
     };
@@ -405,7 +405,7 @@ fn evaluate_with_service(
             &dataset(),
             &prepared,
             &[],
-            QueryOptions::new().with_remote(Some(&resolver)),
+            &QueryOptions::new().with_remote(Some(&resolver)),
         ))
     })
 }
@@ -551,11 +551,11 @@ fn path_under(host: Arc<SuspendingHost>) -> (Result<GovernedOutcome, RdfDiagnost
         let outcome = engine.query_governed(
             &dataset(),
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(host),
         );
         let after = engine
-            .query_with_options_view(&*dataset(), request, QueryOptions::EMPTY)
+            .query_with_options_view(&*dataset(), request, &QueryOptions::EMPTY)
             .is_ok();
         (outcome, after)
     })
@@ -579,7 +579,7 @@ fn a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_co
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("the ungoverned path answers");
     assert_eq!(pairs(&baseline), ["s1|o1", "s2|o2", "s3|o3", "s4|o4"]);
@@ -649,7 +649,7 @@ fn request_with_relation(query: &str, bytes: usize) -> Result<Vec<String>, RdfDi
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&env),
+            &QueryOptions::new().with_env(&env),
         ))
     })
 }
@@ -823,7 +823,7 @@ fn a_thousand_nested_laterals_answer_inside_an_allocation_ceiling() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ));
         (answered, window.close())
     });

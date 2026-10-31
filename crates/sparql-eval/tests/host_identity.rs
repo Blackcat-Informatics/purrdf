@@ -347,7 +347,7 @@ fn original_host_ids_join_and_expand_triples_without_native_interning() {
     let result = NativeSparqlEngine::new().query_fallible_view(
         &host,
         request("SELECT ?s ?t WHERE { ?s <http://example.org/p> ?mid . ?mid <http://example.org/q> ?t }"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     ).expect("host SELECT");
     let (_, rows) = result.result.solutions().expect("SELECT shape");
     assert_eq!(rows.len(), 1);
@@ -379,7 +379,7 @@ fn host_deletion_discards_partial_output_and_preserves_first_typed_cause() {
     let result = engine.query_fallible_view(
         &host,
         request("SELECT ?t WHERE { ?s <http://example.org/q> ?t }"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
     assert!(matches!(
         result,
@@ -393,7 +393,7 @@ fn host_deletion_discards_partial_output_and_preserves_first_typed_cause() {
     let empty = engine.query_fallible_view(
         &host,
         request("ASK { ?s <http://example.org/missing> ?o }"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
     assert!(matches!(
         empty,
@@ -437,7 +437,7 @@ fn certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failur
                 let result = engine.query_fallible_view(
                 &host,
                 request("ASK { ?s <http://example.org/p> ?low ; <http://example.org/q> ?high . FILTER(?low < ?high) }"),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             );
                 match certificate {
                     Certificate::Unavailable | Certificate::Ordered => {
@@ -496,9 +496,9 @@ fn triple_graph_support_precedes_empty_and_nested_query_shortcuts() {
             for use_prepared in [false, true] {
                 let read = triple.read().unwrap();
                 let result = if use_prepared {
-                    engine.query_prepared_fallible_view(&read, &prepared, &[], QueryOptions::EMPTY)
+                    engine.query_prepared_fallible_view(&read, &prepared, &[], &QueryOptions::EMPTY)
                 } else {
-                    engine.query_fallible_view(&read, request(query), QueryOptions::EMPTY)
+                    engine.query_fallible_view(&read, request(query), &QueryOptions::EMPTY)
                 };
                 assert!(
                     matches!(
@@ -520,7 +520,7 @@ fn triple_graph_support_precedes_empty_and_nested_query_shortcuts() {
                         .query_fallible_view(
                             &healthy,
                             request("SELECT * WHERE { ?s ?p ?o }"),
-                            QueryOptions::EMPTY
+                            &QueryOptions::EMPTY
                         )
                         .is_ok()
                 );
@@ -529,7 +529,7 @@ fn triple_graph_support_precedes_empty_and_nested_query_shortcuts() {
             // quad carrier even when its dictionary has no graph name.
             assert!(
                 engine
-                    .query_with_options_view(quad.as_ref(), request(query), QueryOptions::EMPTY)
+                    .query_with_options_view(quad.as_ref(), request(query), &QueryOptions::EMPTY)
                     .is_ok()
             );
             if query.contains("GRAPH") {
@@ -558,11 +558,11 @@ fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() 
         "CONSTRUCT { ?s <urn:derived> ?o } WHERE { ?s <urn:p> ?o }",
     ] {
         let expected = engine
-            .query_with_options_view(quad.as_ref(), request(query), QueryOptions::EMPTY)
+            .query_with_options_view(quad.as_ref(), request(query), &QueryOptions::EMPTY)
             .unwrap();
         let read = triple.read().unwrap();
         let actual = engine
-            .query_fallible_view(&read, request(query), QueryOptions::EMPTY)
+            .query_fallible_view(&read, request(query), &QueryOptions::EMPTY)
             .unwrap()
             .result;
         match expected {
@@ -650,7 +650,7 @@ fn triple_local_graph_support_stops_at_the_remote_service_boundary() {
             for use_prepared in [false, true] {
                 let read = triple.read().unwrap();
                 let result = if use_prepared {
-                    engine.query_prepared_fallible_view(&read, &prepared, &[], options)
+                    engine.query_prepared_fallible_view(&read, &prepared, &[], &options)
                 } else {
                     engine.query_fallible_view(
                         &read,
@@ -659,7 +659,7 @@ fn triple_local_graph_support_stops_at_the_remote_service_boundary() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        options,
+                        &options,
                     )
                 };
                 if remote_only {

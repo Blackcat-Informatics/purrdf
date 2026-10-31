@@ -206,6 +206,8 @@ const GOVERNOR_OPTION_KEYS = [
   "maxIntermediateCells",
   "maxScratchBytes",
   "maxRemoteRequests",
+  "maxUdfDepth",
+  "unlimitedUdfDepth",
   "cancel",
 ];
 
@@ -307,8 +309,10 @@ function normalizeGovernedOptions(options) {
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
-  if (options.noCeiling !== undefined && typeof options.noCeiling !== "boolean") {
-    throw new TypeError("query option noCeiling must be a boolean when supplied");
+  for (const name of ["noCeiling", "unlimitedUdfDepth"]) {
+    if (options[name] !== undefined && typeof options[name] !== "boolean") {
+      throw new TypeError(`query option ${name} must be a boolean when supplied`);
+    }
   }
   return {
     noCeiling: options.noCeiling,
@@ -326,6 +330,8 @@ function normalizeGovernedOptions(options) {
     ),
     maxScratchBytes: governorCeiling(options.maxScratchBytes, "maxScratchBytes"),
     maxRemoteRequests: governorCeiling(options.maxRemoteRequests, "maxRemoteRequests"),
+    maxUdfDepth: governorCeiling(options.maxUdfDepth, "maxUdfDepth"),
+    unlimitedUdfDepth: options.unlimitedUdfDepth,
     // A governed call CONSUMES the token handle it is given (wasm-bindgen moves an owned
     // exported value), so the engine gets a share and the caller keeps their own token
     // usable across the whole sequence of calls it governs.
@@ -1331,6 +1337,8 @@ export async function ready(wasmBytesOrUrl) {
           o.maxIntermediateCells,
           o.maxScratchBytes,
           o.maxRemoteRequests,
+          o.maxUdfDepth,
+          o.unlimitedUdfDepth,
           o.cancel,
           o.noCeiling,
           o.xpathRegex,
@@ -1367,6 +1375,8 @@ export async function ready(wasmBytesOrUrl) {
           o.maxIntermediateCells,
           o.maxScratchBytes,
           o.maxRemoteRequests,
+          o.maxUdfDepth,
+          o.unlimitedUdfDepth,
           o.cancel,
           o.noCeiling,
           o.xpathRegex,
@@ -1393,6 +1403,8 @@ export async function ready(wasmBytesOrUrl) {
           o.maxIntermediateCells,
           o.maxScratchBytes,
           o.maxRemoteRequests,
+          o.maxUdfDepth,
+          o.unlimitedUdfDepth,
           o.cancel,
           o.noCeiling,
           o.xpathRegex,

@@ -194,7 +194,7 @@ fn answer(query: &str, env: &ExtensionEnv<'static>) -> SparqlResult {
             )
             .expect("authored fixture"),
             request(query),
-            purrdf_sparql_eval::QueryOptions::new().with_env(env),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(env),
         )
         .expect("the call resolves and evaluates")
 }
@@ -263,7 +263,7 @@ fn a_neighbour_joins_back_to_the_graph_by_basic_graph_pattern() {
         .query_with_options_view(
             &*graph,
             request(query),
-            purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
         )
         .expect("evaluate");
     assert_eq!(rows_of(&result), vec![vec!["beta".to_owned()]]);
@@ -328,7 +328,7 @@ fn the_answer_is_byte_identical_across_two_independently_built_artifacts() {
         .query_with_options_view(
             &*data,
             request(QUERY),
-            purrdf_sparql_eval::QueryOptions::new().with_env(&forward),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&forward),
         )
         .expect("evaluate");
     let baseline = purrdf_sparql_results::to_json(
@@ -343,7 +343,7 @@ fn the_answer_is_byte_identical_across_two_independently_built_artifacts() {
             .query_with_options_view(
                 &*data,
                 request(QUERY),
-                purrdf_sparql_eval::QueryOptions::new().with_env(&forward),
+                &purrdf_sparql_eval::QueryOptions::new().with_env(&forward),
             )
             .expect("evaluate");
         assert_eq!(
@@ -381,7 +381,7 @@ fn the_governor_charges_the_search_in_proportion_to_the_candidates_it_examined()
             )
             .expect("authored fixture"),
             request(QUERY),
-            purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
             &QueryGovernors::METERED,
         )
         .expect("the call resolves and evaluates under governors");
@@ -404,7 +404,7 @@ fn the_governor_charges_the_search_in_proportion_to_the_candidates_it_examined()
             .expect("authored fixture"),
             QUERY,
             None,
-            purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
         )
         .expect("explain");
     let at = |point: ChargePoint| -> u64 {
@@ -467,7 +467,7 @@ fn the_search_charge_follows_the_space_size_rather_than_the_rows_returned() {
                 .expect("authored fixture"),
                 one_row,
                 None,
-                purrdf_sparql_eval::QueryOptions::new().with_env(env),
+                &purrdf_sparql_eval::QueryOptions::new().with_env(env),
             )
             .expect("explain");
         let at = |point: ChargePoint| -> u64 {
@@ -515,7 +515,7 @@ fn a_fuel_ceiling_one_unit_below_the_metered_spend_trips() {
                 )
                 .expect("authored fixture"),
                 request(QUERY),
-                purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+                &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
                 governors,
             )
             .expect("a governor trip is an outcome, never an error")
@@ -562,7 +562,7 @@ fn a_declared_row_bound_lets_a_cell_ceiling_admit_the_call_rather_than_refuse_it
             )
             .expect("authored fixture"),
             request(QUERY),
-            purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(64),
         )
         .expect("evaluate");
@@ -801,7 +801,7 @@ fn one_artifact_under_one_binding_attests_one_generation() {
         .prepare_query_with_options(
             QUERY,
             None,
-            purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
         )
         .expect("the query prepares against the registry");
     let outcome = engine
@@ -814,7 +814,7 @@ fn one_artifact_under_one_binding_attests_one_generation() {
             .expect("authored fixture"),
             &prepared,
             &[],
-            purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
+            &purrdf_sparql_eval::QueryOptions::new().with_env(&relations),
             &QueryGovernors::UNBOUNDED,
         )
         .expect("a governed run of a valid query is an outcome, never an error");

@@ -211,7 +211,7 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
     let ds = dataset(8);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     // Each binding must answer for ITS OWN subject. A handle that reused the first
@@ -220,7 +220,7 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
     for subject in 0..8u32 {
         execution.bind(0, iri(subject)).expect("bind");
         let answer = engine
-            .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };
@@ -242,14 +242,14 @@ fn re_running_a_prepared_execution_costs_a_pinned_constant() {
     assert_stays_on_the_calling_thread(&ds);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     let mut run = |subject: u32| -> u64 {
         execution.bind(0, iri(subject)).expect("bind");
         let window = CurrentThreadWindow::open();
         engine
-            .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };
@@ -316,7 +316,7 @@ fn scratch_bytes_of_run(
     execution.bind(0, iri(subject)).expect("bind");
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let rows = engine
-        .execute_governed_in_operation(execution, ds, QueryOptions::EMPTY, &state, |outcome| {
+        .execute_governed_in_operation(execution, ds, &QueryOptions::EMPTY, &state, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("expected solutions");
             };
@@ -375,7 +375,7 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
     let answer_of = |execution: &mut purrdf_sparql_eval::PreparedExecution, subject: u32| {
         execution.bind(0, iri(subject)).expect("bind");
         engine
-            .execute(execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            .execute(execution, &*ds, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };
@@ -388,13 +388,13 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 
     // 1. The answers.
     let mut reused = engine
-        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(MINTING_QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
     let from_reused: Vec<String> = (0..8u32).map(|s| answer_of(&mut reused, s)).collect();
     let from_fresh: Vec<String> = (0..8u32)
         .map(|s| {
             let mut once = engine
-                .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+                .prepare_execution(MINTING_QUERY, None, &["this"], &QueryOptions::EMPTY)
                 .expect("prepare");
             answer_of(&mut once, s)
         })
@@ -419,12 +419,12 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 
     // 2. The counter.
     let mut reused = engine
-        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(MINTING_QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
     let first = scratch_bytes_of_run(&engine, &mut reused, &ds, 0);
     let second = scratch_bytes_of_run(&engine, &mut reused, &ds, 1);
     let mut virgin = engine
-        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(MINTING_QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
     let control = scratch_bytes_of_run(&engine, &mut virgin, &ds, 1);
     assert!(
@@ -447,7 +447,7 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 
     // 3. The tables.
     let mut reused = engine
-        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(MINTING_QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
     for subject in 0..8u32 {
         drop(answer_of(&mut reused, subject));
@@ -547,7 +547,7 @@ fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
 
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_query_with_options(PREPARED_PLAN_QUERY, None, QueryOptions::EMPTY)
+        .prepare_query_with_options(PREPARED_PLAN_QUERY, None, &QueryOptions::EMPTY)
         .expect("the fixture query parses and is admitted");
 
     let validation_window = CurrentThreadWindow::open();
@@ -564,7 +564,7 @@ fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
     let run = || -> u64 {
         let window = CurrentThreadWindow::open();
         let answer = engine
-            .query_prepared(&ds, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&ds, &prepared, &[], &QueryOptions::EMPTY)
             .expect("the admitted plan evaluates");
         let allocations = window.close().allocations;
         let SparqlResult::Solutions { rows, .. } = answer else {
@@ -597,12 +597,12 @@ fn running_with_a_parameter_unbound_is_refused() {
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     // The refusal. Treating an unbound parameter as unrestricted would answer over
     // every subject — a silently WIDER answer, which is the failure this refuses.
-    let refused = engine.execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ());
+    let refused = engine.execute(&mut execution, &*ds, &QueryOptions::EMPTY, |_| ());
     let error = refused.expect_err("an unbound parameter must be refused");
     assert!(
         error.to_string().contains("unbound"),
@@ -614,7 +614,7 @@ fn running_with_a_parameter_unbound_is_refused() {
     // execution that can never run at all.
     execution.bind(0, iri(1)).expect("bind");
     let rows = engine
-        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+        .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("expected solutions");
             };
@@ -629,14 +629,14 @@ fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_val
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     // Bind and run: s1 answers o1. o0 and o1 differ (see `dataset`/`iri`), so this
     // execution's rows are the oracle for which subject it actually ran under.
     execution.bind(0, iri(1)).expect("bind");
     let rows = engine
-        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+        .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("expected solutions");
             };
@@ -651,7 +651,7 @@ fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_val
     // left the slot's old value in place, this run would silently re-answer for s1
     // instead of failing here.
     execution.unbind_all();
-    let refused = engine.execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ());
+    let refused = engine.execute(&mut execution, &*ds, &QueryOptions::EMPTY, |_| ());
     let error = refused.expect_err("a cleared parameter must be refused, not re-answered stale");
     assert!(
         error.to_string().contains("unbound"),
@@ -664,7 +664,7 @@ fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_val
     // tell "honoured the clear" from "silently dropped the whole execution".
     execution.bind(0, iri(2)).expect("bind after clearing");
     let rows = engine
-        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+        .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("expected solutions");
             };
@@ -683,7 +683,7 @@ fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_val
 fn binding_a_name_that_was_not_declared_is_refused() {
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     let error = execution
@@ -710,7 +710,7 @@ fn binding_a_name_that_was_not_declared_is_refused() {
 fn declaring_one_parameter_twice_is_refused() {
     let engine = NativeSparqlEngine::new();
     let error = engine
-        .prepare_execution(QUERY, None, &["this", "this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this", "this"], &QueryOptions::EMPTY)
         .expect_err("a repeated parameter has no single slot to bind");
     assert!(error.to_string().contains("more than once"), "got {error}");
 
@@ -718,7 +718,7 @@ fn declaring_one_parameter_twice_is_refused() {
     // does not mention — `prepare_execution` admits it, and refusing it is the
     // host's opt-in `check_parameters_mentioned` (`prepared_parameter_mentions.rs`).
     let execution = engine
-        .prepare_execution(QUERY, None, &["this", "other"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this", "other"], &QueryOptions::EMPTY)
         .expect("distinct parameters must prepare");
     assert_eq!(execution.parameters().len(), 2);
 }
@@ -763,7 +763,7 @@ fn run_answers(
     ds: &RdfDataset,
 ) -> Vec<String> {
     engine
-        .execute(execution, ds, QueryOptions::EMPTY, |outcome| {
+        .execute(execution, ds, &QueryOptions::EMPTY, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("expected solutions");
             };
@@ -783,7 +783,7 @@ fn the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does() {
     // Two parameters, one of which the query never mentions, so "bind one and run"
     // is a state the engine has to refuse rather than a query that cannot parse.
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this", "other"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this", "other"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     // THE REFUSAL, reached through the id door: slot 1 is still `None`. Treating it
@@ -792,14 +792,14 @@ fn the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does() {
         .bind_id(0, &*ds, subject_id(&ds, 1))
         .expect("the id door binds");
     let through_id = engine
-        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ())
+        .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |_| ())
         .expect_err("an unbound parameter must be refused after an id-door bind");
 
     // The same state reached through the value door refuses with the same words.
     execution.unbind_all();
     execution.bind(0, iri(1)).expect("the value door binds");
     let through_value = engine
-        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ())
+        .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |_| ())
         .expect_err("an unbound parameter must be refused after a value-door bind");
     assert_eq!(
         through_id.to_string(),
@@ -829,7 +829,7 @@ fn the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does() {
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     let through_id = execution
@@ -868,14 +868,14 @@ fn a_duplicate_declaration_is_refused_before_either_door_exists() {
     // than compared — there is exactly one refusal and it happens before any binding
     // door exists.
     let error = engine
-        .prepare_execution(QUERY, None, &["this", "this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this", "this"], &QueryOptions::EMPTY)
         .expect_err("a repeated parameter has no single slot to bind");
     assert!(error.to_string().contains("more than once"), "got {error}");
 
     // THE NEIGHBOUR: distinct names prepare, and the id door then answers through
     // the handle that refusal would have denied.
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this", "other"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this", "other"], &QueryOptions::EMPTY)
         .expect("distinct parameters must prepare");
     execution
         .bind_id(0, &*ds, subject_id(&ds, 0))
@@ -896,7 +896,7 @@ fn the_two_doors_are_interchangeable_within_one_execution() {
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     // The id door is ADDITIONAL, so one handle must take either door on any run and
@@ -1034,10 +1034,10 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
     // (a) Prepared with NO registry: the predicate parses as ordinary data, so the
     // admitted plan is a plain BGP triple pattern over `rel:memberOf`.
     let mut stale = engine
-        .prepare_execution(RELATION_QUERY, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(RELATION_QUERY, None, &[], &QueryOptions::EMPTY)
         .expect("prepare with no registry parses as ordinary data");
 
-    let refused = engine.execute(&mut stale, &*ds, with_env(&env), |_| ());
+    let refused = engine.execute(&mut stale, &*ds, &with_env(&env), |_| ());
     let error = refused.expect_err(
         "a plan prepared with no registry must be refused when executed under one, not \
          silently evaluated as a graph scan over the ordinary triple pattern it was admitted \
@@ -1050,10 +1050,10 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
     // `graph_only_team`, which is what a silently-dropped registry would have
     // answered instead (see `relation_dataset`'s doc comment for the oracle).
     let mut matched = engine
-        .prepare_execution(RELATION_QUERY, None, &[], with_env(&env))
+        .prepare_execution(RELATION_QUERY, None, &[], &with_env(&env))
         .expect("prepare with the registry lowers the predicate to a call");
     let rows = engine
-        .execute(&mut matched, &*ds, with_env(&env), person_team_rows)
+        .execute(&mut matched, &*ds, &with_env(&env), person_team_rows)
         .expect("a plan and options that agree on the registry must execute");
     assert_eq!(
         rows,
@@ -1166,9 +1166,9 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
 
     // (a) Prepared under registry A (SUM), executed under registry B (PRODUCT).
     let mut prepared = engine
-        .prepare_execution(&query, None, &[], with_env(&env_a))
+        .prepare_execution(&query, None, &[], &with_env(&env_a))
         .expect("registry A admits and arity-checks the call");
-    let refused = engine.execute(&mut prepared, &*ds, with_env(&env_b), |_| ());
+    let refused = engine.execute(&mut prepared, &*ds, &with_env(&env_b), |_| ());
     let error = refused.expect_err(
         "a plan prepared under registry A must be refused when executed under registry B, \
          never silently computed under B's different accumulator",
@@ -1177,10 +1177,10 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
 
     // (b) The neighbour: the SAME registry instance at both prepare and execute.
     let mut matched = engine
-        .prepare_execution(&query, None, &[], with_env(&env_a))
+        .prepare_execution(&query, None, &[], &with_env(&env_a))
         .expect("registry A admits and arity-checks the call");
     let total = engine
-        .execute(&mut matched, &*ds, with_env(&env_a), total_cell)
+        .execute(&mut matched, &*ds, &with_env(&env_a), total_cell)
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(total, 15, "1 + 2 + 2 + 10, never the PRODUCT's 40");
 }
@@ -1223,12 +1223,12 @@ fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
     // outside the window; only bind + execute is measured.
     let run_never_memoized = |subject: u32| -> u64 {
         let mut execution = engine
-            .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+            .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
             .expect("prepare");
         execution.bind(0, iri(subject)).expect("bind");
         let window = CurrentThreadWindow::open();
         engine
-            .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut execution, &*ds, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };
@@ -1239,13 +1239,13 @@ fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
     };
 
     let mut memoized = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
     let mut run_memoized = |subject: u32| -> u64 {
         memoized.bind(0, iri(subject)).expect("bind");
         let window = CurrentThreadWindow::open();
         engine
-            .execute(&mut memoized, &*ds, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut memoized, &*ds, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };
@@ -1324,13 +1324,13 @@ fn a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle() {
     let engine = NativeSparqlEngine::new();
     let query = format!("SELECT ?o WHERE {{ ?this <{NS}p> ?o }}");
     let mut execution = engine
-        .prepare_execution(&query, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(&query, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
 
     let run = |execution: &mut purrdf_sparql_eval::PreparedExecution, this: TermValue| -> String {
         execution.bind(0, this).expect("bind");
         engine
-            .execute(execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            .execute(execution, &*ds, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };

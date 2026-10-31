@@ -122,7 +122,7 @@ pub(crate) fn capture_query<D: purrdf_core::DatasetView + Sync>(
     ctx: &crate::eval::EvalCtx<'_, D>,
     prepared: &super::PreparedQuery,
     bindings: crate::substitute::Prebindings<'_>,
-    options: super::QueryOptions<'_, '_>,
+    options: &super::QueryOptions<'_, '_>,
 ) -> Result<QueryCoordinates, EvalError> {
     let request: Result<[u8; 32], EvalError> = (|| {
         let mut frame = LexicalFrame::new(&ctx.growth);
@@ -184,7 +184,7 @@ pub(crate) fn capture_query<D: purrdf_core::DatasetView + Sync>(
 pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
     ctx: &crate::eval::EvalCtx<'_, D>,
     request: [u8; 32],
-    options: super::QueryOptions<'_, '_>,
+    options: &super::QueryOptions<'_, '_>,
     external_source: bool,
 ) -> Result<QueryCoordinates, EvalError> {
     let mut coordinates = QueryCoordinates::started(
@@ -437,7 +437,7 @@ mod tests {
         let capability = WorkspaceCapability::resident();
         let query = "SELECT (NOW() AS ?time) (RAND() AS ?random) (UUID() AS ?uuid) WHERE {}";
         let mut prepared = engine
-            .prepare_execution_admitted(query, None, &[], QueryOptions::EMPTY, &capability)
+            .prepare_execution_admitted(query, None, &[], &QueryOptions::EMPTY, &capability)
             .unwrap();
         let first = time("2024-02-29T12:34:56.125+05:30");
         let shifted = time("2024-02-29T07:04:56.125Z");
@@ -446,7 +446,7 @@ mod tests {
                 engine.execute_governed_admitted(
                     &mut prepared,
                     &dataset,
-                    QueryOptions::new().with_now(now).with_entropy_seed(seed),
+                    &QueryOptions::new().with_now(now).with_entropy_seed(seed),
                     &QueryGovernors::METERED,
                     &capability,
                     |outcome| {
@@ -473,7 +473,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::new().with_now(now).with_entropy_seed(seed),
+                    &QueryOptions::new().with_now(now).with_entropy_seed(seed),
                     &QueryGovernors::METERED,
                 )
             })
@@ -515,7 +515,7 @@ mod tests {
                 "SELECT (1 AS ?value) WHERE {}",
                 None,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &capability,
             )
             .unwrap();
@@ -544,7 +544,7 @@ mod tests {
                 .execute_governed_admitted(
                     &mut prepared,
                     &dataset,
-                    options,
+                    &options,
                     &QueryGovernors::METERED,
                     &capability,
                     |_| (),
@@ -558,7 +558,7 @@ mod tests {
                 substitutions: &[],
             };
             let materialized = engine
-                .query_governed_view(&dataset, request, options, &QueryGovernors::METERED)
+                .query_governed_view(&dataset, request, &options, &QueryGovernors::METERED)
                 .unwrap();
             assert_receipt(materialized.coordinates());
             let state = std::sync::Arc::new(crate::GovernorState::new(&QueryGovernors::METERED));
@@ -570,14 +570,14 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    options,
+                    &options,
                     &state,
                     |_| (),
                 )
                 .unwrap();
             assert_receipt(interned.coordinates());
             let converted = engine
-                .execute_governed_in_operation(&mut prepared, &dataset, options, &state, |_| ())
+                .execute_governed_in_operation(&mut prepared, &dataset, &options, &state, |_| ())
                 .unwrap();
             assert_receipt(converted.coordinates());
 
@@ -596,7 +596,7 @@ mod tests {
                 "SELECT ?value WHERE { VALUES ?value { 1 2 3 } }",
                 None,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &capability,
             )
             .unwrap();
@@ -604,7 +604,7 @@ mod tests {
             engine.execute_governed_admitted(
                 &mut prepared,
                 &dataset,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(0),
                 &capability,
                 |_| panic!("refused visitor"),
@@ -621,7 +621,7 @@ mod tests {
             engine.execute_governed_admitted(
                 &mut prepared,
                 &dataset,
-                QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                &QueryOptions::new().with_now(&now).with_entropy_seed(7),
                 &QueryGovernors::METERED.with_max_answers(1),
                 &capability,
                 |_| panic!("truncated visitor"),
@@ -652,7 +652,7 @@ mod tests {
                 "SELECT (1 AS ?value) WHERE {}",
                 None,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &capability,
             )
             .unwrap();
@@ -678,7 +678,7 @@ mod tests {
                 engine.execute_governed_admitted(
                     &mut prepared,
                     &dataset,
-                    QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                    &QueryOptions::new().with_now(&now).with_entropy_seed(7),
                     &QueryGovernors::METERED,
                     &capability,
                     |_| (),
@@ -706,7 +706,7 @@ mod tests {
             engine.execute_governed_admitted(
                 &mut prepared,
                 &dataset,
-                QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                &QueryOptions::new().with_now(&now).with_entropy_seed(7),
                 &QueryGovernors::METERED,
                 &capability,
                 |_| (),
@@ -736,7 +736,7 @@ mod tests {
                 "SELECT ?value WHERE { VALUES ?value { 1 2 3 } }",
                 None,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &resident,
             )
             .unwrap();
@@ -749,7 +749,7 @@ mod tests {
             engine.execute_governed_admitted(
                 &mut prepared,
                 &dataset,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
                 &workspace.capability(),
                 |_| panic!("physical refusal cannot visit"),
@@ -771,7 +771,7 @@ mod tests {
             engine.execute_governed_admitted(
                 &mut prepared,
                 &dataset,
-                QueryOptions::new().with_now(&now).with_entropy_seed(7),
+                &QueryOptions::new().with_now(&now).with_entropy_seed(7),
                 &QueryGovernors::METERED.with_stop_signal(stop),
                 &resident,
                 |_| panic!("cancelled visitor"),

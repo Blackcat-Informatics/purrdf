@@ -25,7 +25,7 @@ use purrdf_sparql_algebra::{
 
 use crate::agg_fn::{AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate};
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, MAX_UDF_DEPTH, eval_evaluated};
+use crate::eval::{DEFAULT_UDF_DEPTH, EvalCtx, eval_evaluated};
 use crate::governor::lift::Evaluated;
 use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopSignal};
 use crate::parallel::force_parallel_for_test;
@@ -496,14 +496,12 @@ fn scratch_growth_is_charged_so_a_satisfied_row_count_cannot_hide_an_oom() {
 }
 
 #[test]
-fn udf_depth_is_reported_through_evidence_without_being_relaxable() {
+fn udf_depth_reports_the_peak_under_the_selected_policy() {
     let dataset = RdfDatasetBuilder::new()
         .freeze()
         .expect("freeze empty dataset");
 
-    // The recursion guard is in force on every execution, governed or not, and every
-    // builder preserves it — there is no setter that writes this slot, which is what
-    // "not relaxable" means concretely.
+    // Unrelated builders preserve the caller's explicit absence of a depth limit.
     for governors in [
         QueryGovernors::UNBOUNDED,
         QueryGovernors::UNBOUNDED.with_fuel(1),
@@ -512,17 +510,13 @@ fn udf_depth_is_reported_through_evidence_without_being_relaxable() {
         QueryGovernors::UNBOUNDED.with_max_scratch_bytes(1),
         QueryGovernors::UNBOUNDED.with_max_remote_requests(1),
     ] {
-        assert_eq!(
-            governors.limits().get(ResourceDimension::UdfDepth),
-            u64::from(MAX_UDF_DEPTH),
-            "no builder may move the recursion guard"
-        );
+        assert_eq!(governors.max_udf_depth(), None);
     }
 
     // Reported: descending three function frames reports depth three, not three
     // invocations. Depth is a maximum, not a total — a query that calls a function a
     // thousand times at depth one has reached depth one.
-    let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let root = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
     let first = root
         .child_for_user_fn()
@@ -552,12 +546,11 @@ fn udf_depth_is_reported_through_evidence_without_being_relaxable() {
         "a second frame at depth two must not add to a depth that was already reached"
     );
 
-    // Enforced, and enforced identically whether or not a governor is attached: the
-    // ceiling the governor compares against IS the build constant.
+    // Metered and ordinary execution retain the same inclusive default limit.
     let mut governed = EvalCtx::new(&*dataset)
-        .with_governors(Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED)));
+        .with_governors(Arc::new(GovernorState::new(&QueryGovernors::METERED)));
     let mut ungoverned = EvalCtx::new(&*dataset);
-    for _ in 0..MAX_UDF_DEPTH {
+    for _ in 0..DEFAULT_UDF_DEPTH {
         governed = governed
             .child_for_user_fn()
             .expect("inside the governed depth bound is not an error")
@@ -572,8 +565,7 @@ fn udf_depth_is_reported_through_evidence_without_being_relaxable() {
             .child_for_user_fn()
             .expect("a governed ceiling is an outcome, not an error")
             .is_none(),
-        "a caller must not be able to buy their way past the recursion guard, and the \
-         governed trip must remain typed"
+        "crossing the selected finite depth must remain a typed governed trip"
     );
     assert!(ungoverned.child_for_user_fn().is_err());
 }
@@ -758,33 +750,21 @@ fn metered_reports_consumption_that_unbounded_does_not() {
 }
 
 #[test]
-fn metered_does_not_relax_the_udf_depth_ceiling() {
+fn metered_retains_the_default_udf_depth_until_explicitly_removed() {
     let dataset = RdfDatasetBuilder::new()
         .freeze()
         .expect("freeze empty dataset");
 
-    // Metering is a door into the accounting, not a door around the fixed ceilings.
     assert_eq!(
-        QueryGovernors::METERED
-            .limits()
-            .get(ResourceDimension::UdfDepth),
-        u64::from(MAX_UDF_DEPTH),
-        "the recursion guard is a build constant, and no mode may move it"
+        QueryGovernors::METERED.max_udf_depth(),
+        Some(DEFAULT_UDF_DEPTH)
     );
-    assert_eq!(
-        QueryGovernors::METERED
-            .limits()
-            .get(ResourceDimension::UdfDepth),
-        QueryGovernors::UNBOUNDED
-            .limits()
-            .get(ResourceDimension::UdfDepth),
-    );
+    assert_eq!(QueryGovernors::UNBOUNDED.max_udf_depth(), None);
 
-    // Enforced in practice, not just configured: a metered run fails closed at exactly
-    // the same depth an unbounded one does.
+    // The default is inclusive, and its governed refusal retains the actual limit.
     let mut metered = EvalCtx::new(&*dataset)
         .with_governors(Arc::new(GovernorState::new(&QueryGovernors::METERED)));
-    for _ in 0..MAX_UDF_DEPTH {
+    for _ in 0..DEFAULT_UDF_DEPTH {
         metered = metered
             .child_for_user_fn()
             .expect("inside the depth bound is not an evaluation error")
@@ -795,7 +775,7 @@ fn metered_does_not_relax_the_udf_depth_ceiling() {
             .child_for_user_fn()
             .expect("a governed ceiling is an outcome, not an evaluation error")
             .is_none(),
-        "asking to be measured must not buy a deeper stack, and the trip stays typed"
+        "metering keeps the default logical depth, and the trip stays typed"
     );
     assert!(matches!(
         metered.expression_barrier.observed(),
@@ -803,9 +783,23 @@ fn metered_does_not_relax_the_udf_depth_ceiling() {
             dimension: ResourceDimension::UdfDepth,
             limit,
             consumed,
-        }) if limit == u64::from(MAX_UDF_DEPTH)
-            && consumed == u64::from(MAX_UDF_DEPTH) + 1
+        }) if limit == DEFAULT_UDF_DEPTH
+            && consumed == DEFAULT_UDF_DEPTH + 1
     ));
+
+    let policy = QueryGovernors::METERED.without_udf_depth_limit();
+    let state = Arc::new(GovernorState::new(&policy));
+    let mut unlimited = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+    for _ in 0..=DEFAULT_UDF_DEPTH {
+        unlimited = unlimited
+            .child_for_user_fn()
+            .expect("removing a logical limit is not an evaluation error")
+            .expect("depth above the default is admitted when explicitly unlimited");
+    }
+    assert_eq!(
+        state.evidence().consumed_in(ResourceDimension::UdfDepth),
+        DEFAULT_UDF_DEPTH + 1
+    );
 }
 
 // ---------------------------------------------------------------------------

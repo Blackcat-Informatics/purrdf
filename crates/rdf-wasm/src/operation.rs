@@ -592,7 +592,7 @@ impl JobRun<'_> {
         coordinates: &'o purrdf_validate::query::CoordinateInputs,
     ) -> QueryOptions<'o, 'o> {
         coordinates.apply(crate::xpath_regex::select(
-            self.options_under(env, division).with_geo(geo),
+            &self.options_under(env, division).with_geo(geo),
             xpath_regex,
         ))
     }
@@ -745,8 +745,8 @@ fn ungoverned_query(
         // the plan, then its evaluation with no governor state.
         let result = run
             .evaluate(|| {
-                let prepared = engine.prepare_query_with_options(sparql, base, options)?;
-                engine.query_prepared(frozen, &prepared, &[], options)
+                let prepared = engine.prepare_query_with_options(sparql, base, &options)?;
+                engine.query_prepared(frozen, &prepared, &[], &options)
             })
             .map_err(JobError::diagnostic);
         let receipt = capture
@@ -761,7 +761,7 @@ fn ungoverned_query(
             });
     };
     let outcome = run.evaluate(|| {
-        engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
+        engine.query_governed(frozen, sparql_request(sparql, base), &options, &governors)
     });
     if let Ok(outcome) = &outcome {
         run.record_evidence(outcome.evidence());
@@ -887,7 +887,7 @@ impl OperationInput<'_> {
                             engine.query_governed(
                                 &frozen,
                                 request,
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -914,7 +914,7 @@ impl OperationInput<'_> {
                             engine.query_governed(
                                 &frozen,
                                 request,
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -992,7 +992,7 @@ impl OperationInput<'_> {
                                 request,
                                 &EntailmentClosure::new(plan.entailment(), &imports)
                                     .with_limits(limits.eval_options()),
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -1044,11 +1044,11 @@ impl OperationInput<'_> {
                                 &frozen,
                                 &sparql,
                                 base,
-                                options,
+                                &options,
                                 Arc::clone(stop),
                             ),
                             None => {
-                                engine.explain_query_with_options(&frozen, &sparql, base, options)
+                                engine.explain_query_with_options(&frozen, &sparql, base, &options)
                             }
                         })
                         .map_err(JobError::diagnostic)?;
@@ -1084,11 +1084,11 @@ impl OperationInput<'_> {
                         .with_coordinate_observer(&capture);
                     let result = match run.ungoverned_watch() {
                         None => run
-                            .evaluate(|| engine.update_with_options(&mut target, request, options))
+                            .evaluate(|| engine.update_with_options(&mut target, request, &options))
                             .map_err(JobError::diagnostic),
                         Some(governors) => run
                             .evaluate(|| {
-                                engine.update_governed(&mut target, request, options, &governors)
+                                engine.update_governed(&mut target, request, &options, &governors)
                             })
                             .map_err(JobError::diagnostic)
                             .and_then(|outcome| {
@@ -1128,7 +1128,7 @@ impl OperationInput<'_> {
                             engine.update_governed(
                                 &mut target,
                                 request,
-                                run.selected_options(
+                                &run.selected_options(
                                     &env,
                                     division,
                                     xpath_regex,
@@ -1402,7 +1402,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 ),
                 Ok(SparqlResult::Boolean(true))
             )

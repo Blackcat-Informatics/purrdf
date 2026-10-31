@@ -162,7 +162,7 @@ fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, None).expect("prepare");
     engine
-        .query_prepared_view(dataset, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(dataset, &prepared, &[], &QueryOptions::EMPTY)
         .expect("query")
 }
 

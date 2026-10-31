@@ -500,7 +500,7 @@ fn evaluate(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(relations.clone())
                     .expect("the fixture declarations read cleanly"),
             ),

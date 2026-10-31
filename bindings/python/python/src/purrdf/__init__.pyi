@@ -841,6 +841,8 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
@@ -888,6 +890,8 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> EntailmentQueryOutcome: ...
@@ -934,6 +938,8 @@ class _QuadStore:
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...

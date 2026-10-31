@@ -27,14 +27,14 @@ fn data(rows: usize) -> Arc<RdfDataset> {
 
 fn verify_publication(engine: &NativeSparqlEngine, plan: &PreparedQuery, data: &Arc<RdfDataset>) {
     let SparqlResult::Graph(expected) = engine
-        .query_prepared(data, plan, &[], QueryOptions::EMPTY)
+        .query_prepared(data, plan, &[], &QueryOptions::EMPTY)
         .expect("ordinary")
     else {
         panic!("graph")
     };
     let mut target = RdfDatasetBuilder::new();
     let stats = engine
-        .construct_prepared_into_view(data.as_ref(), plan, &[], QueryOptions::EMPTY, &mut target)
+        .construct_prepared_into_view(data.as_ref(), plan, &[], &QueryOptions::EMPTY, &mut target)
         .expect("typed");
     let actual = target.freeze().expect("publication");
     assert_eq!(
@@ -73,7 +73,7 @@ fn bench(c: &mut Bench) {
             |b, data| {
                 b.iter(|| {
                     let SparqlResult::Graph(graph) = engine
-                        .query_prepared(data, &plan, &[], QueryOptions::EMPTY)
+                        .query_prepared(data, &plan, &[], &QueryOptions::EMPTY)
                         .expect("query")
                     else {
                         panic!("graph")
@@ -95,7 +95,7 @@ fn bench(c: &mut Bench) {
                         data.as_ref(),
                         &plan,
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &mut target,
                     )
                     .expect("construct");

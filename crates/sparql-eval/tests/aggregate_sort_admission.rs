@@ -86,12 +86,12 @@ fn calls_reachable_only_through_aggregate_sort_keys_require_admission() {
         let query = ask(fold(Expression::Exists(Child::new(inner))));
         assert_eq!(
             engine
-                .prepare_algebra(query.clone(), QueryOptions::EMPTY)
+                .prepare_algebra(query.clone(), &QueryOptions::EMPTY)
                 .unwrap_err()
                 .code,
             code
         );
-        assert!(PreparedQuery::rewritten(query, QueryOptions::EMPTY).is_err());
+        assert!(PreparedQuery::rewritten(query, &QueryOptions::EMPTY).is_err());
         // A third assertion used to stand here: build a trivially-admitted
         // `PreparedQuery`, overwrite its `query` field by hand with the
         // sort-key-only call above (bypassing admission entirely), and confirm
@@ -193,7 +193,7 @@ fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
     ] {
         for silent in ["", "SILENT "] {
             let error = engine
-                .query_with_source_view(&*data, request(&query(silent, key)), &source, options)
+                .query_with_source_view(&*data, request(&query(silent, key)), &source, &options)
                 .unwrap_err();
             assert!(error.message.contains(expected), "{silent}{key}: {error:?}");
         }
@@ -205,14 +205,14 @@ fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
         "EXISTS { VALUES ?x { 1 } LATERAL { VALUES ?y { 2 } } }",
     ] {
         let error = engine
-            .query_with_source_view(&*data, request(&query("", key)), &source, options)
+            .query_with_source_view(&*data, request(&query("", key)), &source, &options)
             .unwrap_err();
         assert!(
             error.message.contains("no in-memory endpoint"),
             "{key}: {error:?}"
         );
         let result = engine
-            .query_with_source_view(&*data, request(&query("SILENT ", key)), &source, options)
+            .query_with_source_view(&*data, request(&query("SILENT ", key)), &source, &options)
             .unwrap();
         match result {
             purrdf_core::SparqlResult::Solutions { rows, .. } => {
@@ -239,7 +239,7 @@ fn basic_profile_checks_aggregate_sort_keys_before_governor_work() {
     assert!(error.message.contains("1.2-basic"), "{error:?}");
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let error = engine
-        .query_prepared_governed_in_operation(&*data, &prepared, &[], QueryOptions::EMPTY, &state)
+        .query_prepared_governed_in_operation(&*data, &prepared, &[], &QueryOptions::EMPTY, &state)
         .unwrap_err();
     assert!(error.message.contains("1.2-basic"), "{error:?}");
     assert_eq!(state.evidence().consumed_in(ResourceDimension::Fuel), 0);

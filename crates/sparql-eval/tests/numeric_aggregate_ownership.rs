@@ -38,7 +38,7 @@ fn exact_sum_and_avg_keep_output_admitted_through_clone_and_extraction() {
 
     let window = CurrentThreadWindow::open();
     let complete = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], options)
+        .query_prepared_fallible_view(&source, &prepared, &[], &options)
         .expect("the exact integer/decimal fold is supported");
     let measured = window.close();
     assert_eq!(complete.result.solutions().unwrap().1, expected);
@@ -74,7 +74,7 @@ fn native_ieee_and_raw_duration_fold_laws_survive_owned_state() {
     let prepared = engine.prepare_query(&query, None).unwrap();
     let source = open(&image, CEILING);
     let complete = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     let (_, rows) = complete.result.solutions().unwrap();
     let TermValue::Literal {
@@ -101,7 +101,7 @@ fn native_ieee_and_raw_duration_fold_laws_survive_owned_state() {
     let prepared = engine.prepare_query(&query, None).unwrap();
     let source = open(&image, CEILING);
     let complete = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(
         complete.result.solutions().unwrap().1,
@@ -128,7 +128,7 @@ fn exact_mean_refusal_stays_an_aggregate_code_in_an_admitted_receipt() {
             &source,
             &prepared,
             &[],
-            QueryOptions::EMPTY.with_division(DivisionPolicy::Exact),
+            &QueryOptions::EMPTY.with_division(DivisionPolicy::Exact),
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -154,7 +154,7 @@ fn capacity_refusal_never_becomes_a_poisoned_or_partial_aggregate() {
     let small = engine.prepare_query(&pair_query("1"), None).unwrap();
     let calibration = open(&image, CEILING);
     let small_result = engine
-        .query_prepared_fallible_view(&calibration, &small, &[], options)
+        .query_prepared_fallible_view(&calibration, &small, &[], &options)
         .unwrap();
     let ceiling = calibration.evidence().peak_bytes();
     drop(small_result);
@@ -167,7 +167,7 @@ fn capacity_refusal_never_becomes_a_poisoned_or_partial_aggregate() {
     let large = engine.prepare_query(&pair_query(&input), None).unwrap();
     let source = open(&image, ceiling);
     let window = CurrentThreadWindow::open();
-    let refused = engine.query_prepared_fallible_view(&source, &large, &[], options);
+    let refused = engine.query_prepared_fallible_view(&source, &large, &[], &options);
     let measured = window.close();
     assert!(
         matches!(
@@ -184,7 +184,7 @@ fn capacity_refusal_never_becomes_a_poisoned_or_partial_aggregate() {
 
     let source = open(&image, CEILING);
     let complete = engine
-        .query_prepared_fallible_view(&source, &large, &[], options)
+        .query_prepared_fallible_view(&source, &large, &[], &options)
         .expect("the same magnitude succeeds with sufficient capacity");
     let (_, rows) = complete.result.solutions().unwrap();
     assert_eq!(
@@ -219,10 +219,10 @@ fn all_ten_native_statistics_keep_original_owners_through_every_query_door() {
     let options = QueryOptions::EMPTY.with_env(&env);
     let query = "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#PERCENTILE>, ?x; P=0.5) AS ?percentile) (AGG(<http://example.org/stat#STDDEV>, ?x) AS ?stddev) (AGG(<http://example.org/stat#STDDEV_POP>, ?x) AS ?stddevpop) (AGG(<http://example.org/stat#VARIANCE>, ?x) AS ?variance) (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?varpop) (AGG(<http://example.org/stat#MODE>, ?x) AS ?mode) (AGG(<http://example.org/stat#FIRST>, ?x) AS ?first) (AGG(<http://example.org/stat#LAST>, ?x) AS ?last) (AGG(<http://example.org/stat#TOPK>, ?x; K=2) AS ?topk) WHERE { VALUES ?x { 3 1 2 } }";
     let prepared = engine
-        .prepare_query_with_options(query, None, options)
+        .prepare_query_with_options(query, None, &options)
         .unwrap();
     let expected = engine
-        .query_prepared_view(&*resident, &prepared, &[], options)
+        .query_prepared_view(&*resident, &prepared, &[], &options)
         .unwrap();
     let expected_rows = expected.solutions().unwrap().1;
     assert_eq!(
@@ -253,15 +253,15 @@ fn all_ten_native_statistics_keep_original_owners_through_every_query_door() {
         let window = CurrentThreadWindow::open();
         let result = match door {
             0 => engine
-                .query_fallible_view(&source, request, options)
+                .query_fallible_view(&source, request, &options)
                 .map(|complete| complete.result)
                 .map_err(|failure| format!("{failure:?}")),
             1 => engine
-                .query_prepared_fallible_view(&source, &prepared, &[], options)
+                .query_prepared_fallible_view(&source, &prepared, &[], &options)
                 .map(|complete| complete.result)
                 .map_err(|failure| format!("{failure:?}")),
             2 => engine
-                .query_governed_fallible_view(&source, request, options, &QueryGovernors::METERED)
+                .query_governed_fallible_view(&source, request, &options, &QueryGovernors::METERED)
                 .map(|complete| complete.result)
                 .map_err(|failure| format!("{failure:?}")),
             _ => engine
@@ -269,7 +269,7 @@ fn all_ten_native_statistics_keep_original_owners_through_every_query_door() {
                     &source,
                     &prepared,
                     &[],
-                    options,
+                    &options,
                     &QueryGovernors::METERED,
                 )
                 .map(|complete| complete.result)
@@ -306,10 +306,10 @@ fn statistical_duration_interpolation_and_exact_variance_codes_use_native_kernel
         "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#PERCENTILE>, ?x; P=0.25) AS ?percentile) WHERE {{ VALUES ?x {{ \"P1D\"^^<{XSD_DURATION}> \"P3D\"^^<{XSD_DURATION}> }} }}"
     );
     let prepared = engine
-        .prepare_query_with_options(&query, None, options)
+        .prepare_query_with_options(&query, None, &options)
         .unwrap();
     let expected = engine
-        .query_prepared_view(&*resident, &prepared, &[], options)
+        .query_prepared_view(&*resident, &prepared, &[], &options)
         .unwrap();
     let source = open(&image, CEILING);
     let window = CurrentThreadWindow::open();
@@ -318,7 +318,7 @@ fn statistical_duration_interpolation_and_exact_variance_codes_use_native_kernel
             &source,
             &prepared,
             &[],
-            options,
+            &options,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -335,7 +335,7 @@ fn statistical_duration_interpolation_and_exact_variance_codes_use_native_kernel
     drop(complete);
     let query = "SELECT (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?variance) WHERE { VALUES ?x { 1 0 0 } }";
     let prepared = engine
-        .prepare_query_with_options(query, None, options)
+        .prepare_query_with_options(query, None, &options)
         .unwrap();
     let source = open(&image, CEILING);
     let complete = engine
@@ -343,7 +343,7 @@ fn statistical_duration_interpolation_and_exact_variance_codes_use_native_kernel
             &source,
             &prepared,
             &[],
-            options,
+            &options,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -367,11 +367,11 @@ fn statistical_large_state_refusal_never_publishes_poison_or_partial_success() {
         )
     };
     let small = engine
-        .prepare_query_with_options(&query_for("1"), None, options)
+        .prepare_query_with_options(&query_for("1"), None, &options)
         .unwrap();
     let calibration = open(&image, CEILING);
     let small_result = engine
-        .query_prepared_fallible_view(&calibration, &small, &[], options)
+        .query_prepared_fallible_view(&calibration, &small, &[], &options)
         .unwrap();
     let ceiling = calibration.evidence().peak_bytes();
     drop(small_result);
@@ -381,11 +381,11 @@ fn statistical_large_state_refusal_never_publishes_poison_or_partial_success() {
         "0".repeat(usize::try_from(ceiling).unwrap() + 1)
     ));
     let prepared = engine
-        .prepare_query_with_options(&large, None, options)
+        .prepare_query_with_options(&large, None, &options)
         .unwrap();
     let source = open(&image, ceiling);
     let window = CurrentThreadWindow::open();
-    let result = engine.query_prepared_fallible_view(&source, &prepared, &[], options);
+    let result = engine.query_prepared_fallible_view(&source, &prepared, &[], &options);
     let measured = window.close();
     assert!(matches!(
         result,
@@ -422,7 +422,7 @@ fn statistical_big_integer_states_and_outputs_are_physically_admitted() {
         "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?variance) (AGG(<http://example.org/stat#MODE>, ?x) AS ?mode) (AGG(<http://example.org/stat#TOPK>, ?x; K=2) AS ?topk) WHERE {{ VALUES ?x {{ {first} {last} }} }}"
     );
     let prepared = engine
-        .prepare_query_with_options(&query, None, options)
+        .prepare_query_with_options(&query, None, &options)
         .unwrap();
     let source = open(&image, CEILING);
     let window = CurrentThreadWindow::open();
@@ -431,7 +431,7 @@ fn statistical_big_integer_states_and_outputs_are_physically_admitted() {
             &source,
             &prepared,
             &[],
-            options,
+            &options,
             &QueryGovernors::METERED,
         )
         .unwrap();

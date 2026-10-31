@@ -253,7 +253,7 @@ pub fn project_construct_view<D: DatasetView<ReadError = std::convert::Infallibl
         ));
     }
     let result = engine
-        .query_prepared_view(view, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(view, &prepared, &[], &QueryOptions::EMPTY)
         .map_err(|error| {
             if error.code == "native-sparql-source-read" {
                 ProjectionError::source_read(error)

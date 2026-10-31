@@ -35,7 +35,7 @@ const STAT: &str = "http://example.org/stat#";
 
 fn governed(
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     governors: &QueryGovernors,
 ) -> GovernedOutcome {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
@@ -78,7 +78,7 @@ fn first_cell(outcome: &GovernedOutcome) -> String {
 fn refused_beside(
     refused: &str,
     neighbour: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     dimension: ResourceDimension,
 ) -> String {
     let metered = governed(neighbour, options, &QueryGovernors::METERED);
@@ -144,7 +144,7 @@ fn temporal_exact_seconds_charge_real_query_fuel() {
         let answer = refused_beside(
             &wide_query,
             &tiny_query,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             ResourceDimension::Fuel,
         );
         assert_ne!(answer, "-", "the bounded neighbour must bind its result");
@@ -158,7 +158,7 @@ fn temporal_exact_seconds_charge_real_query_fuel() {
     let answer = refused_beside(
         &shifted,
         &retagged,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
     assert_ne!(answer, "-");
@@ -171,7 +171,7 @@ fn temporal_exact_seconds_charge_real_query_fuel() {
         assert!(matches!(
             governed(
                 query,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(accepted)
             ),
             GovernedOutcome::Complete { .. }
@@ -180,7 +180,7 @@ fn temporal_exact_seconds_charge_real_query_fuel() {
             let middle = refused + (accepted - refused) / 2;
             let outcome = governed(
                 query,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(middle),
             );
             if matches!(outcome, GovernedOutcome::Complete { .. }) {
@@ -214,7 +214,7 @@ fn a_products_growing_scale_is_charged_for_fuel() {
     let answer = refused_beside(
         &squaring("0.1", 20),
         &squaring("1.0", 20),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
     // The product is `1.0`, three characters: a computed whole decimal keeps its point.
@@ -222,7 +222,7 @@ fn a_products_growing_scale_is_charged_for_fuel() {
     // The exact answer at a modest scale: 0.1^(2^10) has 1,024 fractional digits.
     let metered = governed(
         &squaring("0.1", 10),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
     assert_eq!(first_cell(&metered), "1026");
@@ -236,7 +236,7 @@ fn a_products_growing_scale_is_charged_for_memory_before_it_allocates() {
     refused_beside(
         &squaring("0.1", 18),
         &squaring("1.0", 18),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::ScratchBytes,
     );
     // Thirty-two squarings would render 0.1^(2^32): four billion digits.
@@ -245,7 +245,7 @@ fn a_products_growing_scale_is_charged_for_memory_before_it_allocates() {
     // production parallel gate rejects these singleton bags and exact XSD math is
     // synchronous, so count this caller's allocations without sibling-test traffic.
     let window = CurrentThreadWindow::open();
-    let outcome = governed(&squaring("0.1", 32), QueryOptions::EMPTY, &ceiling);
+    let outcome = governed(&squaring("0.1", 32), &QueryOptions::EMPTY, &ceiling);
     let measured = window.close();
     assert!(
         matches!(&outcome, GovernedOutcome::BudgetExhausted(exhausted)
@@ -268,7 +268,7 @@ fn a_comparison_that_aligns_is_charged() {
     let answer = refused_beside(
         &format!("SELECT ({a} < {b} AS ?y) WHERE {{}}"),
         &format!("SELECT ({a} < {c} AS ?y) WHERE {{}}"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
     assert_eq!(answer, "true");
@@ -284,14 +284,14 @@ fn a_tower_operand_meeting_a_double_is_charged() {
     let answer = refused_beside(
         &format!("SELECT ({near_one} + 1.0e0 AS ?y) WHERE {{}}"),
         &format!("SELECT ({past_range} + 1.0e0 AS ?y) WHERE {{}}"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
     assert_eq!(answer, "INF");
     let answer = refused_beside(
         &format!("SELECT (xsd:double({near_one}) AS ?y) WHERE {{}}"),
         &format!("SELECT (xsd:double({past_range}) AS ?y) WHERE {{}}"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
     assert_eq!(answer, "INF");
@@ -306,36 +306,36 @@ fn a_non_default_division_policy_is_charged() {
     let query = "SELECT (1 / 3 AS ?y) WHERE {}";
     let metered = governed(
         query,
-        QueryOptions::EMPTY.with_division(narrow),
+        &QueryOptions::EMPTY.with_division(narrow),
         &QueryGovernors::METERED,
     );
     assert_eq!(first_cell(&metered), "0.3333333333");
     let ceiling = QueryGovernors::UNBOUNDED
         .with_fuel(metered.evidence().consumed_in(ResourceDimension::Fuel));
     assert!(matches!(
-        governed(query, QueryOptions::EMPTY.with_division(narrow), &ceiling),
+        governed(query, &QueryOptions::EMPTY.with_division(narrow), &ceiling),
         GovernedOutcome::Complete { .. }
     ));
     assert!(matches!(
-        governed(query, QueryOptions::EMPTY.with_division(wide), &ceiling),
+        governed(query, &QueryOptions::EMPTY.with_division(wide), &ceiling),
         GovernedOutcome::BudgetExhausted(_)
     ));
     // AVG forms its mean under the same policy, and is charged the same way.
     let avg = "SELECT (AVG(?v) AS ?y) WHERE { VALUES ?v { 1 2 4 } }";
     let metered = governed(
         avg,
-        QueryOptions::EMPTY.with_division(narrow),
+        &QueryOptions::EMPTY.with_division(narrow),
         &QueryGovernors::METERED,
     );
     assert_eq!(first_cell(&metered), "2.3333333333");
     let ceiling = QueryGovernors::UNBOUNDED
         .with_fuel(metered.evidence().consumed_in(ResourceDimension::Fuel));
     assert!(matches!(
-        governed(avg, QueryOptions::EMPTY.with_division(narrow), &ceiling),
+        governed(avg, &QueryOptions::EMPTY.with_division(narrow), &ceiling),
         GovernedOutcome::Complete { .. }
     ));
     assert!(matches!(
-        governed(avg, QueryOptions::EMPTY.with_division(wide), &ceiling),
+        governed(avg, &QueryOptions::EMPTY.with_division(wide), &ceiling),
         GovernedOutcome::BudgetExhausted(_)
     ));
 }
@@ -351,7 +351,7 @@ fn sum_and_avg_are_charged_for_their_chain() {
         refused_beside(
             &format!("SELECT ({aggregate}(?v) AS ?y) WHERE {{ VALUES ?v {{ {vast}{ones} }} }}"),
             &format!("SELECT ({aggregate}(?v) AS ?y) WHERE {{ VALUES ?v {{ {short}{ones} }} }}"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             ResourceDimension::Fuel,
         );
     }
@@ -375,7 +375,7 @@ fn a_long_column_of_big_integers_sums_at_a_linear_cost() {
     let spent = |rows: usize| {
         governed(
             &sum(&column(rows)),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .evidence()
@@ -389,7 +389,7 @@ fn a_long_column_of_big_integers_sums_at_a_linear_cost() {
 
     let rows = 100_000_usize;
     let ceiling = QueryGovernors::UNBOUNDED.with_fuel(50_000_000);
-    let answered = governed(&sum(&column(rows)), QueryOptions::EMPTY, &ceiling);
+    let answered = governed(&sum(&column(rows)), &QueryOptions::EMPTY, &ceiling);
     // Σ (10^39 + i) for i < n = n·10^39 + n(n − 1)/2.
     let expected = format!("{rows}{:039}", rows * (rows - 1) / 2);
     assert_eq!(first_cell(&answered), expected);
@@ -397,7 +397,7 @@ fn a_long_column_of_big_integers_sums_at_a_linear_cost() {
     let vast = decimal(&format!("0.{}1", "0".repeat(100_000)));
     let refused = governed(
         &sum(&format!("{vast} {}", column(rows))),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ceiling,
     );
     assert!(
@@ -433,7 +433,7 @@ fn extremes_and_sorts_are_charged_for_their_comparisons() {
                 "SELECT ({aggregate}(?v) AS ?y) WHERE {{ VALUES ?v {{ {} }} }}",
                 spread.join(" ")
             ),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             ResourceDimension::Fuel,
         );
     }
@@ -446,7 +446,7 @@ fn extremes_and_sorts_are_charged_for_their_comparisons() {
             "SELECT (STRLEN(STR(?v)) AS ?y) WHERE {{ VALUES ?v {{ {} }} }} ORDER BY ?v",
             spread.join(" ")
         ),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
 }
@@ -475,7 +475,7 @@ fn statistical_aggregates_are_charged() {
                 "SELECT (AGG(<{STAT}{local}>, ?v) AS ?y) WHERE {{ VALUES ?v {{ {} }} }}",
                 short.join(" ")
             ),
-            options,
+            &options,
             ResourceDimension::Fuel,
         );
     }
@@ -501,7 +501,7 @@ fn unary_functions_and_casts_are_charged() {
         refused_beside(
             &format!("SELECT (STRLEN(STR({refused})) AS ?y) WHERE {{}}"),
             &format!("SELECT (STRLEN(STR({neighbour})) AS ?y) WHERE {{}}"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             ResourceDimension::Fuel,
         );
     }
@@ -513,7 +513,7 @@ fn unary_functions_and_casts_are_charged() {
 fn machine_word_numbers_charge_no_tower_work() {
     let small = governed(
         "SELECT (SUM(?v * 2 + 1) AS ?y) WHERE { VALUES ?v { 1 2 3 4.5 } } ORDER BY ?y",
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
     assert_eq!(first_cell(&small), "25.0");

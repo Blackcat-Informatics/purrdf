@@ -39,6 +39,10 @@ pub enum PurrdfGovernorFlag {
     DeadlineMillis = 1 << 5,
     /// Poll `cancellation`.
     Cancellation = 1 << 6,
+    /// Enforce the inclusive logical depth in `max_udf_depth`.
+    MaxUdfDepth = 1 << 7,
+    /// Remove the default logical user-function depth ceiling.
+    UnlimitedUdfDepth = 1 << 8,
 }
 
 const KNOWN_FLAGS: u32 = PurrdfGovernorFlag::Fuel as u32
@@ -47,14 +51,18 @@ const KNOWN_FLAGS: u32 = PurrdfGovernorFlag::Fuel as u32
     | PurrdfGovernorFlag::MaxScratchBytes as u32
     | PurrdfGovernorFlag::MaxRemoteRequests as u32
     | PurrdfGovernorFlag::DeadlineMillis as u32
-    | PurrdfGovernorFlag::Cancellation as u32;
+    | PurrdfGovernorFlag::Cancellation as u32
+    | PurrdfGovernorFlag::MaxUdfDepth as u32
+    | PurrdfGovernorFlag::UnlimitedUdfDepth as u32;
 
 /// Caller-supplied governors for one C-ABI query or UPDATE call.
 ///
 /// Set the corresponding [`PurrdfGovernorFlag`] bit in `enabled` for every field that is
 /// meaningful. Zero is a valid inclusive ceiling. Unset numeric fields are ignored, and
 /// every governed call still meters them at the native `METERED` ceiling so its evidence
-/// is useful. `reserved` must be zero. `cancellation`, when enabled, must remain a live
+/// is useful. Logical UDF depth defaults to 32. Enable MaxUdfDepth for an inclusive
+/// finite depth or UnlimitedUdfDepth to remove it; enabling both is an error.
+/// `reserved` must be zero. `cancellation`, when enabled, must remain a live
 /// handle until the synchronous call returns.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -73,6 +81,9 @@ pub struct PurrdfQueryGovernors {
     pub max_scratch_bytes: u64,
     /// Inclusive remote-request ceiling.
     pub max_remote_requests: u64,
+    /// Inclusive logical depth when MaxUdfDepth is enabled.
+    /// MaxUdfDepth and UnlimitedUdfDepth are mutually exclusive.
+    pub max_udf_depth: u64,
     /// Relative wall-clock budget in milliseconds.
     pub deadline_millis: u64,
     /// Optional shareable cancellation handle.
@@ -88,6 +99,7 @@ impl PurrdfQueryGovernors {
         max_intermediate_cells: 0,
         max_scratch_bytes: 0,
         max_remote_requests: 0,
+        max_udf_depth: 0,
         deadline_millis: 0,
         cancellation: std::ptr::null(),
     };
@@ -97,7 +109,8 @@ impl PurrdfQueryGovernors {
     }
 }
 
-/// Initialize `*out` as a metered governed call with no finite caller ceiling.
+/// Initialize `*out` as a metered governed call with the default UDF depth limit.
+/// Other resource dimensions have no finite caller ceiling.
 ///
 /// # Safety
 /// `out` must be writable.
@@ -429,6 +442,10 @@ unsafe fn decode_parts(
             max_remote_requests: config
                 .flag(PurrdfGovernorFlag::MaxRemoteRequests)
                 .then_some(config.max_remote_requests),
+            max_udf_depth: config
+                .flag(PurrdfGovernorFlag::MaxUdfDepth)
+                .then_some(config.max_udf_depth),
+            unlimited_udf_depth: config.flag(PurrdfGovernorFlag::UnlimitedUdfDepth),
             no_ceiling: false,
         };
 

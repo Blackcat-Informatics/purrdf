@@ -319,7 +319,7 @@ fn a_ledger_job_and_its_provider_are_queried_through_the_real_engine() {
         )
         .unwrap();
     let SparqlResult::Solutions { rows, .. } = engine
-        .query_prepared_view(&*dataset, &query, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&*dataset, &query, &[], &QueryOptions::EMPTY)
         .unwrap()
     else {
         panic!("SELECT produces solutions");
