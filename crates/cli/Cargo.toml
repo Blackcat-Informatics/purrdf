@@ -106,7 +106,7 @@ purrdf-gts = { workspace = true }
 # Frames the gzip and zstd fixtures the transport integration tests feed to the binary.
 # Both are already workspace-pinned (purrdf-gts links them); test-only here.
 purrdf-deflate = { workspace = true }
-structured-zstd = { workspace = true }
+purrdf-zstd = { workspace = true }
 # The integration tests recompute the SHA-256 identities the binary prints, in
 # lowercase hex.
 sha2 = { workspace = true }

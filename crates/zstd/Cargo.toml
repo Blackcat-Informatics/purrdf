@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-zstd"
+description = "PurRDF's shared pure-Rust Zstandard codec and deterministic dictionary trainer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# The inherited codec and local modifications retain the original Apache grant.
+license = "Apache-2.0"
+documentation = "https://docs.rs/purrdf-zstd"
+keywords = ["zstd", "zstandard", "compression", "dictionary", "wasm"]
+categories = ["compression", "encoding", "wasm"]
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "purrdf_zstd"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+purrdf-hash.workspace = true
+twox-hash.workspace = true

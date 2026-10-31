@@ -416,6 +416,23 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "zstd-codec"
+summary = "Shared Zstandard frame codec and deterministic FastCOVER dictionary training"
+home = "purrdf_zstd::decoding::FrameDecoder"
+entry_points = ["purrdf_zstd::encoding::compress_slice_to_vec", "purrdf_zstd::dictionary::create_fastcover_dict_from_source"]
+spec = "RFC 8878 frame encoding and decoding; pinned inherited codec with fixed target dispatch, native borrowed refusal inspection and deterministic dictionary finalization"
+vectors = ["crates/columnar/tests/golden_bytes.rs"]
+bench = ["purrdf-columnar:codec"]
+sites = []
+replaces_external = ["structured-zstd"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "match-length"
 summary = "The first-mismatch index: the length of the common prefix of two byte strings, word-parallel inline for short keys and vector-dispatched for the encoder's candidate windows"
 home = "purrdf_deflate::common_prefix_len"

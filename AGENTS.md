@@ -68,6 +68,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
 | `purrdf-columnar` (`crates/columnar`) | Bidirectional five-table Parquet codec for RDF 1.2 + blobs |
 | `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log through `purrdf_lex::cbor`, BLAKE3, COSE, Ed25519 through `purrdf-ed25519`) |
+| `purrdf-zstd` (`crates/zstd`) | Shared Zstandard frame codec and deterministic FastCOVER dictionary trainer over `purrdf-hash` and `twox-hash`; one fixed product with native error inspection and target-selected kernels, imported with its original Apache grant |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
 | `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
 | `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
@@ -127,6 +128,7 @@ order, with the home each names. Call the home; never write a second body.
 | `sha3` | `purrdf_hash::sha3::Sha3` |
 | `crc32` | `purrdf_hash::crc32::Crc32` |
 | `deflate-gzip` | `purrdf_deflate::Inflater` |
+| `zstd-codec` | `purrdf_zstd::decoding::FrameDecoder` |
 | `match-length` | `purrdf_deflate::common_prefix_len` |
 | `csvw-dialect-csv` | `purrdf_core::csv::Reader` |
 | `strongly-connected-components` | `purrdf_core::graph::tarjan_scc` |
@@ -306,10 +308,10 @@ makes it removable).
   `purrdf-hash` (the `root` of `layers.toml`) has **zero runtime
   dependencies**. The ring-fenced crates — the rows of `layers.toml` that carry
   an `external` list: `purrdf-lex`, `purrdf-iri`, `purrdf-xsd`,
-  `purrdf-events`, `purrdf-deflate`, `purrdf-ed25519` and `purrdf-testkit` —
+  `purrdf-events`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-zstd` and `purrdf-testkit` —
   depend only on the first-party crates in their `deps` and the external
   packages in their `external` (empty for all but `purrdf-ed25519`, which takes
-  `sha2`, and `purrdf-testkit`, which takes `regex-syntax`, `sha2` and
+  `sha2`, `purrdf-zstd`, which takes `twox-hash`, and `purrdf-testkit`, which takes `regex-syntax`, `sha2` and
   `wasm-bindgen`). `make rdf-core-hygiene` checks both, reading the root, the
   ring-fenced crates and their rows from `layers.toml`.
 * **One home per job.** `helpers-ledger.toml` names the single implementation
@@ -344,8 +346,8 @@ makes it removable).
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 35 publishable crates,
-  `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
+* **Everything is wasm-able.** Every publishable crate, including
+  `purrdf-wasm`, must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
   on the wasm path; crypto stays pure-Rust for exactly this reason.

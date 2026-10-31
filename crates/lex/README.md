@@ -97,7 +97,7 @@ branch-free clean-chunk test; in the one chunk that holds a hit, the lanes read
 as a little-endian `u128` give the first hit's offset as their trailing-zero
 count over eight. That is the shape LLVM lowers to packed byte compares and a
 mask extraction — `pcmpeqb`/`pmovmskb` on x86_64, `cmeq`/`cmhi` and `addp` on
-aarch64, `i8x16.eq`/`i8x16.lt_u` under wasm `simd128` — and to straight-line
+`aarch64`, `i8x16.eq`/`i8x16.lt_u` under wasm `simd128` — and to straight-line
 scalar code where the target has no vector unit. `scripts/check-simd-asm.py`
 holds each scanner to that shape in the emitted assembly on seven target
 configurations, and the equivalence tests compare every scanner with the
@@ -128,3 +128,8 @@ The normalization tables in `src/unicode_tables.rs` are generated from the
 Unicode Character Database and ship Unicode, Inc. data under the
 [Unicode License v3](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSES/Unicode-3.0.txt)
 in addition; see [LICENSING.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md).
+
+The inherited YAML emitter additionally retains its MIT terms, and the generated
+HTML reference data retains `BSD-3-Clause`; see
+[LICENSING.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md)
+for the preserved notices and source provenance.

@@ -12,8 +12,8 @@ use std::borrow::Cow;
 mod error;
 pub use error::{CodecError, CodecFailure, CodecUnavailable};
 
-use structured_zstd::decoding::{ContentChecksum, FrameDecoder, errors::FrameDecoderError};
-use structured_zstd::encoding::{
+use purrdf_zstd::decoding::{ContentChecksum, FrameDecoder, errors::FrameDecoderError};
+use purrdf_zstd::encoding::{
     CompressionLevel, FrameCompressor, MatchGeneratorDriver, compress_to_vec,
 };
 
@@ -295,7 +295,7 @@ pub struct ZstdBlockInfo {
 /// Returns [`CodecError::Failed`] when the byte stream is not an exact sequence
 /// of zstd frames, or a frame omits its `Frame_Content_Size`.
 pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecError> {
-    use structured_zstd::decoding::{
+    use purrdf_zstd::decoding::{
         FrameContentSize, find_frame_compressed_size, read_frame_header_info,
     };
 
@@ -407,7 +407,6 @@ pub(crate) fn decode_chain_with_decrypt_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dict::DictSeed;
 
     #[test]
     fn bounded_decode_checks_empty_identity_and_every_chain_intermediate() {
@@ -630,7 +629,7 @@ mod tests {
 
         for dict in [
             crate::dict::raw_content_dict(&corpus, 4096).expect("raw content dict builds"),
-            crate::dict::trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("trained dict"),
+            crate::dict::trained_dict(&corpus, 4096).expect("trained dict"),
         ] {
             let encoded = encode_chain_with_options(
                 &["zstd".to_string()],
@@ -771,7 +770,7 @@ mod tests {
 
         for dict in [
             crate::dict::raw_content_dict(&corpus, 4096).expect("raw content dict builds"),
-            crate::dict::trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("trained dict"),
+            crate::dict::trained_dict(&corpus, 4096).expect("trained dict"),
         ] {
             let encoded = encode_chain_with_options(
                 &["zstd-rsyncable".to_string()],

@@ -18,43 +18,12 @@
 //!
 //! - [`raw_content_dict`] keeps a canonical trailing window of the corpus — no
 //!   training, no randomness; trivially wasm-clean and deterministic.
-//! - [`trained_dict`] runs pure-Rust FastCOVER
-//!   ([`structured_zstd::dictionary`]) under an **explicit [`DictSeed`]**.
-//!
-//! # Why the seed is an explicit parameter
-//!
-//! FastCOVER's reservoir sampler draws from `fastrand`'s thread-local RNG and
-//! upstream `FastCoverOptions` exposes no seed field, so the sampler's stream is
-//! determined by ambient thread-local state. [`trained_dict`] closes that hole
-//! from both ends:
-//!
-//! 1. The seed is a **required argument** ([`DictSeed`]) — never implicit, so a
-//!    caller that wants a specific dictionary says so, and two corpora that
-//!    should share a dictionary can be trained under the same seed.
-//! 2. The thread-local seed is **saved before and restored after** training
-//!    (`fastrand::get_seed`/`fastrand::seed` round-trip the generator state
-//!    exactly), so the call leaves no ambient trace on the caller's RNG stream
-//!    and observes none of the caller's.
-//!
-//! Because `fastrand`'s generator is thread-*local*, two threads training
-//! concurrently never share it, and (1)+(2) make each call a pure function of
-//! `(corpus, target_len, seed)` regardless of what any other `fastrand` user on
-//! any thread — including the same one, before or after — is doing. That is the
-//! property [`trained_dict`]'s determinism claim actually needs, and it is
-//! covered by a concurrent test rather than a single-threaded caveat.
-//!
-//! MEASURED against `structured-zstd` 0.0.49: its reservoir sampler's skip loop
-//! reads into a zero-length buffer and therefore terminates immediately, so the
-//! sample it produces is the leading window of the source and the RNG draws do
-//! not currently reach the dictionary bytes — two seeds yield the same
-//! dictionary today. The seed parameter is NOT decorative because of that: it
-//! is what makes this module's determinism independent of that upstream detail.
-//! If a later `structured-zstd` makes the sampler actually sample, the output
-//! stays a pure function of `(corpus, target_len, seed)` instead of silently
-//! becoming a function of whatever the calling thread last did with `fastrand`.
+//! - [`trained_dict`] runs deterministic pure Rust FastCOVER over the canonical
+//!   corpus bytes, then finalizes the dictionary. The trainer has no random
+//!   generator or seed parameter.
 
-use structured_zstd::decoding::Dictionary;
-use structured_zstd::dictionary::{
+use purrdf_zstd::decoding::Dictionary;
+use purrdf_zstd::dictionary::{
     FastCoverOptions, FinalizeOptions, create_fastcover_dict_from_source, finalize_raw_dict,
 };
 
@@ -89,7 +58,7 @@ pub enum DictError {
 pub enum DictOperation {
     /// Canonical trailing-window construction.
     Raw,
-    /// Explicitly seeded FastCOVER construction.
+    /// Deterministic FastCOVER construction over the canonical corpus.
     Train,
     /// Parse an existing finalized dictionary.
     Decode,
@@ -156,18 +125,6 @@ fn canonical_concat(corpus: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// Derive a deterministic 64-bit seed from the canonical corpus bytes.
-fn derive_seed(concat: &[u8]) -> u64 {
-    let hash = purrdf_hash::blake3::hash(concat);
-    let bytes = hash.as_bytes();
-    // BLAKE3 output is 32 bytes; the first eight are ample entropy for a seed.
-    u64::from_le_bytes(
-        *bytes
-            .first_chunk()
-            .expect("BLAKE3 digest is 32 bytes, so 8 are always available"),
-    )
-}
-
 /// Build a deterministic **raw-content** finalized dictionary from `corpus`.
 ///
 /// The dictionary content is the canonical trailing window of the corpus (a zstd
@@ -199,60 +156,15 @@ pub fn raw_content_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, 
     })
 }
 
-/// The seed FastCOVER's reservoir sampler runs under — always explicit.
+/// Build a deterministic FastCOVER-trained finalized dictionary from `corpus`.
 ///
-/// There is no `Default`: a dictionary's bytes are a function of its seed, and
-/// picking one silently is exactly the ambient-state coupling this type exists
-/// to remove.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DictSeed {
-    /// Derive the seed from the canonical corpus bytes (BLAKE3-256, first eight
-    /// bytes little-endian). The dictionary is then a pure function of the
-    /// sample multiset alone — the seed carries no information the corpus does
-    /// not already fix, which is what a content-addressed pack wants.
-    FromCorpus,
-    /// An explicit caller-chosen seed. Two different corpora trained under the
-    /// same seed draw the same sampler stream.
-    Explicit(u64),
-}
-
-impl DictSeed {
-    /// Resolve to the concrete `fastrand` seed for `concat`.
-    fn resolve(self, concat: &[u8]) -> u64 {
-        match self {
-            Self::FromCorpus => derive_seed(concat),
-            Self::Explicit(seed) => seed,
-        }
-    }
-}
-
-/// Restores the thread-local `fastrand` seed on drop, so a panic inside
-/// FastCOVER cannot leave the caller's generator re-seeded.
-struct RestoreFastrandSeed(u64);
-
-impl Drop for RestoreFastrandSeed {
-    fn drop(&mut self) {
-        fastrand::seed(self.0);
-    }
-}
-
-/// Build a deterministic **FastCOVER-trained** finalized dictionary from
-/// `corpus` under an explicit `seed`.
-///
-/// The thread-local `fastrand` generator is seeded from `seed` for the duration
-/// of training and restored afterwards (see the module docs), so the result is a
-/// pure function of `(corpus, target_len, seed)` — reproducible under
-/// concurrency and alongside other `fastrand` users. The trainer finalizes the
-/// raw content into a full dictionary binary.
+/// Training reads only the canonical corpus bytes and fixed FastCOVER options.
+/// The result is independent of ambient random state.
 ///
 /// # Errors
 /// Returns [`DictError`] when the corpus is empty or too small for FastCOVER to
 /// train a dictionary of the requested size.
-pub fn trained_dict(
-    corpus: &[&[u8]],
-    target_len: usize,
-    seed: DictSeed,
-) -> Result<Vec<u8>, DictError> {
+pub fn trained_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, DictError> {
     let concat = canonical_concat(corpus);
     if concat.is_empty() {
         return Err(DictError::EmptyCorpus {
@@ -262,17 +174,13 @@ pub fn trained_dict(
         });
     }
     let mut out = Vec::new();
-    let result = {
-        let _restore = RestoreFastrandSeed(fastrand::get_seed());
-        fastrand::seed(seed.resolve(&concat));
-        create_fastcover_dict_from_source(
-            concat.as_slice(),
-            &mut out,
-            target_len,
-            &FastCoverOptions::default(),
-            FinalizeOptions::default(),
-        )
-    };
+    let result = create_fastcover_dict_from_source(
+        concat.as_slice(),
+        &mut out,
+        target_len,
+        &FastCoverOptions::default(),
+        FinalizeOptions::default(),
+    );
     result.map_err(|err| DictError::External {
         operation: DictOperation::Train,
         input_bytes: concat.len(),
@@ -302,7 +210,7 @@ pub fn dictionary_id(dict: &[u8]) -> Result<u32, DictError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use structured_zstd::decoding::Dictionary;
+    use purrdf_zstd::decoding::Dictionary;
 
     /// A corpus with enough repeated structure for FastCOVER to train on.
     fn sample_corpus() -> Vec<Vec<u8>> {
@@ -357,9 +265,9 @@ mod tests {
     fn trained_dict_is_deterministic_and_valid() {
         let owned = sample_corpus();
         let corpus = as_slices(&owned);
-        let a = trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("training should succeed");
-        let b = trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("training should succeed");
-        assert_eq!(a, b, "seeded FastCOVER must be byte-reproducible");
+        let a = trained_dict(&corpus, 4096).expect("training should succeed");
+        let b = trained_dict(&corpus, 4096).expect("training should succeed");
+        assert_eq!(a, b, "FastCOVER must be byte-reproducible");
         assert_ne!(a, [] as [u8; 0]);
         assert_is_valid_finalized_dict(&a);
     }
@@ -371,8 +279,8 @@ mod tests {
         let mut reversed = forward.clone();
         reversed.reverse();
         assert_eq!(
-            trained_dict(&forward, 4096, DictSeed::FromCorpus).expect("train"),
-            trained_dict(&reversed, 4096, DictSeed::FromCorpus).expect("train"),
+            trained_dict(&forward, 4096).expect("train"),
+            trained_dict(&reversed, 4096).expect("train"),
             "the trained dict must be a pure function of the sample multiset"
         );
     }
@@ -380,7 +288,7 @@ mod tests {
     #[test]
     fn producers_reject_empty_corpus() {
         assert_eq!(
-            trained_dict(&[], 4096, DictSeed::FromCorpus).expect_err("empty corpus is rejected"),
+            trained_dict(&[], 4096).expect_err("empty corpus is rejected"),
             DictError::EmptyCorpus {
                 operation: DictOperation::Train,
                 samples: 0,
@@ -395,102 +303,6 @@ mod tests {
                 target_len: 4096
             }
         );
-    }
-
-    /// The property that actually matters: the trained bytes do not depend on
-    /// the caller's ambient `fastrand` state under ANY seed choice.
-    ///
-    /// This is deliberately NOT written as "two seeds give two dictionaries":
-    /// see the module docs — upstream's reservoir currently consumes the RNG
-    /// only vestigially, so that assertion would encode an upstream
-    /// implementation detail rather than this module's contract.
-    #[test]
-    fn trained_bytes_ignore_the_callers_ambient_rng_state() {
-        let owned = sample_corpus();
-        let corpus = as_slices(&owned);
-
-        fastrand::seed(1);
-        let under_seed_one = trained_dict(&corpus, 4096, DictSeed::Explicit(7)).expect("train");
-        fastrand::seed(0xFFFF_FFFF_FFFF_FFFF);
-        let _ = fastrand::u64(..);
-        let under_other_state = trained_dict(&corpus, 4096, DictSeed::Explicit(7)).expect("train");
-        assert_eq!(
-            under_seed_one, under_other_state,
-            "an explicitly-seeded trained dict must not observe ambient RNG state"
-        );
-
-        // The declared seed is what governs, and it round-trips reproducibly.
-        assert_eq!(
-            trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("train"),
-            trained_dict(
-                &corpus,
-                4096,
-                DictSeed::Explicit(derive_seed(&canonical_concat(&corpus)))
-            )
-            .expect("train"),
-            "FromCorpus must equal the explicit seed it derives"
-        );
-    }
-
-    /// (g) The seeded trainer is reproducible when called concurrently from
-    /// several threads WHILE other `fastrand` users churn the ambient
-    /// thread-local generator — the property the old "single-threaded, seed the
-    /// global" caveat could not offer.
-    #[test]
-    fn trained_dict_is_reproducible_under_concurrency_with_other_fastrand_users() {
-        let owned = sample_corpus();
-        let expected = {
-            let corpus = as_slices(&owned);
-            trained_dict(&corpus, 4096, DictSeed::Explicit(12345)).expect("train")
-        };
-
-        let noise = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let noisemakers: Vec<_> = (0..3)
-            .map(|_| {
-                let noise = std::sync::Arc::clone(&noise);
-                std::thread::spawn(move || {
-                    while noise.load(std::sync::atomic::Ordering::Relaxed) {
-                        fastrand::seed(fastrand::u64(..));
-                        let _ = fastrand::f64();
-                    }
-                })
-            })
-            .collect();
-
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..4)
-                .map(|_| {
-                    let owned = &owned;
-                    scope.spawn(move || {
-                        // Churn this thread's OWN generator first: `trained_dict`
-                        // must observe none of it and leave none of its own.
-                        fastrand::seed(0x5EED_5EED);
-                        let before = fastrand::u64(..);
-                        fastrand::seed(0x5EED_5EED);
-                        let corpus = as_slices(owned);
-                        let dict =
-                            trained_dict(&corpus, 4096, DictSeed::Explicit(12345)).expect("train");
-                        (dict, before, fastrand::u64(..))
-                    })
-                })
-                .collect();
-            for handle in handles {
-                let (dict, before, after) = handle.join().expect("training thread");
-                assert_eq!(
-                    dict, expected,
-                    "a seeded trained dict must be byte-identical across threads"
-                );
-                assert_eq!(
-                    before, after,
-                    "training must restore the caller's thread-local fastrand state"
-                );
-            }
-        });
-
-        noise.store(false, std::sync::atomic::Ordering::Relaxed);
-        for handle in noisemakers {
-            handle.join().expect("noise thread");
-        }
     }
 
     #[test]

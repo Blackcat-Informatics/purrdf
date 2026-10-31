@@ -35,8 +35,8 @@ pub mod schema;
 mod writer;
 
 pub use error::{
-    ColumnarError, ColumnarWriteError, CompactReason, ConstructionReason, MetadataReason,
-    PageBodyReason, ProjectionReason, ReaderReason, ValueBodyReason,
+    CanonicalReason, ColumnarError, ColumnarWriteError, CompactReason, ConstructionReason,
+    MetadataReason, PageBodyReason, ProjectionReason, ReaderReason, ValueBodyReason, ZstdReason,
 };
 pub use files::ParquetFiles;
 pub use manifest::source_manifest;

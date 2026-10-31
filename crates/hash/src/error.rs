@@ -142,54 +142,61 @@ impl StructuredError for std::time::SystemTimeError {
     }
 }
 
+/// Portable name of an original I/O kind, when the standard category is known.
+/// Unknown categories retain their native discriminant through structured inspection.
+#[must_use]
+pub fn io_error_kind_name(kind: std::io::ErrorKind) -> Option<&'static str> {
+    match kind {
+        std::io::ErrorKind::NotFound => Some("not-found"),
+        std::io::ErrorKind::PermissionDenied => Some("permission-denied"),
+        std::io::ErrorKind::ConnectionRefused => Some("connection-refused"),
+        std::io::ErrorKind::ConnectionReset => Some("connection-reset"),
+        std::io::ErrorKind::HostUnreachable => Some("host-unreachable"),
+        std::io::ErrorKind::NetworkUnreachable => Some("network-unreachable"),
+        std::io::ErrorKind::ConnectionAborted => Some("connection-aborted"),
+        std::io::ErrorKind::NotConnected => Some("not-connected"),
+        std::io::ErrorKind::AddrInUse => Some("address-in-use"),
+        std::io::ErrorKind::AddrNotAvailable => Some("address-not-available"),
+        std::io::ErrorKind::NetworkDown => Some("network-down"),
+        std::io::ErrorKind::BrokenPipe => Some("broken-pipe"),
+        std::io::ErrorKind::AlreadyExists => Some("already-exists"),
+        std::io::ErrorKind::WouldBlock => Some("would-block"),
+        std::io::ErrorKind::NotADirectory => Some("not-a-directory"),
+        std::io::ErrorKind::IsADirectory => Some("is-a-directory"),
+        std::io::ErrorKind::DirectoryNotEmpty => Some("directory-not-empty"),
+        std::io::ErrorKind::ReadOnlyFilesystem => Some("read-only-filesystem"),
+        std::io::ErrorKind::StaleNetworkFileHandle => Some("stale-network-file-handle"),
+        std::io::ErrorKind::InvalidInput => Some("invalid-input"),
+        std::io::ErrorKind::InvalidData => Some("invalid-data"),
+        std::io::ErrorKind::TimedOut => Some("timed-out"),
+        std::io::ErrorKind::WriteZero => Some("write-zero"),
+        std::io::ErrorKind::StorageFull => Some("storage-full"),
+        std::io::ErrorKind::NotSeekable => Some("not-seekable"),
+        std::io::ErrorKind::QuotaExceeded => Some("quota-exceeded"),
+        std::io::ErrorKind::FileTooLarge => Some("file-too-large"),
+        std::io::ErrorKind::ResourceBusy => Some("resource-busy"),
+        std::io::ErrorKind::ExecutableFileBusy => Some("executable-file-busy"),
+        std::io::ErrorKind::Deadlock => Some("deadlock"),
+        std::io::ErrorKind::CrossesDevices => Some("crosses-devices"),
+        std::io::ErrorKind::TooManyLinks => Some("too-many-links"),
+        std::io::ErrorKind::InvalidFilename => Some("invalid-filename"),
+        std::io::ErrorKind::ArgumentListTooLong => Some("argument-list-too-long"),
+        std::io::ErrorKind::Interrupted => Some("interrupted"),
+        std::io::ErrorKind::Unsupported => Some("unsupported"),
+        std::io::ErrorKind::UnexpectedEof => Some("unexpected-eof"),
+        std::io::ErrorKind::OutOfMemory => Some("out-of-memory"),
+        std::io::ErrorKind::Other => Some("other"),
+        _ => None,
+    }
+}
+
 impl StructuredError for std::io::ErrorKind {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         // Public stable categories have portable names. The standard library
         // also produces hidden categories and may add further ones. Retain
         // their actual unit discriminant rather than calling them Other or
         // formatting them. This native value is not a persistent identity.
-        let name = match self {
-            Self::NotFound => Some("not-found"),
-            Self::PermissionDenied => Some("permission-denied"),
-            Self::ConnectionRefused => Some("connection-refused"),
-            Self::ConnectionReset => Some("connection-reset"),
-            Self::HostUnreachable => Some("host-unreachable"),
-            Self::NetworkUnreachable => Some("network-unreachable"),
-            Self::ConnectionAborted => Some("connection-aborted"),
-            Self::NotConnected => Some("not-connected"),
-            Self::AddrInUse => Some("address-in-use"),
-            Self::AddrNotAvailable => Some("address-not-available"),
-            Self::NetworkDown => Some("network-down"),
-            Self::BrokenPipe => Some("broken-pipe"),
-            Self::AlreadyExists => Some("already-exists"),
-            Self::WouldBlock => Some("would-block"),
-            Self::NotADirectory => Some("not-a-directory"),
-            Self::IsADirectory => Some("is-a-directory"),
-            Self::DirectoryNotEmpty => Some("directory-not-empty"),
-            Self::ReadOnlyFilesystem => Some("read-only-filesystem"),
-            Self::StaleNetworkFileHandle => Some("stale-network-file-handle"),
-            Self::InvalidInput => Some("invalid-input"),
-            Self::InvalidData => Some("invalid-data"),
-            Self::TimedOut => Some("timed-out"),
-            Self::WriteZero => Some("write-zero"),
-            Self::StorageFull => Some("storage-full"),
-            Self::NotSeekable => Some("not-seekable"),
-            Self::QuotaExceeded => Some("quota-exceeded"),
-            Self::FileTooLarge => Some("file-too-large"),
-            Self::ResourceBusy => Some("resource-busy"),
-            Self::ExecutableFileBusy => Some("executable-file-busy"),
-            Self::Deadlock => Some("deadlock"),
-            Self::CrossesDevices => Some("crosses-devices"),
-            Self::TooManyLinks => Some("too-many-links"),
-            Self::InvalidFilename => Some("invalid-filename"),
-            Self::ArgumentListTooLong => Some("argument-list-too-long"),
-            Self::Interrupted => Some("interrupted"),
-            Self::Unsupported => Some("unsupported"),
-            Self::UnexpectedEof => Some("unexpected-eof"),
-            Self::OutOfMemory => Some("out-of-memory"),
-            Self::Other => Some("other"),
-            _ => None,
-        };
+        let name = io_error_kind_name(*self);
         visitor.variant("std-io-kind");
         visitor.value(
             Some("name"),

@@ -9,6 +9,8 @@ use core::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PageBodyReason {
+    /// No compressed frame is present.
+    EmptyFrameStream,
     /// Known frame declarations do not sum to the Parquet value-body size.
     FrameContentTotal {
         /// Total bytes claimed by the native frame headers, without decoding.
@@ -73,6 +75,7 @@ pub enum PageBodyReason {
 
 impl purrdf_hash::error::StructuredError for PageBodyReason {
     purrdf_hash::error_visit! {
+        EmptyFrameStream => "columnar-zstd-empty-frame-stream" {},
         FrameContentTotal { declared, expected } => "columnar-frame-content-total" {
             "declared" => ByteCount(u128::from(*declared)), "expected" => ByteCount(u128::from(*expected)),
         },
@@ -108,6 +111,7 @@ impl fmt::Display for PageBodyReason {
     /// Render the established body diagnostic from its original scalar operands.
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::EmptyFrameStream => output.write_str("empty frame stream"),
             Self::FrameContentTotal { declared, expected } => {
                 write!(
                     output,

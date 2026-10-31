@@ -387,7 +387,23 @@ and `BlobContent { row, cause }`, and RDF reconstruction failures through
 `Reconstruction(RdfDiagnostic)`. These replace formatted `Malformed` details;
 the complete original cause, digest bytes and zero-based row remain inspectable.
 Storage-bearing reconstruction diagnostics retain their enclosing fields and
-attachments. Existing `Clone`/`Eq` implementations and human prefixes remain.
+attachments. Human prefixes and `Clone` remain. `ColumnarError` and
+`ColumnarWriteError` no longer implement `PartialEq` or `Eq`: original native
+codec and I/O causes do not define value equality. Inspect typed fields instead.
+
+The final generic `Malformed { context, detail }` variant is removed. Canonical
+row-shape failures use `Canonical(CanonicalReason)`, retaining original counts,
+column kind and nullability. Zstandard failures use `Zstd { context, reason }`,
+whose fallible shared owner retains the complete original codec error. Empty
+frame streams use `PageBodyReason::EmptyFrameStream` without allocating a
+diagnostic owner. The local `purrdf-zstd` provider exposes borrowed native error
+inspection; no downstream registry patch or formatted cause is needed.
+
+`purrdf_gts::dict::trained_dict` now accepts only the corpus and target length.
+`DictSeed` is removed: the actual FastCOVER trainer has no RNG, so seeding and
+restoring a thread-local generator never affected dictionary bytes. The unused
+legacy COVER and reservoir APIs are omitted from the local codec provider.
+
 
 Freeze failures previously returned as `ColumnarError::Storage` now also return
 `Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
