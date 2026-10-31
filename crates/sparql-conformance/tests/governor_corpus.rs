@@ -1590,7 +1590,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
         SparqlResult::Graph(graph) => {
             out.push_str("graph\n");
             out.push_str(
-                &purrdf_core::try_canonicalize(
+                purrdf_core::try_canonicalize(
                     graph,
                     &mut purrdf_core::CanonicalizationControl::new(
                         purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -1598,7 +1598,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
                     ),
                 )
                 .unwrap()
-                .nquads,
+                .nquads(),
             );
         }
         SparqlResult::Solutions {
@@ -1628,7 +1628,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
                 out.push_str(
-                    &purrdf_core::try_canonicalize(
+                    purrdf_core::try_canonicalize(
                         aux,
                         &mut purrdf_core::CanonicalizationControl::new(
                             purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -1636,7 +1636,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
                         ),
                     )
                     .unwrap()
-                    .nquads,
+                    .nquads(),
                 );
             }
         }

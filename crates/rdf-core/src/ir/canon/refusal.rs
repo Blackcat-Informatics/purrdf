@@ -3,10 +3,11 @@
 
 //! Original admission ownership for a reserved-vocabulary refusal.
 
-use purrdf_lex::allocation::{Admission, Memory, SharedOwned, StorageError};
+use purrdf_lex::allocation::{SharedOwned, StorageError};
 
+use super::ownership::SourceGrant;
 use super::{CanonError, TermPosition};
-use crate::{DatasetView, OwnedWorkspaceReservation};
+use crate::DatasetView;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Fields {
@@ -77,41 +78,6 @@ impl std::fmt::Display for ReservedVocabulary {
 }
 impl std::error::Error for ReservedVocabulary {}
 
-struct SourceGrant<E> {
-    reservation: OwnedWorkspaceReservation<E>,
-    live: usize,
-    failure: Option<E>,
-}
-
-impl<E> Admission for SourceGrant<E> {
-    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
-        let bytes = u64::try_from(bytes).map_err(|_| StorageError::SizeOverflow)?;
-        if self.failure.is_some() {
-            return Err(StorageError::AdmissionFailed);
-        }
-        self.reservation.resize(bytes).map_err(|cause| {
-            self.failure = Some(cause);
-            StorageError::AdmissionFailed
-        })
-    }
-}
-
-impl<E> SourceGrant<E> {
-    fn memory<T>(
-        &mut self,
-        operation: impl FnOnce(&mut Memory<'_, Self>) -> Result<T, StorageError>,
-    ) -> Result<T, CanonError<E>> {
-        let mut memory = Memory::resume(self, self.live);
-        let result = operation(&mut memory);
-        let live = memory.admitted_bytes();
-        self.live = live;
-        result.map_err(|error| match (error, self.failure.take()) {
-            (StorageError::AdmissionFailed, Some(cause)) => CanonError::OwnedAdmission(cause),
-            (error, _) => CanonError::Storage(error),
-        })
-    }
-}
-
 /// The payload precedes its grant so every unsuccessful construction drops it first.
 pub(super) struct RefusalBuilder<E> {
     fields: Fields,
@@ -124,20 +90,13 @@ impl<E: Send + Sync + 'static> RefusalBuilder<E> {
         iri: &str,
         position: TermPosition,
     ) -> Result<Self, CanonError<E>> {
-        let reservation = view
-            .reserve_owned_workspace(0)
-            .ok_or(CanonError::OwnedWorkspaceUnavailable)?
-            .map_err(CanonError::OwnedAdmission)?;
+        let grant = SourceGrant::new(view)?;
         let mut builder = Self {
             fields: Fields {
                 iri: String::new(),
                 position,
             },
-            grant: SourceGrant {
-                reservation,
-                live: 0,
-                failure: None,
-            },
+            grant,
         };
         builder.fields.iri = builder.grant.memory(|memory| memory.string(iri))?;
         Ok(builder)
@@ -171,8 +130,8 @@ impl<E: Send + Sync + 'static> RefusalBuilder<E> {
 mod tests {
     use super::*;
     use crate::{
-        CanonHash, GraphMatch, NoopReservation, QuadIds, RdfDataset, RdfDatasetBuilder,
-        RdfStoreCapabilities, TermId, TermRef, TermValue, WorkspaceReservation,
+        CanonHash, GraphMatch, NoopReservation, OwnedWorkspaceReservation, QuadIds, RdfDataset,
+        RdfDatasetBuilder, RdfStoreCapabilities, TermId, TermRef, TermValue, WorkspaceReservation,
     };
     use purrdf_testkit::error_capture::{CallerRefusal, Capture};
     use std::sync::Arc;
@@ -343,17 +302,38 @@ mod tests {
             }
             if !matches!(capability, Capability::SourceRefused) {
                 let healthy = view(capability, false);
-                assert!(
-                    super::super::try_canonicalize_view(
-                        &healthy,
-                        CanonHash::Sha256,
-                        &mut crate::CanonicalizationControl::new(
-                            crate::RDFC_V2_CORPUS_POLICY,
-                            None
-                        )
-                    )
-                    .is_ok()
+                let output = super::super::try_canonicalize_view(
+                    &healthy,
+                    CanonHash::Sha256,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
                 );
+                drop(healthy);
+                match capability {
+                    Capability::Granted => {
+                        let output = output.expect("the source admits ordinary canonical output");
+                        let shared = output.clone();
+                        assert!(std::ptr::eq(output.nquads(), shared.nquads()));
+                        drop(output);
+                        assert_eq!(
+                            shared.nquads(),
+                            "<urn:healthy> <urn:predicate> <urn:predicate> .\n"
+                        );
+                    }
+                    Capability::Missing => {
+                        assert!(matches!(output, Err(CanonError::OwnedWorkspaceUnavailable)));
+                    }
+                    Capability::FactoryRefused
+                    | Capability::GrowthRefused
+                    | Capability::PublicationRefused => {
+                        let Err(CanonError::OwnedAdmission(cause)) = output else {
+                            panic!("ordinary output must retain the source admission refusal");
+                        };
+                        assert_eq!(cause, ORIGINAL);
+                    }
+                    Capability::SourceRefused => {
+                        unreachable!("the source-refused branch was excluded")
+                    }
+                }
             }
         }
     }

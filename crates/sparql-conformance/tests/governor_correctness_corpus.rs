@@ -118,7 +118,7 @@ fn render(result: &SparqlResult) -> String {
                     )
                 )
                 .unwrap()
-                .nquads
+                .nquads()
             )
         }
         SparqlResult::Solutions {
@@ -141,7 +141,7 @@ fn render(result: &SparqlResult) -> String {
                     )
                 )
                 .unwrap()
-                .nquads
+                .nquads()
             )
             .expect("writing to a String cannot fail");
             out

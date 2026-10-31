@@ -256,7 +256,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
     )
     .expect_err("entailment refuses");
     assert_unresolved(&refused, "entail_to_ntriples_string");
-    let entailed = entail_to_ntriples_string(
+    let entailed_owner = entail_to_ntriples_string(
         IMPORTER,
         None,
         DATA,
@@ -264,6 +264,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("entails");
+    let entailed = entailed_owner.nquads();
     assert!(entailed.contains(INFERRED), "{entailed}");
 
     let rules = |imports: &[(&str, &str)]| {

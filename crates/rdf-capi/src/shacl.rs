@@ -451,7 +451,7 @@ unsafe fn validate_entry(
                 .into_bytes()
             }
         };
-        *out_buffer = into_handle(PurrdfBuffer(bytes));
+        *out_buffer = into_handle(PurrdfBuffer::from(bytes));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -780,10 +780,10 @@ unsafe fn validate_changes_entry(
             ChangeScope::Everything { reason } => {
                 *out_scope = PurrdfShaclChangeScopeKind::Everything as i32;
                 *out_focus_nodes = 0;
-                *out_reason = into_handle(PurrdfBuffer(reason.as_bytes().to_vec()));
+                *out_reason = into_handle(PurrdfBuffer::from(reason.as_bytes().to_vec()));
             }
         }
-        *out_buffer = into_handle(PurrdfBuffer(bytes));
+        *out_buffer = into_handle(PurrdfBuffer::from(bytes));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1124,14 +1124,14 @@ unsafe fn entail_entry(
             control,
         )?;
         if !out_diagnostics.is_null() {
-            *out_diagnostics = into_handle(PurrdfBuffer(
+            *out_diagnostics = into_handle(PurrdfBuffer::from(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
             ));
         }
-        *out_receipt = into_handle(PurrdfBuffer(
+        *out_receipt = into_handle(PurrdfBuffer::from(
             purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates).into_bytes(),
         ));
-        *out_buffer = into_handle(PurrdfBuffer(outcome.ntriples.into_bytes()));
+        *out_buffer = into_handle(PurrdfBuffer::from(outcome.ntriples));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1407,17 +1407,17 @@ unsafe fn apply_rules_entry(
         let coordinates = crate::query::decode_coordinates(now, entropy_seed)?;
         let outcome = apply_rules_outcome(&request, regex, coordinates)?;
         if let Some(proof) = outcome.proof {
-            *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
+            *out_proof = into_handle(PurrdfBuffer::from(proof.into_bytes()));
         }
         if !out_diagnostics.is_null() {
-            *out_diagnostics = into_handle(PurrdfBuffer(
+            *out_diagnostics = into_handle(PurrdfBuffer::from(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
             ));
         }
-        *out_receipt = into_handle(PurrdfBuffer(
+        *out_receipt = into_handle(PurrdfBuffer::from(
             purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates).into_bytes(),
         ));
-        *out_inferred = into_handle(PurrdfBuffer(outcome.inferred_ntriples.into_bytes()));
+        *out_inferred = into_handle(PurrdfBuffer::from(outcome.inferred_ntriples.into_bytes()));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1526,7 +1526,7 @@ pub unsafe extern "C" fn purrdf_shacl_check_rules(
                 &imports,
             )
             .map_err(PurrdfError::shapes)?;
-            *out_summary = into_handle(PurrdfBuffer(summary.into_bytes()));
+            *out_summary = into_handle(PurrdfBuffer::from(summary.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1766,10 +1766,11 @@ unsafe fn eval_node_expr_entry(
             regex,
         )?;
         if !out_diagnostics.is_null() {
-            *out_diagnostics =
-                into_handle(PurrdfBuffer(diagnostic_text(&diagnostics).into_bytes()));
+            *out_diagnostics = into_handle(PurrdfBuffer::from(
+                diagnostic_text(&diagnostics).into_bytes(),
+            ));
         }
-        *out_terms = into_handle(PurrdfBuffer(bytes));
+        *out_terms = into_handle(PurrdfBuffer::from(bytes));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1863,7 +1864,7 @@ pub unsafe extern "C" fn purrdf_shacl_lint_shapes(
             .map_err(PurrdfError::shapes)?;
             *out_clean = i32::from(report.is_clean());
             *out_findings = report.findings();
-            *out_report = into_handle(PurrdfBuffer(report.render().into_bytes()));
+            *out_report = into_handle(PurrdfBuffer::from(report.render().into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1998,7 +1999,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_encode(
                 let graph = opt_cstr_to_str(shapes_graph_iri)?;
                 let bytes = encode_product_bytes(shapes, base, graph, &imports, control)
                     .map_err(|refusal| product_error(&refusal))?;
-                *out_buffer = into_handle(PurrdfBuffer(bytes));
+                *out_buffer = into_handle(PurrdfBuffer::from(bytes));
                 Ok(PurrdfStatus::Ok)
             }
         )
@@ -2047,7 +2048,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_open(
             }
             let bytes = product_bytes(product, product_len, "purrdf_shapes_product_open")?;
             let described = open_product_bytes(bytes).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(described));
+            *out_buffer = into_handle(PurrdfBuffer::from(described));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -2227,7 +2228,7 @@ unsafe fn product_entry(
                 .into_bytes()
             }
         };
-        *out_buffer = into_handle(PurrdfBuffer(sarif));
+        *out_buffer = into_handle(PurrdfBuffer::from(sarif));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -3320,7 +3321,8 @@ ex:StatusShape a sh:NodeShape ;
             ),
         )
         .expect("entailment produced");
-        let text = bytes.ntriples;
+        let text_owner = bytes.ntriples;
+        let text = text_owner.nquads();
         assert_eq!(bytes.diagnostics, []);
         assert!(text.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."

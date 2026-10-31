@@ -100,7 +100,7 @@ macro_rules! ffi_canonical_try {
                 |$control| -> Result<$crate::status::PurrdfStatus, $crate::error::PurrdfError> { $body },
             )?;
             *$evidence = $crate::handles::into_handle(
-                $crate::buffer::PurrdfBuffer(receipts.into_bytes()),
+                $crate::buffer::PurrdfBuffer::from(receipts.into_bytes()),
             );
             Ok(status)
         })

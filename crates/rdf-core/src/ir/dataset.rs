@@ -3824,13 +3824,13 @@ mod tests {
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &ba,
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "union is order-independent up to isomorphism"
         );
     }
@@ -3956,13 +3956,13 @@ mod tests {
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &u,
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "single-input union is isomorphic to the input"
         );
     }

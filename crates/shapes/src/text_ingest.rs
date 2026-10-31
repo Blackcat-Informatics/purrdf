@@ -555,7 +555,7 @@ mod tests {
         // LAW: test-only, self-built fixture Turtle (`ttl` above) — never
         // caller-supplied and never reachable through a binding, so the panicking
         // wrapper is sound here.
-        let nt = ::purrdf_rdf::canonical_flat_nquads(
+        let nt_owner = ::purrdf_rdf::canonical_flat_nquads(
             dataset.as_ref(),
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -563,6 +563,7 @@ mod tests {
             ),
         )
         .expect("serialize");
+        let nt = nt_owner.nquads();
         assert!(
             nt.contains("<http://example.org/dir/rel>"),
             "the relative subject must resolve against the base: {nt}"

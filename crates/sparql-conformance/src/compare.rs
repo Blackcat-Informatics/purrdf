@@ -222,9 +222,9 @@ pub fn compare_results(
             )
         }
         (SparqlResult::Graph(l), SparqlResult::Graph(r)) => {
-            let l_canon = purrdf_core::try_canonicalize(l, control)?.nquads;
-            let r_canon = purrdf_core::try_canonicalize(r, control)?.nquads;
-            if l_canon == r_canon {
+            let l_canon = purrdf_core::try_canonicalize(l, control)?;
+            let r_canon = purrdf_core::try_canonicalize(r, control)?;
+            if l_canon.nquads() == r_canon.nquads() {
                 Ok(())
             } else {
                 Err("graph results differ (canonical N-Quads mismatch)"
@@ -259,9 +259,9 @@ fn compare_update(
         .into());
     };
     let expected = crate::run::build_dataset(&case.base, data, graph_data)?;
-    let actual_canon = purrdf_core::try_canonicalize(actual, control)?.nquads;
-    let expected_canon = purrdf_core::try_canonicalize(&expected, control)?.nquads;
-    if actual_canon == expected_canon {
+    let actual_canon = purrdf_core::try_canonicalize(actual, control)?;
+    let expected_canon = purrdf_core::try_canonicalize(&expected, control)?;
+    if actual_canon.nquads() == expected_canon.nquads() {
         Ok(())
     } else {
         Err(
@@ -376,9 +376,9 @@ fn compare_eval(
             let media = crate::run::data_media_type(path);
             let expected = purrdf::parse_dataset(&expected_bytes, media, None)
                 .map_err(|e| format!("parse expected graph {}: {e}", path.display()))?;
-            let actual_canon = purrdf_core::try_canonicalize(actual, control)?.nquads;
-            let expected_canon = purrdf_core::try_canonicalize(&expected, control)?.nquads;
-            if actual_canon == expected_canon {
+            let actual_canon = purrdf_core::try_canonicalize(actual, control)?;
+            let expected_canon = purrdf_core::try_canonicalize(&expected, control)?;
+            if actual_canon.nquads() == expected_canon.nquads() {
                 Ok(())
             } else {
                 Err(
@@ -500,7 +500,7 @@ fn compare_solutions(
         Literals::ByValue,
         control,
     )?;
-    if actual_canon == expected_canon {
+    if actual_canon.nquads() == expected_canon.nquads() {
         Ok(())
     } else {
         let mode = if ordered {
@@ -513,8 +513,9 @@ fn compare_solutions(
             expected.rows.len(),
             rows.len(),
             actual_canon
+                .nquads()
                 .lines()
-                .zip(expected_canon.lines())
+                .zip(expected_canon.nquads().lines())
                 .find(|(actual, expected)| actual != expected)
                 .map_or_else(
                     || "one result's canonical graph ends earlier".to_owned(),
@@ -575,7 +576,7 @@ fn encode_solution_set(
     ordered: bool,
     literals: Literals,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, CompareError> {
+) -> Result<purrdf_core::Canonicalized, CompareError> {
     let mut builder = RdfDatasetBuilder::new();
     let index_predicate = builder
         .intern_iri(&format!("{CONFORMANCE_NS}index"))
@@ -626,9 +627,7 @@ fn encode_solution_set(
     let dataset = builder
         .freeze()
         .map_err(|e| format!("encode solution set for comparison: {e}"))?;
-    purrdf_core::try_canonicalize(&dataset, control)
-        .map(|canonical| canonical.nquads)
-        .map_err(CompareError::from)
+    purrdf_core::try_canonicalize(&dataset, control).map_err(CompareError::from)
 }
 
 /// The canonical form a solution sequence is compared in: the RDFC-1.0 canonical
@@ -648,7 +647,7 @@ pub fn canonical_solutions(
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, CompareError> {
+) -> Result<purrdf_core::Canonicalized, CompareError> {
     // Exact: a trace that records this string must see the lexical forms the
     // evaluator produced, so a change in how it spells a number still moves it.
     encode_solution_set(variables, rows, ordered, Literals::Exact, control)
@@ -942,7 +941,10 @@ mod tests {
     }
 
     /// Encode a one-variable, one-row set (unordered) to its canonical form.
-    fn one(term: TermValue, control: &mut purrdf_core::CanonicalizationControl<'_>) -> String {
+    fn one(
+        term: TermValue,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> purrdf_core::Canonicalized {
         encode_solution_set(
             &["x".to_owned()],
             &[vec![Some(term)]],
@@ -973,8 +975,8 @@ mod tests {
             purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
 
         assert_ne!(
-            one(lit("a", DT_B), &mut control),
-            one(lit(&format!("a\"^^<{DT_B}>"), DT_X), &mut control),
+            one(lit("a", DT_B), &mut control).nquads(),
+            one(lit(&format!("a\"^^<{DT_B}>"), DT_X), &mut control).nquads(),
             "a lexical form that spells the datatype framing must not encode as that \
              framing"
         );
@@ -986,8 +988,8 @@ mod tests {
             purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
 
         assert_ne!(
-            one(TermValue::Iri("L:something".to_owned()), &mut control),
-            one(lit("something", DT_X), &mut control),
+            one(TermValue::Iri("L:something".to_owned()), &mut control).nquads(),
+            one(lit("something", DT_X), &mut control).nquads(),
             "IRI and Literal encodings must stay distinct"
         );
     }
@@ -1000,8 +1002,8 @@ mod tests {
         // A single-column row bound to a blank node must encode identically
         // regardless of the blank's original label — the core isomorphism fix.
         assert_eq!(
-            one(blank("b0"), &mut control),
-            one(blank("totally-different"), &mut control),
+            one(blank("b0"), &mut control).nquads(),
+            one(blank("totally-different"), &mut control).nquads(),
             "blank-node label must not affect equality"
         );
     }
@@ -1063,7 +1065,7 @@ mod tests {
         // ?x and ?y bound to the SAME blank (coreference) must differ from ?x
         // and ?y bound to two independent blanks, even though both relabel away.
         let vars = ["x".to_owned(), "y".to_owned()];
-        let shared = encode_solution_set(
+        let shared_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("b0")), Some(blank("b0"))]],
             false,
@@ -1071,7 +1073,8 @@ mod tests {
             &mut control,
         )
         .expect("encode");
-        let distinct = encode_solution_set(
+        let shared = shared_owner.nquads();
+        let distinct_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("b0")), Some(blank("b1"))]],
             false,
@@ -1079,12 +1082,13 @@ mod tests {
             &mut control,
         )
         .expect("encode");
+        let distinct = distinct_owner.nquads();
         assert_ne!(
             shared, distinct,
             "coreference between two variables is observable, not just blank count"
         );
         // ...but relabelling the SAME coreference must still collapse.
-        let shared_relabelled = encode_solution_set(
+        let shared_relabelled_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("zzz")), Some(blank("zzz"))]],
             false,
@@ -1092,6 +1096,7 @@ mod tests {
             &mut control,
         )
         .expect("encode");
+        let shared_relabelled = shared_relabelled_owner.nquads();
         assert_eq!(shared, shared_relabelled);
     }
 
@@ -1103,7 +1108,7 @@ mod tests {
         // The same blank bound to ?x vs to ?y is a different row (position
         // matters); only blank *identity* is bijection-normalized.
         let vars = ["x".to_owned(), "y".to_owned()];
-        let a = encode_solution_set(
+        let a_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("b0")), None]],
             false,
@@ -1111,7 +1116,8 @@ mod tests {
             &mut control,
         )
         .expect("encode");
-        let b = encode_solution_set(
+        let a = a_owner.nquads();
+        let b_owner = encode_solution_set(
             &vars,
             &[vec![None, Some(blank("b0"))]],
             false,
@@ -1119,6 +1125,7 @@ mod tests {
             &mut control,
         )
         .expect("encode");
+        let b = b_owner.nquads();
         assert_ne!(a, b, "variable position must still compare exactly");
     }
 
@@ -1136,9 +1143,11 @@ mod tests {
         let one_shared = &[vec![Some(blank("z"))], vec![Some(blank("z"))]];
         assert_ne!(
             encode_solution_set(&vars, two_distinct, false, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             encode_solution_set(&vars, one_shared, false, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             "two distinct blanks must NOT equal the same blank repeated (no global bijection)"
         );
     }
@@ -1154,8 +1163,12 @@ mod tests {
         let ab = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
         let pq = &[vec![Some(blank("p"))], vec![Some(blank("q"))]];
         assert_eq!(
-            encode_solution_set(&vars, ab, false, Literals::Exact, &mut control).expect("encode"),
-            encode_solution_set(&vars, pq, false, Literals::Exact, &mut control).expect("encode"),
+            encode_solution_set(&vars, ab, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
+            encode_solution_set(&vars, pq, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
             "a global bijection over all rows must compare equal"
         );
     }
@@ -1178,24 +1191,30 @@ mod tests {
         ];
         assert_ne!(
             encode_solution_set(&vars, forward, true, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             encode_solution_set(&vars, reverse, true, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             "ordered: a different row order must compare unequal"
         );
         assert_eq!(
             encode_solution_set(&vars, forward, true, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             encode_solution_set(&vars, forward, true, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             "ordered: identical order must compare equal"
         );
         // The SAME two orders compare EQUAL when unordered (multiset).
         assert_eq!(
             encode_solution_set(&vars, forward, false, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             encode_solution_set(&vars, reverse, false, Literals::Exact, &mut control)
-                .expect("encode"),
+                .expect("encode")
+                .nquads(),
             "unordered: row order must not matter"
         );
     }

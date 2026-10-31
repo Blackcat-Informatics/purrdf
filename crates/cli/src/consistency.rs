@@ -60,7 +60,7 @@
 use std::path::Path;
 
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
-use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer};
+use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer, ReasoningText};
 
 use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
 use crate::cli::{CliRdfFormat, LedgerTarget, refuse_document_flags};
@@ -168,10 +168,12 @@ pub(crate) fn run(
         options.proof,
     )
     .map_err(CliError::Runtime)?;
-    let answer: ReasoningAnswer = if options.proof {
+    let answer: ReasoningAnswer<ReasoningText> = if options.proof {
         session.prove("consistency", "", canonical.control()?)
     } else {
-        session.consistency(canonical.control()?)
+        session
+            .consistency(canonical.control()?)
+            .map(|answer| answer.map_answer(ReasoningText::Rendered))
     }
     .map_err(CliError::native)?;
 
@@ -212,10 +214,10 @@ pub(crate) fn run(
 /// A proof that does not check is a RUNTIME ERROR rather than a `verified false` line: this
 /// command's exit code already carries the decided/undecided distinction, and a refusal that
 /// left the exit code at zero would be a check a script could not act on.
-fn check_supplied_proof(
+fn check_supplied_proof<A: AsRef<str>>(
     path: &Path,
     session: &ReasonerSession,
-    answer: &ReasoningAnswer,
+    answer: &ReasoningAnswer<A>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     let proof = std::fs::read_to_string(path).map_err(|error| {

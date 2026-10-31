@@ -145,8 +145,11 @@ use std::convert::Infallible;
 
 mod state;
 pub use state::{DatasetStateDigest, DatasetStateError};
+mod ownership;
 mod refusal;
 pub use refusal::ReservedVocabulary;
+mod result;
+pub use result::Canonicalized;
 
 use purrdf_lex::walk::WorkList;
 mod control;
@@ -411,55 +414,6 @@ fn hash_lines(
     Ok(result)
 }
 
-/// The result of canonicalizing a dataset or a view of one.
-///
-/// Generic over the id type `Id` — the [`Id`](DatasetView::Id) of the view
-/// that produced it — and **defaulted to [`TermId`]**, so the bare spelling
-/// `Canonicalized` continues to name the `&RdfDataset` result everywhere.
-#[derive(Clone, Debug)]
-pub struct Canonicalized<Id = TermId> {
-    /// The canonical N-Quads document: every line `'\n'`-terminated, the set of
-    /// lines sorted bytewise ascending and deduplicated. Blanks render as their
-    /// canonical `_:c14nN` label.
-    ///
-    /// What a reifier or annotation row renders AS depends on
-    /// [`Self::presentation`], reported alongside this field rather than left
-    /// implicit: under [`CanonPresentation::Overlay`] such a row renders through
-    /// the profile's reserved `urn:purrdf:rdfc:` sentinels; under
-    /// [`CanonPresentation::FlatAssertion`] no sentinel is ever minted — the same
-    /// row renders as an ordinary quad carrying its own real predicate. A document
-    /// produced by one of this module's four flat entry points therefore NEVER
-    /// contains a sentinel, and this field's bytes alone cannot tell a reader which
-    /// presentation produced them — read [`Self::presentation`] for that.
-    ///
-    /// This field carries NO view-local ids, which is what makes it comparable
-    /// across view kinds: the canonical bytes of a composite view and of the flat
-    /// dataset holding the same content are equal.
-    pub nquads: String,
-    /// Each blank id mapped to its canonical label (`"c14n0"`, …) WITHOUT
-    /// the leading `_:`. The ids are those of the view that was canonicalized and
-    /// are meaningful only within it.
-    ///
-    /// This map is the PRINCIPLED blank-label assignment: the labels are issued
-    /// purely from graph structure, so they are isomorphism-invariant (two
-    /// isomorphic datasets assign corresponding blanks the same label), and their
-    /// alphabet is ASCII alphanumerics only — legal under every constrained
-    /// egress alphabet (`BLANK_NODE_LABEL`, XML `NCName`; see
-    /// [`crate::blank_label`]). [`canonical_relabel`] applies it as a dataset
-    /// rewrite.
-    pub labels: BTreeMap<Id, Box<str>>,
-    /// Which [`CanonPresentation`] produced [`Self::nquads`] — the fourth of the
-    /// consumer pin's four coordinates `(profile, version, presentation, hash)`
-    /// (`docs/RDF12-CANON-PROFILE.md` §9), now readable off the result itself
-    /// rather than only inferable from which entry point the caller happened to
-    /// call. [`try_canonicalize`], [`try_canonicalize_view`],
-    /// [`try_canonicalize_graph_view`] and their kin always report
-    /// [`CanonPresentation::Overlay`]; [`try_canonicalize_flat_view`],
-    /// [`try_canonicalize_flat_graph_view`] and the empty-selection cases of both
-    /// families always report the presentation of the family that produced them.
-    pub presentation: CanonPresentation,
-}
-
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`], returning a typed
 /// [`CanonError`] on refusal.
 ///
@@ -574,7 +528,7 @@ pub fn try_canonical_blake3_view<D: DatasetView>(
                 )
                 .run_fallible()?;
                 let mut digest = purrdf_hash::blake3::Hasher::new();
-                for chunk in canonical.nquads.as_bytes().chunks(64 * 1024) {
+                for chunk in canonical.nquads().as_bytes().chunks(64 * 1024) {
                     run.check_stop().map_err(|_| CanonError::Stopped)?;
                     digest.update(chunk);
                 }
@@ -633,8 +587,8 @@ fn canonical_sha256_view<D: DatasetView>(
                     run,
                 )
                 .run_fallible()?;
-                let digest =
-                    digest_document(&canonical.nquads, run).map_err(CanonError::with_read_error)?;
+                let digest = digest_document(canonical.nquads(), run)
+                    .map_err(CanonError::with_read_error)?;
                 Ok((canonical, digest))
             })
             .map_err(CanonError::Read)?
@@ -713,7 +667,7 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
                     }
                     None => {
                         run.phase(CanonPhase::Output);
-                        Ok(empty_canonicalized(CanonPresentation::Overlay))
+                        empty_canonicalized(view, CanonPresentation::Overlay, run.stop())
                     }
                 }
             })
@@ -751,9 +705,9 @@ pub fn try_graph_digest_view<D: DatasetView>(
                         run,
                     )
                     .run_fallible()?,
-                    None => empty_canonicalized(CanonPresentation::Overlay),
+                    None => empty_canonicalized(view, CanonPresentation::Overlay, run.stop())?,
                 };
-                digest_document(&canonical.nquads, run).map_err(CanonError::with_read_error)
+                digest_document(canonical.nquads(), run).map_err(CanonError::with_read_error)
             })
             .map_err(CanonError::Read)?
         },
@@ -905,7 +859,7 @@ pub fn try_canonicalize_flat_graph_view<D: FallibleDatasetView>(
                 }
                 None => {
                     run.phase(CanonPhase::Output);
-                    Ok(empty_canonicalized(CanonPresentation::FlatAssertion))
+                    empty_canonicalized(v, CanonPresentation::FlatAssertion, run.stop())
                 }
             }
         }) {
@@ -980,7 +934,7 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
                 run,
             )
             .run_fallible()?;
-            digest_document(&canonical.nquads, run).map_err(CanonError::with_read_error)
+            digest_document(canonical.nquads(), run).map_err(CanonError::with_read_error)
         }) {
             Ok(result) => result.map_err(ViewCanonError::Refused),
             Err(failure) => Err(failure.into()),
@@ -999,12 +953,12 @@ fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id
 /// The canonical form of an empty selection: the empty document, no labels, under
 /// the caller-stated `presentation` (an empty document is the same bytes under
 /// either presentation, but the caller's own family is still the one reported).
-fn empty_canonicalized<Id>(presentation: CanonPresentation) -> Canonicalized<Id> {
-    Canonicalized {
-        nquads: String::new(),
-        labels: BTreeMap::new(),
-        presentation,
-    }
+fn empty_canonicalized<D: DatasetView>(
+    view: &D,
+    presentation: CanonPresentation,
+    stop: Option<&dyn crate::StopSignal>,
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
+    result::ResultBuilder::new(view, presentation)?.finish(stop)
 }
 
 /// Relabel every blank node of `ds` to its canonical `c14n{n}` label at
@@ -2259,8 +2213,8 @@ impl std::fmt::Display for TermPosition {
 
 /// Why canonicalization refused.
 ///
-/// Both variants are refusals of ADVERSARIAL input, and they are separate variants
-/// rather than one opaque error because they oblige a caller differently: a
+/// Search-budget exhaustion and reserved-vocabulary conflicts are separate
+/// variants because they oblige a caller differently: a
 /// [`BudgetExceeded`] dataset is well-formed and merely uncanonicalizable within
 /// bounds, while a [`ReservedVocabulary`] dataset is one whose acceptance would have
 /// been an identity collision. A consumer auditing a rejection needs to tell those
@@ -2287,7 +2241,7 @@ pub enum CanonError<E = Infallible> {
     Stopped,
     /// Exact charged-work counters cannot represent another event.
     CounterCapacity,
-    /// The source cannot retain an owned reserved-vocabulary refusal.
+    /// The source cannot retain an owned canonical result or refusal.
     OwnedWorkspaceUnavailable,
 }
 
@@ -2314,14 +2268,14 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::ReservedVocabulary(err) => err.fmt(f),
             Self::Read(error) => write!(f, "dataset read failed: {error}"),
             Self::OwnedAdmission(error) => {
-                write!(f, "canonical reserved-vocabulary admission failed: {error}")
+                write!(f, "canonical payload admission failed: {error}")
             }
             Self::Stopped => f.write_str("canonicalization was stopped by the caller"),
             Self::CounterCapacity => {
                 f.write_str("canonicalization charged-work counter cannot represent another event")
             }
             Self::OwnedWorkspaceUnavailable => f.write_str(
-                "canonical reserved-vocabulary refusal requires source-owned workspace admission",
+                "canonical payload requires source-owned workspace admission",
             ),
         }
     }
@@ -2629,16 +2583,39 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
         let canonical = self.issue_labels()?;
         canonical.run.phase(CanonPhase::Output);
-        let nquads = canonical
-            .serialize_canonical()
+        let mut result = result::ResultBuilder::new(canonical.ds, canonical.presentation)?;
+        let lines = canonical
+            .canonical_lines()
             .map_err(CanonError::with_read_error)?;
-        let presentation = canonical.presentation;
-        let labels = canonical.canonical.issued;
-        Ok(Canonicalized {
-            nquads,
-            labels,
-            presentation,
-        })
+        let bytes = lines
+            .iter()
+            .try_fold(0usize, |bytes, line| bytes.checked_add(line.len()))
+            .ok_or(CanonError::Storage(
+                purrdf_lex::allocation::StorageError::SizeOverflow,
+            ))?;
+        canonical
+            .check_stop()
+            .map_err(CanonError::with_read_error)?;
+        result.reserve_text(bytes)?;
+        for line in lines {
+            canonical
+                .check_stop()
+                .map_err(CanonError::with_read_error)?;
+            result.append(&line)?;
+        }
+        result.reserve_labels(canonical.canonical.issued.len())?;
+        for (id, label) in canonical.canonical.issued {
+            canonical
+                .run
+                .check_stop()
+                .map_err(|_| CanonError::Stopped)?;
+            result.label(id, &label)?;
+        }
+        canonical
+            .run
+            .check_stop()
+            .map_err(|_| CanonError::Stopped)?;
+        result.finish(canonical.stop)
     }
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
@@ -3016,7 +2993,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// §4.4 step 7: serialize every component with canonical labels, sorted + deduped.
-    fn serialize_canonical(&self) -> Result<String, CanonError> {
+    fn canonical_lines(&self) -> Result<BTreeSet<String>, CanonError> {
         let render = BlankRender::Canonical {
             issuer: &self.canonical,
         };
@@ -3033,18 +3010,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 Ok(())
             },
         )?;
-        // CONSUMED rather than borrowed. Iterating by reference held every line
-        // alongside the concatenation that was being built from it, so the peak was
-        // the document twice over plus one allocation per line. Taking the set by
-        // value frees each line as it is appended, so the two halves trade off
-        // instead of stacking.
-        let mut out = String::with_capacity(lines.iter().map(String::len).sum());
-        for line in lines {
-            self.check_stop()?;
-            out.push_str(&line);
-        }
         self.check_stop()?;
-        Ok(out)
+        Ok(lines)
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
@@ -3282,13 +3249,12 @@ mod tests {
         b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
-    fn canon(ds: &RdfDataset) -> String {
+    fn canon(ds: &RdfDataset) -> Canonicalized {
         try_canonicalize(
             ds,
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .unwrap()
-        .nquads
     }
 
     #[test]
@@ -3304,7 +3270,7 @@ mod tests {
         b.push_quad(s, p, o1, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(
-            canon(&ds),
+            canon(&ds).nquads(),
             "<http://example.org/s> <http://example.org/p> <http://example.org/o1> .\n\
              <http://example.org/s> <http://example.org/p> <http://example.org/o2> .\n"
         );
@@ -3314,8 +3280,8 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .labels
-            .is_empty(),
+            .label_count()
+                == 0,
             "no blanks → no labels"
         );
     }
@@ -3354,7 +3320,8 @@ mod tests {
         let triple = b.intern_triple(s, pred, o).unwrap();
         b.push_reifier(r, triple).unwrap();
         let genuine = b.freeze().expect("valid");
-        let lowered = canon(&genuine);
+        let lowered_owner = canon(&genuine);
+        let lowered = lowered_owner.nquads();
         assert!(
             lowered.contains("<urn:purrdf:rdfc:reifies>"),
             "the fixture must actually exercise the lowering: {lowered}"
@@ -3380,7 +3347,8 @@ mod tests {
         )
         .expect("the emitted shape must fold, not refuse");
         assert_eq!(
-            folded.nquads, lowered,
+            folded.nquads(),
+            lowered,
             "the spelled row and the row it spells must canonicalize to the same bytes"
         );
 
@@ -3405,7 +3373,7 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .expect("a row spelled both ways must fold, not refuse")
-            .nquads,
+            .nquads(),
             lowered,
             "spelling one row twice must not change the canonical form"
         );
@@ -3719,8 +3687,8 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("a genuine overlay must canonicalize");
-        assert!(out.nquads.contains("<urn:purrdf:rdfc:reifies>"));
-        assert!(out.nquads.contains("<urn:purrdf:rdfc:annotation>"));
+        assert!(out.nquads().contains("<urn:purrdf:rdfc:reifies>"));
+        assert!(out.nquads().contains("<urn:purrdf:rdfc:annotation>"));
     }
 
     // -----------------------------------------------------------------------
@@ -3802,11 +3770,11 @@ mod tests {
         )
         .unwrap();
         assert!(
-            first.nquads.contains("<urn:purrdf:rdfc:reifies>")
-                && first.nquads.contains("<urn:purrdf:rdfc:annotation>")
-                && first.nquads.contains("_:c14n"),
+            first.nquads().contains("<urn:purrdf:rdfc:reifies>")
+                & first.nquads().contains("<urn:purrdf:rdfc:annotation>")
+                & first.nquads().contains("_:c14n"),
             "the fixture must reach both sentinels and the labeler: {}",
-            first.nquads
+            first.nquads()
         );
 
         // The stand-in really is the document: no statement layer of its own, and one
@@ -3815,7 +3783,7 @@ mod tests {
         assert_eq!(reread.annotation_quads().count(), 0);
         assert_eq!(
             reread.quads().count(),
-            first.nquads.lines().count(),
+            first.nquads().lines().count(),
             "the re-read dataset must hold exactly the canonical document's rows"
         );
 
@@ -3825,12 +3793,13 @@ mod tests {
         )
         .expect("the canonical document must be admissible");
         assert_eq!(
-            second.nquads, first.nquads,
+            second.nquads(),
+            first.nquads(),
             "canonicalizing the canonical document must reproduce it byte for byte"
         );
         assert_eq!(
-            ContentDigest::of(second.nquads.as_bytes()),
-            ContentDigest::of(first.nquads.as_bytes()),
+            ContentDigest::of(second.nquads().as_bytes()),
+            ContentDigest::of(first.nquads().as_bytes()),
             "equal bytes must mint equal identity"
         );
 
@@ -3841,8 +3810,8 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
-            second.nquads
+            .nquads(),
+            second.nquads()
         );
     }
 
@@ -3876,10 +3845,10 @@ mod tests {
         )
         .unwrap();
         assert!(
-            scoped.nquads.contains("<urn:purrdf:rdfc:reifies>")
-                && scoped.nquads.contains("<urn:purrdf:rdfc:annotation> ."),
+            scoped.nquads().contains("<urn:purrdf:rdfc:reifies>")
+                & scoped.nquads().contains("<urn:purrdf:rdfc:annotation> ."),
             "the per-graph document must carry both lowered rows, graph-erased: {}",
-            scoped.nquads
+            scoped.nquads()
         );
 
         // The document, read back: every row in the default graph, the statement
@@ -3897,7 +3866,7 @@ mod tests {
         let reread = b.freeze().expect("valid");
         assert_eq!(
             reread.quads().count(),
-            scoped.nquads.lines().count(),
+            scoped.nquads().lines().count(),
             "the re-read dataset must hold exactly the per-graph document's rows"
         );
 
@@ -3907,8 +3876,8 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .expect("a per-graph canonical document must be admissible")
-            .nquads,
-            scoped.nquads,
+            .nquads(),
+            scoped.nquads(),
             "re-canonicalizing a per-graph document must reproduce it byte for byte"
         );
         assert_eq!(
@@ -3924,7 +3893,7 @@ mod tests {
                     &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
                 )
                 .expect("admissible")
-                .nquads
+                .nquads()
                 .as_bytes()
             ),
             "the per-graph digest must be re-derivable from the document it covers"
@@ -3945,13 +3914,13 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &spelled,
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         assert_eq!(
             try_canonicalize_with(
@@ -3960,14 +3929,14 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize_with(
                 &spelled,
                 CanonHash::Sha384,
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "the fold is in the ingestion seam, so it is hash-algorithm-independent"
         );
         assert_eq!(
@@ -3977,14 +3946,14 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize_view(
                 &*spelled,
                 CanonHash::Sha256,
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "the view-generic entry point folds too — one seam, not two"
         );
         assert_eq!(
@@ -4010,7 +3979,7 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
             )
             .unwrap()
-            .nquads
+            .nquads()
             .as_bytes(),
         ) == ContentDigest::of(
             try_canonicalize(
@@ -4018,7 +3987,7 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
             )
             .unwrap()
-            .nquads
+            .nquads()
             .as_bytes(),
         )
     }
@@ -4166,7 +4135,7 @@ mod tests {
     #[test]
     fn empty_dataset_canonicalizes_to_empty() {
         let ds = RdfDatasetBuilder::new().freeze().expect("valid");
-        assert_eq!(canon(&ds), "");
+        assert_eq!(canon(&ds).nquads(), "");
     }
 
     #[test]
@@ -4183,9 +4152,11 @@ mod tests {
         b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
-            canon(&ds).contains("\"0.70\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
-            "lexical form preserved: {}",
             canon(&ds)
+                .nquads()
+                .contains("\"0.70\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
+            "lexical form preserved: {}",
+            canon(&ds).nquads()
         );
     }
 
@@ -4204,7 +4175,8 @@ mod tests {
             .unwrap();
         b.push_quad(s, p, plain, None).unwrap();
         b.push_quad(s, q, rtl, None).unwrap();
-        let out = canon(&ds_of(b));
+        let out_owner = canon(&ds_of(b));
+        let out = out_owner.nquads();
         assert!(out.contains("\"hi\" ."), "xsd:string bare: {out}");
         assert!(
             out.contains("\"مرحبا\"@ar--rtl ."),
@@ -4230,8 +4202,8 @@ mod tests {
         let a = build("x", 0);
         let c = build("totally-different", 9);
         assert_eq!(
-            canon(&a),
-            canon(&c),
+            canon(&a).nquads(),
+            canon(&c).nquads(),
             "blank label/scope must not affect canon"
         );
     }
@@ -4252,14 +4224,15 @@ mod tests {
         };
         let a = build("x", "y");
         let c = build("m", "n");
-        let ca = canon(&a);
+        let ca_owner = canon(&a);
+        let ca = ca_owner.nquads();
         assert_eq!(
             ca,
-            canon(&c),
+            canon(&c).nquads(),
             "relabeled ring must canonicalize identically"
         );
         assert!(
-            ca.contains("_:c14n0") && ca.contains("_:c14n1"),
+            ca.contains("_:c14n0") & ca.contains("_:c14n1"),
             "stable labels: {ca}"
         );
     }
@@ -4272,7 +4245,10 @@ mod tests {
         let x = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
         b.push_quad(x, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
-        assert_eq!(canon(&ds), "_:c14n0 <http://example.org/p> _:c14n0 .\n");
+        assert_eq!(
+            canon(&ds).nquads(),
+            "_:c14n0 <http://example.org/p> _:c14n0 .\n"
+        );
     }
 
     /// Differently-wired blank graphs must NOT be byte-equal.
@@ -4288,7 +4264,7 @@ mod tests {
             b.push_quad(blank, link, nb, None).unwrap();
             b.freeze().expect("valid")
         };
-        assert_ne!(canon(&build("o1")), canon(&build("o2")));
+        assert_ne!(canon(&build("o1")).nquads(), canon(&build("o2")).nquads());
     }
 
     /// Reifier COUNT is observable in the canonical form (the headline gate).
@@ -4305,8 +4281,10 @@ mod tests {
             }
             b.freeze().expect("valid")
         };
-        let one = canon(&build(&["r1"]));
-        let two = canon(&build(&["r1", "r2"]));
+        let one_owner = canon(&build(&["r1"]));
+        let one = one_owner.nquads();
+        let two_owner = canon(&build(&["r1", "r2"]));
+        let two = two_owner.nquads();
         assert_ne!(one, two, "two reifiers must differ from one");
         assert!(
             one.contains("<urn:purrdf:rdfc:reifies> <<( "),
@@ -4336,8 +4314,10 @@ mod tests {
             }
             b.freeze().expect("valid")
         };
-        let with = canon(&build(true));
-        let without = canon(&build(false));
+        let with_owner = canon(&build(true));
+        let with = with_owner.nquads();
+        let without_owner = canon(&build(false));
+        let without = without_owner.nquads();
         assert_ne!(with, without);
         assert!(
             with.contains("<urn:purrdf:rdfc:annotation> ."),
@@ -4391,14 +4371,15 @@ mod tests {
             b.push_quad(base, refp, t2, None).unwrap();
             b.freeze().expect("valid")
         };
-        let ca = canon(&build("x", "y"));
+        let ca_owner = canon(&build("x", "y"));
+        let ca = ca_owner.nquads();
         assert_eq!(
             ca,
-            canon(&build("m", "n")),
+            canon(&build("m", "n")).nquads(),
             "nested-triple-term automorphism must canonicalize identically regardless of input labels"
         );
         assert!(
-            ca.contains("_:c14n0") && ca.contains("_:c14n1"),
+            ca.contains("_:c14n0") & ca.contains("_:c14n1"),
             "two stable nested blank labels: {ca}"
         );
         assert!(ca.contains("<<("), "triple terms rendered: {ca}");
@@ -4425,7 +4406,7 @@ mod tests {
         };
         assert_ne!(
             ca,
-            canon(&asym),
+            canon(&asym).nquads(),
             "an asymmetric nested-triple graph must not canonicalize to the symmetric one"
         );
     }
@@ -4487,9 +4468,8 @@ mod tests {
         )
         .expect("relabel");
         let expected: BTreeSet<(String, BlankScope)> = canonical
-            .labels
-            .values()
-            .map(|l| (l.to_string(), BlankScope::DEFAULT))
+            .labels()
+            .map(|(_, label)| (label.to_string(), BlankScope::DEFAULT))
             .collect();
         let got = output_blanks(&out);
         assert_eq!(got, expected, "output blanks must be exactly the c14n set");
@@ -4537,13 +4517,13 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &ds,
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "relabeling must preserve the isomorphism class"
         );
         assert_eq!(
@@ -4552,13 +4532,13 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &once,
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "relabeling a relabeled dataset must change nothing (canonical bytes)"
         );
         assert_eq!(
@@ -4650,19 +4630,19 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .unwrap();
-        assert_eq!(flat.nquads, view.nquads);
-        assert_eq!(flat.labels, view.labels);
+        assert_eq!(flat.nquads(), view.nquads());
+        assert!(flat.labels().eq(view.labels()));
         assert!(
-            flat.nquads.contains("<urn:purrdf:rdfc:reifies>")
-                && flat.nquads.contains("<urn:purrdf:rdfc:annotation>")
-                && flat.nquads.contains("_:c14n"),
+            flat.nquads().contains("<urn:purrdf:rdfc:reifies>")
+                & flat.nquads().contains("<urn:purrdf:rdfc:annotation>")
+                & flat.nquads().contains("_:c14n"),
             "the fixture must reach the overlay and the labeler: {}",
-            flat.nquads
+            flat.nquads()
         );
         // The defaulted type parameter: `Canonicalized` still names the `TermId`
         // instantiation, so existing call sites keep their key type unchanged.
         let flat: Canonicalized = flat;
-        let _: &BTreeMap<TermId, Box<str>> = &flat.labels;
+        let _: Canonicalized<TermId> = flat;
         // SHA-384 travels the same seam.
         assert_eq!(
             try_canonicalize_with(
@@ -4671,14 +4651,14 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize_view(
                 &*ds,
                 CanonHash::Sha384,
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         // And so do the screening surfaces.
         assert_eq!(blank_count(&ds), blank_count_view(&*ds));
@@ -4694,12 +4674,12 @@ mod tests {
     fn graph_scoped_canonicalization_matches_the_named_graph_projection() {
         let ds = seam_dataset();
         let graph = "http://example.org/g";
-        let projected = try_canonicalize(
+        let projected_owner = try_canonicalize(
             &ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap(),
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
-        .unwrap()
-        .nquads;
+        .unwrap();
+        let projected = projected_owner.nquads();
         assert!(!projected.is_empty(), "the graph must hold content");
         assert_eq!(
             try_canonicalize_graph_view(
@@ -4709,7 +4689,7 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             projected
         );
         assert_eq!(
@@ -4737,7 +4717,7 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ""
         );
         assert_eq!(
@@ -4748,7 +4728,7 @@ mod tests {
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ""
         );
     }
@@ -4783,14 +4763,14 @@ mod tests {
         )
         .expect("a clean graph must still canonicalize");
         assert_eq!(
-            neighbour.nquads,
+            neighbour.nquads(),
             try_canonicalize(
                 &ds.project_graph(Some(&crate::RdfTerm::iri("http://example.org/clean")))
                     .unwrap(),
                 &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         // The whole dataset IS refused, because the offending row is in it.
         assert!(matches!(
@@ -4867,13 +4847,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            canonicalized.nquads,
+            canonicalized.nquads(),
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
              _:c14n0 <http://example.org/confidence> \"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal> <urn:purrdf:rdfc:annotation> .\n\
              _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
         );
         assert_eq!(
-            canonicalized.presentation,
+            canonicalized.presentation(),
             CanonPresentation::Overlay,
             "an overlay-producing entry point must report the Overlay presentation on its result"
         );
@@ -4898,18 +4878,18 @@ mod tests {
         .run_fallible()
         .unwrap();
         assert_eq!(
-            flat.nquads,
+            flat.nquads(),
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
              _:c14n0 <http://example.org/confidence> \"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal> .\n\
              _:c14n0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
         );
         assert!(
-            !flat.nquads.contains(RESERVED_NAMESPACE),
+            !flat.nquads().contains(RESERVED_NAMESPACE),
             "no reserved-namespace IRI may appear in the flat presentation's output: {}",
-            flat.nquads
+            flat.nquads()
         );
         assert_eq!(
-            flat.presentation,
+            flat.presentation(),
             CanonPresentation::FlatAssertion,
             "a flat-producing entry point must report the FlatAssertion presentation on its result"
         );
@@ -5004,7 +4984,8 @@ mod tests {
         .run_fallible()
         .unwrap();
         assert_eq!(
-            flat_twice.nquads, flat_once.nquads,
+            flat_twice.nquads(),
+            flat_once.nquads(),
             "spelling one default-graph row twice must not change the flat canonical form"
         );
 
@@ -5062,7 +5043,8 @@ mod tests {
         .run_fallible()
         .unwrap();
         assert_eq!(
-            flat_twice_g.nquads, flat_once_g.nquads,
+            flat_twice_g.nquads(),
+            flat_once_g.nquads(),
             "spelling one named-graph row twice must not change the flat canonical form"
         );
     }
@@ -5076,14 +5058,13 @@ mod tests {
 
     /// The flat canonical bytes of `ds`, panicking on refusal (test convenience,
     /// mirroring [`canon`] for the flat presentation).
-    fn flat_canon(ds: &RdfDataset) -> String {
+    fn flat_canon(ds: &RdfDataset) -> Canonicalized {
         try_canonicalize_flat_view(
             ds,
             CanonHash::Sha256,
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("admissible")
-        .nquads
     }
 
     /// The flat counterpart of
@@ -5107,7 +5088,8 @@ mod tests {
         let triple = b.intern_triple(s, pred, o).unwrap();
         b.push_reifier(r, triple).unwrap();
         let genuine = b.freeze().expect("valid");
-        let lowered = flat_canon(&genuine);
+        let lowered_owner = flat_canon(&genuine);
+        let lowered = lowered_owner.nquads();
         assert!(
             lowered.contains(RDF_REIFIES),
             "the fixture must actually exercise the real-predicate lowering: {lowered}"
@@ -5132,7 +5114,8 @@ mod tests {
             "B must carry no statement layer of its own — the quad IS the input"
         );
 
-        let folded = flat_canon(&spelled);
+        let folded_owner = flat_canon(&spelled);
+        let folded = folded_owner.nquads();
         assert_eq!(
             folded, lowered,
             "the sentinel-spelled row and the native reifier it denotes must produce \
@@ -5159,7 +5142,7 @@ mod tests {
         b.push_quad(r, sentinel, triple, None).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
-            flat_canon(&both),
+            flat_canon(&both).nquads(),
             lowered,
             "spelling one row twice (native + sentinel-spelled) must not change the \
              flat canonical form"
@@ -5179,7 +5162,8 @@ mod tests {
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
         b.push_annotation(r, pred, o).unwrap();
         let genuine = b.freeze().expect("valid");
-        let lowered = flat_canon(&genuine);
+        let lowered_owner = flat_canon(&genuine);
+        let lowered = lowered_owner.nquads();
         assert_eq!(
             lowered, "<http://example.org/r> <http://example.org/p> <http://example.org/o> .\n",
             "the fixture must actually exercise the annotation lowering"
@@ -5200,7 +5184,8 @@ mod tests {
             "B must carry no statement layer of its own — the quad IS the input"
         );
 
-        let folded = flat_canon(&spelled);
+        let folded_owner = flat_canon(&spelled);
+        let folded = folded_owner.nquads();
         assert_eq!(
             folded, lowered,
             "the sentinel-spelled row and the native annotation it denotes must \
@@ -5217,7 +5202,7 @@ mod tests {
         b.push_quad(r, pred, o, Some(sentinel)).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
-            flat_canon(&both),
+            flat_canon(&both).nquads(),
             lowered,
             "spelling one annotation row twice must not change the flat canonical form"
         );
@@ -5319,7 +5304,8 @@ mod tests {
             "no native row in this fixture"
         );
 
-        let bytes = flat_canon(&ds);
+        let bytes_owner = flat_canon(&ds);
+        let bytes = bytes_owner.nquads();
         let line_count = bytes.lines().filter(|l| !l.is_empty()).count();
         assert_eq!(
             line_count, 1,
@@ -5342,7 +5328,8 @@ mod tests {
             "no native row in this fixture"
         );
 
-        let bytes = flat_canon(&ds);
+        let bytes_owner = flat_canon(&ds);
+        let bytes = bytes_owner.nquads();
         let line_count = bytes.lines().filter(|l| !l.is_empty()).count();
         assert_eq!(
             line_count, 1,
@@ -5381,17 +5368,18 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("admissible");
-        let line_count = scoped.nquads.lines().filter(|l| !l.is_empty()).count();
+        let line_count = scoped.nquads().lines().filter(|l| !l.is_empty()).count();
         assert_eq!(
-            line_count, 1,
+            line_count,
+            1,
             "the same dedup law must hold when both spellings live in a named graph: {}",
-            scoped.nquads
+            scoped.nquads()
         );
-        assert!(scoped.nquads.contains(RDF_REIFIES));
-        assert!(!scoped.nquads.contains(RESERVED_NAMESPACE));
+        assert!(scoped.nquads().contains(RDF_REIFIES));
+        assert!(!scoped.nquads().contains(RESERVED_NAMESPACE));
         // Graph-erasing emission: the per-graph document carries no graph token.
         assert_eq!(
-            scoped.nquads,
+            scoped.nquads(),
             format!(
                 "<http://example.org/r> <{RDF_REIFIES}> <<( <http://example.org/s> \
                  <http://example.org/p> <http://example.org/o> )>> .\n"
@@ -5436,8 +5424,8 @@ mod tests {
         let solo = solo.freeze().expect("valid");
 
         assert_eq!(
-            flat_canon(&all_three),
-            flat_canon(&solo),
+            flat_canon(&all_three).nquads(),
+            flat_canon(&solo).nquads(),
             "native + sentinel-spelled + real-predicate must still yield exactly one row"
         );
 
@@ -5486,8 +5474,8 @@ mod tests {
         let solo_ann = solo_ann.freeze().expect("valid");
 
         assert_eq!(
-            flat_canon(&all_three_ann),
-            flat_canon(&solo_ann),
+            flat_canon(&all_three_ann).nquads(),
+            flat_canon(&solo_ann).nquads(),
             "annotation: native + sentinel-spelled + real-quad must still yield \
              exactly one row"
         );
@@ -5541,8 +5529,8 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("the exact folded shape must be admitted under flat, too");
-        assert!(flat.nquads.contains(RDF_REIFIES));
-        assert!(!flat.nquads.contains(RESERVED_NAMESPACE));
+        assert!(flat.nquads().contains(RDF_REIFIES));
+        assert!(!flat.nquads().contains(RESERVED_NAMESPACE));
     }
 
     // -----------------------------------------------------------------------
@@ -5598,9 +5586,9 @@ mod tests {
         )
         .expect("an IRI outside the reserved namespace must be admitted");
         assert!(
-            admitted.nquads.contains("<urn:purrdf:other:annotation>"),
+            admitted.nquads().contains("<urn:purrdf:other:annotation>"),
             "the neighbouring graph name must appear in the output: {}",
-            admitted.nquads
+            admitted.nquads()
         );
         assert!(check_admissible_flat_view(&*ds).is_ok());
     }
@@ -5684,9 +5672,9 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("a large non-symmetric graph must not be refused for budget reasons");
-        assert_ne!(admitted.nquads, "");
+        assert_ne!(admitted.nquads(), "");
         assert_eq!(
-            admitted.labels.len(),
+            admitted.label_count(),
             400,
             "every pair's two blanks get a label"
         );
@@ -5713,7 +5701,7 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("admissible fixture");
-        assert_eq!(via_arc.nquads, via_owned.nquads);
+        assert_eq!(via_arc.nquads(), via_owned.nquads());
     }
 
     /// A two-graph fixture: graph `gA` carries a reifier, an annotation on it, and
@@ -5767,11 +5755,11 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("admissible");
-        assert_eq!(via_graph_scope.nquads, via_projection.nquads);
+        assert_eq!(via_graph_scope.nquads(), via_projection.nquads());
         assert!(
-            !via_graph_scope.nquads.contains("<http://example.org/bs>"),
+            !via_graph_scope.nquads().contains("<http://example.org/bs>"),
             "graph B's content must not leak into graph A's scope: {}",
-            via_graph_scope.nquads
+            via_graph_scope.nquads()
         );
     }
 
@@ -5794,7 +5782,7 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("admissible fixture");
-        assert_eq!(digest, ContentDigest::of(flat.nquads.as_bytes()));
+        assert_eq!(digest, ContentDigest::of(flat.nquads().as_bytes()));
 
         // SHA-384 travels the same seam — and selects ONLY the label-issuance
         // algorithm: the digest over the resulting document is still the
@@ -5813,7 +5801,7 @@ mod tests {
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("admissible fixture");
-        assert_eq!(digest384, ContentDigest::of(flat384.nquads.as_bytes()));
+        assert_eq!(digest384, ContentDigest::of(flat384.nquads().as_bytes()));
     }
 
     // -----------------------------------------------------------------------
@@ -6121,7 +6109,7 @@ mod tests {
                 let receipt = control.receipts().last().unwrap();
                 assert_eq!(receipt.policy, SearchPolicy::Finite(limit));
                 if limit == work.total() {
-                    assert_eq!(result.unwrap().nquads, expected.nquads);
+                    assert_eq!(result.unwrap().nquads(), expected.nquads());
                     assert_eq!(receipt.work, work);
                     assert!(receipt.completed);
                     assert_eq!(receipt.phase, CanonPhase::Output);
@@ -6190,15 +6178,15 @@ mod tests {
         .unwrap();
         assert_eq!(
             digest,
-            *purrdf_hash::blake3::hash(document.nquads.as_bytes()).as_bytes()
+            *purrdf_hash::blake3::hash(document.nquads().as_bytes()).as_bytes()
         );
         let quiet = CanonStopAfter::new(usize::MAX);
         let mut dual_control = CanonicalizationControl::new(SearchPolicy::Unlimited, Some(&quiet));
         let (dual_document, sha256) =
             try_canonicalize_sha256_view(&*dataset, CanonHash::Sha256, &mut dual_control).unwrap();
-        assert_eq!(dual_document.nquads, document.nquads);
-        assert_eq!(dual_document.labels, document.labels);
-        assert_eq!(sha256, ContentDigest::of(document.nquads.as_bytes()));
+        assert_eq!(dual_document.nquads(), document.nquads());
+        assert!(dual_document.labels().eq(document.labels()));
+        assert_eq!(sha256, ContentDigest::of(document.nquads().as_bytes()));
         assert_eq!(dual_control.receipts().len(), 1);
         assert!(matches!(
             dual_control.receipts()[0].configuration,
@@ -6223,7 +6211,7 @@ mod tests {
             &mut zero,
         )
         .unwrap();
-        assert_eq!(empty.nquads, "");
+        assert_eq!(empty.nquads(), "");
         assert_eq!(zero.receipts()[0].phase, CanonPhase::Output);
         assert_eq!(zero.receipts()[0].work.total(), 0);
         let no_rows = RdfDatasetBuilder::new().freeze().unwrap();
@@ -6331,9 +6319,9 @@ mod tests {
                     ),
                 )
                 .unwrap();
-                assert_eq!(actual.nquads, expected.nquads);
-                assert_eq!(actual.labels, expected.labels);
-                assert_eq!(actual.presentation, expected.presentation);
+                assert_eq!(actual.nquads(), expected.nquads());
+                assert!(actual.labels().eq(expected.labels()));
+                assert_eq!(actual.presentation(), expected.presentation());
             }
         }
     }
@@ -6452,10 +6440,7 @@ mod tests {
         .issue_labels()
         .unwrap();
         signal.0.store(8, std::sync::atomic::Ordering::Relaxed);
-        assert!(matches!(
-            state.serialize_canonical(),
-            Err(CanonError::Stopped)
-        ));
+        assert!(matches!(state.canonical_lines(), Err(CanonError::Stopped)));
     }
 
     #[test]

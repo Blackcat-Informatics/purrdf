@@ -2580,7 +2580,7 @@ mod tests {
         triples(ds).contains(&(ex(s), ex(p), ex(o)))
     }
 
-    fn canon(ds: &RdfDataset) -> String {
+    fn canon(ds: &RdfDataset) -> purrdf_core::Canonicalized {
         ::purrdf_rdf::try_canonicalize(
             ds,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -2589,7 +2589,6 @@ mod tests {
             ),
         )
         .unwrap()
-        .nquads
     }
 
     // ── Parsing ────────────────────────────────────────────────────────────────
@@ -3570,7 +3569,7 @@ mod tests {
         );
         assert!(has_iri(&forward, "alice", "a", "x"));
         assert!(has_iri(&forward, "alice", "b", "y"));
-        assert_eq!(canon(&forward), canon(&swapped));
+        assert_eq!(canon(&forward).nquads(), canon(&swapped).nquads());
     }
 
     // ── Ordered execution (SHACL 1.2 Inference Rules) ────────────────────────────
@@ -3652,8 +3651,8 @@ mod tests {
             triple_set(&negative_zero)
         );
         assert_eq!(
-            canon(&plain),
-            canon(&negative_zero),
+            canon(&plain).nquads(),
+            canon(&negative_zero).nquads(),
             "sh:order -0.0 and sh:order 0 must produce the identical closure"
         );
     }
@@ -3735,8 +3734,8 @@ mod tests {
         let swapped = entail(LAYERED_GATING_DATA, &layered_gating_shapes(1, 0));
 
         assert_ne!(
-            canon(&forward),
-            canon(&swapped),
+            canon(&forward).nquads(),
+            canon(&swapped).nquads(),
             "swapping sh:order over a condition-gated rule must change the closure"
         );
         // And concretely: the gated head appears only when its rule runs FIRST.
@@ -4137,7 +4136,10 @@ mod tests {
         let shapes = r"
             ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
               sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .";
-        assert_eq!(canon(&entail(data, shapes)), canon(&entail(data, shapes)));
+        assert_eq!(
+            canon(&entail(data, shapes)).nquads(),
+            canon(&entail(data, shapes)).nquads()
+        );
     }
 
     #[test]
@@ -4149,7 +4151,7 @@ mod tests {
                 "CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis } WHERE { $this a ex:Person }" ] ."#;
         let first = entail(data, shapes);
         let second = entail(data, shapes);
-        assert_eq!(canon(&first), canon(&second));
+        assert_eq!(canon(&first).nquads(), canon(&second).nquads());
         // Distinct focus nodes get distinct minted blanks (two ex:addr edges to two
         // different blank subjects of ex:city).
         let addr_objects: Vec<String> = triples(&first)
@@ -4190,8 +4192,8 @@ mod tests {
         let first = entail(data, shapes);
         let second = entail(data, shapes);
         assert_eq!(
-            canon(&first),
-            canon(&second),
+            canon(&first).nquads(),
+            canon(&second).nquads(),
             "blank-focus blank-minting must be byte-identical across runs"
         );
 
@@ -4279,8 +4281,8 @@ mod tests {
         let a = entail("_:x a ex:Person .", shapes);
         let b = entail("_:y a ex:Person .", shapes);
         assert_eq!(
-            canon(&a),
-            canon(&b),
+            canon(&a).nquads(),
+            canon(&b).nquads(),
             "isomorphic inputs (blank relabeled) must entail identically"
         );
     }
@@ -4414,11 +4416,12 @@ mod tests {
         // entailment is byte-stable.
         let first = entail(data, shapes);
         let second = entail(data, shapes);
-        assert_eq!(canon(&first), canon(&second));
+        assert_eq!(canon(&first).nquads(), canon(&second).nquads());
 
         // RDFC canonical labels: the blank in the base ex:has triple and in the
         // derived ex:copied triple must canonicalize to the SAME label.
-        let nq = canon(&first);
+        let nq_owner = canon(&first);
+        let nq = nq_owner.nquads();
         let object_of = |predicate: &str| -> String {
             nq.lines()
                 .find(|line| line.contains(predicate))
@@ -4441,7 +4444,7 @@ mod tests {
         // already co-refers with the base blank, so the closure is stable.
         let shapes_parsed = parse_shapes(shapes);
         let again = entail_dataset(first.as_ref(), &shapes_parsed).expect("re-entailment");
-        assert_eq!(canon(&first), canon(&again));
+        assert_eq!(canon(&first).nquads(), canon(&again).nquads());
     }
 
     /// The same co-reference guarantee for a data blank whose label is DOTTED.
@@ -4462,7 +4465,8 @@ mod tests {
                 "CONSTRUCT { $this ex:copied ?b } WHERE { $this ex:has ?b }" ] ."#;
 
         let entailed = entail(data, shapes);
-        let nq = canon(&entailed);
+        let nq_owner = canon(&entailed);
+        let nq = nq_owner.nquads();
         let object_of = |predicate: &str| -> String {
             nq.lines()
                 .find(|line| line.contains(predicate))
@@ -4601,8 +4605,8 @@ mod tests {
             let reparsed = ::purrdf_rdf::parse_dataset(&bytes, media, None)
                 .unwrap_or_else(|e| panic!("{media} re-parse must succeed: {e}"));
             assert_eq!(
-                canon(entailed),
-                canon(reparsed.as_ref()),
+                canon(entailed).nquads(),
+                canon(reparsed.as_ref()).nquads(),
                 "{media} round-trip must be isomorphic to the entailed dataset"
             );
         }

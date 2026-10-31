@@ -186,7 +186,7 @@ fn canonical_equality(
     let actual =
         purrdf_core::try_canonicalize_flat_view(actual, purrdf_core::CanonHash::Sha256, control)
             .map_err(GradeError::from)?;
-    if expected.nquads == actual.nquads {
+    if expected.nquads() == actual.nquads() {
         Ok(())
     } else {
         Err(GradeError::Mismatch(

@@ -164,12 +164,11 @@ fn render_result(
             }
         }
         SparqlResult::Graph(graph) => {
-            let nquads = purrdf_core::try_canonicalize(graph, control)
-                .unwrap()
-                .nquads;
+            let nquads_owner = purrdf_core::try_canonicalize(graph, control).unwrap();
+            let nquads = nquads_owner.nquads();
             writeln!(out, "graph quads={}", nquads.lines().count()).expect("write");
             if !volatile {
-                margin(&nquads, out);
+                margin(nquads, out);
             }
         }
         SparqlResult::Solutions {
@@ -187,13 +186,15 @@ fn render_result(
                 return;
             }
             match canonical_solutions(variables, rows, ordered, control) {
-                Ok(nquads) => margin(&nquads, out),
+                Ok(nquads) => margin(nquads.nquads(), out),
                 Err(_) => out.push_str("unencodable\n"),
             }
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
                 margin(
-                    &purrdf_core::try_canonicalize(aux, control).unwrap().nquads,
+                    purrdf_core::try_canonicalize(aux, control)
+                        .unwrap()
+                        .nquads(),
                     out,
                 );
             }
@@ -482,12 +483,11 @@ fn render_store(
     out: &mut String,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) {
-    let nquads = purrdf_core::try_canonicalize(store, control)
-        .unwrap()
-        .nquads;
+    let nquads_owner = purrdf_core::try_canonicalize(store, control).unwrap();
+    let nquads = nquads_owner.nquads();
     writeln!(out, "store quads={}", nquads.lines().count()).expect("write");
     if !volatile {
-        margin(&nquads, out);
+        margin(nquads, out);
     }
 }
 
@@ -497,14 +497,13 @@ fn store_digest(
     volatile: bool,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> String {
-    let nquads = purrdf_core::try_canonicalize(store, control)
-        .unwrap()
-        .nquads;
+    let nquads_owner = purrdf_core::try_canonicalize(store, control).unwrap();
+    let nquads = nquads_owner.nquads();
     let quads = nquads.lines().count();
     if volatile {
         format!("quads={quads}")
     } else {
-        format!("quads={quads} digest={}", stable_hash_hex(&nquads))
+        format!("quads={quads} digest={}", stable_hash_hex(nquads))
     }
 }
 

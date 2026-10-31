@@ -106,13 +106,13 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
         .export_trig_lines(&mut purrdf_core::sink::WriterDrain(&mut bytes))
         .unwrap();
     assert!(streamed.evidence().evictions() > 0);
-    let canonical = try_canonicalize_flat_view(
+    let canonical_owner = try_canonicalize_flat_view(
         &streamed,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap()
-    .nquads;
+    .unwrap();
+    let canonical = canonical_owner.nquads();
     let parsed = parse_dataset(&bytes, "application/trig", None).unwrap();
     assert_eq!(parsed.quad_count(), 2);
     assert_eq!(parsed.reifier_quads().count(), 1);
@@ -133,7 +133,7 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         canonical
     );
     let native = serialize_dataset_to_format(&open(), NativeRdfFormat::TriG, None).unwrap();
@@ -149,7 +149,7 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         canonical
     );
     let reexport =
@@ -166,7 +166,7 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         canonical
     );
 }

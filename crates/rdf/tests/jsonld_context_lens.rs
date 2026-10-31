@@ -107,7 +107,8 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
                 None
             )
         )
-        .expect("canonical source"),
+        .expect("canonical source")
+        .nquads(),
         canonical_flat_nquads(
             &reparsed,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -116,6 +117,7 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
             )
         )
         .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -201,7 +203,8 @@ fn heterogeneous_values_partition_across_compatible_aliases() {
                 None
             )
         )
-        .expect("canonical source"),
+        .expect("canonical source")
+        .nquads(),
         canonical_flat_nquads(
             &reparsed,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -210,6 +213,7 @@ fn heterogeneous_values_partition_across_compatible_aliases() {
             )
         )
         .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -322,7 +326,8 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
                 None
             )
         )
-        .expect("canonical expected"),
+        .expect("canonical expected")
+        .nquads(),
         canonical_flat_nquads(
             &actual,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -331,6 +336,7 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
             )
         )
         .expect("canonical actual")
+        .nquads()
     );
 
     for (description, input) in [
@@ -393,7 +399,8 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
                 None
             )
         )
-        .expect("canonical source"),
+        .expect("canonical source")
+        .nquads(),
         canonical_flat_nquads(
             &reparsed,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -402,6 +409,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
             )
         )
         .expect("canonical reparsed")
+        .nquads()
     );
 
     let noncanonical = concat!(
@@ -431,7 +439,8 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
                 None
             )
         )
-        .expect("canonical source"),
+        .expect("canonical source")
+        .nquads(),
         canonical_flat_nquads(
             &reparsed,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -440,6 +449,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
             )
         )
         .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -595,7 +605,8 @@ fn null_entries_in_graph_id_type_and_index_containers_are_ignored() {
                 None
             )
         )
-        .expect("canonical expected"),
+        .expect("canonical expected")
+        .nquads(),
         canonical_flat_nquads(
             &actual,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -604,6 +615,7 @@ fn null_entries_in_graph_id_type_and_index_containers_are_ignored() {
             )
         )
         .expect("canonical actual")
+        .nquads()
     );
 }
 
@@ -654,7 +666,8 @@ fn graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope() {
                 None
             )
         )
-        .expect("canonical expected"),
+        .expect("canonical expected")
+        .nquads(),
         canonical_flat_nquads(
             &actual,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -663,6 +676,7 @@ fn graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope() {
             )
         )
         .expect("canonical actual")
+        .nquads()
     );
 }
 
@@ -777,7 +791,8 @@ fn configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures() 
                 None
             )
         )
-        .expect("canonical source"),
+        .expect("canonical source")
+        .nquads(),
         canonical_flat_nquads(
             &reparsed,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -786,6 +801,7 @@ fn configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures() 
             )
         )
         .expect("canonical reparsed")
+        .nquads()
     );
 }
 

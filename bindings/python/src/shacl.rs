@@ -500,7 +500,7 @@ fn entail(
         "execution_receipt_json",
         purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates),
     )?;
-    out.set_item("ntriples", outcome.ntriples)?;
+    out.set_item("ntriples", outcome.ntriples.nquads())?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
     crate::py_canonical::finish(py, out.into_any().unbind(), receipts)
 }

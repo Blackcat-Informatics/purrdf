@@ -1706,7 +1706,7 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
             )
             .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
             assert_eq!(
-                canonical.nquads.lines().count(),
+                canonical.nquads().lines().count(),
                 claim.turtle.lines().count(),
                 "every line is one distinct triple"
             );
@@ -4912,7 +4912,7 @@ fn the_designated_heading_and_lineage_literals_carry_their_own_datatypes() {
         )
         .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
         assert_eq!(
-            canonical.nquads.lines().count(),
+            canonical.nquads().lines().count(),
             claim.turtle.lines().count()
         );
     }

@@ -170,10 +170,10 @@ mod tests {
             assert!(error.is_null());
             assert!(!document.0.is_null() && !report.0.is_null() && !evidence.0.is_null());
             let document_buffer = document.0.as_ref().expect("successful document output");
-            let document_text = std::str::from_utf8(&document_buffer.0).unwrap();
+            let document_text = std::str::from_utf8(document_buffer.as_bytes()).unwrap();
             assert!(document_text.starts_with("_:c14n"), "{document_text}");
             let evidence_buffer = evidence.0.as_ref().expect("successful receipt output");
-            let receipts = std::str::from_utf8(&evidence_buffer.0).unwrap();
+            let receipts = std::str::from_utf8(evidence_buffer.as_bytes()).unwrap();
             assert!(
                 receipts.contains("unlimited") && receipts.contains("\"completed\":true"),
                 "{receipts}"

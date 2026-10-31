@@ -7150,7 +7150,7 @@ mod tests {
                 ),
             )
             .unwrap()
-            .nquads
+            .nquads()
             .as_bytes(),
         )
         .as_bytes();

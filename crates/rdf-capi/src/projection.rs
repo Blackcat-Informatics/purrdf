@@ -77,8 +77,10 @@ pub unsafe extern "C" fn purrdf_project(
             let outcome = project_archive(PurrdfDataset::dataset(dataset), profile, &config)
                 .map_err(|error| projection_error(&error))?;
 
-            let archive = into_handle(PurrdfBuffer(outcome.archive));
-            let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            let archive = into_handle(PurrdfBuffer::from(outcome.archive));
+            let ledger = into_handle(PurrdfBuffer::from(
+                outcome.loss_ledger.render_json().into_bytes(),
+            ));
             *out_archive = archive;
             *out_loss_ledger_json = ledger;
             Ok(PurrdfStatus::Ok)
@@ -150,8 +152,10 @@ pub unsafe extern "C" fn purrdf_project_with_assets(
             )
             .map_err(|error| projection_error(&error))?;
 
-            let archive = into_handle(PurrdfBuffer(outcome.archive));
-            let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            let archive = into_handle(PurrdfBuffer::from(outcome.archive));
+            let ledger = into_handle(PurrdfBuffer::from(
+                outcome.loss_ledger.render_json().into_bytes(),
+            ));
             *out_archive = archive;
             *out_loss_ledger_json = ledger;
             Ok(PurrdfStatus::Ok)
@@ -209,7 +213,9 @@ pub unsafe extern "C" fn purrdf_lift(
                 .map_err(|error| projection_error(&error))?;
 
             let dataset = into_handle(PurrdfDataset::new(outcome.dataset));
-            let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            let ledger = into_handle(PurrdfBuffer::from(
+                outcome.loss_ledger.render_json().into_bytes(),
+            ));
             *out_dataset = dataset;
             *out_loss_ledger_json = ledger;
             Ok(PurrdfStatus::Ok)

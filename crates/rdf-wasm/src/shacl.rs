@@ -510,7 +510,7 @@ pub(crate) fn entail_to_ntriples_impl(
 pub struct ShaclEntailment {
     coordinates: purrdf_shapes::RuleCoordinates,
     /// The materialized dataset as N-Triples.
-    ntriples: String,
+    ntriples: purrdf_core::Canonicalized,
     canonicalization_json: String,
     /// The mandatory diagnostics.
     diagnostics: Vec<ShaclDiagnostic>,
@@ -548,7 +548,7 @@ impl ShaclEntailment {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn ntriples(&self) -> String {
-        self.ntriples.clone()
+        self.ntriples.nquads().to_owned()
     }
 
     /// The shapes graph's mandatory diagnostics, one `{ rule, shape }` per shape with an
@@ -2741,7 +2741,7 @@ pub(crate) mod tests {
 
     #[test]
     fn entail_materializes_inferred_triple() {
-        let nt = entail_to_ntriples_impl(
+        let nt_owner = entail_to_ntriples_impl(
             RULE_SHAPES,
             None,
             RULE_DATA,
@@ -2758,6 +2758,7 @@ pub(crate) mod tests {
         )
         .expect("entailment produced")
         .ntriples;
+        let nt = nt_owner.nquads();
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -3255,7 +3256,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             let refused = run(limits).expect_err("a limit of one").to_string();
             assert!(refused.ends_with(knob), "{refused}");
         }
-        let raised = run(purrdf_validate::RuleLimits {
+        let raised_owner = run(purrdf_validate::RuleLimits {
             max_term_generating_rounds: Some(64),
             max_generated_terms: Some(64),
             max_stored_facts: Some(64),
@@ -3263,6 +3264,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         })
         .expect("raised limits admit the counter")
         .ntriples;
+        let raised = raised_owner.nquads();
         assert!(
             raised.contains(
                 "<http://example.org/ns#a> <http://example.org/ns#n> \
@@ -3326,7 +3328,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             "{without}"
         );
 
-        let entailed = entail_to_ntriples_impl(
+        let entailed_owner = entail_to_ntriples_impl(
             SHAPES_GRAPH_RULES,
             None,
             data,
@@ -3343,11 +3345,12 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
         )
         .expect("entails")
         .ntriples;
+        let entailed = entailed_owner.nquads();
         assert!(
-            entailed.contains(named) && entailed.contains(marked),
+            entailed.contains(named) & entailed.contains(marked),
             "{entailed}"
         );
-        let plain = entail_to_ntriples_impl(
+        let plain_owner = entail_to_ntriples_impl(
             SHAPES_GRAPH_RULES,
             None,
             data,
@@ -3364,6 +3367,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
         )
         .expect("entails")
         .ntriples;
+        let plain = plain_owner.nquads();
         assert!(
             plain.contains(unnamed) && !plain.contains(marked),
             "{plain}"

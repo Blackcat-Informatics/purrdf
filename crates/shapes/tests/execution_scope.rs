@@ -381,7 +381,8 @@ ex:PersonRule a sh:NodeShape ;
                 None
             )
         )
-        .expect("canonical"),
+        .expect("canonical")
+        .nquads(),
         purrdf_rdf::canonical_flat_nquads(
             baseline.as_ref(),
             &mut purrdf_core::CanonicalizationControl::new(
@@ -389,7 +390,8 @@ ex:PersonRule a sh:NodeShape ;
                 None
             )
         )
-        .expect("canonical"),
+        .expect("canonical")
+        .nquads(),
         "a quiet signal changes nothing entailed"
     );
 

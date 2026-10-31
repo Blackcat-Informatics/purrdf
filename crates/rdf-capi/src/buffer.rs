@@ -7,10 +7,60 @@
 use crate::handles::free_handle;
 use crate::status::PurrdfStatus;
 
-/// An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
-/// with `purrdf_buffer_free`.
+/// Owned bytes or an immutable canonical result under its original admission.
 #[derive(Debug)]
-pub struct PurrdfBuffer(pub(crate) Vec<u8>);
+enum BufferBytes {
+    Owned(Vec<u8>),
+    Canonical(purrdf_core::Canonicalized),
+}
+
+/// An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
+/// with `purrdf_buffer_free`. Canonical payloads retain their source's grant.
+#[derive(Debug)]
+pub struct PurrdfBuffer {
+    bytes: BufferBytes,
+}
+
+impl PurrdfBuffer {
+    /// Borrow the original bytes for the lifetime of this opaque handle.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        match &self.bytes {
+            BufferBytes::Owned(bytes) => bytes,
+            BufferBytes::Canonical(canonical) => canonical.nquads().as_bytes(),
+        }
+    }
+}
+
+impl From<Vec<u8>> for PurrdfBuffer {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes: BufferBytes::Owned(bytes),
+        }
+    }
+}
+
+impl From<String> for PurrdfBuffer {
+    fn from(text: String) -> Self {
+        Self::from(text.into_bytes())
+    }
+}
+
+impl From<purrdf_core::Canonicalized> for PurrdfBuffer {
+    fn from(canonical: purrdf_core::Canonicalized) -> Self {
+        Self {
+            bytes: BufferBytes::Canonical(canonical),
+        }
+    }
+}
+
+impl From<purrdf_validate::regime::ReasoningText> for PurrdfBuffer {
+    fn from(text: purrdf_validate::regime::ReasoningText) -> Self {
+        match text {
+            purrdf_validate::regime::ReasoningText::Rendered(text) => Self::from(text),
+            purrdf_validate::regime::ReasoningText::Canonical(canonical) => Self::from(canonical),
+        }
+    }
+}
 
 /// Expose the buffer's bytes as a borrowed pointer + length. The pointer is
 /// valid until `purrdf_buffer_free(buf)`; the C side must not free it. For an
@@ -29,7 +79,7 @@ pub unsafe extern "C" fn purrdf_buffer_data(
             if buf.is_null() || out_ptr.is_null() || out_len.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
-            let bytes = &(*buf).0;
+            let bytes = (*buf).as_bytes();
             *out_ptr = bytes.as_ptr();
             *out_len = bytes.len();
             PurrdfStatus::Ok as i32
@@ -53,7 +103,7 @@ mod tests {
 
     #[test]
     fn data_exposes_bytes() {
-        let raw = into_handle(PurrdfBuffer(b"hello".to_vec()));
+        let raw = into_handle(PurrdfBuffer::from(b"hello".to_vec()));
         let mut ptr: *const u8 = std::ptr::null();
         let mut len: usize = 0;
         unsafe {

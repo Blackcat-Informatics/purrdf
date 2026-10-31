@@ -546,7 +546,7 @@ impl Dataset {
     pub fn canonical_nquads_flat(
         &self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<String, purrdf_rdf::CanonError> {
+    ) -> Result<purrdf_core::Canonicalized, purrdf_rdf::CanonError> {
         purrdf_rdf::canonical_flat_nquads(&self.ds, control)
     }
 
@@ -958,6 +958,7 @@ mod tests {
                 None,
             ))
             .unwrap()
+            .nquads()
             .lines()
             .map(str::to_owned)
             .collect();

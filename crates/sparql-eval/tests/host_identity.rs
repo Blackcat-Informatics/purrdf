@@ -586,7 +586,7 @@ fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() 
                     )
                 )
                 .unwrap()
-                .nquads,
+                .nquads(),
                 try_canonicalize_flat_view(
                     expected.as_ref(),
                     CanonHash::Sha256,
@@ -596,7 +596,7 @@ fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() 
                     )
                 )
                 .unwrap()
-                .nquads,
+                .nquads(),
                 "{query}"
             ),
         }

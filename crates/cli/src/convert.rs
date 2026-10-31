@@ -445,7 +445,7 @@ fn run_with_transforms(
     if options.canonical {
         let nquads =
             match try_canonicalize_flat_view(&dataset, CanonHash::Sha256, canonical.control()?) {
-                Ok(canonicalized) => canonicalized.nquads,
+                Ok(canonicalized) => canonicalized,
                 Err(ViewCanonError::Refused(err)) => return Err(CliError::native(err)),
                 Err(ViewCanonError::NotReady { error, .. }) => match error {
                 // LAW: an owned `Arc<RdfDataset>`'s `FallibleDatasetView::Error` is
@@ -453,7 +453,7 @@ fn run_with_transforms(
                 // unreachable by construction.
             },
             };
-        sink::write_out_with_request(output, nquads.as_bytes(), canonical)?;
+        sink::write_out_with_request(output, nquads.nquads().as_bytes(), canonical)?;
         // The RDFC-1.0 canonical N-Quads document flattens the RDF 1.2 statement
         // overlay into plain triples; it is a lossless re-rendering, so the only
         // entries are whatever reading the sources already dropped.

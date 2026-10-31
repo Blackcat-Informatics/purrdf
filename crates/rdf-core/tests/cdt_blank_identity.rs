@@ -216,18 +216,18 @@ fn an_embedded_blank_node_counts_as_a_blank_node() {
 /// form carries the ISSUED labels rather than the input ones.
 #[test]
 fn the_canonical_form_carries_issued_labels_inside_the_literal() {
-    let a = try_canonicalize(
+    let a_owner = try_canonicalize(
         &list_object("[_:x, 42]"),
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap()
-    .nquads;
-    let b = try_canonicalize(
+    .unwrap();
+    let a = a_owner.nquads();
+    let b_owner = try_canonicalize(
         &list_object("[_:y, 42]"),
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap()
-    .nquads;
+    .unwrap();
+    let b = b_owner.nquads();
     assert_eq!(a, b);
     assert!(a.contains("c14n0"), "canonical N-Quads: {a}");
     assert!(

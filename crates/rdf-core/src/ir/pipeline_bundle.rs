@@ -597,10 +597,9 @@ impl<H> BundleCore<H> {
         control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<ContentDigest, PipelineBundleError> {
         let canonical = try_canonicalize_view(view, CanonHash::Sha256, control)
-            .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?
-            .nquads;
+            .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?;
         DigestWorkCounter::bump(&self.work.dataset_canonicalizations);
-        Ok(self.digest_over(&canonical))
+        Ok(self.digest_over(canonical.nquads()))
     }
 
     fn residue_digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
@@ -610,10 +609,9 @@ impl<H> BundleCore<H> {
     ) -> Result<ContentDigest, PipelineBundleError> {
         let residue = ResidueView(view);
         let canonical = try_canonicalize_view(&residue, CanonHash::Sha256, control)
-            .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?
-            .nquads;
+            .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?;
         DigestWorkCounter::bump(&self.work.residue_canonicalizations);
-        Ok(ContentDigest::of(canonical.as_bytes()))
+        Ok(ContentDigest::of(canonical.nquads().as_bytes()))
     }
 
     fn digest_over(&self, canonical_nquads: &str) -> ContentDigest {
@@ -2357,7 +2355,7 @@ mod tests {
                     &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
                 )
                 .unwrap()
-                .nquads
+                .nquads()
                 .as_bytes()
             )
         );

@@ -1999,7 +1999,7 @@ pub(crate) fn prepared_and_query_forms() {
                     )
                 )
                 .unwrap()
-                .nquads,
+                .nquads(),
                 purrdf_core::ir::canon::try_canonicalize(
                     &b,
                     &mut purrdf_core::CanonicalizationControl::new(
@@ -2008,7 +2008,7 @@ pub(crate) fn prepared_and_query_forms() {
                     )
                 )
                 .unwrap()
-                .nquads
+                .nquads()
             ),
             (a, b) => panic!("same original form: {a:?}/{b:?}"),
         }
@@ -2704,7 +2704,7 @@ pub(crate) fn scoped_streams_and_update_where() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         purrdf_core::ir::canon::try_canonicalize(
             &shaped,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -2713,7 +2713,7 @@ pub(crate) fn scoped_streams_and_update_where() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         "UPDATE WHERE uses the same native physical dispatch and original graph writer"
     );
 }

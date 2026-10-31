@@ -1145,13 +1145,16 @@ fn schema_compilation_key(
     })?;
 
     let mut bytes = Vec::with_capacity(
-        shapes.nquads.len() + ontology.nquads.len() + request.namespaces.prefixes.len() * 64 + 256,
+        shapes.nquads().len()
+            + ontology.nquads().len()
+            + request.namespaces.prefixes.len() * 64
+            + 256,
     );
     frame_be_labelled(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
     frame_be_labelled(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
     frame_be_labelled(&mut bytes, "crate-version", crate::VERSION.as_bytes());
-    frame_be_labelled(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
-    frame_be_labelled(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
+    frame_be_labelled(&mut bytes, "shapes-rdfc", shapes.nquads().as_bytes());
+    frame_be_labelled(&mut bytes, "ontology-rdfc", ontology.nquads().as_bytes());
     frame_be_labelled(
         &mut bytes,
         "primary-prefix",

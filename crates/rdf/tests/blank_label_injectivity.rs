@@ -121,15 +121,16 @@ fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap();
-    assert_eq!(probe.labels.len(), 5, "five blank nodes to canonicalize");
-    assert_eq!(merged.labels.len(), 3, "the control really has three");
+    assert_eq!(probe.label_count(), 5, "five blank nodes to canonicalize");
+    assert_eq!(merged.label_count(), 3, "the control really has three");
     assert_ne!(
-        probe.nquads, merged.nquads,
+        probe.nquads(),
+        merged.nquads(),
         "two non-isomorphic datasets must not canonicalize to identical bytes"
     );
     // Canonicalization is itself stable across the round trip.
     assert_eq!(
-        probe.nquads,
+        probe.nquads(),
         try_canonicalize(
             &parse(&serialize(&parse(PROBE))),
             &mut purrdf_core::CanonicalizationControl::new(
@@ -138,7 +139,7 @@ fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
             )
         )
         .unwrap()
-        .nquads
+        .nquads()
     );
 }
 

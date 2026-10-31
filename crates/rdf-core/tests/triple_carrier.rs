@@ -296,8 +296,8 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
             )
         )
         .unwrap()
-        .nquads,
-        before.nquads
+        .nquads(),
+        before.nquads()
     );
     assert_eq!(
         try_flat_digest_view(
@@ -331,8 +331,8 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
             )
         )
         .unwrap()
-        .nquads,
-        before.nquads
+        .nquads(),
+        before.nquads()
     );
     assert_eq!(
         try_flat_digest_view(
@@ -358,8 +358,8 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
             )
         )
         .unwrap()
-        .nquads,
-        before.nquads
+        .nquads(),
+        before.nquads()
     );
     assert_eq!(
         try_flat_digest_view(

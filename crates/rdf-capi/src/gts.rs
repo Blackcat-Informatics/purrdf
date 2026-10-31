@@ -100,7 +100,7 @@ pub unsafe extern "C" fn purrdf_to_gts(
             .map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
             })?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }

@@ -286,7 +286,8 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
                         None
                     )
                 )
-                .expect("canonical expected dataset"),
+                .expect("canonical expected dataset")
+                .nquads(),
                 canonical_flat_nquads(
                     &actual,
                     &mut purrdf_core::CanonicalizationControl::new(
@@ -295,6 +296,7 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
                     )
                 )
                 .expect("canonical actual dataset")
+                .nquads()
             ));
         }
     }

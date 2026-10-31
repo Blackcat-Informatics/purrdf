@@ -9804,7 +9804,7 @@ mod tests {
                 ),
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/from> <http://ex/g1> <http://ex/audit> .\n\
              <http://ex/a> <http://ex/from> <http://ex/g2> <http://ex/audit> .\n\
              <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g1> .\n\

@@ -41,7 +41,7 @@
 //! unchanged.
 
 use purrdf_validate::regime::{
-    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer,
+    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer, ReasoningText,
     RegimeClosure as BoundaryClosure, RegimeHost, certain_answers_to_string,
     check_absent_proof_is_not_verifiable, check_dl_proof, check_dl_proof_golden_vectors,
     check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
@@ -61,7 +61,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug)]
 pub struct RegimeClosure {
     /// The materialized dataset as canonical (RDFC-1.0) N-Quads.
-    nquads: String,
+    nquads: purrdf_core::Canonicalized,
     /// The run's reasoning report, in the boundary's byte-stable rendering.
     report: String,
     canonicalization_json: String,
@@ -81,7 +81,7 @@ impl RegimeClosure {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn nquads(&self) -> String {
-        self.nquads.clone()
+        self.nquads.nquads().to_owned()
     }
 
     /// What the run actually did: which rules fired and how often, which
@@ -362,7 +362,7 @@ pub fn entail_check_inconsistent_refusal(
 #[derive(Debug)]
 pub struct ReasoningAnswer {
     /// The service's answer, in the boundary's line-oriented rendering.
-    answer: String,
+    answer: ReasoningText,
     /// The certificate of the run that produced it.
     certificate: String,
     /// The proof term of the run that produced it, or the `availability not-recorded`
@@ -388,7 +388,7 @@ impl ReasoningAnswer {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn answer(&self) -> String {
-        self.answer.clone()
+        self.answer.as_ref().to_owned()
     }
 
     /// How completely the service decided, in one of THREE certificate grammars —
@@ -439,9 +439,9 @@ impl ReasoningAnswer {
     }
 }
 
-impl From<BoundaryAnswer> for ReasoningAnswer {
-    fn from(produced: BoundaryAnswer) -> Self {
-        let (answer, certificate, proof) = produced.into_proved_parts();
+impl<A: AsRef<str> + Into<ReasoningText>> From<BoundaryAnswer<A>> for ReasoningAnswer {
+    fn from(produced: BoundaryAnswer<A>) -> Self {
+        let (answer, certificate, proof) = produced.map_answer(Into::into).into_proved_parts();
         Self {
             answer,
             certificate,
@@ -2121,7 +2121,11 @@ mod tests {
         )
         .map_err(|error| error.to_string())
         .expect("closes over the import");
-        assert!(closed.nquads.contains(derived), "{}", closed.nquads);
+        assert!(
+            closed.nquads.nquads().contains(derived),
+            "{}",
+            closed.nquads.nquads()
+        );
         let unreached = materialize_impl(
             fact,
             "rdfs",
@@ -2160,7 +2164,7 @@ mod tests {
         )
         .map_err(|error| error.to_string())
         .expect("imports nothing");
-        assert!(!plain.nquads.contains(derived));
+        assert!(!plain.nquads.nquads().contains(derived));
 
         let refused = consistency_impl(
             &importing,
@@ -2191,7 +2195,7 @@ mod tests {
         )
         .map_err(|error| error.to_string())
         .expect("decides the closure");
-        assert_eq!(decided.answer, "consistency false\n");
+        assert_eq!(decided.answer.as_ref(), "consistency false\n");
         let unreached = consistency_impl(
             fact,
             &iris,
@@ -2222,7 +2226,8 @@ mod tests {
             )
             .map_err(|error| error.to_string())
             .expect("imports nothing")
-            .answer,
+            .answer
+            .as_ref(),
             "consistency true\n"
         );
     }
@@ -2645,7 +2650,7 @@ mod tests {
         )
         .map_err(|error| error.to_string())
         .expect("exact");
-        assert_eq!(exact.nquads, closed.nquads);
+        assert_eq!(exact.nquads.nquads(), closed.nquads.nquads());
         let Err(steps) = materialize_impl(
             SCHEMA,
             "owl-rl",
@@ -2742,7 +2747,7 @@ mod tests {
         )
         .map_err(|error| error.to_string())
         .unwrap();
-        assert_eq!(exact.nquads, reference.nquads);
+        assert_eq!(exact.nquads.nquads(), reference.nquads.nquads());
     }
 
     #[test]

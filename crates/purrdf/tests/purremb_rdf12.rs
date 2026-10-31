@@ -124,8 +124,7 @@ fn rdf_fixture_with_columnar(
     let subject_target = RdfTermTarget::Blank {
         dataset_id: dataset_target.id,
         canonical_label: canonical
-            .labels
-            .get(&subject)
+            .label(&subject)
             .expect("canonical blank label")
             .to_string(),
     }

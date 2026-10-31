@@ -329,11 +329,10 @@ fn a_rule_fires_at_an_explicit_shape_target() {
             ),
         )
         .unwrap()
-        .nquads
     };
     let fired = "<http://example.org/ns#a> <http://example.org/ns#q> <http://example.org/ns#v>";
-    assert!(entail("ex:a sh:shape ex:S .").contains(fired));
-    assert!(!entail("ex:a ex:p ex:S .").contains(fired));
+    assert!(entail("ex:a sh:shape ex:S .").nquads().contains(fired));
+    assert!(!entail("ex:a ex:p ex:S .").nquads().contains(fired));
 }
 
 // ── Where targets (sh:targetWhere) ─────────────────────────────────────────────

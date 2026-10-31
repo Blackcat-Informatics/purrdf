@@ -418,7 +418,7 @@ fn run_case(entry: &Value) -> Result<(), String> {
                     )
                 )
                 .unwrap()
-                .nquads,
+                .nquads(),
                 try_canonicalize(
                     &expected,
                     &mut purrdf_core::CanonicalizationControl::new(
@@ -427,7 +427,7 @@ fn run_case(entry: &Value) -> Result<(), String> {
                     )
                 )
                 .unwrap()
-                .nquads,
+                .nquads(),
             ))
         } else {
             Err(summary)

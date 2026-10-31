@@ -448,7 +448,7 @@ mod tests {
     /// purrdf, so the native `serialize_dataset` is out of reach here). For the
     /// single-quad fixtures below the canonical document is identical to the written
     /// quad line; multi-quad callers get a deterministic bytewise-sorted document.
-    fn roundtrip_nquads(dataset: &RdfDataset, profile: &str) -> String {
+    fn roundtrip_nquads(dataset: &RdfDataset, profile: &str) -> purrdf_core::Canonicalized {
         let graph = roundtrip(dataset, &RdfLookaside::default(), profile);
         let bundle =
             crate::import_gts_graph(graph).expect("import the round-tripped GTS graph into the IR");
@@ -460,11 +460,11 @@ mod tests {
             ),
         )
         .unwrap()
-        .nquads
     }
 
     fn assert_nquads_eq(dataset: &RdfDataset, profile: &str, expected: &str) {
-        let nquads = roundtrip_nquads(dataset, profile);
+        let nquads_owner = roundtrip_nquads(dataset, profile);
+        let nquads = nquads_owner.nquads();
         assert_eq!(nquads.trim(), expected.trim());
     }
 
@@ -553,7 +553,8 @@ mod tests {
             )],
         );
 
-        let nquads = roundtrip_nquads(&ds, "purrdf-test");
+        let nquads_owner = roundtrip_nquads(&ds, "purrdf-test");
+        let nquads = nquads_owner.nquads();
         assert!(nquads.contains("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"));
         assert!(nquads.contains("https://example.org/confidence"));
         assert!(nquads.contains("0.9"));

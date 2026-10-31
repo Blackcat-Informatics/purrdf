@@ -40,17 +40,17 @@ pub(super) fn canonicalize_quads(
 }
 
 /// Map each original blank-node label to its canonical `c14nN` label.
-fn label_map(ds: &RdfDataset, c: &Canonicalized) -> FastMap<String, String> {
-    let mut map = FastMap::with_capacity_and_hasher(c.labels.len(), FastHasher::default());
-    for (&tid, label) in &c.labels {
+fn label_map<'a>(ds: &'a RdfDataset, c: &'a Canonicalized) -> FastMap<&'a str, &'a str> {
+    let mut map = FastMap::with_capacity_and_hasher(c.label_count(), FastHasher::default());
+    for (tid, label) in c.labels() {
         if let TermRef::Blank { label: orig, .. } = ds.resolve(tid) {
-            map.insert(orig.to_owned(), label.to_string());
+            map.insert(orig, label);
         }
     }
     map
 }
 
-fn relabel_quad(quad: &RdfQuad, map: &FastMap<String, String>) -> RdfQuad {
+fn relabel_quad(quad: &RdfQuad, map: &FastMap<&str, &str>) -> RdfQuad {
     let mut out = RdfQuad::new(
         relabel_term(&quad.subject, map),
         quad.predicate.clone(),
@@ -64,11 +64,11 @@ fn relabel_quad(quad: &RdfQuad, map: &FastMap<String, String>) -> RdfQuad {
 /// terms). Canonicalization assigns a label to *every* blank in the dataset, so an
 /// unmapped blank is a broken invariant — hard-fail rather than silently passing the
 /// original id through (no degraded fallback; `.goals`).
-fn relabel_term(term: &RdfTerm, map: &FastMap<String, String>) -> RdfTerm {
+fn relabel_term(term: &RdfTerm, map: &FastMap<&str, &str>) -> RdfTerm {
     match term {
         RdfTerm::Iri(_) | RdfTerm::Literal(_) => term.clone(),
-        RdfTerm::BlankNode(label) => match map.get(label) {
-            Some(canon) => RdfTerm::BlankNode(canon.clone()),
+        RdfTerm::BlankNode(label) => match map.get(label.as_str()) {
+            Some(canon) => RdfTerm::BlankNode((*canon).to_owned()),
             None => unreachable!(
                 "RDFC-1.0 labels every blank node; missing canonical label for _:{label}"
             ),

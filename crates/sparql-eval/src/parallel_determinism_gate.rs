@@ -503,7 +503,7 @@ fn comparable(
         },
         SparqlResult::Boolean(b) => Comparable::Boolean(*b),
         SparqlResult::Graph(ds) => Comparable::Graph {
-            nquads: try_canonicalize(ds, control).unwrap().nquads,
+            nquads: try_canonicalize(ds, control).unwrap().nquads(),
         },
     }
 }

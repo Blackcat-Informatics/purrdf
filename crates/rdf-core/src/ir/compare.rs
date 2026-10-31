@@ -138,8 +138,8 @@ fn canonical_equal<
 ) -> Result<bool, canon::CanonError> {
     // The exact oracle: byte-equal canonical N-Quads ⇔ RDF isomorphism.
     Ok(
-        canon::try_canonicalize_view(a, canon::CanonHash::Sha256, control)?.nquads
-            == canon::try_canonicalize_view(b, canon::CanonHash::Sha256, control)?.nquads,
+        canon::try_canonicalize_view(a, canon::CanonHash::Sha256, control)?.nquads()
+            == canon::try_canonicalize_view(b, canon::CanonHash::Sha256, control)?.nquads(),
     )
 }
 
