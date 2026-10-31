@@ -461,8 +461,12 @@ impl<'a> Builder<'a> {
         if !std::sync::Weak::ptr_eq(index, &Arc::downgrade(&owner.index)) {
             return Err(PreparationRefusal::ForeignIndex.into());
         }
-        crate::expression::named_outputs::visit(expression, |target| {
-            let definition = owner.definition_required(target)?;
+        crate::expression::named_outputs::visit_terms(expression, |target| {
+            // Only an emitted, selected target must resolve. An unselected If
+            // branch or an empty focus must not acquire an eager runtime error.
+            let Some(definition) = owner.definition(target) else {
+                return Ok(());
+            };
             self.edge(
                 Node {
                     kind: Kind::Shape(definition),
@@ -690,12 +694,22 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
             && let Some(target) =
                 super::closed::original_conformance(expr, self.owner).map_err(WalkError::Shape)?
         {
-            // The focus operand is independent of the valuation. The expression
-            // asks only this original target, so its dependency is positive in both the
-            // selected proof and the unselected cycle-admission graph.
+            // Both operands are independent of the valuation. Every possible
+            // original target adds a positive dependency in the selected proof
+            // and the unselected cycle-admission graph.
             let previous = self.context;
             self.context = Context::default();
-            let result = self.reference(&target.id, shnex::CONFORMS_TO_SHAPE);
+            let result = match target {
+                ShapeArg::Named(target) => self.reference(&target.id, shnex::CONFORMS_TO_SHAPE),
+                ShapeArg::Computed { expr, shapes } => self
+                    .indexed_targets(
+                        expr,
+                        shapes,
+                        shnex::CONFORMS_TO_SHAPE,
+                        RecursionPolarity::Positive,
+                    )
+                    .map(|_| ()),
+            };
             self.context = previous;
             return result;
         }

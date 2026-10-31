@@ -1746,9 +1746,22 @@ pub(crate) fn eval_planned_conformance_focus(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Option<Term>, crate::error::ShapesError> {
+    eval_planned_conformance_operand(store, focus, node, lowered, plan, guard, scope)
+        .and_then(conformance_focus)
+}
+
+/// Evaluate a proved operand under the enclosing conformance structural frame.
+pub(crate) fn eval_planned_conformance_operand(
+    store: &ShaclData,
+    focus: &Term,
+    node: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     guard.enter_node_expr()?;
-    let result = eval_planned_node_expr_in_scope(store, focus, node, lowered, plan, guard, scope)
-        .and_then(conformance_focus);
+    let result = eval_planned_node_expr_in_scope(store, focus, node, lowered, plan, guard, scope);
     guard.exit_node_expr();
     result
 }
@@ -1762,6 +1775,29 @@ fn conformance_focus(mut candidates: Vec<Term>) -> Result<Option<Term>, crate::e
         .into());
     }
     Ok(candidates.pop())
+}
+
+/// Resolve the selected computed operand through its original lowered index.
+pub(crate) fn conformance_target<'a>(
+    produced: &[Term],
+    plan: ShapePlan<'a>,
+    index: u32,
+) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
+    let [shape_iri] = produced else {
+        return Err(format!(
+            "shnex:conformsToShape shape argument must produce exactly \
+             one shape IRI, got {}",
+            produced.len()
+        )
+        .into());
+    };
+    plan.indexed(index, shape_iri)?.ok_or_else(|| {
+        format!(
+            "shnex:conformsToShape shape argument produced \
+             {shape_iri}, which is not a shape of this shapes graph"
+        )
+        .into()
+    })
 }
 
 /// Evaluate a node expression that has NO stage-0 lowering, lowering it here.
@@ -2435,21 +2471,7 @@ fn eval_node_expr_at_depth(
                         )?)]),
                         ShapeArg::Computed { expr, .. } => {
                             let produced = descend!(expr, 1)?;
-                            let [shape_iri] = produced.as_slice() else {
-                                return Err(format!(
-                                    "shnex:conformsToShape shape argument must produce exactly \
-                                     one shape IRI, got {}",
-                                    produced.len()
-                                )
-                                .into());
-                            };
-                            let shape_plan =
-                                plan.indexed(lowered.index()?, shape_iri)?.ok_or_else(|| {
-                                    format!(
-                                        "shnex:conformsToShape shape argument produced \
-                                         {shape_iri}, which is not a shape of this shapes graph"
-                                    )
-                                })?;
+                            let shape_plan = conformance_target(&produced, plan, lowered.index()?)?;
                             Ok(vec![bool_literal(conforms_guarded(
                                 store, &only, shape_plan, guard,
                             )?)])
