@@ -15,7 +15,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 use purrdf::{
-    AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedPurrpckSource, DerivedIndex,
+    AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedEmbeddingSource, DerivedIndex,
     DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
     EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, ExtensionTarget,
     IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
@@ -31,7 +31,7 @@ use purrdf_hnsw::{HnswIndex, IndexArithmetic, Params, VectorMatrix, guard, level
 
 /// One fixture context: everything needed to rebuild the artifact with a different index.
 struct Context {
-    source: CertifiedPurrpckSource,
+    source: CertifiedEmbeddingSource,
     contract: EmbeddingFamilyContract,
     family: EmbeddingFamily,
     targets: Vec<EmbeddingTarget>,
@@ -293,7 +293,7 @@ impl Fixture {
 fn context(rows: usize, dims: usize, prefix: usize) -> Context {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _source_bytes) =
-        CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");
 
     let mut targets = vec![dataset_target];

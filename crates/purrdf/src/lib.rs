@@ -138,9 +138,10 @@ pub use purrdf_rdf::*;
 
 pub mod embedding;
 pub use embedding::{
-    CanonicalMetadataInput, CanonicalMetadataSections, CertifiedPurrpckSource, EmbeddingBuilder,
-    EmbeddingStreamWriter, EncodedArtifact, MatrixInput, MatrixRow, ProjectionSpec,
-    SourceVerificationReport, bind_external_pack, verify_embedding_source, verify_external_pack,
+    CanonicalMetadataInput, CanonicalMetadataSections, CertifiedEmbeddingSource, EmbeddingBuilder,
+    EmbeddingSource, EmbeddingStreamWriter, EncodedArtifact, MatrixInput, MatrixRow,
+    ProjectionSpec, SourceAttachmentError, SourceVerificationReport, bind_external_pack,
+    verify_embedding_source, verify_external_pack,
 };
 
 /// Borrowed typed error inspection, available without a sub-crate dependency.

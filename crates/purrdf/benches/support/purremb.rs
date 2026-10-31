@@ -15,7 +15,7 @@ use std::collections::BinaryHeap;
 use std::io::Cursor;
 
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, ContentDigest, CorpusTarget,
     DimensionalityPolicy, DistanceMetric, DocumentTarget, EffectiveMatrixView, EffectivePrefix,
     EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingStreamWriter, EmbeddingTarget,
     EmbeddingView, ExtensionTarget, MatrixCommitment, MatrixInput, MatrixRow, PrefixPostprocessing,
@@ -47,9 +47,9 @@ const FX: Identities = Identities {
     ..Identities::at("https://example.org/bench/purremb/")
 };
 
-fn source() -> (CertifiedPurrpckSource, EmbeddingTarget) {
+fn source() -> (CertifiedEmbeddingSource, EmbeddingTarget) {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty RDF source");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
     let target = source.dataset_target(true).expect("source dataset target");
     (source, target)
 }
@@ -183,7 +183,7 @@ fn matrix_commitment(view: &EmbeddingView<'_>) -> MatrixCommitment {
 
 pub(crate) struct F32Fixture {
     pub(crate) bytes: Vec<u8>,
-    source: CertifiedPurrpckSource,
+    source: CertifiedEmbeddingSource,
     contract: EmbeddingFamilyContract,
     targets: Vec<EmbeddingTarget>,
     pub(crate) target_set: TargetSet,

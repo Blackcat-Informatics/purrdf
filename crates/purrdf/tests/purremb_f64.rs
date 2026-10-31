@@ -4,7 +4,7 @@
 //! Lossless double precision PURREMB round trip.
 
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, EmbeddingView, MatrixInput,
     MatrixRow, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, TargetSet, VectorDtype,
     verify_embedding,
@@ -16,7 +16,7 @@ const FX: Identities = Identities::at("https://example.org/");
 #[test]
 fn binary64_bits_and_signed_zero_round_trip() {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
     let target = source.dataset_target(true).expect("dataset target");
     let target_id = target.id;
     let set = TargetSet::new(vec![target_id]).expect("target set");

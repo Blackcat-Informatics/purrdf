@@ -75,7 +75,7 @@ impl TryFrom<u32> for TargetKind {
     }
 }
 
-/// Canonical target plus optional retained identity bytes and pack-local ordinal.
+/// Canonical target plus optional retained identity bytes and source-local ordinal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EmbeddingTarget {
     /// Stable target identity.
@@ -1175,11 +1175,6 @@ fn validate_ordinal(kind: TargetKind, ordinal: Option<u64>) -> Result<(), Embedd
             "u64::MAX is reserved for an absent source ordinal",
         ));
     }
-    if kind == TargetKind::RdfTerm && ordinal == Some(0) {
-        return Err(EmbeddingError::Malformed(
-            "RDF term source ordinals are one-based",
-        ));
-    }
     Ok(())
 }
 
@@ -1398,13 +1393,19 @@ mod tests {
     }
 
     #[test]
-    fn rdf_term_ordinals_are_one_based() {
-        let error = EmbeddingTarget::from_digest(
+    fn source_free_ordinals_allow_zero_and_preserve_the_absent_sentinel() {
+        EmbeddingTarget::from_digest(
             TargetKind::RdfTerm,
             TargetIdentityDigest::from_raw([4; 32]),
             Some(0),
         )
-        .expect_err("zero is not a unified PackId");
+        .expect("Columnar dictionary rows are zero-based");
+        let error = EmbeddingTarget::from_digest(
+            TargetKind::RdfTerm,
+            TargetIdentityDigest::from_raw([4; 32]),
+            Some(u64::MAX),
+        )
+        .expect_err("the absence sentinel is never a present ordinal");
         assert!(matches!(error, EmbeddingError::Malformed(_)));
 
         EmbeddingTarget::from_digest(

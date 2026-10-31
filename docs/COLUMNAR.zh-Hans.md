@@ -11,6 +11,23 @@ SPDX-License-Identifier: CC-BY-4.0
 
 所有表都是扁平的。Parquet 物理类型只有 `INT64` 和 `BYTE_ARRAY`；表示文本的字节数组带有标准 UTF8 注解。必需列每行恰有一个值。可选列的定义层级为 0 时表示 null，为 1 时表示有值。
 
+## 精确文件来源清单
+
+PURREMB `source_format = 2` 通过以下规范二进制清单绑定实际的五文件模式 v1 集合。所有整数均为无符号小端序。
+
+| 字段 | 编码 |
+| --- | --- |
+| 魔数 | 八个 ASCII 字节 `PURRCOLM` |
+| 清单版本 | `u32`，值为 `1` |
+| 表数量 | `u32`，值为 `5` |
+| 每个文件记录 | `u64` 文件名字节长度、UTF-8 文件名字节、`u64` 实际文件字节长度、全部实际文件字节的原始 32 字节 SHA-256 |
+
+记录严格采用 `Table::ALL` 顺序：`terms.parquet`、`quads.parquet`、`reifiers.parquet`、`annotations.parquet`、`blobs.parquet`。文件名使用 `purrdf_hash::frame::frame_le` 定界，无填充及尾随数据。所有文件均须包含，包括有效的零行 Parquet 文件；缺失文件不是空表。
+
+`source_manifest` 从 `ParquetFiles` 计算这些字节，但不验证 Parquet 或认证 RDF。认证先完成严格的原生读取，包括每个 blob 摘要，再使用 `purrdf-rdfc12` 对重建的 RDF 数据集独立规范化。PURREMB 保存清单的字节长度和 `SHA256(manifest bytes)`，与认证的 RDF 摘要分开。
+
+`read_with_ordinals` 完成与 `read` 相同的严格读取，仅保留请求的原始项、四元组、具体化绑定及注释行，行号从零开始。证据使用读取器显式的来源字典到内核映射，始终绑定实际重建的数据集。内核 ID 和最终迭代次序不是来源序号。空请求不保留陈述行证据；完成请求不能跳过后续行、表或 blob 的验证。
+
 ## 投影失败
 
 原生完整性错误通过 `ColumnarError::ContentStore` 或 `BlobContent { row, cause }` 保留原始 `ContentStoreError`，其中行号从零开始。结构化错误协议直接借用两个 SHA-256 摘要的原始字节。`Reconstruction` 保留完整的原始 `RdfDiagnostic`，包括存储错误和原生原因附件。标准错误链直接借用这些原因；传递时不格式化、克隆或分配替代原因。既有的人类可读消息前缀和冻结字节保持不变。

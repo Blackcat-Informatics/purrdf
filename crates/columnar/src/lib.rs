@@ -24,6 +24,8 @@ mod column;
 mod compact;
 pub mod error;
 mod files;
+mod manifest;
+mod ordinal;
 mod parquet;
 #[doc(hidden)]
 pub mod plain_bench;
@@ -37,8 +39,10 @@ pub use error::{
     PageBodyReason, ProjectionReason, ReaderReason, ValueBodyReason,
 };
 pub use files::ParquetFiles;
+pub use manifest::source_manifest;
+pub use ordinal::{ColumnarOrdinal, ColumnarOrdinalRead, ColumnarOrdinalValue};
 pub use parquet::Compression;
 pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};
-pub use reader::{ColumnarRead, read};
+pub use reader::{ColumnarRead, read, read_with_ordinals};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
 pub use writer::{ColumnarWrite, project, write};

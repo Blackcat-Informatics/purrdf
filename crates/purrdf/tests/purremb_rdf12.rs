@@ -4,12 +4,13 @@
 //! RDF 1.2 graph, reifier, annotation, directional-literal, and triple-term targets.
 
 use purrdf::{
-    BlankScope, CanonicalMetadataInput, CertifiedPurrpckSource, DatasetView, EmbeddingBuilder,
-    EmbeddingError, EmbeddingFamilyContract, EmbeddingTarget, EmbeddingView, MatrixInput,
-    MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfAnnotationTarget,
+    BlankScope, CanonicalMetadataInput, CertifiedEmbeddingSource, DatasetView, EmbeddingBuilder,
+    EmbeddingError, EmbeddingFamilyContract, EmbeddingSource, EmbeddingTarget, EmbeddingView,
+    MatrixInput, MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfAnnotationTarget,
     RdfDatasetBuilder, RdfGraphTarget, RdfLiteral, RdfReifierTarget, RdfStatementTarget,
-    RdfTermTarget, RdfTextDirection, RelationKind, TargetKind, TargetRelation, TargetSet, TermRef,
-    try_canonicalize, verify_embedding, verify_embedding_source,
+    RdfTermTarget, RdfTextDirection, RelationKind, SourceAttachmentError, TargetKind,
+    TargetRelation, TargetSet, TermRef, try_canonicalize, verify_embedding,
+    verify_embedding_source,
 };
 use purrdf_core::purremb_fixture::Identities;
 
@@ -19,8 +20,9 @@ const FX: Identities = Identities {
     ..Identities::at("https://example.org/rdf12/")
 };
 
+#[derive(Clone)]
 struct RdfFixture {
-    source: CertifiedPurrpckSource,
+    source: CertifiedEmbeddingSource,
     source_bytes: Vec<u8>,
     targets: Vec<EmbeddingTarget>,
     relations: Vec<TargetRelation>,
@@ -29,6 +31,12 @@ struct RdfFixture {
 }
 
 fn rdf_fixture() -> RdfFixture {
+    rdf_fixture_with_columnar(None).0
+}
+
+fn rdf_fixture_with_columnar(
+    compression: Option<purrdf::columnar::Compression>,
+) -> (RdfFixture, Option<purrdf::columnar::ParquetFiles>) {
     let mut dataset = RdfDatasetBuilder::new();
     let subject = dataset
         .intern_blank("source-label", BlankScope::DEFAULT)
@@ -88,7 +96,15 @@ fn rdf_fixture() -> RdfFixture {
     let dataset = dataset.freeze().expect("valid RDF 1.2 dataset");
     let canonical = try_canonicalize(&dataset).expect("canonical labels");
     let (source, source_bytes) =
-        CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let files = compression.map(|compression| {
+        purrdf::columnar::write(&*dataset, &purrdf::ContentStore::new(), compression)
+            .unwrap()
+            .files
+    });
+    let source = files.as_ref().map_or(source, |files| {
+        CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(files)).unwrap()
+    });
     let dataset_target = source.dataset_target(true).expect("dataset target");
 
     let subject_target = RdfTermTarget::Blank {
@@ -325,7 +341,7 @@ fn rdf_fixture() -> RdfFixture {
             annotation_object_target.id,
         ),
     ];
-    let targets = vec![
+    let mut targets = vec![
         dataset_target,
         subject_target,
         predicate_target,
@@ -344,13 +360,110 @@ fn rdf_fixture() -> RdfFixture {
         reifier.clone(),
         annotation.clone(),
     ];
-    RdfFixture {
-        source,
-        source_bytes,
-        targets,
-        relations,
-        matrix_targets: vec![outer_target, reifier, annotation],
-        family_contract: FX.cosine_contract("rdf12-projection", 2),
+    if files.is_some() {
+        use purrdf::columnar::{ProjectionCell, Table};
+        let projection =
+            purrdf::columnar::project(&*dataset, &purrdf::ContentStore::new()).unwrap();
+        // The source dictionary orders values independently of ingest IDs.
+        // Select original rows by their literal source fields, never kernel IDs.
+        let term_rows: Vec<_> = projection.rows(Table::Terms).collect();
+        for (target_index, lexical) in [
+            (1, "source-label"),
+            (5, "https://example.org/rdf12/confidence"),
+        ] {
+            let row = term_rows
+                .iter()
+                .position(|row| row[2] == ProjectionCell::Bytes(lexical.as_bytes()))
+                .unwrap();
+            targets[target_index].source_local_ordinal = Some(row as u64);
+        }
+        let first_iri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+        assert_eq!(term_rows[0][2], ProjectionCell::Bytes(first_iri.as_bytes()));
+        targets.push(
+            RdfTermTarget::Iri(first_iri.into())
+                .into_target(true, Some(0))
+                .unwrap(),
+        );
+        let literal_row = term_rows
+            .iter()
+            .position(|row| row[2] == ProjectionCell::Bytes(b"bonjour"))
+            .unwrap();
+        let inner_row = term_rows
+            .iter()
+            .position(|row| {
+                row[1] == ProjectionCell::Int64(3)
+                    && row[9] == ProjectionCell::Int64(literal_row as i64)
+            })
+            .unwrap();
+        targets[8].source_local_ordinal = Some(inner_row as u64);
+        // There is exactly one binding and annotation. The first base row is
+        // the non-triple statement in the default graph.
+        targets[12].source_local_ordinal = Some(0);
+        targets[15].source_local_ordinal = Some(0);
+        targets[16].source_local_ordinal = Some(0);
+    }
+    (
+        RdfFixture {
+            source,
+            source_bytes,
+            targets,
+            relations,
+            matrix_targets: vec![outer_target, reifier, annotation],
+            family_contract: FX.cosine_contract("rdf12-projection", 2),
+        },
+        files,
+    )
+}
+
+#[test]
+fn columnar_rdf12_source_ordinals_use_original_rows_and_canonical_blank_labels() {
+    use purrdf::columnar::Compression;
+    for compression in [Compression::Uncompressed, Compression::Zstd] {
+        let (fixture, files) = rdf_fixture_with_columnar(Some(compression));
+        let files = files.unwrap();
+        let bytes = build(&fixture, fixture.relations.clone()).unwrap();
+        let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
+        verify_embedding(&mut view).unwrap();
+        let report = verify_embedding_source(&view, EmbeddingSource::Columnar(&files)).unwrap();
+        assert_eq!(report.ordinals_checked(), 7);
+        assert_eq!(
+            report.certified_rdf_digest(),
+            fixture.source.certified_rdf_digest()
+        );
+
+        for index in [1, 5, 8, 12, 15, 16, 17] {
+            let mut stale = fixture.targets.clone();
+            stale[index].source_local_ordinal = Some(u64::MAX - 1);
+            let changed = RdfFixture {
+                targets: stale,
+                ..fixture.clone()
+            };
+            let bytes = build(&changed, changed.relations.clone()).unwrap();
+            let view = EmbeddingView::from_bytes(&bytes).unwrap();
+            assert!(matches!(
+                verify_embedding_source(&view, EmbeddingSource::Columnar(&files)),
+                Err(SourceAttachmentError::Columnar(cause))
+                    if matches!(*cause, purrdf::columnar::ColumnarError::OrdinalOutOfRange { .. })
+            ));
+        }
+        for (index, ordinal) in [(5, 1), (12, 1)] {
+            let mut changed = fixture.clone();
+            changed.targets[index].source_local_ordinal = Some(ordinal);
+            let bytes = build(&changed, changed.relations.clone()).unwrap();
+            let view = EmbeddingView::from_bytes(&bytes).unwrap();
+            assert!(matches!(
+                verify_embedding_source(&view, EmbeddingSource::Columnar(&files)),
+                Err(SourceAttachmentError::Embedding(
+                    EmbeddingError::OrdinalMismatch { .. }
+                ))
+            ));
+        }
+        let mut unsupported = fixture;
+        unsupported.targets[10].source_local_ordinal = Some(0);
+        assert!(matches!(
+            build(&unsupported, unsupported.relations.clone()),
+            Err(EmbeddingError::Malformed(_))
+        ));
     }
 }
 
@@ -402,7 +515,8 @@ fn rdf12_composites_round_trip_through_one_identity_model() {
     let bytes = build(&fixture, fixture.relations.clone()).expect("RDF 1.2 PURREMB");
     let mut view = EmbeddingView::from_bytes(&bytes).expect("structural view");
     verify_embedding(&mut view).expect("full RDF target verification");
-    verify_embedding_source(&view, &fixture.source_bytes).expect("certified RDF source");
+    verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
+        .expect("certified RDF source");
     assert_eq!(view.target_count(), fixture.targets.len());
     assert_eq!(view.relation_count(), fixture.relations.len());
     assert_eq!(
@@ -429,6 +543,20 @@ fn multi_binding_fixture_with_annotation(
     include_unbound_annotation: bool,
     [annotation_predicate, annotation_object]: [usize; 2],
 ) -> RdfFixture {
+    multi_binding_carrier(
+        include_unbound_annotation,
+        [annotation_predicate, annotation_object],
+        false,
+    )
+    .0
+}
+
+fn multi_binding_carrier(
+    include_unbound_annotation: bool,
+    [annotation_predicate, annotation_object]: [usize; 2],
+    columnar: bool,
+) -> (RdfFixture, Option<purrdf::columnar::ParquetFiles>) {
+    use purrdf::columnar::{ProjectionCell, Table};
     let iris = [
         "subject",
         "predicate",
@@ -467,7 +595,18 @@ fn multi_binding_fixture_with_annotation(
     }
     let dataset = dataset.freeze().expect("multiple RDF 1.2 bindings");
     let (source, source_bytes) =
-        CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let projection = columnar
+        .then(|| purrdf::columnar::project(&*dataset, &purrdf::ContentStore::new()).unwrap());
+    let files = projection.as_ref().map(|projection| {
+        projection
+            .to_parquet(purrdf::columnar::Compression::Uncompressed)
+            .unwrap()
+            .files
+    });
+    let source = files.as_ref().map_or(source, |files| {
+        CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(files)).unwrap()
+    });
     let pack = PackView::from_bytes(&source_bytes).expect("pack view");
     let dataset_target = source.dataset_target(true).unwrap();
     let terms: Vec<_> = iris
@@ -501,10 +640,19 @@ fn multi_binding_fixture_with_annotation(
                 terms[7].id,
             ));
         }
-        let annotation_ordinal = pack
-            .annotation_quads()
-            .position(|quad| quad.g.is_some() == named)
-            .unwrap() as u64;
+        let annotation_ordinal = projection.as_ref().map_or_else(
+            || {
+                pack.annotation_quads()
+                    .position(|quad| quad.g.is_some() == named)
+                    .unwrap()
+            },
+            |projection| {
+                projection
+                    .rows(Table::Annotations)
+                    .position(|row| (row[3] != ProjectionCell::Null) == named)
+                    .unwrap()
+            },
+        ) as u64;
         for object in 2..=3 {
             if named && object == 3 && !include_unbound_annotation {
                 continue;
@@ -517,11 +665,26 @@ fn multi_binding_fixture_with_annotation(
             }
             .into_target(true, None)
             .unwrap();
-            let reifier_ordinal = pack.reifier_quads().position(|quad| {
+            let reifier_ordinal = if let Some(projection) = &projection {
+                let lexical = format!("https://example.org/multiple/{}", iris[object]);
+                let id = projection
+                    .rows(Table::Terms)
+                    .position(|row| row[2] == ProjectionCell::Bytes(lexical.as_bytes()))
+                    .unwrap() as i64;
+                projection
+                    .rows(Table::Reifiers)
+                    .position(|row| {
+                        row[3] == ProjectionCell::Int64(id)
+                            && (row[4] != ProjectionCell::Null) == named
+                    })
+                    .map(|ordinal| ordinal as u64)
+            } else {
+                pack.reifier_quads().position(|quad| {
                 if quad.g.is_some() != named { return false; }
                 let TermRef::Triple { o, .. } = pack.resolve(quad.o).expect("resident pack resolution succeeds") else { panic!("reifier object must be a triple"); };
                 matches!(pack.resolve(o).expect("resident pack resolution succeeds"), TermRef::Iri(iri) if iri == format!("https://example.org/multiple/{}", iris[object]))
-            }).map(|ordinal| ordinal as u64);
+            }).map(|ordinal| ordinal as u64)
+            };
             let reifier = RdfReifierTarget {
                 graph: graph.id,
                 statement: statement.id,
@@ -569,13 +732,38 @@ fn multi_binding_fixture_with_annotation(
         }
         targets.push(graph);
     }
-    RdfFixture {
-        source,
-        source_bytes,
-        targets,
-        relations,
-        matrix_targets,
-        family_contract: FX.cosine_contract("rdf12-projection", 2),
+    (
+        RdfFixture {
+            source,
+            source_bytes,
+            targets,
+            relations,
+            matrix_targets,
+            family_contract: FX.cosine_contract("rdf12-projection", 2),
+        },
+        files,
+    )
+}
+
+#[test]
+fn columnar_annotation_ordinal_resolves_all_bindings_of_the_original_resource() {
+    for include_unbound in [false, true] {
+        let (fixture, files) = multi_binding_carrier(include_unbound, [5, 6], true);
+        let bytes = build(&fixture, fixture.relations.clone()).unwrap();
+        let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
+        verify_embedding(&mut view).unwrap();
+        let files = files.unwrap();
+        let result = verify_embedding_source(&view, EmbeddingSource::Columnar(&files));
+        if include_unbound {
+            assert!(matches!(
+                result,
+                Err(SourceAttachmentError::Embedding(
+                    EmbeddingError::OrdinalMismatch { .. }
+                ))
+            ));
+        } else {
+            assert_eq!(result.unwrap().ordinals_checked(), 6);
+        }
     }
 }
 
@@ -585,7 +773,7 @@ fn source_ordinals_accept_each_statement_bound_by_one_reifier() {
     let bytes = build(&fixture, fixture.relations.clone()).expect("multi-binding artifact");
     let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
     verify_embedding(&mut view).expect("valid target identities and relations");
-    let report = verify_embedding_source(&view, &fixture.source_bytes)
+    let report = verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
         .expect("each binding matches its source ordinal");
     assert_eq!(report.ordinals_checked(), 6);
 }
@@ -597,8 +785,10 @@ fn annotation_ordinal_refuses_a_statement_not_bound_in_its_graph() {
     let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
     verify_embedding(&mut view).expect("valid identities are distinct from source binding");
     assert!(matches!(
-        verify_embedding_source(&view, &fixture.source_bytes),
-        Err(EmbeddingError::OrdinalMismatch { .. })
+        verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+        Err(SourceAttachmentError::Embedding(
+            EmbeddingError::OrdinalMismatch { .. }
+        ))
     ));
 }
 
@@ -608,10 +798,8 @@ fn assert_certified_ordinal_mismatch(fixture: &RdfFixture, kind: TargetKind) {
     verify_embedding(&mut view).expect("valid target identities and relations");
 
     assert!(matches!(
-        verify_embedding_source(
-            &view,
-            &fixture.source_bytes),
-        Err(EmbeddingError::OrdinalMismatch { target_kind, .. })
+        verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+        Err(SourceAttachmentError::Embedding(EmbeddingError::OrdinalMismatch { target_kind, .. }))
             if target_kind == kind.code()
     ));
 }

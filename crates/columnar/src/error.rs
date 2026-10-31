@@ -27,6 +27,20 @@ pub use page_body::PageBodyReason;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColumnarError {
+    /// An exact file length cannot fit the canonical source manifest.
+    ManifestLength {
+        /// The original table.
+        table: crate::Table,
+        /// The original byte length.
+        length: usize,
+    },
+    /// A requested original row does not exist in the fully decoded source.
+    OrdinalOutOfRange {
+        /// The requested original table and row.
+        ordinal: crate::ColumnarOrdinal,
+        /// The actual number of rows in that table.
+        rows: u64,
+    },
     /// Logical capacity or physical storage refused RDF reconstruction.
     Storage(purrdf_lex::allocation::StorageError),
     /// Original content-store integrity refusal during projection.
@@ -125,6 +139,12 @@ pub enum ColumnarError {
 
 impl purrdf_hash::error::StructuredError for ColumnarError {
     purrdf_hash::error_visit! {
+        ManifestLength { table, length } => "columnar-manifest-length" {
+            "table" => Code(table.name()), "length" => ByteCount(*length as u128),
+        },
+        OrdinalOutOfRange { ordinal, rows } => "columnar-ordinal-out-of-range" {
+            "table" => Code(ordinal.table().name()), "ordinal" => Unsigned(u128::from(ordinal.index())), "rows" => Unsigned(u128::from(*rows)),
+        },
         Storage(cause) => "columnar-storage" { "cause" => Cause(cause) },
         ContentStore(cause) => "columnar-content-store" { "cause" => Cause(cause) },
         BlobContent { row, cause } => "columnar-blob-content" {
@@ -206,6 +226,17 @@ impl fmt::Display for ColumnarError {
     /// Render the established human prefix from the retained native cause.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ManifestLength { table, length } => write!(
+                f,
+                "columnar {} byte length {length} cannot fit the source manifest",
+                table.file_name()
+            ),
+            Self::OrdinalOutOfRange { ordinal, rows } => write!(
+                f,
+                "columnar {} ordinal {} is outside its {rows} rows",
+                ordinal.table().file_name(),
+                ordinal.index()
+            ),
             Self::Storage(error) => write!(f, "columnar storage: {error}"),
             Self::ContentStore(cause) => {
                 write!(f, "columnar content store is malformed: {cause}")
