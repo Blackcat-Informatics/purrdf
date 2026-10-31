@@ -78,7 +78,7 @@ fn finite_refusal_and_unlimited_neighbor_publish_separate_receipts_before_output
         input,
     );
     assert_eq!(failed_evidence.status.code(), Some(1));
-    assert!(failed_evidence.stdout.is_empty());
+    assert_eq!(failed_evidence.stdout, [] as [u8; 0]);
     let diagnostic = support::stderr(&failed_evidence);
     assert!(
         diagnostic.contains("cannot publish --canonicalization-receipts"),
@@ -114,6 +114,6 @@ fn receipt_alias_is_refused_before_reading_or_truncating_input() {
         support::stderr(&result)
     );
     assert!(support::stderr(&result).contains("aliases"));
-    assert!(result.stdout.is_empty());
+    assert_eq!(result.stdout, [] as [u8; 0]);
     assert_eq!(std::fs::read(&input).expect("source preserved"), original);
 }
