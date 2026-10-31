@@ -1259,6 +1259,7 @@ mod tests {
 
         fn reserve_owned_workspace(
             &self,
+            _bytes: u64,
         ) -> Option<Result<purrdf_core::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>>
         {
             // Reads fail independently; this resident fixture admits retained payloads.
