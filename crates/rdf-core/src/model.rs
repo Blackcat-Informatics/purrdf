@@ -87,33 +87,69 @@ impl RdfLiteral {
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> Result<(), (&'static str, &'static str)> {
+        match Self::diagnose_components_with_memory(
+            datatype,
+            language,
+            direction,
+            &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        ) {
+            Ok(()) => Ok(()),
+            Err(purrdf_lex::control::ControlledError::Native(cause)) => Err(cause),
+            Err(purrdf_lex::control::ControlledError::Control(_)) => {
+                unreachable!("resident language diagnosis has no callback")
+            }
+        }
+    }
+
+    pub(crate) fn diagnose_components_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<
+        (),
+        purrdf_lex::control::ControlledError<
+            (&'static str, &'static str),
+            purrdf_lex::allocation::StorageError,
+        >,
+    > {
         if let Some(language) = language {
             // The grammar first: a datatype/direction mismatch on a tag that is
             // not a language tag at all would report the downstream symptom.
-            if let Err(error) = purrdf_iri::langtag::parse_with(
+            if let Err(error) = purrdf_iri::langtag::parse_with_memory(
                 language,
                 purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded,
+                memory,
             ) {
-                return Err((error.diagnostic_code(), error.message()));
+                let error = match error {
+                    purrdf_lex::control::ControlledError::Control(cause) => {
+                        return Err(purrdf_lex::control::ControlledError::Control(cause));
+                    }
+                    purrdf_lex::control::ControlledError::Native(cause) => cause,
+                };
+                return Err((error.diagnostic_code(), error.message()).into());
             }
             if datatype != Self::language_datatype_iri(direction) {
                 return Err((
                     LITERAL_SHAPE_CODE,
                     "literal datatype does not match its language and base direction",
-                ));
+                )
+                    .into());
             }
         } else {
             if direction.is_some() {
                 return Err((
                     LITERAL_SHAPE_CODE,
                     "a base direction requires a language tag",
-                ));
+                )
+                    .into());
             }
             if matches!(datatype, RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
                 return Err((
                     LITERAL_SHAPE_CODE,
                     "a language-string datatype requires a language tag",
-                ));
+                )
+                    .into());
             }
         }
         Ok(())

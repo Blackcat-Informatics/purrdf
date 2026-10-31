@@ -2099,11 +2099,93 @@ pub fn parse(tag: &str) -> Result<LanguageTag<'_>, LanguageTagError> {
 /// A typed [`LanguageTagError`] naming the production that refused; see that
 /// type for the failure map.
 pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, LanguageTagError> {
+    match parse_native(tag, profile, Control { checkpoint: None }) {
+        Ok(tag) => Ok(tag),
+        Err(purrdf_lex::control::ControlledError::Native(cause)) => Err(cause),
+        Err(purrdf_lex::control::ControlledError::Control(_)) => {
+            unreachable!("resident language parser has no callback")
+        }
+    }
+}
+
+type ReadResult<T> = Result<
+    T,
+    purrdf_lex::control::ControlledError<LanguageTagError, purrdf_lex::allocation::StorageError>,
+>;
+
+#[derive(Clone, Copy)]
+struct Control<'a> {
+    checkpoint: Option<&'a dyn Fn(u64) -> Result<(), purrdf_lex::allocation::StorageError>>,
+}
+impl fmt::Debug for Control<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("Control").finish_non_exhaustive()
+    }
+}
+impl Control<'_> {
+    fn checkpoint(self, units: u64) -> ReadResult<()> {
+        if let Some(checkpoint) = self.checkpoint {
+            checkpoint(units).map_err(purrdf_lex::control::ControlledError::Control)?;
+        }
+        Ok(())
+    }
+    fn separator(self, bytes: &[u8]) -> ReadResult<Option<usize>> {
+        if self.checkpoint.is_none() {
+            return Ok(bytes.iter().position(|&byte| byte == b'-'));
+        }
+        for (index, chunk) in bytes.chunks(256).enumerate() {
+            self.checkpoint(chunk.len() as u64)?;
+            if let Some(at) = chunk.iter().position(|&byte| byte == b'-') {
+                return Ok(Some(index * 256 + at));
+            }
+        }
+        Ok(None)
+    }
+    fn all(self, text: &str, predicate: impl Fn(u8) -> bool) -> ReadResult<bool> {
+        if self.checkpoint.is_none() {
+            return Ok(text.bytes().all(predicate));
+        }
+        for chunk in text.as_bytes().chunks(256) {
+            self.checkpoint(chunk.len() as u64)?;
+            if !chunk.iter().copied().all(&predicate) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// Parse the native language grammar under the original account's progress authority.
+/// The returned tag borrows `tag` and allocates no storage.
+/// # Errors
+/// Preserves native language errors separately from original storage/progress refusal.
+pub fn parse_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+    tag: &'a str,
+    profile: Profile,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> ReadResult<LanguageTag<'a>> {
+    let enabled = memory.admission().progress_enabled();
+    let memory = core::cell::RefCell::new(memory);
+    let checkpoint = |units| memory.borrow_mut().admission_mut().checkpoint(units);
+    let control = Control {
+        checkpoint: enabled.then_some(&checkpoint),
+    };
+    let parsed = parse_native(tag, profile, control)?;
+    control.checkpoint(0)?;
+    Ok(parsed)
+}
+
+fn parse_native<'a>(
+    tag: &'a str,
+    profile: Profile,
+    control: Control<'_>,
+) -> ReadResult<LanguageTag<'a>> {
+    control.checkpoint(0)?;
     if matches!(
         profile,
         Profile::ConcreteSyntaxLangtagBounded | Profile::ConcreteSyntaxLangtag
     ) {
-        return parse_concrete_syntax_langtag(tag, profile);
+        return parse_concrete_syntax_langtag(tag, profile, control);
     }
 
     // `grandfathered` first: it is a closed set of literals, most of which the
@@ -2120,9 +2202,9 @@ pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, Langua
     // subtags. Checking that envelope once, up front, keeps the two length
     // failures out of the production functions below, which then only ever ask
     // "does this subtag have the shape my production names?".
-    check_subtag_envelope(tag, profile)?;
+    check_subtag_envelope(tag, profile, control)?;
 
-    let mut cursor = Cursor::new(tag);
+    let mut cursor = Cursor::new(tag, control);
 
     // `privateuse` as the whole tag. It is the only alternative that may begin
     // with the reserved `x` singleton, so a leading `x` commits to it: there is
@@ -2135,9 +2217,9 @@ pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, Langua
     // `langtag = language ["-" script] ["-" region] *("-" variant)
     //            *("-" extension) ["-" privateuse]`
     let (language, extlang) = take_language(&mut cursor)?;
-    let script = cursor.take_if(is_script);
-    let region = cursor.take_if(is_region);
-    let variants = take_variants(&mut cursor);
+    let script = cursor.take_if(is_script)?;
+    let region = cursor.take_if(is_region)?;
+    let variants = take_variants(&mut cursor)?;
     let extensions = take_extensions(&mut cursor)?;
     let private_use = take_private_use(&mut cursor, profile)?;
     require_exhausted(&cursor)?;
@@ -2178,16 +2260,19 @@ pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, Langua
 /// for not being ALPHA, not for being nine characters). A tag that took the
 /// RFC 5646 reading above needs no envelope check, having already passed the
 /// same one inside [`parse_with`].
-fn parse_concrete_syntax_langtag(
-    tag: &str,
+fn parse_concrete_syntax_langtag<'a>(
+    tag: &'a str,
     profile: Profile,
-) -> Result<LanguageTag<'_>, LanguageTagError> {
-    if let Ok(parsed) = parse_with(tag, Profile::Rfc5646PrivateUseRelaxed) {
-        return Ok(parsed);
+    control: Control<'_>,
+) -> ReadResult<LanguageTag<'a>> {
+    match parse_native(tag, Profile::Rfc5646PrivateUseRelaxed, control) {
+        Ok(parsed) => return Ok(parsed),
+        Err(error @ purrdf_lex::control::ControlledError::Control(_)) => return Err(error),
+        Err(purrdf_lex::control::ControlledError::Native(_)) => {}
     }
-    check_langtag_terminal(tag)?;
+    check_langtag_terminal(tag, control)?;
     if matches!(profile, Profile::ConcreteSyntaxLangtagBounded) {
-        check_subtag_envelope(tag, profile)?;
+        check_subtag_envelope(tag, profile, control)?;
     }
     Ok(LanguageTag::whole(tag, TagForm::ConcreteSyntaxOnly, None))
 }
@@ -2199,25 +2284,24 @@ fn parse_concrete_syntax_langtag(
 /// the character-class test at every position: `all_alpha` and `all_alphanum`
 /// are vacuously true for the empty string, and without the ordering `en-`
 /// would be accepted.
-fn check_langtag_terminal(tag: &str) -> Result<(), LanguageTagError> {
-    let mut subtags = tag.split('-');
-    // `str::split` always yields at least one item, so the default is unreachable;
-    // taking it as the empty string routes an impossible case to the same refusal
-    // the empty input gets rather than to a panic.
-    let primary = subtags.next().unwrap_or_default();
+fn check_langtag_terminal(tag: &str, control: Control<'_>) -> ReadResult<()> {
+    let mut cursor = Cursor::new(tag, control);
+    let (_, primary) = cursor.peek()?.expect("a split has its first subtag");
     if primary.is_empty() {
-        return Err(LanguageTagError::SubtagLengthZero);
+        return Err(LanguageTagError::SubtagLengthZero.into());
     }
-    if !all_alpha(primary) {
-        return Err(LanguageTagError::TerminalPrimaryNotAlpha);
+    if !control.all(primary, |byte| byte.is_ascii_alphabetic())? {
+        return Err(LanguageTagError::TerminalPrimaryNotAlpha.into());
     }
-    for subtag in subtags {
+    cursor.bump()?;
+    while let Some((_, subtag)) = cursor.peek()? {
         if subtag.is_empty() {
-            return Err(LanguageTagError::SubtagLengthZero);
+            return Err(LanguageTagError::SubtagLengthZero.into());
         }
-        if !all_alphanum(subtag) {
-            return Err(LanguageTagError::TerminalSubtagNotAlphanum);
+        if !control.all(subtag, |byte| byte.is_ascii_alphanumeric())? {
+            return Err(LanguageTagError::TerminalSubtagNotAlphanum.into());
         }
+        cursor.bump()?;
     }
     Ok(())
 }
@@ -2344,10 +2428,10 @@ fn canonical_case_holds(tag: &str) -> bool {
 /// and no other production admits a one-character subtag. The zero-length
 /// refusal is unconditional — an empty subtag fits no production under any
 /// profile. Lifting the ceiling *here* as well as in
-/// [`is_private_use_subtag`] is what keeps this pre-pass and the productions
+/// the private-use production is what keeps this pre-pass and the productions
 /// below in agreement, rather than having the pre-pass refuse a tag the
 /// productions would have taken.
-fn check_subtag_envelope(tag: &str, profile: Profile) -> Result<(), LanguageTagError> {
+fn check_subtag_envelope(tag: &str, profile: Profile, control: Control<'_>) -> ReadResult<()> {
     let relaxed = matches!(
         profile,
         Profile::Rfc5646PrivateUseRelaxed
@@ -2355,16 +2439,18 @@ fn check_subtag_envelope(tag: &str, profile: Profile) -> Result<(), LanguageTagE
             | Profile::ConcreteSyntaxLangtag
     );
     let mut ceiling_applies = true;
-    for subtag in tag.split('-') {
+    let mut cursor = Cursor::new(tag, control);
+    while let Some((_, subtag)) = cursor.peek()? {
         if subtag.is_empty() {
-            return Err(LanguageTagError::SubtagLengthZero);
+            return Err(LanguageTagError::SubtagLengthZero.into());
         }
         if ceiling_applies && subtag.len() > SUBTAG_CEILING {
-            return Err(LanguageTagError::SubtagLengthOverEight);
+            return Err(LanguageTagError::SubtagLengthOverEight.into());
         }
         if relaxed && is_private_use_marker(subtag) {
             ceiling_applies = false;
         }
+        cursor.bump()?;
     }
     Ok(())
 }
@@ -2375,9 +2461,10 @@ fn check_subtag_envelope(tag: &str, profile: Profile) -> Result<(), LanguageTagE
 /// report the [`Span`] it occupied, which is what lets the accessors on
 /// [`LanguageTag`] slice the original input.
 #[derive(Debug)]
-struct Cursor<'a> {
+struct Cursor<'a, 'c> {
     /// The tag being walked.
     tag: &'a str,
+    control: Control<'c>,
     /// Byte offset at which the pending subtag starts.
     at: usize,
     /// Set once the final subtag has been consumed. Needed because a cursor
@@ -2386,68 +2473,79 @@ struct Cursor<'a> {
     exhausted: bool,
 }
 
-impl<'a> Cursor<'a> {
+impl<'a, 'c> Cursor<'a, 'c> {
     /// A cursor positioned at the first subtag of `tag`.
-    const fn new(tag: &'a str) -> Self {
+    const fn new(tag: &'a str, control: Control<'c>) -> Self {
         Self {
             tag,
+            control,
             at: 0,
             exhausted: false,
         }
     }
 
     /// The pending subtag and the span it occupies, without consuming it.
-    fn peek(&self) -> Option<(Span, &'a str)> {
+    fn peek(&self) -> ReadResult<Option<(Span, &'a str)>> {
         if self.exhausted {
-            return None;
+            return Ok(None);
         }
         let rest: &'a str = &self.tag[self.at..];
-        let length = rest.find('-').unwrap_or(rest.len());
+        let length = self
+            .control
+            .separator(rest.as_bytes())?
+            .unwrap_or(rest.len());
         let (text, _) = rest.split_at(length);
-        Some((
+        Ok(Some((
             Span {
                 start: self.at,
                 end: self.at + length,
             },
             text,
-        ))
+        )))
     }
 
     /// Consumes the pending subtag.
-    fn bump(&mut self) {
+    fn bump(&mut self) -> ReadResult<()> {
         let rest = &self.tag[self.at..];
-        match rest.find('-') {
+        match self.control.separator(rest.as_bytes())? {
             Some(separator) => self.at += separator + 1,
             None => {
                 self.at = self.tag.len();
                 self.exhausted = true;
             }
         }
+        Ok(())
     }
 
     /// Consumes the pending subtag when it satisfies `production`, and reports
     /// the span it occupied. This is the whole of an ABNF `[...]` option and
     /// one step of a `*(...)` repetition.
-    fn take_if(&mut self, production: impl Fn(&str) -> bool) -> Option<Span> {
-        let (span, text) = self.peek()?;
+    fn take_if(&mut self, production: impl Fn(&str) -> bool) -> ReadResult<Option<Span>> {
+        let Some((span, text)) = self.peek()? else {
+            return Ok(None);
+        };
+        // Every predicate here inspects at most eight bytes after a length
+        // check. The unbounded private-use predicate uses Control::all instead.
+        self.control.checkpoint(1)?;
         if !production(text) {
-            return None;
+            return Ok(None);
         }
-        self.bump();
-        Some(span)
+        self.bump()?;
+        Ok(Some(span))
     }
 
     /// `true` when the pending subtag satisfies `production`, without
     /// consuming anything.
-    fn peek_is(&self, production: impl Fn(&str) -> bool) -> bool {
-        self.peek().is_some_and(|(_, text)| production(text))
+    fn peek_is(&self, production: impl Fn(&str) -> bool) -> ReadResult<bool> {
+        self.control.checkpoint(1)?;
+        Ok(self.peek()?.is_some_and(|(_, text)| production(text)))
     }
 }
 
 /// Refuses a tag with subtags the production never reached.
-fn require_exhausted(cursor: &Cursor<'_>) -> Result<(), LanguageTagError> {
-    if cursor.peek().is_some() {
-        return Err(LanguageTagError::UnconsumedSubtag);
+fn require_exhausted(cursor: &Cursor<'_, '_>) -> ReadResult<()> {
+    if cursor.peek()?.is_some() {
+        return Err(LanguageTagError::UnconsumedSubtag.into());
     }
     Ok(())
 }
@@ -2458,9 +2556,9 @@ fn require_exhausted(cursor: &Cursor<'_>) -> Result<(), LanguageTagError> {
 /// alternatives collapse to "2..=8 ASCII letters" for the primary subtag; what
 /// distinguishes them is that only the `2*3ALPHA` one admits a following
 /// `extlang`, which is why the length is re-tested before recursing.
-fn take_language(cursor: &mut Cursor<'_>) -> Result<(Span, Option<Span>), LanguageTagError> {
-    let Some(span) = cursor.take_if(is_language) else {
-        return Err(LanguageTagError::LanguageProductionUnmatched);
+fn take_language(cursor: &mut Cursor<'_, '_>) -> ReadResult<(Span, Option<Span>)> {
+    let Some(span) = cursor.take_if(is_language)? else {
+        return Err(LanguageTagError::LanguageProductionUnmatched.into());
     };
     if span.len() > 3 {
         // The `4ALPHA` and `5*8ALPHA` alternatives have no `["-" extlang]`.
@@ -2471,13 +2569,13 @@ fn take_language(cursor: &mut Cursor<'_>) -> Result<(Span, Option<Span>), Langua
 }
 
 /// `extlang = 3ALPHA *2("-" 3ALPHA)`
-fn take_extlang(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagError> {
-    let Some(first) = cursor.take_if(is_extlang_subtag) else {
+fn take_extlang(cursor: &mut Cursor<'_, '_>) -> ReadResult<Option<Span>> {
+    let Some(first) = cursor.take_if(is_extlang_subtag)? else {
         return Ok(None);
     };
     let mut run = first;
     for _ in 0..EXTLANG_REPEAT_LIMIT {
-        match cursor.take_if(is_extlang_subtag) {
+        match cursor.take_if(is_extlang_subtag)? {
             Some(repeat) => run.end = repeat.end,
             None => return Ok(Some(run)),
         }
@@ -2489,19 +2587,19 @@ fn take_extlang(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagErro
     // many, and saying so beats a generic leftover-subtag complaint. Anything
     // that is *not* 3 letters still falls through to the sections below, so
     // `zh-cmn-yue-nan-Hant-CN` is unaffected.
-    if cursor.peek_is(is_extlang_subtag) {
-        return Err(LanguageTagError::ExtlangRepetitionExceeded);
+    if cursor.peek_is(is_extlang_subtag)? {
+        return Err(LanguageTagError::ExtlangRepetitionExceeded.into());
     }
     Ok(Some(run))
 }
 
 /// `*("-" variant)`
-fn take_variants(cursor: &mut Cursor<'_>) -> Option<Span> {
+fn take_variants(cursor: &mut Cursor<'_, '_>) -> ReadResult<Option<Span>> {
     let mut run: Option<Span> = None;
-    while let Some(variant) = cursor.take_if(is_variant) {
+    while let Some(variant) = cursor.take_if(is_variant)? {
         run = Some(extend(run, variant));
     }
-    run
+    Ok(run)
 }
 
 /// `*("-" extension)`, where `extension = singleton 1*("-" (2*8alphanum))`
@@ -2509,17 +2607,17 @@ fn take_variants(cursor: &mut Cursor<'_>) -> Option<Span> {
 /// The `1*` is the only thing that can fail: a one-character alphanumeric
 /// subtag is never an extension subtag, so it ends the inner repetition and is
 /// re-offered to the outer one as the next singleton.
-fn take_extensions(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagError> {
+fn take_extensions(cursor: &mut Cursor<'_, '_>) -> ReadResult<Option<Span>> {
     let mut run: Option<Span> = None;
-    while let Some(singleton) = cursor.take_if(is_singleton) {
+    while let Some(singleton) = cursor.take_if(is_singleton)? {
         let mut extension = singleton;
         let mut subtags = 0usize;
-        while let Some(subtag) = cursor.take_if(is_extension_subtag) {
+        while let Some(subtag) = cursor.take_if(is_extension_subtag)? {
             extension.end = subtag.end;
             subtags += 1;
         }
         if subtags == 0 {
-            return Err(LanguageTagError::SingletonWithoutSubtag);
+            return Err(LanguageTagError::SingletonWithoutSubtag.into());
         }
         run = Some(extend(run, extension));
     }
@@ -2534,21 +2632,31 @@ fn take_extensions(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagE
 /// This is the only production `profile` reaches: the `1*8alphanum` bound on
 /// its subtags is the single thing
 /// [`Profile::Rfc5646PrivateUseRelaxed`] widens.
-fn take_private_use(
-    cursor: &mut Cursor<'_>,
-    profile: Profile,
-) -> Result<Option<Span>, LanguageTagError> {
-    let Some(marker) = cursor.take_if(is_private_use_marker) else {
+fn take_private_use(cursor: &mut Cursor<'_, '_>, profile: Profile) -> ReadResult<Option<Span>> {
+    let Some(marker) = cursor.take_if(is_private_use_marker)? else {
         return Ok(None);
     };
     let mut run = marker;
     let mut subtags = 0usize;
-    while let Some(subtag) = cursor.take_if(|text| is_private_use_subtag(text, profile)) {
+    while let Some((subtag, text)) = cursor.peek()? {
+        let ceiling = if matches!(profile, Profile::Rfc5646) {
+            SUBTAG_CEILING
+        } else {
+            usize::MAX
+        };
+        if !(1..=ceiling).contains(&text.len())
+            || !cursor
+                .control
+                .all(text, |byte| byte.is_ascii_alphanumeric())?
+        {
+            break;
+        }
+        cursor.bump()?;
         run.end = subtag.end;
         subtags += 1;
     }
     if subtags == 0 {
-        return Err(LanguageTagError::PrivateUseWithoutSubtag);
+        return Err(LanguageTagError::PrivateUseWithoutSubtag.into());
     }
     Ok(Some(run))
 }
@@ -2627,23 +2735,6 @@ fn is_extension_subtag(text: &str) -> bool {
 /// case-insensitive (RFC 5234 §2.3), so `X` opens it too.
 fn is_private_use_marker(text: &str) -> bool {
     text.eq_ignore_ascii_case("x")
-}
-
-/// One `1*8alphanum` subtag of `privateuse` — `1*alphanum` under
-/// [`Profile::Rfc5646PrivateUseRelaxed`], which lifts the upper bound and
-/// nothing else.
-fn is_private_use_subtag(text: &str, profile: Profile) -> bool {
-    let ceiling = match profile {
-        Profile::Rfc5646 => SUBTAG_CEILING,
-        // The terminal profiles re-enter through the relaxed profile rather
-        // than reaching here, but neither caps a private-use subtag either, so
-        // they answer with the relaxed profile and stay correct if that routing
-        // ever changes.
-        Profile::Rfc5646PrivateUseRelaxed
-        | Profile::ConcreteSyntaxLangtagBounded
-        | Profile::ConcreteSyntaxLangtag => usize::MAX,
-    };
-    (1..=ceiling).contains(&text.len()) && all_alphanum(text)
 }
 
 #[cfg(test)]

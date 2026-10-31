@@ -12,14 +12,31 @@ use crate::collections::{ListVocab, build_rdf_list};
 use crate::{BlankScope, RdfLiteral, RdfQuad, RdfTerm, TermValue, turtle};
 use std::collections::BTreeSet;
 
+macro_rules! fno {
+    ($local:literal) => {
+        concat!("https://w3id.org/function/ontology#", $local)
+    };
+}
+macro_rules! fnom {
+    ($local:literal) => {
+        concat!("https://w3id.org/function/vocabulary/mapping#", $local)
+    };
+}
+
 mod admission;
+mod construction;
+#[cfg(test)]
+mod control_tests;
+pub use construction::{FnoConstructionFailure, FnoConstructorRefusal};
 mod inspection;
 mod read;
 mod read_error;
 #[cfg(test)]
 mod read_tests;
-pub use admission::{FnoAdmissionError, FnoAdmissionReason};
-pub use read_error::{FnoFieldKind, FnoReadError, FnoStructureKind};
+pub use admission::{FnoAdmissionError, FnoAdmissionReason, FnoRejectedCatalog};
+pub use read_error::{
+    FnoFieldKind, FnoReadError, FnoReadFailure, FnoReadSourceError, FnoStructureKind,
+};
 
 // --------------------------------------------------------------------------- //
 // Vocabulary
@@ -83,10 +100,16 @@ pub struct FnoCatalogInput {
 }
 
 /// An immutable catalog with canonical set order and validated references.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FnoCatalog {
-    data: FnoCatalogInput,
+    data: purrdf_lex::allocation::SharedOwned<FnoCatalogInput>,
 }
+impl PartialEq for FnoCatalog {
+    fn eq(&self, other: &Self) -> bool {
+        *self.data == *other.data
+    }
+}
+impl Eq for FnoCatalog {}
 
 impl FnoCatalog {
     /// Admit complete catalog data, preserving the original input on refusal.
@@ -94,23 +117,94 @@ impl FnoCatalog {
     /// # Errors
     /// Refuses malformed RDF values, conflicting descriptions and unresolved
     /// references. Indistinguishable duplicate facts are canonicalized once valid.
-    pub fn try_new(mut data: FnoCatalogInput) -> Result<Self, FnoAdmissionError> {
-        let shared = match admission::validate(&data) {
-            Ok(shared) => shared,
-            Err(reason) => {
-                return Err(FnoAdmissionError {
-                    input: Box::new(data),
-                    reason,
-                });
+    pub fn try_new(data: FnoCatalogInput) -> Result<Self, FnoAdmissionError> {
+        use purrdf_lex::{
+            allocation::Resident,
+            control::{ControlledError, Unmetered},
+        };
+        match Self::try_new_with_control(data, Resident, Unmetered) {
+            Ok(catalog) => Ok(catalog),
+            Err(FnoConstructorRefusal {
+                input,
+                cause: ControlledError::Native(reason),
+            }) => Err(FnoAdmissionError { input, reason }),
+            Err(FnoConstructorRefusal {
+                cause: ControlledError::Control(never),
+                ..
+            }) => match never {},
+        }
+    }
+
+    /// Construct an immutable catalog under an original owned allocation account.
+    ///
+    /// Native validation and canonicalization share the resident engine. An admitted
+    /// staging copy preserves the caller's original fields on every refusal.
+    /// `storage` starts with zero live bytes and is reserved for this operation;
+    /// it must not carry another live payload. The successful catalog and native error operands retain this account until their
+    /// last shared owner is dropped; borrowed access cannot detach that ownership.
+    ///
+    /// # Errors
+    /// Returns the untouched original input with the original callback failure,
+    /// physical refusal, or immutable admitted semantic reason. No partial catalog
+    /// is published, including when canonicalization or publication is interrupted.
+    ///
+    /// ```
+    /// use purrdf_core::{FnoCatalog, FnoCatalogInput, TermValue};
+    /// use purrdf_lex::{allocation::Resident, control::ControlledError};
+    /// let input = FnoCatalogInput {
+    ///     ontology_iri: "urn:ontology".into(), document_iri: "urn:catalog".into(),
+    ///     doc_label: TermValue::typed_literal("Catalog", purrdf_xsd::datatype::XSD_STRING),
+    ///     banner: TermValue::typed_literal("Functions", purrdf_xsd::datatype::XSD_STRING),
+    ///     functions: vec![], params: vec![], implementations: vec![], mappings: vec![],
+    /// };
+    /// let refused = FnoCatalog::try_new_with_control(input, Resident, |_| Err("stopped"))
+    ///     .unwrap_err();
+    /// assert!(matches!(refused.cause, ControlledError::Control("stopped")));
+    /// assert_eq!(refused.input.document_iri, "urn:catalog");
+    /// ```
+    pub fn try_new_with_control<S, C>(
+        data: FnoCatalogInput,
+        storage: S,
+        progress: C,
+    ) -> Result<Self, FnoConstructorRefusal<C::Error>>
+    where
+        S: purrdf_lex::allocation::Admission + Send + Sync + 'static,
+        C: purrdf_lex::control::Progress,
+    {
+        use construction::{Context, FnoConstructionFailure};
+        use purrdf_lex::control::ControlledError;
+        let mut context = Context::new(storage, progress);
+        let staged = (|| {
+            context.check(0)?;
+            let staged = admission::construct(&mut context, &data)?;
+            context.check(0)?;
+            Ok(staged)
+        })();
+        let cause = match staged {
+            Ok(staged) => {
+                return context
+                    .publish(staged)
+                    .map(|data| Self { data })
+                    .map_err(|cause| FnoConstructorRefusal { input: data, cause });
+            }
+            Err(ControlledError::Control(cause)) => ControlledError::Control(cause),
+            Err(ControlledError::Native(FnoConstructionFailure::Storage(cause))) => {
+                ControlledError::Native(FnoConstructionFailure::Storage(cause))
+            }
+            Err(ControlledError::Native(FnoConstructionFailure::Source(never))) => match never {},
+            Err(ControlledError::Native(FnoConstructionFailure::Semantic(reason))) => {
+                match context.publish_refusal(reason) {
+                    Ok(reason) => ControlledError::Native(FnoConstructionFailure::Semantic(reason)),
+                    Err(cause) => cause,
+                }
             }
         };
-        admission::canonicalize(&mut data, &shared);
-        Ok(Self { data })
+        Err(FnoConstructorRefusal { input: data, cause })
     }
 
     /// Borrow every admitted field without permitting mutation of invariants.
     #[must_use]
-    pub const fn as_input(&self) -> &FnoCatalogInput {
+    pub fn as_input(&self) -> &FnoCatalogInput {
         &self.data
     }
 
@@ -854,8 +948,8 @@ mod tests {
         }
         input.functions[0].output.r#type = purrdf_xsd::datatype::XSD_BOOLEAN.to_owned();
         assert!(matches!(
-            *FnoCatalog::try_new(input).unwrap_err().reason,
-            FnoAdmissionReason::ConflictingNode { .. }
+            &FnoCatalog::try_new(input).unwrap_err().reason,
+            FnoConstructionFailure::Semantic(reason) if matches!(&**reason, FnoAdmissionReason::ConflictingNode { .. })
         ));
         assert_eq!(
             FnoCatalog::try_new(catalog.as_input().clone()).unwrap(),
@@ -1025,7 +1119,7 @@ mod tests {
             let expected = input.clone();
             let error = FnoCatalog::try_new(input).unwrap_err();
             assert_eq!(error.input.document_iri.as_ptr(), pointer);
-            assert_eq!(*error.input, expected);
+            assert_eq!(error.input, expected);
             let capture = Capture::read(&error).child("reason");
             assert_eq!(
                 capture.code,

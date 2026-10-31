@@ -429,8 +429,44 @@ pub fn is_absolute_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> core::result::Result<bool, IriReadError> {
     let memory = core::cell::RefCell::new(memory);
-    let render = |message: core::fmt::Arguments<'_>| memory.borrow_mut().format(&message);
-    scan_with(s, Mode::Iri, Diagnostics::Admitted(&render)).map(|spans| spans.scheme.is_some())
+    let render =
+        |message: core::fmt::Arguments<'_>| memory.borrow_mut().format_with_progress(&message);
+    let checkpoint = |units| memory.borrow_mut().admission_mut().checkpoint(units);
+    let enabled = memory.borrow().admission().progress_enabled();
+    scan_with(
+        s,
+        Mode::Iri,
+        Diagnostics::Admitted {
+            render: &render,
+            checkpoint: &checkpoint,
+            enabled,
+        },
+    )
+    .map(|spans| spans.scheme.is_some())
+}
+
+/// Run the native IRI verdict without constructing grammar diagnostic strings.
+/// # Errors
+/// Returns original storage/progress refusal; invalid grammar remains `None`.
+pub fn absolute_verdict_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    text: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> core::result::Result<Option<bool>, purrdf_lex::allocation::StorageError> {
+    let memory = core::cell::RefCell::new(memory);
+    let checkpoint = |units| memory.borrow_mut().admission_mut().checkpoint(units);
+    let enabled = memory.borrow().admission().progress_enabled();
+    match scan_with(
+        text,
+        Mode::Iri,
+        Diagnostics::ControlledVerdict {
+            checkpoint: &checkpoint,
+            enabled,
+        },
+    ) {
+        Ok(spans) => Ok(Some(spans.scheme.is_some())),
+        Err(IriReadError::Lexical(_)) => Ok(None),
+        Err(IriReadError::Storage(cause)) => Err(cause),
+    }
 }
 
 /// Parse an IRI under its caller's original physical allocation account.
@@ -466,8 +502,19 @@ fn scan_admitted<S: purrdf_lex::allocation::Admission + ?Sized>(
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> core::result::Result<Spans, IriReadError> {
     let memory = core::cell::RefCell::new(memory);
-    let render = |message: core::fmt::Arguments<'_>| memory.borrow_mut().format(&message);
-    scan_with(text, Mode::Iri, Diagnostics::Admitted(&render))
+    let render =
+        |message: core::fmt::Arguments<'_>| memory.borrow_mut().format_with_progress(&message);
+    let checkpoint = |units| memory.borrow_mut().admission_mut().checkpoint(units);
+    let enabled = memory.borrow().admission().progress_enabled();
+    scan_with(
+        text,
+        Mode::Iri,
+        Diagnostics::Admitted {
+            render: &render,
+            checkpoint: &checkpoint,
+            enabled,
+        },
+    )
 }
 
 fn iri_from_spans(text: String, spans: Spans) -> Iri {
@@ -486,22 +533,77 @@ fn iri_from_spans(text: String, spans: Spans) -> Iri {
 pub(crate) enum Diagnostics<'a> {
     Owned,
     Verdict,
-    Admitted(
-        &'a dyn Fn(
+    ControlledVerdict {
+        checkpoint:
+            &'a dyn Fn(u64) -> core::result::Result<(), purrdf_lex::allocation::StorageError>,
+        enabled: bool,
+    },
+    Admitted {
+        render: &'a dyn Fn(
             core::fmt::Arguments<'_>,
-        ) -> core::result::Result<String, purrdf_lex::allocation::StorageError>,
-    ),
+        )
+            -> core::result::Result<String, purrdf_lex::allocation::StorageError>,
+        checkpoint:
+            &'a dyn Fn(u64) -> core::result::Result<(), purrdf_lex::allocation::StorageError>,
+        enabled: bool,
+    },
 }
 
 impl Diagnostics<'_> {
+    pub(crate) fn checkpoint(self, units: u64) -> core::result::Result<(), IriReadError> {
+        match self {
+            Self::Admitted {
+                checkpoint,
+                enabled: true,
+                ..
+            }
+            | Self::ControlledVerdict {
+                checkpoint,
+                enabled: true,
+            } => checkpoint(units).map_err(IriReadError::Storage),
+            _ => Ok(()),
+        }
+    }
+    pub(crate) fn find(
+        self,
+        bytes: &[u8],
+        reverse: bool,
+        kernel: impl Fn(&[u8]) -> Option<usize>,
+    ) -> core::result::Result<Option<usize>, IriReadError> {
+        if !matches!(
+            self,
+            Self::Admitted { enabled: true, .. } | Self::ControlledVerdict { enabled: true, .. }
+        ) {
+            return Ok(kernel(bytes));
+        }
+        if reverse {
+            let mut end = bytes.len();
+            while end > 0 {
+                let start = end.saturating_sub(256);
+                self.checkpoint((end - start) as u64)?;
+                if let Some(at) = kernel(&bytes[start..end]) {
+                    return Ok(Some(start + at));
+                }
+                end = start;
+            }
+        } else {
+            for (index, chunk) in bytes.chunks(256).enumerate() {
+                self.checkpoint(chunk.len() as u64)?;
+                if let Some(at) = kernel(chunk) {
+                    return Ok(Some(index * 256 + at));
+                }
+            }
+        }
+        Ok(None)
+    }
     pub(crate) fn message(
         self,
         message: core::fmt::Arguments<'_>,
     ) -> core::result::Result<String, IriReadError> {
         match self {
             Self::Owned => Ok(message.to_string()),
-            Self::Verdict => Ok(String::new()),
-            Self::Admitted(render) => render(message).map_err(IriReadError::Storage),
+            Self::Verdict | Self::ControlledVerdict { .. } => Ok(String::new()),
+            Self::Admitted { render, .. } => render(message).map_err(IriReadError::Storage),
         }
     }
 }
@@ -544,6 +646,7 @@ fn scan_with(
     mode: Mode,
     diagnostics: Diagnostics<'_>,
 ) -> core::result::Result<Spans, IriReadError> {
+    diagnostics.checkpoint(0)?;
     if s.is_empty() {
         return Err(IriError::Empty.into());
     }
@@ -555,7 +658,13 @@ fn scan_with(
     let mut idx = 0usize;
 
     let mut scheme: Option<Range<usize>> = None;
-    if let Some(colon) = find_scheme_colon(s) {
+    if let Some(colon) = if bytes.first().is_some_and(u8::is_ascii_alphabetic) {
+        diagnostics
+            .find(bytes, false, find_scheme_end)?
+            .filter(|&at| bytes[at] == b':')
+    } else {
+        None
+    } {
         validate_scheme_with(&s[..colon], diagnostics)?;
         scheme = Some(0..colon);
         idx = colon + 1; // skip ':'
@@ -566,7 +675,10 @@ fn scan_with(
     if bytes[idx..].starts_with(b"//") {
         let astart = idx + 2;
         // authority runs until the next '/', '?', '#' or end.
-        let aend = astart + find_authority_end(&bytes[astart..]).unwrap_or(bytes.len() - astart);
+        let aend = astart
+            + diagnostics
+                .find(&bytes[astart..], false, find_authority_end)?
+                .unwrap_or(bytes.len() - astart);
         validate_authority_with(&s[astart..aend], astart, mode, diagnostics)?;
         authority = Some(astart..aend);
         idx = aend;
@@ -574,16 +686,32 @@ fn scan_with(
 
     // path: runs until '?' or '#' or end.
     let pstart = idx;
-    let pend = pstart + find_byte2(&bytes[pstart..], b'?', b'#').unwrap_or(bytes.len() - pstart);
-    validate_path(&s[pstart..pend], pstart, mode)?;
+    let pend = pstart
+        + diagnostics
+            .find(&bytes[pstart..], false, |bytes| {
+                find_byte2(bytes, b'?', b'#')
+            })?
+            .unwrap_or(bytes.len() - pstart);
+    validate_component_with(
+        &s[pstart..pend],
+        pstart,
+        COLON | AT | SLASH,
+        false,
+        mode,
+        diagnostics,
+    )?;
     // RFC-3986 §4.2: a relative reference with no scheme and no authority has a
     // `path-noscheme`, whose FIRST segment must not contain a ':' — otherwise the
     // reference would be ambiguous with a scheme. Reject it (hard-fail, not a
     // degraded accept). A ':' in a later segment (e.g. `foo/bar:baz`) is fine.
     if scheme.is_none() && authority.is_none() {
         let first_seg = &s[pstart..pend];
-        let seg = first_seg.split('/').next().unwrap_or("");
-        if let Some(rel) = seg.find(':') {
+        let end = diagnostics
+            .find(first_seg.as_bytes(), false, |bytes| find_byte(bytes, b'/'))?
+            .unwrap_or(first_seg.len());
+        if let Some(rel) = diagnostics.find(&first_seg.as_bytes()[..end], false, |bytes| {
+            find_byte(bytes, b':')
+        })? {
             return Err(IriError::DisallowedChar(':', pstart + rel).into());
         }
     }
@@ -594,8 +722,18 @@ fn scan_with(
     let mut query: Option<Range<usize>> = None;
     if idx < bytes.len() && bytes[idx] == b'?' {
         let qstart = idx + 1;
-        let qend = qstart + find_byte(&bytes[qstart..], b'#').unwrap_or(bytes.len() - qstart);
-        validate_query(&s[qstart..qend], qstart, mode)?;
+        let qend = qstart
+            + diagnostics
+                .find(&bytes[qstart..], false, |bytes| find_byte(bytes, b'#'))?
+                .unwrap_or(bytes.len() - qstart);
+        validate_component_with(
+            &s[qstart..qend],
+            qstart,
+            COLON | AT | SLASH | QUESTION,
+            true,
+            mode,
+            diagnostics,
+        )?;
         query = Some(qstart..qend);
         idx = qend;
     }
@@ -603,7 +741,14 @@ fn scan_with(
     // fragment: '#' then the rest.
     let fragment: Option<Range<usize>> = if idx < bytes.len() && bytes[idx] == b'#' {
         let fstart = idx + 1;
-        validate_fragment(&s[fstart..], fstart, mode)?;
+        validate_component_with(
+            &s[fstart..],
+            fstart,
+            COLON | AT | SLASH | QUESTION,
+            false,
+            mode,
+            diagnostics,
+        )?;
         Some(fstart..s.len())
     } else {
         None
@@ -618,21 +763,6 @@ fn scan_with(
     })
 }
 
-/// Locate the `:` that terminates a valid scheme, if any. Returns `None` when the
-/// string is a relative reference (the first `:` — if any — is preceded by a
-/// `/`, `?`, or `#`, or the leading run is not a valid scheme).
-fn find_scheme_colon(s: &str) -> Option<usize> {
-    let b = s.as_bytes();
-    // First char must be ALPHA for a scheme to exist at all.
-    if b.is_empty() || !b[0].is_ascii_alphabetic() {
-        return None;
-    }
-    match find_scheme_end(b) {
-        Some(i) if b[i] == b':' => Some(i),
-        Some(_) | None => None,
-    }
-}
-
 fn validate_scheme_with(
     s: &str,
     diagnostics: Diagnostics<'_>,
@@ -645,6 +775,7 @@ fn validate_scheme_with(
         return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))?).into());
     }
     for &c in &b[1..] {
+        diagnostics.checkpoint(1)?;
         // scheme tail = ALPHA / DIGIT / `+` `-` `.` (ASCII-only by grammar).
         if !ascii_class(c, SCHEME_TAIL) {
             return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))?).into());
@@ -776,6 +907,30 @@ pub(crate) fn validate_component(
     allow_iprivate: bool,
     mode: Mode,
 ) -> Result<()> {
+    match validate_component_with(
+        s,
+        base_off,
+        extra_mask,
+        allow_iprivate,
+        mode,
+        Diagnostics::Owned,
+    ) {
+        Ok(()) => Ok(()),
+        Err(IriReadError::Lexical(cause)) => Err(cause),
+        Err(IriReadError::Storage(_)) => {
+            unreachable!("resident component validation has no storage callback")
+        }
+    }
+}
+
+pub(crate) fn validate_component_with(
+    s: &str,
+    base_off: usize,
+    extra_mask: u8,
+    allow_iprivate: bool,
+    mode: Mode,
+    diagnostics: Diagnostics<'_>,
+) -> core::result::Result<(), IriReadError> {
     debug_assert!(
         extra_mask & !COMPONENT_EXTRAS == 0,
         "a component admits only the single-byte extra classes"
@@ -784,6 +939,7 @@ pub(crate) fn validate_component(
     let allowed = UNRESERVED | SUB_DELIMS | extra_mask;
     let mut i = 0usize;
     while i < bytes.len() {
+        diagnostics.checkpoint(1)?;
         // Clean-run precheck: skip every leading byte of the next eight that the
         // per-byte arm below would accept as an ASCII class member, all at once.
         // It stops at the first byte that needs that arm — a `%`, a non-ASCII
@@ -803,7 +959,7 @@ pub(crate) fn validate_component(
                 || !bytes[i + 1].is_ascii_hexdigit()
                 || !bytes[i + 2].is_ascii_hexdigit()
             {
-                return Err(IriError::BadPercentEncoding(base_off + i));
+                return Err(IriError::BadPercentEncoding(base_off + i).into());
             }
             i += 3;
             continue;
@@ -813,7 +969,7 @@ pub(crate) fn validate_component(
                 i += 1;
                 continue;
             }
-            return Err(IriError::DisallowedChar(b as char, base_off + i));
+            return Err(IriError::DisallowedChar(b as char, base_off + i).into());
         }
         // Non-ASCII: `b` is a UTF-8 lead byte at a char boundary (the ASCII bytes
         // before it are single-byte). Decode and apply the IRI Unicode test.
@@ -822,7 +978,7 @@ pub(crate) fn validate_component(
             i += c.len_utf8();
             continue;
         }
-        return Err(IriError::DisallowedChar(c, base_off + i));
+        return Err(IriError::DisallowedChar(c, base_off + i).into());
     }
     Ok(())
 }
@@ -928,18 +1084,19 @@ fn validate_authority_with(
 ) -> core::result::Result<(), IriReadError> {
     // authority = [ userinfo "@" ] host [ ":" port ]
     // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
-    let (userinfo, rest, host_off) = match find_byte(s.as_bytes(), b'@') {
-        Some(at) => (Some(&s[..at]), &s[at + 1..], base_off + at + 1),
-        None => (None, s, base_off),
-    };
+    let (userinfo, rest, host_off) =
+        match diagnostics.find(s.as_bytes(), false, |bytes| find_byte(bytes, b'@'))? {
+            Some(at) => (Some(&s[..at]), &s[at + 1..], base_off + at + 1),
+            None => (None, s, base_off),
+        };
     if let Some(ui) = userinfo {
         // userinfo: unreserved / pct / sub-delims / ":"
-        validate_component(ui, base_off, COLON, false, mode)?;
+        validate_component_with(ui, base_off, COLON, false, mode, diagnostics)?;
     }
 
     // Split host and optional port. An IP-literal host is bracketed `[...]`.
     let (host, port_off, port) = if rest.starts_with('[') {
-        match rest.find(']') {
+        match diagnostics.find(rest.as_bytes(), false, |bytes| find_byte(bytes, b']'))? {
             Some(close) => {
                 let host = &rest[..=close];
                 let after = &rest[close + 1..];
@@ -960,7 +1117,9 @@ fn validate_authority_with(
             }
         }
     } else {
-        match rest.rfind(':') {
+        match diagnostics.find(rest.as_bytes(), true, |bytes| {
+            bytes.iter().rposition(|&byte| byte == b':')
+        })? {
             Some(colon) => (
                 &rest[..colon],
                 Some(host_off + colon + 1),
@@ -973,6 +1132,7 @@ fn validate_authority_with(
     crate::host::validate_host_with(host, host_off, mode, diagnostics)?;
     if let (Some(p), Some(poff)) = (port, port_off) {
         for (k, c) in p.char_indices() {
+            diagnostics.checkpoint(1)?;
             if !c.is_ascii_digit() {
                 return Err(IriError::DisallowedChar(c, poff + k).into());
             }
@@ -982,21 +1142,6 @@ fn validate_authority_with(
         // identity. Empty, long, and leading-zero digit strings remain lexical.
     }
     Ok(())
-}
-
-fn validate_path(s: &str, base_off: usize, mode: Mode) -> Result<()> {
-    // pchar = unreserved / pct / sub-delims / ":" / "@"; plus "/" segment sep.
-    validate_component(s, base_off, COLON | AT | SLASH, false, mode)
-}
-
-fn validate_query(s: &str, base_off: usize, mode: Mode) -> Result<()> {
-    // query = *( pchar / "/" / "?" ); IRIs additionally allow `iprivate`.
-    validate_component(s, base_off, COLON | AT | SLASH | QUESTION, true, mode)
-}
-
-fn validate_fragment(s: &str, base_off: usize, mode: Mode) -> Result<()> {
-    // fragment = *( pchar / "/" / "?" )
-    validate_component(s, base_off, COLON | AT | SLASH | QUESTION, false, mode)
 }
 
 /// The bytes that end an authority: `/`, `?`, `#`.

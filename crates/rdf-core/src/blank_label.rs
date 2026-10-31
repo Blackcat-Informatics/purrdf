@@ -210,6 +210,41 @@ pub fn is_valid_label(label: &str, alphabet: LabelAlphabet) -> bool {
     }
 }
 
+fn is_valid_label_with_memory<S: Admission + ?Sized>(
+    label: &str,
+    alphabet: LabelAlphabet,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    if !memory.admission().progress_enabled() {
+        return Ok(is_valid_label(label, alphabet));
+    }
+    match alphabet {
+        LabelAlphabet::BlankNodeLabel => {
+            purrdf_lex::terminals::is_valid_blank_node_label_with_control(label, &mut |units| {
+                memory.admission_mut().checkpoint(units)
+            })
+        }
+        LabelAlphabet::NcName => {
+            purrdf_lex::terminals::is_ncname_with_control(label, &mut |units| {
+                memory.admission_mut().checkpoint(units)
+            })
+        }
+        LabelAlphabet::Unconstrained => Ok(true),
+        LabelAlphabet::XmlText => {
+            if label.is_empty() {
+                return Ok(false);
+            }
+            for ch in label.chars() {
+                memory.admission_mut().checkpoint(1)?;
+                if !is_xml_text_char(ch) {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
 /// Encode a `(label, scope)` pair into `alphabet`'s single-slot token,
 /// returning the label BORROWED and byte-identical when it can be written
 /// verbatim.
@@ -261,21 +296,27 @@ pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
     alphabet: LabelAlphabet,
     memory: &mut Memory<'_, S>,
 ) -> Result<Cow<'a, str>, StorageError> {
-    if !needs_envelope(label, scope, alphabet) {
+    memory.admission_mut().checkpoint(0)?;
+    if !needs_envelope_with_memory(label, scope, alphabet, memory)? {
         return Ok(Cow::Borrowed(label));
     }
-    let encoded = memory.format(&EnvelopeSpelling { label, scope })?;
+    let encoded = memory.format_with_progress(&EnvelopeSpelling { label, scope })?;
     debug_assert!(
-        is_valid_label(&encoded, alphabet),
+        is_valid_label_with_memory(&encoded, alphabet, memory)?,
         "encode_blank_label must always produce a token legal under the target alphabet"
     );
     Ok(Cow::Owned(encoded))
 }
 
-fn needs_envelope(label: &str, scope: BlankScope, alphabet: LabelAlphabet) -> bool {
-    scope != BlankScope::DEFAULT
-        || !is_valid_label(label, alphabet)
-        || label.starts_with(ESCAPE_MARKER)
+fn needs_envelope_with_memory<S: Admission + ?Sized>(
+    label: &str,
+    scope: BlankScope,
+    alphabet: LabelAlphabet,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    Ok(scope != BlankScope::DEFAULT
+        || !is_valid_label_with_memory(label, alphabet, memory)?
+        || label.starts_with(ESCAPE_MARKER))
 }
 
 /// Allocation-free rendering of the single canonical envelope spelling.
@@ -358,6 +399,7 @@ pub fn decode_blank_label_with_memory<'a, S: Admission + ?Sized>(
     alphabet: LabelAlphabet,
     memory: &mut Memory<'_, S>,
 ) -> Result<(Cow<'a, str>, BlankScope), StorageError> {
+    memory.admission_mut().checkpoint(0)?;
     if !token.starts_with(ESCAPE_MARKER) {
         return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
     }
@@ -367,7 +409,7 @@ pub fn decode_blank_label_with_memory<'a, S: Admission + ?Sized>(
     // The envelope parser accepts only the renderer's canonical scope and
     // scalar spelling. The remaining image condition is whether the encoder
     // would envelope this label at all; do not allocate an image-test copy.
-    if !needs_envelope(&label, scope, alphabet) {
+    if !needs_envelope_with_memory(&label, scope, alphabet, memory)? {
         if let Cow::Owned(label) = label {
             memory.release_string(label)?;
         }
@@ -422,13 +464,33 @@ struct Envelope<'a> {
 
 impl<'a> Envelope<'a> {
     fn parse(token: &'a str) -> Option<Self> {
-        let rest = token.strip_prefix(ESCAPE_MARKER)?;
+        Self::parse_with_memory(token, &mut Memory::new(&mut Resident))
+            .expect("resident envelope parser allocates no storage")
+    }
+
+    fn parse_with_memory<S: Admission + ?Sized>(
+        token: &'a str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Self>, StorageError> {
+        memory.admission_mut().checkpoint(0)?;
+        let Some(rest) = token.strip_prefix(ESCAPE_MARKER) else {
+            return Ok(None);
+        };
         // The scope digits are the maximal digit run, always terminated by the `_`
         // that opens the body — so the split is unambiguous even when the body
         // itself starts with digits.
-        let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let mut digits_len = 0;
+        for byte in rest.bytes() {
+            memory.admission_mut().checkpoint(1)?;
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            digits_len += 1;
+        }
         let (digits, body) = rest.split_at(digits_len);
-        let body = body.strip_prefix('_')?;
+        let Some(body) = body.strip_prefix('_') else {
+            return Ok(None);
+        };
         let scope = if digits.is_empty() {
             BlankScope::DEFAULT
         } else {
@@ -437,20 +499,34 @@ impl<'a> Envelope<'a> {
             // (the image test below would reject it anyway; refusing here keeps the
             // grammar's statement exact).
             if digits.starts_with('0') {
-                return None;
+                return Ok(None);
             }
-            let ordinal = digits.parse::<u32>().ok()?;
+            // A canonical u32 ordinal has at most ten digits, so this native
+            // integer parse is a bounded decision after the governed digit scan.
+            if digits.len() > 10 {
+                return Ok(None);
+            }
+            let Ok(ordinal) = digits.parse::<u32>() else {
+                return Ok(None);
+            };
             if ordinal == 0 {
-                return None;
+                return Ok(None);
             }
             BlankScope(ordinal)
         };
         let mut chars = body.chars();
         let mut bytes = 0;
-        while let Some(scalar) = envelope_scalar(&mut chars).ok()? {
+        loop {
+            memory.admission_mut().checkpoint(1)?;
+            let Ok(scalar) = envelope_scalar(&mut chars) else {
+                return Ok(None);
+            };
+            let Some(scalar) = scalar else {
+                break;
+            };
             bytes += scalar.len_utf8();
         }
-        Some(Self { body, scope, bytes })
+        Ok(Some(Self { body, scope, bytes }))
     }
 
     fn chars(self) -> impl Iterator<Item = char> + Clone + 'a {
@@ -484,19 +560,24 @@ fn decode_envelope<'a, S: Admission + ?Sized>(
     token: &'a str,
     memory: &mut Memory<'_, S>,
 ) -> Result<Option<(Cow<'a, str>, BlankScope)>, StorageError> {
-    let Some(envelope) = Envelope::parse(token) else {
+    let Some(envelope) = Envelope::parse_with_memory(token, memory)? else {
         return Ok(None);
     };
-    if envelope
-        .body
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric())
-    {
+    let mut plain = true;
+    for byte in envelope.body.bytes() {
+        memory.admission_mut().checkpoint(1)?;
+        if !byte.is_ascii_alphanumeric() {
+            plain = false;
+            break;
+        }
+    }
+    if plain {
         return Ok(Some((Cow::Borrowed(envelope.body), envelope.scope)));
     }
     let mut decoded = String::new();
     memory.reserve_string(&mut decoded, envelope.bytes)?;
     for scalar in envelope.chars() {
+        memory.admission_mut().checkpoint(1)?;
         memory.push_char(&mut decoded, scalar)?;
     }
     Ok(Some((Cow::Owned(decoded), envelope.scope)))

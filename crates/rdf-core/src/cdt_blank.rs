@@ -176,8 +176,23 @@ impl BlankBinding {
         let encoded =
             encode_blank_label_with_memory(&label, scope, LabelAlphabet::BlankNodeLabel, memory)?;
         let bound = match encoded {
-            Cow::Borrowed(encoded) if encoded == token => Cow::Borrowed(token),
-            Cow::Borrowed(encoded) => Cow::Owned(memory.string(encoded)?),
+            Cow::Borrowed(encoded) => {
+                let unchanged = if memory.admission().progress_enabled() {
+                    purrdf_lex::control::compare_bytes(
+                        encoded.as_bytes(),
+                        token.as_bytes(),
+                        &mut |units| memory.admission_mut().checkpoint(units),
+                    )?
+                    .is_eq()
+                } else {
+                    encoded == token
+                };
+                if unchanged {
+                    Cow::Borrowed(token)
+                } else {
+                    Cow::Owned(memory.string_with_progress(encoded)?)
+                }
+            }
             Cow::Owned(encoded) => Cow::Owned(encoded),
         };
         if let Cow::Owned(label) = label {
@@ -273,21 +288,67 @@ impl CdtBlankError {
     }
 }
 
-impl From<CdtBlankError> for crate::RdfDiagnostic {
-    /// The parse diagnostic a codec reports when a document carries an
-    /// ill-formed composite literal. The whole document is refused: see the
-    /// module docs for why there is no opaque-literal fallback.
-    fn from(err: CdtBlankError) -> Self {
-        let code = match err {
-            CdtBlankError::Storage(error) => return error.into(),
-            CdtBlankError::Malformed { .. } => "cdt-literal-malformed",
-            CdtBlankError::ScannerDisagreement { .. } => "cdt-literal-scan-disagreement",
+impl CdtBlankError {
+    /// Render the native CDT refusal through its original diagnostic account.
+    /// The consumed cause is destroyed before its admitted payload is released.
+    /// # Errors
+    /// Returns physical diagnostic construction refusal.
+    pub fn into_diagnostic_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<crate::RdfDiagnostic, StorageError> {
+        let bytes = self.owned_bytes()?;
+        let baseline = memory
+            .admitted_bytes()
+            .checked_sub(bytes)
+            .ok_or(StorageError::SizeOverflow)?;
+        let result = (|| {
+            let code = match &self {
+                Self::Storage(error) => return Err(*error),
+                Self::Malformed { .. } => "cdt-literal-malformed",
+                Self::ScannerDisagreement { .. } => "cdt-literal-scan-disagreement",
+            };
+            let mut diagnostic = crate::RdfDiagnostic::try_error_with_memory(code, &self, memory)?;
+            diagnostic.detail = Some(memory.string_with_progress(
+                "a cdt:List / cdt:Map lexical form denotes blank nodes in the enclosing document's \
+                 scope, so one that does not parse leaves that scope -- and the identity of \
+                 same-labelled blank nodes outside the literal -- undefined",
+            )?);
+            Ok(diagnostic)
+        })();
+        drop(self);
+        let retained = result
+            .as_ref()
+            .ok()
+            .map_or(Some(0), crate::RdfDiagnostic::retained_bytes)
+            .ok_or(StorageError::SizeOverflow)?;
+        let Some(released) = baseline
+            .checked_add(retained)
+            .and_then(|live| memory.admitted_bytes().checked_sub(live))
+        else {
+            // A native diagnostic cannot escape an invalid ownership census.
+            drop(result);
+            if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+                let _ = memory.release_bytes(bytes);
+            }
+            return Err(StorageError::SizeOverflow);
         };
-        Self::error(code, err.to_string()).with_detail(
-            "a cdt:List / cdt:Map lexical form denotes blank nodes in the enclosing document's \
-             scope, so one that does not parse leaves that scope -- and the identity of \
-             same-labelled blank nodes outside the literal -- undefined",
-        )
+        let cleanup = memory.release_bytes(released);
+        if result.is_ok() {
+            cleanup?;
+        }
+        result
+    }
+}
+
+impl From<CdtBlankError> for crate::RdfDiagnostic {
+    fn from(err: CdtBlankError) -> Self {
+        let bytes = match err.owned_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => return error.into(),
+        };
+        err.into_diagnostic_with_memory(&mut Memory::resume(&mut Resident, bytes))
+            .unwrap_or_else(Into::into)
     }
 }
 
@@ -326,6 +387,7 @@ pub fn bind_cdt_blank_labels_with_memory<'a, S: Admission + ?Sized>(
     binding: BlankBinding,
     memory: &mut Memory<'_, S>,
 ) -> Result<Cow<'a, str>, CdtBlankError> {
+    memory.admission_mut().checkpoint(0)?;
     if !is_cdt_datatype(datatype) {
         return Ok(Cow::Borrowed(lexical));
     }
@@ -422,6 +484,7 @@ pub(crate) fn bind_cdt_blank_labels_lazy_with_memory<'a, S: Admission + ?Sized>(
     binding: &mut impl FnMut(&mut Memory<'_, S>) -> Result<BlankBinding, StorageError>,
     memory: &mut Memory<'_, S>,
 ) -> Result<Cow<'a, str>, StorageError> {
+    memory.admission_mut().checkpoint(0)?;
     if !is_cdt_datatype(datatype) {
         return Ok(Cow::Borrowed(lexical));
     }
@@ -520,6 +583,7 @@ pub fn rewrite_cdt_terms_with_memory<'a, S: Admission + ?Sized>(
     on_iri: &mut impl FnMut(&str, bool, &mut Memory<'_, S>) -> Result<Option<String>, StorageError>,
     memory: &mut Memory<'_, S>,
 ) -> Result<Cow<'a, str>, StorageError> {
+    memory.admission_mut().checkpoint(0)?;
     if !is_cdt_datatype(datatype) {
         return Ok(Cow::Borrowed(lexical));
     }
@@ -600,6 +664,7 @@ pub fn cdt_embedded_blanks_with_memory<S: Admission + ?Sized>(
     datatype: &str,
     memory: &mut Memory<'_, S>,
 ) -> Result<Vec<(String, BlankScope)>, StorageError> {
+    memory.admission_mut().checkpoint(0)?;
     if !is_cdt_datatype(datatype) {
         return Ok(Vec::new());
     }
@@ -611,7 +676,7 @@ pub fn cdt_embedded_blanks_with_memory<S: Admission + ?Sized>(
                 decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, memory)?;
             let label = match label {
                 Cow::Owned(label) => label,
-                Cow::Borrowed(label) => memory.string(label)?,
+                Cow::Borrowed(label) => memory.string_with_progress(label)?,
             };
             memory.push(&mut blanks, (label, scope))?;
         }
@@ -656,6 +721,12 @@ struct GrammarStorage<'m, 'a, S: Admission + ?Sized> {
 }
 
 impl<S: Admission + ?Sized> Admission for GrammarStorage<'_, '_, S> {
+    fn progress_enabled(&self) -> bool {
+        self.memory.admission().progress_enabled()
+    }
+    fn checkpoint(&mut self, units: u64) -> Result<(), StorageError> {
+        self.memory.admission_mut().checkpoint(units)
+    }
     fn resize(&mut self, next: usize) -> Result<(), StorageError> {
         if next >= self.live {
             self.memory.add_bytes(next - self.live)?;
@@ -707,6 +778,7 @@ fn splice_with_memory<'a, S: Admission + ?Sized>(
     let mut out: Option<String> = None;
     let mut cursor = 0usize;
     for span in spans {
+        memory.admission_mut().checkpoint(1)?;
         if span.start < cursor {
             continue;
         }
@@ -714,14 +786,14 @@ fn splice_with_memory<'a, S: Admission + ?Sized>(
             continue;
         };
         let buf = out.get_or_insert_with(String::new);
-        memory.push_str(buf, &lexical[cursor..span.start])?;
-        memory.push_str(buf, &replacement)?;
+        memory.push_str_with_progress(buf, &lexical[cursor..span.start])?;
+        memory.push_str_with_progress(buf, &replacement)?;
         memory.release_string(replacement)?;
         cursor = span.end;
     }
     match out {
         Some(mut buf) => {
-            memory.push_str(&mut buf, &lexical[cursor..])?;
+            memory.push_str_with_progress(&mut buf, &lexical[cursor..])?;
             Ok(Cow::Owned(buf))
         }
         None => Ok(Cow::Borrowed(lexical)),
@@ -738,8 +810,9 @@ fn check_scan_agrees<S: Admission + ?Sized>(
     let parsed = grammar_blank_labels(value, memory)?;
     let mut scanned = Vec::new();
     for span in spans {
+        memory.admission_mut().checkpoint(1)?;
         if let TokenKind::Blank(label) = &span.kind {
-            let label = memory.string(label)?;
+            let label = memory.string_with_progress(label)?;
             memory.push(&mut scanned, label)?;
         }
     }
@@ -748,9 +821,28 @@ fn check_scan_agrees<S: Admission + ?Sized>(
     // Identity only depends on the SET of labels, so compare as multisets.
     let mut a = memory.collect(scanned.iter().map(String::as_str))?;
     let mut b = memory.collect(parsed.iter().map(String::as_str))?;
-    a.sort_unstable();
-    b.sort_unstable();
-    let agrees = a == b;
+    for values in [&mut a, &mut b] {
+        purrdf_lex::walk::try_sort_unstable_by(values, |left, right| {
+            purrdf_lex::control::compare_bytes(left.as_bytes(), right.as_bytes(), &mut |units| {
+                memory.admission_mut().checkpoint(units)
+            })
+        })?;
+    }
+    let mut agrees = a.len() == b.len();
+    if agrees {
+        for (left, right) in a.iter().zip(&b) {
+            if !purrdf_lex::control::compare_bytes(
+                left.as_bytes(),
+                right.as_bytes(),
+                &mut |units| memory.admission_mut().checkpoint(units),
+            )?
+            .is_eq()
+            {
+                agrees = false;
+                break;
+            }
+        }
+    }
     memory.release_vec(a)?;
     memory.release_vec(b)?;
     if agrees {
@@ -788,6 +880,7 @@ fn grammar_blank_labels<S: Admission + ?Sized>(
     let mut embedded: Vec<(String, String)> = Vec::new();
     walk_value(root, &mut out, &mut embedded, memory)?;
     while let Some((lexical, datatype)) = embedded.pop() {
+        memory.admission_mut().checkpoint(1)?;
         let (value, bytes) = parse_composite(&lexical, &datatype, memory)?;
         walk_value(&value, &mut out, &mut embedded, memory)?;
         drop(value);
@@ -814,9 +907,10 @@ fn walk_value<S: Admission + ?Sized>(
     let mut stack = purrdf_lex::walk::WorkList::<&CdtTerm, 16>::new();
     push_children(&mut stack, value, memory)?;
     while let Some(term) = stack.pop() {
+        memory.admission_mut().checkpoint(1)?;
         match term {
             CdtTerm::Blank(label) => {
-                let label = memory.string(label)?;
+                let label = memory.string_with_progress(label)?;
                 memory.push(out, label)?;
             }
             CdtTerm::Composite(inner) => push_children(&mut stack, inner, memory)?,
@@ -826,8 +920,8 @@ fn walk_value<S: Admission + ?Sized>(
                 stack.try_push_admitted(&triple.object, memory)?;
             }
             CdtTerm::Literal(lit) if is_cdt_datatype(&lit.datatype) => {
-                let lexical = memory.string(&lit.lexical)?;
-                let datatype = memory.string(&lit.datatype)?;
+                let lexical = memory.string_with_progress(&lit.lexical)?;
+                let datatype = memory.string_with_progress(&lit.datatype)?;
                 memory.push(embedded, (lexical, datatype))?;
             }
             CdtTerm::Literal(_) | CdtTerm::Iri(_) | CdtTerm::Null => {}
@@ -847,11 +941,13 @@ fn push_children<'a, S: Admission + ?Sized>(
     match value.contents() {
         CdtContents::List(items) => {
             for item in items {
+                memory.admission_mut().checkpoint(1)?;
                 stack.try_push_admitted(item, memory)?;
             }
         }
         CdtContents::Map(entries) => {
             for entry in entries {
+                memory.admission_mut().checkpoint(1)?;
                 stack.try_push_admitted(&entry.value, memory)?;
             }
         }
@@ -904,7 +1000,7 @@ fn scan_tokens_with_memory<S: Admission + ?Sized>(
 ) -> Result<Vec<TokenSpan>, StorageError> {
     let mut spans = Vec::new();
     let mut queue = Vec::new();
-    let text = memory.string(lexical)?;
+    let text = memory.string_with_progress(lexical)?;
     memory.push(
         &mut queue,
         Region {
@@ -916,6 +1012,7 @@ fn scan_tokens_with_memory<S: Admission + ?Sized>(
     // budget bounds how many there can be.
     let mut budget = purrdf_cdt::MAX_ELEMENTS;
     while let Some(region) = queue.pop() {
+        memory.admission_mut().checkpoint(1)?;
         if budget == 0 {
             release_region(region, memory)?;
             break;
@@ -924,13 +1021,25 @@ fn scan_tokens_with_memory<S: Admission + ?Sized>(
         scan_region(&region, &mut spans, &mut queue, memory)?;
         release_region(region, memory)?;
     }
-    spans.sort_unstable_by_key(|span| span.start);
+    purrdf_lex::walk::try_sort_unstable_by(&mut spans, |left, right| {
+        memory.admission_mut().checkpoint(1)?;
+        Ok::<_, StorageError>(left.start.cmp(&right.start))
+    })?;
     // A token located inside an embedded literal is nested INSIDE that
     // literal's own IRIREF-bearing span only in the datatype case, which is
     // scanned in the parent region; the label regions never overlap. Drop any
     // span that would still overlap its predecessor rather than trust that.
     let before = span_payload_bytes(&spans)?;
-    spans.dedup_by(|later, earlier| later.start < earlier.end);
+    let mut kept = 0;
+    for read in 0..spans.len() {
+        memory.admission_mut().checkpoint(1)?;
+        if kept != 0 && spans[read].start < spans[kept - 1].end {
+            continue;
+        }
+        spans.swap(kept, read);
+        kept += 1;
+    }
+    spans.truncate(kept);
     let after = span_payload_bytes(&spans)?;
     memory.release_bytes(
         before
@@ -974,11 +1083,12 @@ fn scan_region<S: Admission + ?Sized>(
     let bytes = region.text.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
+        memory.admission_mut().checkpoint(16)?;
         match bytes[i] {
             // A triple term opens with `<<(`, whose leading `<` is not an IRI.
             b'<' if region.text[i..].starts_with("<<(") => i += 3,
             b'<' => {
-                let (end, close) = scan_iriref(bytes, i);
+                let (end, close) = scan_iriref(bytes, i, memory)?;
                 if let Some(close) = close {
                     // An element-position IRI: `iri_only` is false, because the
                     // grammar admits a blank node in this very position.
@@ -989,9 +1099,9 @@ fn scan_region<S: Admission + ?Sized>(
             b'"' | b'\'' => i = scan_string(region, i, spans, queue, memory)?,
             b'_' if bytes.get(i + 1) == Some(&b':') => {
                 let label_start = i + 2;
-                let end = scan_label_body(&region.text, label_start);
+                let end = scan_label_body(&region.text, label_start, memory)?;
                 if end > label_start {
-                    let label = memory.string(&region.text[label_start..end])?;
+                    let label = memory.string_with_progress(&region.text[label_start..end])?;
                     memory.push(
                         spans,
                         TokenSpan {
@@ -1020,16 +1130,21 @@ fn scan_region<S: Admission + ?Sized>(
 /// total path simply reports no token for it.
 ///
 /// `UCHAR` escapes ride through: no escape spells a raw `>`.
-fn scan_iriref(bytes: &[u8], start: usize) -> (usize, Option<usize>) {
+fn scan_iriref<S: Admission + ?Sized>(
+    bytes: &[u8],
+    start: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<(usize, Option<usize>), StorageError> {
     let mut i = start + 1;
     while i < bytes.len() {
+        memory.admission_mut().checkpoint(16)?;
         match bytes[i] {
-            b'>' => return (i + 1, Some(i)),
+            b'>' => return Ok((i + 1, Some(i))),
             b'\\' => i += 2,
             _ => i += 1,
         }
     }
-    (bytes.len(), None)
+    Ok((bytes.len(), None))
 }
 
 /// The end offset of the `BLANK_NODE_LABEL` body starting at `start`.
@@ -1037,9 +1152,14 @@ fn scan_iriref(bytes: &[u8], start: usize) -> (usize, Option<usize>) {
 /// `BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?`
 /// — the trailing `.` the production forbids is trimmed here, so `_:b.` scans as
 /// the label `b` exactly as the grammar reads it.
-fn scan_label_body(text: &str, start: usize) -> usize {
+fn scan_label_body<S: Admission + ?Sized>(
+    text: &str,
+    start: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<usize, StorageError> {
     let mut end = start;
     for ch in text[start..].chars() {
+        memory.admission_mut().checkpoint(4)?;
         if crate::blank_label::is_pn_chars(ch) || ch == '.' {
             end += ch.len_utf8();
         } else {
@@ -1048,13 +1168,14 @@ fn scan_label_body(text: &str, start: usize) -> usize {
     }
     // Trim trailing dots: they are legal mid-label but never final.
     while end > start && text.as_bytes()[end - 1] == b'.' {
+        memory.admission_mut().checkpoint(1)?;
         end -= 1;
     }
     // The first character must be PN_CHARS_U or a digit for this to be a label.
-    match text[start..end].chars().next() {
+    Ok(match text[start..end].chars().next() {
         Some(first) if crate::blank_label::is_pn_chars_u(first) || first.is_ascii_digit() => end,
         _ => start,
-    }
+    })
 }
 
 /// Record one `IRIREF` token: `open` is the `<`, `close` the `>`, `end` one past
@@ -1069,7 +1190,7 @@ fn push_iri_span<S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> Result<(), StorageError> {
     let iri = match expand_uchars_with_memory(&region.text[open + 1..close], memory)? {
-        Cow::Borrowed(text) => memory.string(text)?,
+        Cow::Borrowed(text) => memory.string_with_progress(text)?,
         Cow::Owned(text) => text,
     };
     memory.push(
@@ -1102,6 +1223,7 @@ fn scan_string<S: Admission + ?Sized>(
     let mut content_end = bytes.len();
     let mut after = bytes.len();
     while i < bytes.len() {
+        memory.admission_mut().checkpoint(16)?;
         if bytes[i] == b'\\' {
             i += 2;
             continue;
@@ -1134,7 +1256,7 @@ fn scan_string<S: Admission + ?Sized>(
     if bytes.get(iri_start) != Some(&b'<') {
         return Ok(iri_start);
     }
-    let (iri_end, close) = scan_iriref(bytes, iri_start);
+    let (iri_end, close) = scan_iriref(bytes, iri_start, memory)?;
     let Some(close) = close else {
         return Ok(iri_end);
     };
@@ -1173,6 +1295,7 @@ fn unescaped_region<S: Admission + ?Sized>(
     let bytes = raw.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
+        memory.admission_mut().checkpoint(16)?;
         let root = region.root_of(content_start + i);
         if bytes[i] == b'\\' {
             let (ch, width) = decode_escape(raw, i);
