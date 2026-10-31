@@ -12,6 +12,7 @@
 //! own anchors cost.
 
 use crate::model::{Graph, ReifierRow, Term, TermKind, Triple3};
+use crate::term_table::TermsRef;
 use crate::{FastMap, FastSet};
 
 /// Indexes kept in step with one segment's terms and accepted bindings.
@@ -71,21 +72,26 @@ impl ReifierIndex {
     /// naming `rid` through `rf`, and — because a self-bound triple term may
     /// leave `rf` implicit — the term whose own id IS `rid`. Miss an anchor and
     /// the loop is recorded rather than refused.
-    pub(super) fn binding_is_recursive(&self, graph: &Graph, rid: usize, triple: Triple3) -> bool {
+    pub(super) fn binding_is_recursive(
+        &self,
+        terms: TermsRef<'_>,
+        rid: usize,
+        triple: Triple3,
+    ) -> bool {
         let mut seen: FastSet<usize> = FastSet::default();
         self.anchors(rid).iter().any(|&anchor| {
             <[usize; 3]>::from(triple).into_iter().any(|component| {
                 // Each probe starts from an empty set; clearing the hoisted
                 // set reuses its table instead of allocating one per component.
                 seen.clear();
-                self.depends_on_anchor(graph, component, anchor, (rid, triple), &mut seen)
+                self.depends_on_anchor(terms, component, anchor, (rid, triple), &mut seen)
             })
         })
     }
 
     fn depends_on_anchor(
         &self,
-        graph: &Graph,
+        terms: TermsRef<'_>,
         term_id: usize,
         anchor: usize,
         pending: (usize, Triple3),
@@ -97,12 +103,12 @@ impl ReifierIndex {
         if !seen.insert(term_id) {
             return false;
         }
-        let Some(triple) = self.pending_binding(graph, term_id, pending) else {
+        let Some(triple) = self.pending_binding(terms, term_id, pending) else {
             return false;
         };
         <[usize; 3]>::from(triple)
             .into_iter()
-            .any(|component| self.depends_on_anchor(graph, component, anchor, pending, seen))
+            .any(|component| self.depends_on_anchor(terms, component, anchor, pending, seen))
     }
 
     /// The `(s, p, o)` a triple TERM would resolve to once `pending` is
@@ -116,11 +122,11 @@ impl ReifierIndex {
     /// walker then dies on.
     fn pending_binding(
         &self,
-        graph: &Graph,
+        terms: TermsRef<'_>,
         term_id: usize,
         pending: (usize, Triple3),
     ) -> Option<Triple3> {
-        let term = graph.terms.get(term_id)?;
+        let term = terms.get(term_id)?;
         if term.kind != TermKind::Triple {
             return None;
         }

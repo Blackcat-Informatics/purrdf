@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 
 use crate::{FastMap, FastSet};
 use std::io::Read;
+use std::sync::Arc;
+
+use crate::term_table::TermsRef;
 
 mod fold_error;
 use fold_error::FoldError;
@@ -29,7 +32,9 @@ use payload_error::{PayloadCause, PayloadError};
 mod reifier_index;
 use reifier_index::ReifierIndex;
 
-use purrdf_lex::cbor::{self, Value};
+use purrdf_lex::cbor::{self, BorrowedItem, EncodedItem, Value, ValueRef};
+mod encoded_frame;
+use encoded_frame::{Payload, StreamItem};
 
 use crate::codec::{
     Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
@@ -42,7 +47,7 @@ use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
     RowDecode, RowError, TermIdBase, check_quad_positions, decode_annotation_row,
-    decode_reifier_row,
+    decode_reifier_row, numeric_row,
 };
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
@@ -65,10 +70,15 @@ pub(crate) fn text_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
 }
 
 /// Borrow raw blob bytes and move decoded transform output without copying.
-fn payload_bytes(value: Cow<'_, Value>) -> Option<Cow<'_, [u8]>> {
+fn payload_bytes(value: Payload<'_>) -> Result<Option<Cow<'_, [u8]>>, PayloadError> {
     match value {
-        Cow::Borrowed(value) => value.as_bytes().map(Cow::Borrowed),
-        Cow::Owned(value) => value.into_bytes().ok().map(Cow::Owned),
+        Payload::Value(value) => value
+            .map(ValueRef::bytes)
+            .transpose()
+            .map(Option::flatten)
+            .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause))),
+        Payload::Blob(bytes) => Ok(Some(bytes)),
+        Payload::Encoded(_) => unreachable!("blob decoding returns bytes, never an RDF item"),
     }
 }
 
@@ -225,10 +235,13 @@ impl FrameContext<'_> {
         let Some(bytes) = source.get(start..end) else {
             return false;
         };
-        let Ok(Ok(map)) = cbor::decode(bytes, cbor::Limits::DEFAULT).map(Value::into_map) else {
+        let Ok((item, used)) = cbor::borrowed_prefix(bytes, cbor::Limits::DEFAULT) else {
             return false;
         };
-        content_id(&map) == self.content_id
+        if used != bytes.len() {
+            return false;
+        }
+        crate::wire::content_id_encoded(item).is_ok_and(|id| id == self.content_id)
     }
 }
 
@@ -326,8 +339,10 @@ pub struct BlobRefusal<'a> {
 pub trait StreamingSink {
     /// Per-frame provenance, fired once per frame before its rows are processed.
     fn frame(&mut self, _ctx: FrameContext<'_>) {}
-    /// Accepted term row.
-    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {}
+    /// Accepted term row, shared with the reader's segment validation table.
+    /// The reader releases its owner after segment validation; a sink may keep
+    /// this handle without copying the term's strings.
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {}
     /// Accepted quad row.
     fn quad(&mut self, _segment_index: u64, _quad: Quad) {}
     /// Accepted reifier row.
@@ -473,6 +488,8 @@ fn absorb_segment_result(result: &mut StreamingReadResult, segment: &Graph) {
 /// Mutable fold state; one per segment (and shared by the snapshot handler).
 struct Folder<'g, 's, 'k> {
     g: &'g mut Graph,
+    // Present only for streaming folds; materialized folds write Graph::terms.
+    shared_terms: Option<&'g mut Vec<Arc<Term>>>,
     sink: Option<&'s mut dyn StreamingSink>,
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: u64,
@@ -501,6 +518,13 @@ struct Folder<'g, 's, 'k> {
 }
 
 impl Folder<'_, '_, '_> {
+    fn terms(&self) -> TermsRef<'_> {
+        match self.shared_terms.as_deref() {
+            Some(terms) => TermsRef::Shared(terms),
+            None => TermsRef::Owned(&self.g.terms),
+        }
+    }
+
     /// Report the ONE shape a multi-bound reifier id can still break: a
     /// quoted-triple term that carries no `tt` of its own and resolves its
     /// components through that id, so the file asks for a single term with two
@@ -514,8 +538,9 @@ impl Folder<'_, '_, '_> {
         let ambiguous: Vec<(usize, u64)> = std::mem::take(&mut self.rebound_reifiers)
             .into_iter()
             .filter(|&(rid, _)| {
+                let terms = self.terms();
                 self.reifier_index.anchors(rid).iter().any(|&tid| {
-                    let term = &self.g.terms[tid];
+                    let term = &terms[tid];
                     term.triple.is_none() && term.reifier == Some(rid)
                 })
             })
@@ -643,10 +668,16 @@ impl Folder<'_, '_, '_> {
         &self,
         frame: &'frame [(Value, Value)],
         blob: bool,
-    ) -> Result<Cow<'frame, Value>, PayloadError> {
-        let d = map_get(frame, "d");
+        data: Option<ValueRef<'frame>>,
+    ) -> Result<Payload<'frame>, PayloadError> {
+        let d = data;
+        let bytes = d
+            .map(ValueRef::bytes)
+            .transpose()
+            .map(Option::flatten)
+            .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause)))?;
         if blob
-            && let Some(Value::Bytes(bytes)) = d
+            && let Some(bytes) = bytes.as_deref()
             && let Some(limit) = self
                 .sink
                 .as_deref()
@@ -661,7 +692,7 @@ impl Folder<'_, '_, '_> {
         if let Some(Value::Array(ids)) = map_get(frame, "x")
             && !ids.is_empty()
         {
-            let Some(Value::Bytes(db)) = d else {
+            let Some(db) = bytes.as_deref() else {
                 return Err(PayloadError::Damaged(PayloadCause::TransformedNotBytes));
             };
             let chain = self.resolve_codecs(ids)?;
@@ -686,14 +717,14 @@ impl Folder<'_, '_, '_> {
                 decode_chain(&chain, db)?
             };
             if blob {
-                return Ok(Cow::Owned(Value::Bytes(decoded)));
+                return Ok(Payload::Blob(Cow::Owned(decoded)));
             }
-            return cbor::decode(&decoded, cbor::Limits::DEFAULT)
-                .map(Cow::Owned)
+            return EncodedItem::from_bytes(decoded, cbor::Limits::DEFAULT)
+                .map(Payload::Encoded)
                 .map_err(|e| PayloadError::Damaged(PayloadCause::Cbor(e)));
         }
         if blob
-            && let Some(Value::Bytes(bytes)) = d
+            && let Some(bytes) = bytes.as_deref()
             && let Some(limit) = self
                 .sink
                 .as_deref()
@@ -705,14 +736,14 @@ impl Folder<'_, '_, '_> {
                 limit,
             }));
         }
-        Ok(d.map_or(Cow::Owned(Value::Null), Cow::Borrowed))
+        Ok(Payload::Value(d))
     }
 
     /// Fold one already-verified frame into the graph.
     ///
     /// Total: a missing capability degrades to an opaque node, and a corrupt
     /// payload degrades to a `damaged` opaque node — the reader never aborts.
-    fn fold_frame(&mut self, frame: &[(Value, Value)], index: u64) {
+    fn fold_frame(&mut self, frame: &[(Value, Value)], index: u64, data: Option<ValueRef<'_>>) {
         // Borrowed from `frame` (a parameter, not `self`), so the `&mut self`
         // handler calls below are unaffected and no per-frame `String` is made.
         let ftype = text_or(map_get(frame, "t"), "");
@@ -720,7 +751,7 @@ impl Folder<'_, '_, '_> {
             self.h_blob_frame(frame, index);
             return;
         }
-        let payload = match self.payload(frame, false) {
+        let payload = match self.payload(frame, false, data) {
             Err(error) => {
                 self.opaque(frame, ftype, error.opaque_reason());
                 let detail = error.diagnostic_detail();
@@ -734,25 +765,39 @@ impl Folder<'_, '_, '_> {
             }
             Ok(p) => p,
         };
-        match ftype {
-            "terms" => self.h_terms(&payload, index, TermIdBase(0)),
-            "quads" => self.h_quads(&payload, index, TermIdBase(0)),
-            "reifies" => self.h_reifies(&payload, index, TermIdBase(0)),
-            "annot" => self.h_annot(&payload, index, TermIdBase(0)),
-            "meta" => self.h_meta(&payload),
-            "suppress" => self.h_suppress(&payload),
-            "snapshot" => self.h_snapshot(&payload, index),
-            "index" => self.h_index(&payload, index),
-            "opaque" => self.h_opaque(&payload),
-            _ => {
-                self.opaque(frame, ftype, "unknown-frame-type");
-                self.diag(
-                    FoldError::UnknownFrameType {
-                        frame_type: ftype.to_string(),
-                    },
-                    index,
-                );
+        let folded = (|| -> Result<(), cbor::DecodeError> {
+            match ftype {
+                "terms" => self.h_terms(payload.view(), index, TermIdBase(0))?,
+                "quads" => self.h_quads(payload.view(), index, TermIdBase(0))?,
+                "reifies" => self.h_reifies(payload.view(), index, TermIdBase(0))?,
+                "annot" => self.h_annot(payload.view(), index, TermIdBase(0))?,
+                "meta" => self.h_meta(payload.view().to_value()?.as_ref()),
+                "suppress" => self.h_suppress(payload.view().to_value()?.as_ref()),
+                "snapshot" => self.h_snapshot(payload.view(), index)?,
+                "index" => self.h_index(payload.view().to_value()?.as_ref(), index),
+                "opaque" => self.h_opaque(payload.view().to_value()?.as_ref()),
+                _ => {
+                    self.opaque(frame, ftype, "unknown-frame-type");
+                    self.diag(
+                        FoldError::UnknownFrameType {
+                            frame_type: ftype.to_string(),
+                        },
+                        index,
+                    );
+                }
             }
+            Ok(())
+        })();
+        if let Err(cause) = folded {
+            let error = PayloadError::Damaged(PayloadCause::Cbor(cause));
+            self.opaque(frame, ftype, error.opaque_reason());
+            let detail = error.diagnostic_detail();
+            self.diag_native(
+                error.diagnostic_code(FRAME_BUDGET_DIAGNOSTIC),
+                error,
+                detail,
+                index,
+            );
         }
     }
 
@@ -780,19 +825,29 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_terms(&mut self, payload: &Value, index: u64, base: TermIdBase) {
-        let Value::Array(rows) = payload else { return };
+    fn h_terms(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            return Ok(());
+        };
         for raw in rows {
-            let Value::Map(entries) = raw else { continue };
+            let raw = raw?.to_value()?;
+            let Value::Map(entries) = raw.as_ref() else {
+                continue;
+            };
             let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
             let value = map_get(entries, "v")
                 .and_then(Value::as_text)
                 .map(str::to_string);
             // This row's id, read before any decode that can raise a diagnostic:
-            // diagnostics land in `self.g.diagnostics`, never in `self.g.terms`,
+            // diagnostics leave the term table unchanged,
             // so the id a refusal quotes is the id this row goes on to take.
-            let tid = self.g.terms.len() as i128;
-            let term_id = self.g.terms.len();
+            let tid = self.terms().len() as i128;
+            let term_id = self.terms().len();
             // THE language-tag decode point. `"l"` is the only field of the wire
             // format that becomes a `LANGTAG` token downstream, and this is the
             // only place it is read: `h_snapshot` re-enters through this very
@@ -819,7 +874,7 @@ impl Folder<'_, '_, '_> {
             // `read` returns a `Graph`, not a `Result` (permissive-read "never
             // panic ..., return graph state plus diagnostics", §7), and dropping
             // the whole row is impossible because term ids are positional —
-            // `tid` is `self.g.terms.len()`, so skipping a row would renumber
+            // `tid` is `self.terms().len()`, so skipping a row would renumber
             // every later term in the segment.
             // `lang_refused` distinguishes "there was no tag" from "there was a
             // tag and the grammar refused it". The base-direction arm below
@@ -950,7 +1005,7 @@ impl Folder<'_, '_, '_> {
                     index,
                 );
             }
-            self.g.terms.push(Term {
+            let term = Term {
                 kind,
                 value,
                 datatype: dt,
@@ -958,23 +1013,40 @@ impl Folder<'_, '_, '_> {
                 direction,
                 reifier: rf,
                 triple: tt,
-            });
-            self.reifier_index
-                .observe_term(term_id, &self.g.terms[term_id]);
-            if let Some(sink) = self.sink.as_deref_mut() {
-                sink.term(self.segment_index, term_id, &self.g.terms[term_id]);
+            };
+            if let Some(terms) = self.shared_terms.as_deref_mut() {
+                let term = Arc::new(term);
+                terms.push(Arc::clone(&term));
+                self.reifier_index.observe_term(term_id, &term);
+                if let Some(sink) = self.sink.as_deref_mut() {
+                    sink.term(self.segment_index, term_id, term);
+                }
+            } else {
+                self.g.terms.push(term);
+                self.reifier_index
+                    .observe_term(term_id, &self.g.terms[term_id]);
             }
         }
+        Ok(())
     }
 
-    fn h_quads(&mut self, payload: &Value, index: u64, base: TermIdBase) {
-        let Value::Array(rows) = payload else { return };
+    fn h_quads(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            return Ok(());
+        };
         for row in rows {
-            let Value::Array(items) = row else { continue };
-            if items.len() < 3 {
+            let Some(items) = numeric_row::<4>(row?)? else {
+                continue;
+            };
+            if items.width < 3 {
                 continue;
             }
-            let raw = match base.row::<4>(items) {
+            let raw = match base.row::<4>(items.values) {
                 Ok(raw) => raw,
                 Err(error) => {
                     self.damaged_row(error, index);
@@ -982,11 +1054,11 @@ impl Folder<'_, '_, '_> {
                 }
             };
             let [s, p, o, gslot] = raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
-            let has_graph = items.len() >= 4;
+            let has_graph = items.width >= 4;
             if s.is_none() || p.is_none() || o.is_none() || (has_graph && gslot.is_none()) {
                 let error = RowError::QuadIds {
-                    values: raw[..items.len().min(4)].to_vec(),
-                    width: items.len(),
+                    values: raw[..items.width.min(4)].to_vec(),
+                    width: items.width,
                 };
                 self.damaged_row(error, index);
                 continue;
@@ -994,14 +1066,18 @@ impl Folder<'_, '_, '_> {
             let (Some(s), Some(p), Some(o)) = (s, p, o) else {
                 continue;
             };
-            if let Err(detail) = check_quad_positions(self.g, s, p, o, gslot) {
+            if let Err(detail) = check_quad_positions(self.terms(), s, p, o, gslot) {
                 let message = detail.to_string();
                 self.diag_native("PositionConstraint", *detail, message, index);
                 continue;
             }
             let quad = (s, p, o, gslot);
             if self.streamable {
-                self.provenance.observe(self.g, s, p, o);
+                let terms = match self.shared_terms.as_deref() {
+                    Some(terms) => TermsRef::Shared(terms),
+                    None => TermsRef::Owned(&self.g.terms),
+                };
+                self.provenance.observe_terms(terms, s, p, o);
             }
             self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
             if self.materialize {
@@ -1009,33 +1085,40 @@ impl Folder<'_, '_, '_> {
             }
             // Layout bookkeeping (§3.3): a stream:digest quad describes an
             // upcoming manifestation — record the IOU for the blob check.
-            if self.g.terms[p].value.as_deref() == Some(STREAM_DIGEST)
-                && let Some(obj) = &self.g.terms[o].value
+            if self.terms()[p].value.as_deref() == Some(STREAM_DIGEST)
+                && let Some(obj) = self.terms()[o].value.clone()
             {
-                self.described.insert(obj.clone());
+                self.described.insert(obj);
             }
         }
+        Ok(())
     }
 
-    fn h_reifies(&mut self, payload: &Value, index: u64, base: TermIdBase) {
-        let Value::Array(rows) = payload else {
+    fn h_reifies(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
             self.diag(FoldError::ReifiesArray { snapshot: false }, index);
-            return;
+            return Ok(());
         };
         for row in rows {
-            let (rid, triple, gslot) = match decode_reifier_row(row, self.g, base) {
-                RowDecode::Skip => continue,
-                RowDecode::Row(row) => row,
-                RowDecode::Damaged(detail) => {
-                    self.damaged_row(*detail, index);
-                    continue;
-                }
-                RowDecode::Position(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("PositionConstraint", *detail, message, index);
-                    continue;
-                }
-            };
+            let (rid, triple, gslot) =
+                match decode_reifier_row(numeric_row::<5>(row?)?, self.terms(), base) {
+                    RowDecode::Skip => continue,
+                    RowDecode::Row(row) => row,
+                    RowDecode::Damaged(detail) => {
+                        self.damaged_row(*detail, index);
+                        continue;
+                    }
+                    RowDecode::Position(detail) => {
+                        let message = detail.to_string();
+                        self.diag_native("PositionConstraint", *detail, message, index);
+                        continue;
+                    }
+                };
             // `rdf:reifies` is NOT functional: one reifier id legitimately
             // binds several distinct triple terms (`r rdf:reifies <<s p o1>>`
             // and `r rdf:reifies <<s p o2>>` are both assertable, in the same
@@ -1049,7 +1132,10 @@ impl Folder<'_, '_, '_> {
             {
                 self.rebound_reifiers.push((rid, index));
             }
-            if self.reifier_index.binding_is_recursive(self.g, rid, triple) {
+            if self
+                .reifier_index
+                .binding_is_recursive(self.terms(), rid, triple)
+            {
                 self.diag(
                     FoldError::RecursiveReifier {
                         reifier: rid,
@@ -1063,29 +1149,39 @@ impl Folder<'_, '_, '_> {
                 .record(self.g, (rid, triple, gslot), self.materialize);
             self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         }
+        Ok(())
     }
 
-    fn h_annot(&mut self, payload: &Value, index: u64, base: TermIdBase) {
-        let Value::Array(rows) = payload else { return };
+    fn h_annot(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            return Ok(());
+        };
         for row in rows {
-            let annotation = match decode_annotation_row(row, self.g, base) {
-                RowDecode::Skip => continue,
-                RowDecode::Row(row) => row,
-                RowDecode::Damaged(detail) => {
-                    self.damaged_row(*detail, index);
-                    continue;
-                }
-                RowDecode::Position(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("PositionConstraint", *detail, message, index);
-                    continue;
-                }
-            };
+            let annotation =
+                match decode_annotation_row(numeric_row::<4>(row?)?, self.terms(), base) {
+                    RowDecode::Skip => continue,
+                    RowDecode::Row(row) => row,
+                    RowDecode::Damaged(detail) => {
+                        self.damaged_row(*detail, index);
+                        continue;
+                    }
+                    RowDecode::Position(detail) => {
+                        let message = detail.to_string();
+                        self.diag_native("PositionConstraint", *detail, message, index);
+                        continue;
+                    }
+                };
             self.with_sink(|segment_index, sink| sink.annotation(segment_index, annotation));
             if self.materialize {
                 self.g.annotations.push(annotation);
             }
         }
+        Ok(())
     }
 
     fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: u64) {
@@ -1138,7 +1234,10 @@ impl Folder<'_, '_, '_> {
         };
 
         if chain.iter().any(|codec| codec.cls == "encrypt") {
-            match self.payload(frame, true).map(payload_bytes) {
+            match self
+                .payload(frame, true, map_get(frame, "d").map(ValueRef::Owned))
+                .and_then(payload_bytes)
+            {
                 Ok(Some(bytes)) => {
                     let digest = digest_str(&bytes);
                     if let Some(meta) = pub_meta {
@@ -1231,7 +1330,10 @@ impl Folder<'_, '_, '_> {
         let Some(Value::Bytes(_)) = d else {
             return;
         };
-        match self.payload(frame, true).map(payload_bytes) {
+        match self
+            .payload(frame, true, map_get(frame, "d").map(ValueRef::Owned))
+            .and_then(payload_bytes)
+        {
             Ok(Some(bytes)) => {
                 let digest = digest_str(&bytes);
                 if let Some(meta) = pub_meta {
@@ -1318,38 +1420,38 @@ impl Folder<'_, '_, '_> {
     /// Decode local term ids against the captured outer base through the same
     /// handlers and semantic checks as equivalent streamed frames. The source
     /// payload remains borrowed; rebasing never builds another CBOR tree.
-    fn h_snapshot(&mut self, payload: &Value, index: u64) {
-        let Value::Map(entries) = payload else { return };
-        let base = TermIdBase(self.g.terms.len());
-        if let Some(terms @ Value::Array(_)) = map_get(entries, "terms") {
-            self.h_terms(terms, index, base);
+    fn h_snapshot(&mut self, payload: ValueRef<'_>, index: u64) -> Result<(), cbor::DecodeError> {
+        if !payload.is_map() {
+            return Ok(());
         }
-        if let Some(quads @ Value::Array(_)) = map_get(entries, "quads") {
-            self.h_quads(quads, index, base);
+        let base = TermIdBase(self.terms().len());
+        if let Some(terms) = payload.get("terms")? {
+            self.h_terms(terms, index, base)?;
         }
-        match map_get(entries, "reifies") {
-            Some(Value::Map(_)) => {
+        if let Some(quads) = payload.get("quads")? {
+            self.h_quads(quads, index, base)?;
+        }
+        if let Some(reifies) = payload.get("reifies")? {
+            if reifies.is_map() {
                 self.diag(FoldError::ReifiesArray { snapshot: true }, index);
+            } else if reifies.array()?.is_some() {
+                self.h_reifies(reifies, index, base)?;
             }
-            Some(reifies @ Value::Array(_)) => {
-                self.h_reifies(reifies, index, base);
-            }
-            _ => {}
         }
-        if let Some(annot @ Value::Array(_)) = map_get(entries, "annot") {
-            self.h_annot(annot, index, base);
+        if let Some(annot) = payload.get("annot")? {
+            self.h_annot(annot, index, base)?;
         }
-        if let Some(Value::Map(blobs)) = map_get(entries, "blobs") {
+        if let Some(blobs) = payload.get("blobs")?
+            && let Some(blobs) = blobs.map()?
+        {
             let ceiling = self
                 .sink
                 .as_deref()
                 .and_then(StreamingSink::blob_decode_limit);
-            for (_, b) in blobs {
-                if let Value::Bytes(bytes) = b {
-                    let digest = digest_str(bytes);
-                    // An embedded entry obeys the same ceiling as a standalone
-                    // payload; without this a snapshot is a way to hand a
-                    // bounded consumer arbitrarily many unbounded blobs.
+            for entry in blobs {
+                let (_, value) = entry?;
+                if let Some(bytes) = value.bytes()? {
+                    let digest = digest_str(&bytes);
                     if let Some(limit) = ceiling
                         && bytes.len() > limit
                     {
@@ -1378,19 +1480,26 @@ impl Folder<'_, '_, '_> {
                         self.blob_index.set(
                             &mut self.g.blobs,
                             digest.clone(),
-                            BlobEntry::bytes(bytes.clone()),
+                            BlobEntry::bytes(bytes.to_vec()),
                         );
                     }
-                    self.emit_blob(&digest, Some(bytes), &[], None, true, bytes.len());
+                    self.emit_blob(&digest, Some(&bytes), &[], None, true, bytes.len());
                 }
             }
         }
-        if let Some(Value::Map(meta)) = map_get(entries, "meta") {
-            for (k, v) in meta {
-                let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
-                self.g.set_meta(key, v.clone());
+        if let Some(meta) = payload.get("meta")?
+            && let Some(meta) = meta.map()?
+        {
+            for entry in meta {
+                let (key, value) = entry?;
+                let key = match key.text()? {
+                    Some(text) => text.into_owned(),
+                    None => format!("{:?}", key.to_value()?.as_ref()),
+                };
+                self.g.set_meta(key, value.to_value()?.into_owned());
             }
         }
+        Ok(())
     }
 
     /// Record an intact `index` frame (§6.2) for the layout check (§3.3).
@@ -1741,7 +1850,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
         return g;
     }
     if bounds.len() > 1 && !options.allow_segments {
-        let mut g = read_segment_with_sink(&items[..bounds[1]], 0, 0, None, options.content_key);
+        let mut g = read_segment(&items[..bounds[1]], 0, options.content_key);
         g.diagnostics.push(
             Diagnostic {
                 cause: None,
@@ -1862,9 +1971,11 @@ impl<R: Read> Read for StreamingCountingReader<R> {
 
 fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
-) -> Result<Option<(Value, u64, u64)>, TornAppendError> {
+) -> Result<Option<(StreamItem, u64, u64)>, TornAppendError> {
     let start = reader.pos;
-    match cbor::read_from(&mut *reader, cbor::Limits::DEFAULT) {
+    match cbor::read_encoded_from(&mut *reader, cbor::Limits::DEFAULT)
+        .and_then(|item| item.map(encoded_frame::classify).transpose())
+    {
         Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
         Ok(None) => Ok(None),
         Err(cause) => Err(TornAppendError {
@@ -1876,6 +1987,9 @@ fn next_stream_item<R: Read>(
 
 struct ActiveStreamingSegment {
     g: Graph,
+    // These owners outlive every validation callback in the segment, then drop
+    // before the resolver flushes it on the next segment's first RDF event.
+    shared_terms: Vec<Arc<Term>>,
     header: Vec<(Value, Value)>,
     expected_prev: Vec<u8>,
     frame_ids: Vec<Vec<u8>>,
@@ -1978,6 +2092,7 @@ impl ActiveStreamingSegment {
         };
         Self {
             g,
+            shared_terms: Vec::new(),
             header,
             expected_prev,
             frame_ids: Vec::new(),
@@ -1998,16 +2113,18 @@ impl ActiveStreamingSegment {
 
     fn process_frame<'k>(
         &mut self,
-        raw: &Value,
+        raw: BorrowedItem<'_>,
         abs_index: u64,
         frame_start: u64,
         frame_end: u64,
         sink: &mut dyn StreamingSink,
         content_key: Option<&'k ContentKeyResolver<'k>>,
-    ) {
+    ) -> Result<(), cbor::DecodeError> {
         if !self.valid_header {
-            return;
+            return Ok(());
         }
+        let mut parsed = encoded_frame::Frame::new(raw)?;
+        let raw = &parsed.metadata;
         // Captured before any push below — the zero-based index of THIS
         // frame within the segment (mirrors `collect_frames` in
         // `replication.rs`).
@@ -2022,6 +2139,7 @@ impl ActiveStreamingSegment {
         let reifier_index = std::mem::take(&mut self.reifier_index);
         let mut folder = Folder {
             g: &mut self.g,
+            shared_terms: Some(&mut self.shared_terms),
             sink: Some(sink),
             content_key,
             segment_index: self.segment_index,
@@ -2050,7 +2168,10 @@ impl ActiveStreamingSegment {
                 Some(Value::Bytes(b)) => Some(b),
                 _ => None,
             };
-            let computed = content_id(frame);
+            let computed = parsed
+                .computed
+                .take()
+                .expect("an encoded map has its canonical content ID");
             let ftype = text_or(map_get(frame, "t"), "").to_string();
             if stored_id.map(|b| &b[..]) != Some(&computed[..]) {
                 let ctx_id = stored_id.cloned().unwrap_or_else(|| computed.clone());
@@ -2117,7 +2238,12 @@ impl ActiveStreamingSegment {
                         ),
                     });
                 }
-                folder.fold_frame(frame, abs_index);
+                let data = if parsed.borrowed_data {
+                    parsed.data
+                } else {
+                    map_get(frame, "d").map(ValueRef::Owned)
+                };
+                folder.fold_frame(frame, abs_index, data);
             }
         } else {
             folder.with_sink(|segment_index, sink| {
@@ -2151,6 +2277,7 @@ impl ActiveStreamingSegment {
         self.blob_events = blob_events;
         self.rebound_reifiers = rebound_reifiers;
         self.reifier_index = reifier_index;
+        Ok(())
     }
 
     fn finish_into_result(
@@ -2165,6 +2292,7 @@ impl ActiveStreamingSegment {
             if !self.rebound_reifiers.is_empty() {
                 let mut folder = Folder {
                     g: &mut self.g,
+                    shared_terms: Some(&mut self.shared_terms),
                     sink: Some(sink),
                     content_key: None,
                     segment_index: self.segment_index,
@@ -2265,7 +2393,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                 break;
             }
         };
-        if is_header_item(&item) {
+        if let StreamItem::Header(item) = item {
             if let Some(segment) = current.take() {
                 if !options.allow_segments {
                     segment.finish_into_result(&mut result, sink);
@@ -2308,14 +2436,24 @@ pub fn read_to_sink_from_reader<R: Read>(
                 sink,
             ));
         } else if let Some(segment) = current.as_mut() {
-            segment.process_frame(
-                &item,
+            let StreamItem::Frame(item) = item else {
+                unreachable!("headers are handled before frame dispatch");
+            };
+            if let Err(cause) = segment.process_frame(
+                item.view(),
                 item_index,
                 frame_start,
                 frame_end,
                 sink,
                 options.content_key,
-            );
+            ) {
+                result.torn = Some(frame_start);
+                torn_cause = Some(TornAppendError {
+                    offset: frame_start,
+                    cause,
+                });
+                break;
+            }
         } else {
             push_result_diagnostic(
                 &mut result,
@@ -2489,12 +2627,12 @@ fn fold_segments(
         use rayon::prelude::*;
         ranges
             .par_iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, None))
+            .map(|&(a, b)| read_segment(&items[a..b], a as u64, None))
             .collect()
     } else {
         ranges
             .iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, content_key))
+            .map(|&(a, b)| read_segment(&items[a..b], a as u64, content_key))
             .collect()
     }
 }
@@ -2519,14 +2657,13 @@ fn parallel_content_ids(items: &[(usize, Value)]) -> Vec<Option<Vec<u8>>> {
         .collect()
 }
 
-fn read_segment_with_sink(
+fn read_segment(
     items: &[(usize, Value)],
     index_offset: u64,
-    segment_index: u64,
-    mut sink: Option<&mut dyn StreamingSink>,
     content_key: Option<&ContentKeyResolver<'_>>,
 ) -> Graph {
     let mut g = Graph::default();
+    let mut sink = None;
     let (_, raw_header) = &items[0];
     let header = match unwrap_header(raw_header) {
         Ok(h) => h,
@@ -2596,13 +2733,14 @@ fn read_segment_with_sink(
     // cheap `prev`-equality check per frame.
     let mut computed_ids = parallel_content_ids(&items[1..]);
 
-    let (index_records, blob_events, restored_sink) = {
+    let (index_records, blob_events) = {
         let catalog = catalog_from(header);
         let mut folder = Folder {
             g: &mut g,
-            sink: sink.take(),
+            shared_terms: None,
+            sink: None,
             content_key,
-            segment_index,
+            segment_index: 0,
             materialize: true,
             streamable: map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
             provenance: crate::compact::ProvenanceSubjects::default(),
@@ -2682,16 +2820,11 @@ fn read_segment_with_sink(
                     ),
                 });
             }
-            folder.fold_frame(frame, abs_index);
+            folder.fold_frame(frame, abs_index, map_get(frame, "d").map(ValueRef::Owned));
         }
         folder.report_ambiguous_reifiers();
-        (folder.index_records, folder.blob_events, folder.sink)
+        (folder.index_records, folder.blob_events)
     };
-    sink = restored_sink;
-
-    if let Some(sink) = sink.as_deref_mut() {
-        sink.segment_head(segment_index, &expected_prev);
-    }
     g.segment_heads.push(expected_prev);
     let seg_meta = g.meta.clone();
     g.segment_meta.push(seg_meta);
@@ -2707,9 +2840,6 @@ fn read_segment_with_sink(
         index_offset,
         &mut sink,
     );
-    if let Some(sink) = sink {
-        sink.streamable_layout(segment_index, &info);
-    }
     g.segment_streamable.push(info);
     g
 }

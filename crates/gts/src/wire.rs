@@ -82,11 +82,21 @@ pub fn digest_label(digest: &[u8]) -> String {
     format!("blake3:{}", purrdf_hash::hex::Lower(digest))
 }
 
-fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
+fn hash_map<E>(
+    write: impl FnOnce(&mut purrdf_hash::blake3::Hasher) -> Result<(), E>,
+) -> Result<Vec<u8>, E> {
     let mut writer = purrdf_hash::blake3::Hasher::new();
-    purrdf_lex::cbor::write_canonical_map(entries, excluded, &mut writer)
-        .expect("hash writer cannot fail");
-    writer.finalize().as_bytes().to_vec()
+    write(&mut writer)?;
+    Ok(writer.finalize().as_bytes().to_vec())
+}
+fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
+    hash_map(|writer| purrdf_lex::cbor::write_canonical_map(entries, excluded, writer))
+        .expect("hash writer cannot fail")
+}
+pub(crate) fn content_id_encoded(
+    frame: purrdf_lex::cbor::BorrowedItem<'_>,
+) -> Result<Vec<u8>, purrdf_lex::cbor::WriteError> {
+    hash_map(|writer| purrdf_lex::cbor::write_canonical_borrowed_map(frame, &["id", "sig"], writer))
 }
 
 /// Compute a frame's `"id"` over its content (excluding `"id"`/`"sig"`).

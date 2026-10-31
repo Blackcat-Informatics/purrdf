@@ -114,44 +114,248 @@ fn write_scalar<W: Write + ?Sized>(value: &Value, out: &mut W) -> io::Result<boo
     Ok(true)
 }
 
-/// One step of the streaming encoder.
-enum Job<'v> {
-    /// A value to encode.
-    Value(&'v Value),
-    /// Advance one array without queuing every child at once.
-    Array(core::slice::Iter<'v, Value>),
-    /// Bytes already encoded: a map key's deterministic encoding.
+use super::decode::{BorrowedItem, DecodeError};
+use super::value_ref::{Entries, ValueRef, Values};
+
+#[derive(Debug)]
+/// An original output failure or refusal while inspecting validated source bytes.
+pub enum WriteError {
+    /// Original writer failure.
+    Io(purrdf_hash::error::IoFailure),
+    /// Original CBOR inspection refusal.
+    Decode(DecodeError),
+    /// The map-only writer was given another item kind.
+    ExpectedMap,
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Decode(error) => error.fmt(f),
+            Self::ExpectedMap => f.write_str("canonical map writer requires a map"),
+        }
+    }
+}
+purrdf_hash::error_sources!(WriteError, Io, Decode);
+impl purrdf_hash::error::StructuredError for WriteError {
+    purrdf_hash::error_visit! {
+        Io(cause) => "cbor-write-io" { "cause" => Cause(cause) },
+        Decode(cause) => "cbor-write-source" { "cause" => Cause(cause) },
+        ExpectedMap => "cbor-write-map-required" {},
+    }
+}
+
+crate::variant_from!(WriteError {
+    Io(purrdf_hash::error::IoFailure), Decode(DecodeError)
+});
+#[derive(Debug)]
+enum WriteFault {
+    Io(io::Error),
+    Decode(DecodeError),
+}
+crate::variant_from!(WriteFault { Io(io::Error), Decode(DecodeError) });
+impl From<WriteFault> for WriteError {
+    fn from(error: WriteFault) -> Self {
+        match error {
+            WriteFault::Io(error) => Self::Io(error.into()),
+            WriteFault::Decode(error) => Self::Decode(error),
+        }
+    }
+}
+
+trait Encodable: Copy {
+    type Values: Iterator<Item = Result<Self, DecodeError>>;
+    type Entries: Iterator<Item = Result<(Self, Self), DecodeError>>;
+    fn scalar<W: Write + ?Sized>(self, out: &mut W) -> Result<bool, WriteFault>;
+    fn excluded(self, excluded: &[&str]) -> Result<bool, DecodeError>;
+    fn tag(self) -> Option<(u64, Self)>;
+    fn array(self) -> Result<Option<(usize, Self::Values)>, DecodeError>;
+    fn map(self) -> Result<Option<(usize, Self::Entries)>, DecodeError>;
+    fn enter_array(items: Self::Values, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError>;
+    fn enter_map(entries: Self::Entries, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError>;
+}
+
+fn owned_child(value: &Value) -> Result<&Value, DecodeError> {
+    Ok(value)
+}
+fn owned_entry(entry: &(Value, Value)) -> Result<(&Value, &Value), DecodeError> {
+    Ok((&entry.0, &entry.1))
+}
+
+impl<'v> Encodable for &'v Value {
+    type Values = core::iter::Map<
+        core::slice::Iter<'v, Value>,
+        fn(&'v Value) -> Result<&'v Value, DecodeError>,
+    >;
+    type Entries = core::iter::Map<
+        core::slice::Iter<'v, (Value, Value)>,
+        fn(&'v (Value, Value)) -> Result<(&'v Value, &'v Value), DecodeError>,
+    >;
+
+    fn scalar<W: Write + ?Sized>(self, out: &mut W) -> Result<bool, WriteFault> {
+        write_scalar(self, out).map_err(WriteFault::Io)
+    }
+    fn excluded(self, excluded: &[&str]) -> Result<bool, DecodeError> {
+        Ok(self.as_text().is_some_and(|text| excluded.contains(&text)))
+    }
+    fn tag(self) -> Option<(u64, Self)> {
+        match self {
+            Value::Tag(tag, item) => Some((*tag, item.as_ref())),
+            _ => None,
+        }
+    }
+    fn array(self) -> Result<Option<(usize, Self::Values)>, DecodeError> {
+        Ok(match self {
+            Value::Array(items) => Some((items.len(), items.iter().map(owned_child))),
+            _ => None,
+        })
+    }
+    fn map(self) -> Result<Option<(usize, Self::Entries)>, DecodeError> {
+        Ok(match self {
+            Value::Map(entries) => Some((entries.len(), entries.iter().map(owned_entry))),
+            _ => None,
+        })
+    }
+    fn enter_array(items: Self::Values, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError> {
+        steps.extend(
+            items
+                .rev()
+                .map(|item| Step::Enter(item.expect("owned children cannot decode"))),
+        );
+        Ok(())
+    }
+    fn enter_map(entries: Self::Entries, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError> {
+        for entry in entries.rev() {
+            let (key, value) = entry.expect("owned entries cannot decode");
+            steps.push(Step::Enter(value));
+            steps.push(Step::Enter(key));
+        }
+        Ok(())
+    }
+}
+
+impl<'v> Encodable for BorrowedItem<'v> {
+    type Values = core::iter::Map<
+        Values<'v>,
+        fn(Result<ValueRef<'v>, DecodeError>) -> Result<Self, DecodeError>,
+    >;
+    type Entries = core::iter::Map<
+        Entries<'v>,
+        fn(Result<(ValueRef<'v>, ValueRef<'v>), DecodeError>) -> Result<(Self, Self), DecodeError>,
+    >;
+
+    fn scalar<W: Write + ?Sized>(self, out: &mut W) -> Result<bool, WriteFault> {
+        match self.major() {
+            BYTES => {
+                let bytes = self.bytes()?.expect("validated byte-string major type");
+                head::write_head(out, BYTES, bytes.len() as u64)?;
+                out.write_all(&bytes)?;
+            }
+            TEXT => {
+                let text = self.text()?.expect("validated text major type");
+                head::write_head(out, TEXT, text.len() as u64)?;
+                out.write_all(text.as_bytes())?;
+            }
+            0 | 1 | SIMPLE => {
+                return write_scalar(&self.decode()?, out).map_err(WriteFault::Io);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+    fn excluded(self, excluded: &[&str]) -> Result<bool, DecodeError> {
+        Ok(BorrowedItem::text(self)?.is_some_and(|text| excluded.contains(&text.as_ref())))
+    }
+    fn tag(self) -> Option<(u64, Self)> {
+        BorrowedItem::tag(self)
+    }
+    fn array(self) -> Result<Option<(usize, Self::Values)>, DecodeError> {
+        Ok(ValueRef::Encoded(self).array()?.map(|items| {
+            (
+                items.len(),
+                items.into_iter().map(encoded_value as fn(_) -> _),
+            )
+        }))
+    }
+    fn map(self) -> Result<Option<(usize, Self::Entries)>, DecodeError> {
+        Ok(ValueRef::Encoded(self).map()?.map(|entries| {
+            (
+                entries.len(),
+                entries.into_iter().map(encoded_entry as fn(_) -> _),
+            )
+        }))
+    }
+    fn enter_array(items: Self::Values, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError> {
+        let items: Vec<_> = items.collect::<Result<_, _>>()?;
+        steps.extend(items.into_iter().rev().map(Step::Enter));
+        Ok(())
+    }
+    fn enter_map(entries: Self::Entries, steps: &mut Vec<Step<Self>>) -> Result<(), DecodeError> {
+        let entries: Vec<_> = entries.collect::<Result<_, _>>()?;
+        for (key, value) in entries.into_iter().rev() {
+            steps.push(Step::Enter(value));
+            steps.push(Step::Enter(key));
+        }
+        Ok(())
+    }
+}
+
+fn encoded_value(
+    value: Result<ValueRef<'_>, DecodeError>,
+) -> Result<BorrowedItem<'_>, DecodeError> {
+    match value? {
+        ValueRef::Encoded(value) => Ok(value),
+        ValueRef::Owned(_) => unreachable!("an encoded iterator retains encoded children"),
+    }
+}
+fn encoded_entry<'a>(
+    entry: Result<(ValueRef<'a>, ValueRef<'a>), DecodeError>,
+) -> Result<(BorrowedItem<'a>, BorrowedItem<'a>), DecodeError> {
+    let (key, value) = entry?;
+    Ok((encoded_value(Ok(key))?, encoded_value(Ok(value))?))
+}
+
+enum Job<I: Encodable> {
+    Value(I),
+    Array(I::Values),
+    Map(I::Entries),
     Encoded(Vec<u8>),
 }
+enum Step<I> {
+    Enter(I),
+    Exit(I),
+}
 
-/// A key's deterministic encoding.
-fn canonical_key(key: &Value) -> Vec<u8> {
+fn canonical_key<I: Encodable>(key: I) -> Result<Vec<u8>, WriteFault> {
     let mut bytes = Vec::new();
-    if !write_scalar(key, &mut bytes).expect("writing to a Vec cannot fail") {
-        bytes = canonical_bottom_up(key);
+    if !key.scalar(&mut bytes)? {
+        bytes = canonical_bottom_up(key)?;
     }
-    bytes
+    Ok(bytes)
 }
 
-/// A map's entries in deterministic order, each with its key's encoding,
-/// leaving out entries whose key is a text string in `excluded`.
-fn sorted_entries<'v>(
-    entries: &'v [(Value, Value)],
+fn sorted_entries<I: Encodable>(
+    entries: I::Entries,
     excluded: &[&str],
-) -> Vec<(Vec<u8>, &'v Value)> {
-    let mut keyed: Vec<(Vec<u8>, &Value)> = entries
-        .iter()
-        .filter(|(key, _)| !key.as_text().is_some_and(|text| excluded.contains(&text)))
-        .map(|(key, value)| (canonical_key(key), value))
-        .collect();
+) -> Result<Vec<(Vec<u8>, I)>, WriteFault> {
+    let mut keyed = Vec::new();
+    for entry in entries {
+        let (key, value) = entry?;
+        if !excluded.is_empty() && key.excluded(excluded)? {
+            continue;
+        }
+        keyed.push((canonical_key(key)?, value));
+    }
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
-    keyed
+    Ok(keyed)
 }
 
-/// Stream `jobs` to `out`: array cursors retain only their unvisited suffix,
-/// so array width does not grow the traversal work list. Maps retain their
-/// ordered entries, and nesting costs heap, never stack.
-fn run<W: Write + ?Sized>(mut jobs: Vec<Job<'_>>, out: &mut W, canonical: bool) -> io::Result<()> {
+fn run<I: Encodable, W: Write + ?Sized>(
+    mut jobs: Vec<Job<I>>,
+    out: &mut W,
+    canonical: bool,
+) -> Result<(), WriteFault> {
     while let Some(job) = jobs.pop() {
         let value = match job {
             Job::Encoded(bytes) => {
@@ -160,117 +364,146 @@ fn run<W: Write + ?Sized>(mut jobs: Vec<Job<'_>>, out: &mut W, canonical: bool) 
             }
             Job::Value(value) => value,
             Job::Array(mut items) => {
-                let Some(value) = items.next() else {
+                let Some(value) = items.next().transpose()? else {
                     continue;
                 };
-                if !items.as_slice().is_empty() {
+                if items.size_hint().1 != Some(0) {
                     jobs.push(Job::Array(items));
                 }
                 value
             }
+            Job::Map(mut entries) => {
+                let Some((key, value)) = entries.next().transpose()? else {
+                    continue;
+                };
+                jobs.push(Job::Map(entries));
+                jobs.push(Job::Value(value));
+                key
+            }
         };
-        if write_scalar(value, out)? {
+        if value.scalar(out)? {
             continue;
         }
-        match value {
-            Value::Tag(tag, item) => {
-                head::write_head(out, TAG, *tag)?;
-                jobs.push(Job::Value(item));
+        if let Some((tag, item)) = value.tag() {
+            head::write_head(out, TAG, tag)?;
+            jobs.push(Job::Value(item));
+        } else if let Some((len, items)) = value.array()? {
+            head::write_head(out, ARRAY, len as u64)?;
+            if len != 0 {
+                jobs.push(Job::Array(items));
             }
-            Value::Array(items) => {
-                head::write_head(out, ARRAY, items.len() as u64)?;
-                if !items.is_empty() {
-                    jobs.push(Job::Array(items.iter()));
+        } else if let Some((len, entries)) = value.map()? {
+            head::write_head(out, MAP, len as u64)?;
+            if canonical {
+                for (key, value) in sorted_entries::<I>(entries, &[])?.into_iter().rev() {
+                    jobs.push(Job::Value(value));
+                    jobs.push(Job::Encoded(key));
                 }
+            } else if len != 0 {
+                jobs.push(Job::Map(entries));
             }
-            Value::Map(entries) => {
-                head::write_head(out, MAP, entries.len() as u64)?;
-                if canonical {
-                    for (key, value) in sorted_entries(entries, &[]).into_iter().rev() {
-                        jobs.push(Job::Value(value));
-                        jobs.push(Job::Encoded(key));
-                    }
-                } else {
-                    for (key, value) in entries.iter().rev() {
-                        jobs.push(Job::Value(value));
-                        jobs.push(Job::Value(key));
-                    }
-                }
-            }
-            _ => unreachable!("every other value is a scalar"),
+        } else {
+            unreachable!("every non-scalar is a tag, array or map");
         }
     }
     Ok(())
 }
 
-/// The deterministic encoding of `root`, built bottom-up: each container's
-/// encoding is assembled from its children's once they are complete, so a map
-/// nested inside a map KEY is sorted without a recursive call.
-fn canonical_bottom_up(root: &Value) -> Vec<u8> {
-    enum Step<'v> {
-        Enter(&'v Value),
-        Exit(&'v Value),
-    }
+fn canonical_bottom_up<I: Encodable>(root: I) -> Result<Vec<u8>, WriteFault> {
     let mut steps = vec![Step::Enter(root)];
     let mut done: Vec<Vec<u8>> = Vec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(value) => {
                 let mut bytes = Vec::new();
-                if write_scalar(value, &mut bytes).expect("writing to a Vec cannot fail") {
+                if value.scalar(&mut bytes)? {
                     done.push(bytes);
                     continue;
                 }
                 steps.push(Step::Exit(value));
-                match value {
-                    Value::Tag(_, item) => steps.push(Step::Enter(item)),
-                    Value::Array(items) => steps.extend(items.iter().rev().map(Step::Enter)),
-                    Value::Map(entries) => {
-                        for (key, value) in entries.iter().rev() {
-                            steps.push(Step::Enter(value));
-                            steps.push(Step::Enter(key));
-                        }
-                    }
-                    _ => unreachable!("every other value is a scalar"),
+                if let Some((_, item)) = value.tag() {
+                    steps.push(Step::Enter(item));
+                } else if let Some((_, items)) = value.array()? {
+                    I::enter_array(items, &mut steps)?;
+                } else if let Some((_, entries)) = value.map()? {
+                    I::enter_map(entries, &mut steps)?;
+                } else {
+                    unreachable!("every non-scalar is a container");
                 }
             }
             Step::Exit(value) => {
                 let mut bytes = Vec::new();
-                match value {
-                    Value::Tag(tag, _) => {
-                        let item = done.pop().expect("a tag's item is complete");
-                        head::push_head(&mut bytes, TAG, *tag);
+                if let Some((tag, _)) = value.tag() {
+                    let item = done.pop().expect("a tag's item is complete");
+                    head::push_head(&mut bytes, TAG, tag);
+                    bytes.extend_from_slice(&item);
+                } else if let Some((len, _)) = value.array()? {
+                    head::push_head(&mut bytes, ARRAY, len as u64);
+                    let first = done.len() - len;
+                    for item in done.drain(first..) {
                         bytes.extend_from_slice(&item);
                     }
-                    Value::Array(items) => {
-                        head::push_head(&mut bytes, ARRAY, items.len() as u64);
-                        let first = done.len() - items.len();
-                        for item in done.drain(first..) {
-                            bytes.extend_from_slice(&item);
-                        }
+                } else if let Some((len, _)) = value.map()? {
+                    head::push_head(&mut bytes, MAP, len as u64);
+                    let first = done.len() - 2 * len;
+                    let mut children = done.drain(first..);
+                    let mut pairs = Vec::with_capacity(len);
+                    while let Some(key) = children.next() {
+                        pairs.push((key, children.next().expect("an entry has a value")));
                     }
-                    Value::Map(entries) => {
-                        head::push_head(&mut bytes, MAP, entries.len() as u64);
-                        let first = done.len() - 2 * entries.len();
-                        let mut children = done.drain(first..);
-                        let mut pairs = Vec::with_capacity(entries.len());
-                        while let Some(key) = children.next() {
-                            pairs.push((key, children.next().expect("an entry has a value")));
-                        }
-                        drop(children);
-                        pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                        for (key, value) in pairs {
-                            bytes.extend_from_slice(&key);
-                            bytes.extend_from_slice(&value);
-                        }
+                    drop(children);
+                    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                    for (key, value) in pairs {
+                        bytes.extend_from_slice(&key);
+                        bytes.extend_from_slice(&value);
                     }
-                    _ => unreachable!("only a container is exited"),
+                } else {
+                    unreachable!("only a container is exited");
                 }
                 done.push(bytes);
             }
         }
     }
-    done.pop().expect("the root's encoding is assembled last")
+    Ok(done.pop().expect("the root's encoding is assembled last"))
+}
+
+fn owned_io(result: Result<(), WriteFault>) -> io::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(WriteFault::Io(error)) => Err(error),
+        Err(WriteFault::Decode(error)) => {
+            unreachable!("an owned CBOR traversal cannot decode source bytes: {error}")
+        }
+    }
+}
+
+fn write_map<I: Encodable, W: Write + ?Sized>(
+    entries: I::Entries,
+    excluded: &[&str],
+    out: &mut W,
+) -> Result<(), WriteFault> {
+    let sorted = sorted_entries::<I>(entries, excluded)?;
+    head::write_head(out, MAP, sorted.len() as u64)?;
+    let mut jobs = Vec::with_capacity(sorted.len() * 2);
+    for (key, value) in sorted.into_iter().rev() {
+        jobs.push(Job::Value(value));
+        jobs.push(Job::Encoded(key));
+    }
+    run(jobs, out, true)
+}
+
+/// Write a source-backed map, excluding exactly the named text keys.
+///
+/// # Errors
+/// Requires a map and preserves the original writer or CBOR inspection failure.
+pub fn write_canonical_borrowed_map<W: Write + ?Sized>(
+    value: BorrowedItem<'_>,
+    excluded: &[&str],
+    out: &mut W,
+) -> Result<(), WriteError> {
+    let (_, entries) =
+        <BorrowedItem<'_> as Encodable>::map(value)?.ok_or(WriteError::ExpectedMap)?;
+    write_map::<BorrowedItem<'_>, W>(entries, excluded, out).map_err(WriteError::from)
 }
 
 /// Write `value` to `out` as-is: shortest heads, shortest exact floats,
@@ -280,7 +513,7 @@ fn canonical_bottom_up(root: &Value) -> Vec<u8> {
 ///
 /// The writer's error.
 pub fn write<W: Write + ?Sized>(value: &Value, out: &mut W) -> io::Result<()> {
-    run(vec![Job::Value(value)], out, false)
+    owned_io(run(vec![Job::Value(value)], out, false))
 }
 
 /// `value` encoded as-is ([`write`](fn@write)).
@@ -303,7 +536,7 @@ pub fn encode_into(value: &Value, out: &mut Vec<u8>) {
 ///
 /// The writer's error.
 pub fn write_canonical<W: Write + ?Sized>(value: &Value, out: &mut W) -> io::Result<()> {
-    run(vec![Job::Value(value)], out, true)
+    owned_io(run(vec![Job::Value(value)], out, true))
 }
 
 /// `value` in core deterministic encoding ([`write_canonical`]).
@@ -333,14 +566,11 @@ pub fn write_canonical_map<W: Write + ?Sized>(
     excluded: &[&str],
     out: &mut W,
 ) -> io::Result<()> {
-    let sorted = sorted_entries(entries, excluded);
-    head::write_head(out, MAP, sorted.len() as u64)?;
-    let mut jobs = Vec::with_capacity(sorted.len() * 2);
-    for (key, value) in sorted.into_iter().rev() {
-        jobs.push(Job::Value(value));
-        jobs.push(Job::Encoded(key));
-    }
-    run(jobs, out, true)
+    owned_io(write_map::<&Value, W>(
+        entries.iter().map(owned_entry),
+        excluded,
+        out,
+    ))
 }
 
 /// How many bytes [`encode`] (equally, [`canonical`]) writes for `value`.
@@ -362,5 +592,5 @@ pub fn encoded_len(value: &Value) -> usize {
 
 #[cfg(test)]
 pub(super) fn bottom_up(value: &Value) -> Vec<u8> {
-    canonical_bottom_up(value)
+    canonical_bottom_up(value).expect("an owned key encoder writes only to a Vec")
 }

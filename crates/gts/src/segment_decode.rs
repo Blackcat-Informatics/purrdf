@@ -57,6 +57,8 @@
 
 use purrdf_lex::cbor::Value;
 
+use std::sync::Arc;
+
 use crate::FastMap;
 use crate::model::{
     Diagnostic, OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
@@ -268,7 +270,7 @@ pub struct SegmentResolver<S: ResolvedSink> {
     sink: S,
     /// RAW per-segment terms buffered during the streaming phase, keyed by
     /// `(segment_index, gts_id)`, resolved and drained at segment close.
-    raw_terms: FastMap<(u64, usize), Term>,
+    raw_terms: FastMap<(u64, usize), Arc<Term>>,
     /// Per-segment memo from `(segment_index, gts_id)` to the target id,
     /// populated as the currently buffered segment's terms resolve (so a term
     /// referenced twice — e.g. as both a quad subject and a reifier subject —
@@ -482,13 +484,18 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         // MOVE the raw term out: it resolves at most once (every later reference
         // hits the `remaps` cache above), so taking ownership lets interning
         // borrow the target mutably without a conflict AND without cloning the
-        // term's owned strings. A (pathological) cyclic reference now surfaces as
+        // term's owned strings when its validation owner has been released.
+        // A (pathological) cyclic reference now surfaces as
         // a dangling-term ref — the term is already removed — rather than the
         // nesting-limit; both are hard failures and a GTS Writer never emits
         // cycles.
         let Some(term) = self.raw_terms.remove(&(segment_index, gts_id)) else {
             return Err(self.sink.err_dangling_term(segment_index, gts_id, role));
         };
+        // Normal reader drives have released their validation table before
+        // resolution. Custom callers may retain handles, in which case only
+        // that shared term needs an owned copy for interning.
+        let term = Arc::unwrap_or_clone(term);
         let our_id = self.intern_raw_term(segment_index, gts_id, term, depth)?;
         self.remaps.insert((segment_index, gts_id), our_id);
         Ok(our_id)
@@ -601,7 +608,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn term(&mut self, segment_index: u64, term_id: usize, term: &Term) {
+    fn term(&mut self, segment_index: u64, term_id: usize, term: Arc<Term>) {
         if self.error.is_some() {
             return;
         }
@@ -612,8 +619,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         // Streaming phase: stash the raw term verbatim. A quoted-triple term
         // cannot be resolved yet — its reifier binding may arrive in a later
         // frame — so we defer ALL resolution to segment close.
-        self.raw_terms
-            .insert((segment_index, term_id), term.clone());
+        self.raw_terms.insert((segment_index, term_id), term);
     }
 
     fn quad(&mut self, segment_index: u64, quad: Quad) {
